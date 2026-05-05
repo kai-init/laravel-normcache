@@ -94,11 +94,7 @@ class CacheableBuilder extends Builder
 
         $key = 'query:' . NormCache::classKey($model) . ':v' . NormCache::currentVersion($model) . ':' . $this->queryCacheKey($keyBase);
         $ids = $this->resolveIds($key, $base);
-        $models = NormCache::getModels($ids, $model)->all();
-
-        if ($selectedCols !== null) {
-            $models = $this->applyColumnFilter($models, $selectedCols);
-        }
+        $models = NormCache::getModels($ids, $model, $selectedCols);
 
         if (!empty($this->pendingAggregates)) {
             $models = (new AggregateLoader($this->model))->load($models, $this->pendingAggregates);
@@ -286,23 +282,6 @@ class CacheableBuilder extends Builder
             ->select($this->model->getQualifiedKeyName())
             ->pluck($this->model->getKeyName())
             ->all();
-    }
-
-    private function applyColumnFilter(array $models, array $cols): array
-    {
-        $normalized = array_flip(array_map(
-            fn($col) => last(explode('.', (string) $col)),
-            $cols
-        ));
-
-        foreach ($models as $model) {
-            $model->setRawAttributes(
-                array_intersect_key($model->getAttributes(), $normalized),
-                true
-            );
-        }
-
-        return $models;
     }
 
     private function replayPendingAggregates(): void

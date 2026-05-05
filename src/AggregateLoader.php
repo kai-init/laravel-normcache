@@ -25,7 +25,7 @@ class AggregateLoader
         foreach ($pendingAggregates as $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
-            $relation = (new $parentClass)->{$name}();
+            $relation = $this->model->{$name}();
             $relatedClass = $relation->getRelated()::class;
             $relatedVersion = NormCache::currentVersion($relatedClass);
             $constraintHash = $this->constraintKey($relatedClass, $constraint);

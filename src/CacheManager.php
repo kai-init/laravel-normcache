@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
@@ -111,18 +110,16 @@ class CacheManager
         });
     }
 
-    public function getModels(array $ids, string $modelClass): Collection
+    public function getModels(array $ids, string $modelClass, ?array $columns = null): array
     {
         if ($ids === []) {
-            return collect();
+            return [];
         }
 
         $classKey = $this->classKey($modelClass);
+        $prefix = $this->keyPrefix . "model:{$classKey}:";
 
-        $keys = array_map(
-            fn ($id) => $this->prefix("model:$classKey:$id"),
-            $ids
-        );
+        $keys = array_map(fn($id) => $prefix . $id, $ids);
 
         $raw = $this->connection()->mget($keys);
         $cached = array_combine($ids, $raw);
@@ -130,6 +127,16 @@ class CacheManager
         $missed = [];
         $result = [];
         $prototype = new $modelClass;
+
+        $normalizedCols = null;
+        if ($columns !== null) {
+            $normalizedCols = [];
+            foreach ($columns as $col) {
+                $col = (string) $col;
+                $dotPos = strrpos($col, '.');
+                $normalizedCols[$dotPos === false ? $col : substr($col, $dotPos + 1)] = true;
+            }
+        }
 
         foreach ($cached as $id => $item) {
             if (!$item) {
@@ -142,6 +149,10 @@ class CacheManager
             if (!is_array($attrs)) {
                 $missed[] = $id;
                 continue;
+            }
+
+            if ($normalizedCols !== null) {
+                $attrs = array_intersect_key($attrs, $normalizedCols);
             }
 
             $instance = clone $prototype;
@@ -169,8 +180,16 @@ class CacheManager
             $inserts = [];
 
             foreach ($loaded as $id => $model) {
+                $inserts[$prefix . $id] = $this->serialize($model->getAttributes());
+
+                if ($normalizedCols !== null) {
+                    $model->setRawAttributes(
+                        array_intersect_key($model->getAttributes(), $normalizedCols),
+                        true
+                    );
+                }
+
                 $result[$id] = $model;
-                $inserts[$this->prefix("model:$classKey:$id")] = $this->serialize($model->getAttributes());
             }
 
             if ($inserts !== []) {
@@ -189,7 +208,7 @@ class CacheManager
             }
         }
 
-        return collect($ordered);
+        return $ordered;
     }
 
     public function currentVersion(string $modelClass): int

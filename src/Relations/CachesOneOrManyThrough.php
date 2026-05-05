@@ -47,7 +47,7 @@ trait CachesOneOrManyThrough
 
         NormCache::set(
             $key,
-            $result->map(fn($m) => $m->getAttributes())->all(),
+            array_map(fn($m) => $m->getAttributes(), $result->all()),
             NormCache::queryTtl(),
         );
 
