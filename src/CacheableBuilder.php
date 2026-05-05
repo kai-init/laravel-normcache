@@ -92,7 +92,7 @@ class CacheableBuilder extends Builder
         $keyBase = (clone $base);
         $keyBase->columns = null;
 
-        $key = 'query:v' . NormCache::currentVersion($model) . ':' . $this->queryCacheKey($keyBase);
+        $key = 'query:' . NormCache::classKey($model) . ':v' . NormCache::currentVersion($model) . ':' . $this->queryCacheKey($keyBase);
         $ids = $this->resolveIds($key, $base);
         $models = NormCache::getModels($ids, $model)->all();
 

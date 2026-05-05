@@ -271,7 +271,7 @@ class CacheManager
 
         $this->doInvalidateVersion($modelClass);
 
-        foreach (['model', 'agg', 'count'] as $namespace) {
+        foreach (['query', 'model', 'agg', 'count'] as $namespace) {
             $keys = $this->scan($this->prefix("{$namespace}:{$classKey}:*"));
             $this->asyncDel($keys);
         }

@@ -27,9 +27,9 @@ Tracking which cache keys to invalidate becomes a dependency graph problem. Most
 ## The normcache approach
 
 ```
-// Layer 1 — query cache (stores only IDs, versioned)
+// Layer 1 — query cache (stores only IDs, versioned and model-scoped)
 User::where('active', true)->get()
-  →  query:v14:a3f9...  =  [1, 5, 9, 22]
+  →  query:user:v14:a3f9...  =  [1, 5, 9, 22]
 
 // Layer 2 — model cache (stores model attributes by PK)
   →  model:user:1   =  { id: 1, name: "Kai", ... }
@@ -47,11 +47,10 @@ Each model class has a Redis version counter:
 ver:user  =  14
 ```
 
-Version is embedded in every query cache key:
+When a query is cached, both the model name and its current version are embedded in the key:
 
 ```
-query:v14:a3f9...  →  [1, 5, 9]
-query:v14:b82c...  →  [1, 22]
+query:user:v14:a3f9...  →  [1, 5, 9]    ← User query, version from ver:user
 ```
 
 When any user is written:
@@ -60,13 +59,13 @@ When any user is written:
 INCR ver:user   →   15
 ```
 
-All `v14` keys are now permanently bypassed — no deletes, no scans, no tag lookups. They simply expire naturally. The next read writes fresh `v15` keys.
+All User query keys (`v14`) are now permanently bypassed. Stale keys expire naturally; the next User query writes fresh `v15` keys.
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  User::where('active', true)->get()                 │
 │                                                     │
-│  1. Check  query:v15:a3f9...  →  cache miss         │
+│  1. Check  query:user:v15:a3f9...  →  cache miss    │
 │  2. SELECT id FROM users WHERE active = 1           │
 │     →  [1, 5, 9]                                    │
 │  3. MGET model:user:1, model:user:5, model:user:9   │
