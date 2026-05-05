@@ -8,6 +8,6 @@ final class QueryHasher
 {
     public static function hash(QueryBuilder $query): string
     {
-        return hash('xxh3', $query->toSql() . serialize($query->getBindings()));
+        return hash('xxh3', $query->toSql() . json_encode($query->getBindings()));
     }
 }

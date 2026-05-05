@@ -223,11 +223,13 @@ class CacheableBuilder extends Builder
             return null;
         }
 
-        if (collect($cols)->every(fn($c) => !($c instanceof \Illuminate\Database\Query\Expression) && str_ends_with((string) $c, '*'))) {
-            return null;
+        foreach ($cols as $c) {
+            if ($c instanceof \Illuminate\Database\Query\Expression || !str_ends_with((string) $c, '*')) {
+                return $cols;
+            }
         }
 
-        return $cols;
+        return null;
     }
 
     private function hasCalculatedColumns(?array $cols): bool

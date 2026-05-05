@@ -129,6 +129,7 @@ class CacheManager
 
         $missed = [];
         $result = [];
+        $prototype = new $modelClass;
 
         foreach ($cached as $id => $item) {
             if (!$item) {
@@ -143,11 +144,11 @@ class CacheManager
                 continue;
             }
 
-            $model = (new $modelClass)->newInstance([], true);
-            $model->exists = true;
-            $model->setRawAttributes($attrs, true);
+            $instance = clone $prototype;
+            $instance->exists = true;
+            $instance->setRawAttributes($attrs, true);
 
-            $result[$id] = $model;
+            $result[$id] = $instance;
         }
 
         $hitIds = array_diff($ids, $missed);
@@ -168,7 +169,6 @@ class CacheManager
             $inserts = [];
 
             foreach ($loaded as $id => $model) {
-                $classKey = $this->classKey($modelClass);
                 $result[$id] = $model;
                 $inserts[$this->prefix("model:$classKey:$id")] = $this->serialize($model->getAttributes());
             }
@@ -182,10 +182,14 @@ class CacheManager
             }
         }
 
-        return collect($ids)
-            ->map(fn ($id) => $result[$id] ?? null)
-            ->filter()
-            ->values();
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($result[$id])) {
+                $ordered[] = $result[$id];
+            }
+        }
+
+        return collect($ordered);
     }
 
     public function currentVersion(string $modelClass): int
