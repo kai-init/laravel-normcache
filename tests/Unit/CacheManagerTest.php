@@ -109,6 +109,39 @@ class CacheManagerTest extends TestCase
         $this->assertSame(1, $manager->currentVersion('SomeModel'));
     }
 
+    public function test_current_version_is_served_from_local_after_first_read(): void
+    {
+        $this->manager->currentVersion('SomeModel'); // populates local cache
+
+        // Modify Redis directly, bypassing the manager
+        Redis::connection('model-cache-test')->set('test:ver:somemodel', 99);
+
+        // Should still return locally cached value, not the new Redis value
+        $this->assertSame(0, $this->manager->currentVersion('SomeModel'));
+    }
+
+    public function test_flush_version_local_forces_redis_read_on_next_call(): void
+    {
+        $this->manager->currentVersion('SomeModel'); // populates local cache
+
+        Redis::connection('model-cache-test')->set('test:ver:somemodel', 99);
+
+        $this->manager->flushVersionLocal();
+
+        $this->assertSame(99, $this->manager->currentVersion('SomeModel'));
+    }
+
+    public function test_invalidate_version_updates_local_with_new_value(): void
+    {
+        $this->manager->invalidateVersion('SomeModel'); // version = 1, local cache updated
+
+        // Modify Redis directly to simulate external change
+        Redis::connection('model-cache-test')->set('test:ver:somemodel', 99);
+
+        // local cache should have 1 (from the invalidation), not 99
+        $this->assertSame(1, $this->manager->currentVersion('SomeModel'));
+    }
+
     public function test_class_key_falls_back_to_class_basename(): void
     {
         $key = $this->manager->classKey('App\\Models\\Commission');

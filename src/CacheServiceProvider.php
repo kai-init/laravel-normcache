@@ -39,6 +39,13 @@ class CacheServiceProvider extends ServiceProvider
             }
         });
 
+        // Reset L1 version cache between requests when running under Octane.
+        foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
+            if (class_exists($octaneEvent)) {
+                Event::listen($octaneEvent, fn() => $this->app->make(CacheManager::class)->flushVersionLocal());
+            }
+        }
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__ . '/../config/normcache.php' => config_path('normcache.php'),

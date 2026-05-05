@@ -24,6 +24,9 @@ class CacheManager
     /** @var array<string, array<string, true>> */
     protected array $deleteQueue = [];
 
+    /** @var array<string, int> L1 in-process version cache, keyed by classKey */
+    protected array $versionLocal = [];
+
     public function __construct(
         protected string $redisConnection,
         protected int $ttl,
@@ -187,11 +190,20 @@ class CacheManager
 
     public function currentVersion(string $modelClass): int
     {
-        $value = $this->connection()->get(
-            $this->prefix('ver:' . $this->classKey($modelClass))
-        );
+        $classKey = $this->classKey($modelClass);
 
-        return $value !== null ? (int) $value : 0;
+        if (array_key_exists($classKey, $this->versionLocal)) {
+            return $this->versionLocal[$classKey];
+        }
+
+        $value = $this->connection()->get($this->prefix('ver:' . $classKey));
+
+        return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
+    }
+
+    public function flushVersionLocal(): void
+    {
+        $this->versionLocal = [];
     }
 
     public function invalidateVersion(string $modelClass, ?string $connectionName = null): void
@@ -247,7 +259,7 @@ class CacheManager
             }
         }
 
-        $this->connection()->incr(
+        $this->versionLocal[$classKey] = (int) $this->connection()->incr(
             $this->prefix('ver:' . $classKey)
         );
     }
