@@ -1,0 +1,51 @@
+{
+    "name": "kai-init/laravel-normcache",
+    "description": "Normalized, self-invalidating Redis cache for Laravel Eloquent. Caches query IDs and model entities separately with versioned invalidation.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Kai H",
+            "homepage": "https://github.com/kai-init"
+        }
+    ],
+    "keywords": [
+        "laravel",
+        "eloquent",
+        "cache",
+        "redis",
+        "normcache",
+        "normalized-cache",
+        "model-cache",
+        "query-cache"
+    ],
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "NormCache\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "NormCache\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": ["NormCache\\CacheServiceProvider"],
+            "aliases": {
+                "NormCache": "NormCache\\Facades\\NormCache"
+            }
+        }
+    }
+}

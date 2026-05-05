@@ -1,0 +1,50 @@
+<?php
+
+namespace NormCache;
+
+use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Events\TransactionRolledBack;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\ServiceProvider;
+use NormCache\Console\FlushCommand;
+
+class CacheServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
+
+        $this->app->singleton(CacheManager::class, fn() => new CacheManager(
+            config('normcache.connection'),
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            config('normcache.key_prefix'),
+            config('normcache.cooldown'),
+        ));
+
+        $this->app->alias(CacheManager::class, 'normcache');
+    }
+
+    public function boot(): void
+    {
+        Event::listen(TransactionCommitted::class, function (TransactionCommitted $event) {
+            if ($event->connection->transactionLevel() === 0) {
+                $this->app->make(CacheManager::class)->commitPending($event->connection->getName());
+            }
+        });
+
+        Event::listen(TransactionRolledBack::class, function (TransactionRolledBack $event) {
+            if ($event->connection->transactionLevel() === 0) {
+                $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
+            }
+        });
+
+        if ($this->app->runningInConsole()) {
+            $this->publishes([
+                __DIR__ . '/../config/normcache.php' => config_path('normcache.php'),
+            ], 'normcache-config');
+
+            $this->commands([FlushCommand::class]);
+        }
+    }
+}

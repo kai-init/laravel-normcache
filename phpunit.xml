@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="vendor/autoload.php" colors="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <env name="REDIS_HOST" value="127.0.0.1"/>
+        <env name="REDIS_PORT" value="6379"/>
+        <env name="REDIS_PASSWORD" value=""/>
+        <env name="NORMCACHE_ENABLED" value="true"/>
+        <env name="NORMCACHE_PREFIX" value="test:"/>
+        <env name="NORMCACHE_TTL" value="3600"/>
+        <env name="NORMCACHE_QUERY_TTL" value="60"/>
+        <env name="NORMCACHE_COOLDOWN" value="0"/>
+    </php>
+</phpunit>
