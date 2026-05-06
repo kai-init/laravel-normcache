@@ -6,5 +6,5 @@ use Illuminate\Database\Eloquent\Relations\MorphToMany;
 
 class CacheableMorphToMany extends MorphToMany
 {
-    use InvalidatesPivotCache;
+    use CachesPivotRelation, InvalidatesPivotCache;
 }

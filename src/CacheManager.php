@@ -43,6 +43,11 @@ class CacheManager
         return config('normcache.enabled', true);
     }
 
+    public function ttl(): int
+    {
+        return $this->ttl;
+    }
+
     public function queryTtl(): int
     {
         return $this->queryTtl;
@@ -310,7 +315,7 @@ class CacheManager
 
         $this->doInvalidateVersion($modelClass);
 
-        foreach (['query', 'model', 'agg', 'count'] as $namespace) {
+        foreach (['query', 'model', 'agg', 'count', 'pivot'] as $namespace) {
             $keys = $this->scan($this->prefix("{$namespace}:{$classKey}:*"));
             $this->asyncDel($keys);
         }
@@ -318,7 +323,7 @@ class CacheManager
 
     public function flushAll(): int
     {
-        $patterns = ['query:*', 'model:*', 'ver:*', 'agg:*', 'count:*', 'cooldown:*', 'building:*'];
+        $patterns = ['query:*', 'model:*', 'ver:*', 'agg:*', 'count:*', 'pivot:*', 'cooldown:*', 'building:*'];
         $total = 0;
 
         foreach ($patterns as $pattern) {

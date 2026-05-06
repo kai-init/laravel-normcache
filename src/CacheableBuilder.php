@@ -27,6 +27,11 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
+    public function isCacheSkipped(): bool
+    {
+        return $this->skipCache;
+    }
+
     public function remember(int $ttl): static
     {
         $this->queryTtl = $ttl;
