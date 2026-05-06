@@ -29,30 +29,38 @@ trait CachesPivotRelation
 
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
-        $parentVersion = NormCache::currentVersion($parentClass);
-        $relatedVersion = NormCache::currentVersion($relatedClass);
         $parentClassKey = NormCache::classKey($parentClass);
-        $relationName = $this->relationName;
 
-        $keyMap = [];
-        foreach ($this->eagerParentIds as $parentId) {
-            $keyMap[$parentId] = "pivot:{$parentClassKey}:{$relationName}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
-        }
+        $cache = NormCache::getPivotCache(
+            $parentClass,
+            $relatedClass,
+            $this->relationName,
+            $this->eagerParentIds
+        );
 
-        $fetched = NormCache::getMany(array_values($keyMap));
-        $cachedByParentId = array_combine(array_keys($keyMap), $fetched);
+        $parentVersion = $cache['parentVersion'];
+        $relatedVersion = $cache['relatedVersion'];
+        $cachedByParentId = $cache['data'];
 
         $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
 
         if (!empty($missedIds)) {
-            event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$relationName}"));
+            event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+            
             $results = parent::get($columns);
+            
+            $relatedKey = NormCache::classKey($relatedClass);
+            $keyMap = [];
+            foreach ($this->eagerParentIds as $parentId) {
+                $keyMap[$parentId] = "pivot:{$parentClassKey}:{$relatedKey}:{$this->relationName}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
+            }
+            
             $this->populatePivotCache($results, $keyMap, $relatedClass);
 
             return $results;
         }
 
-        event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$relationName}"));
+        event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
 
         return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass);
     }

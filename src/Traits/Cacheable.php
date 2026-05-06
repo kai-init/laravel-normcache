@@ -2,7 +2,6 @@
 
 namespace NormCache\Traits;
 
-use Illuminate\Contracts\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
@@ -33,14 +32,17 @@ trait Cacheable
         NormCache::flushInstance(static::class, $this->getKey(), $this->getConnectionName());
     }
 
-    public function newEloquentBuilder($query): CacheableBuilder
+    public function newEloquentBuilder($query)
     {
+        if (!config('normcache.enabled', true)) {
+            return parent::newEloquentBuilder($query);
+        }
         return new CacheableBuilder($query);
     }
 
     protected function newMorphToMany(
-        Builder $query,
-        Model $parent,
+        \Illuminate\Contracts\Database\Eloquent\Builder $query,
+        \Illuminate\Database\Eloquent\Model $parent,
         $name,
         $table,
         $foreignPivotKey,
@@ -49,7 +51,10 @@ trait Cacheable
         $relatedKey,
         $relationName = null,
         $inverse = false,
-    ): CacheableMorphToMany {
+    ) {
+        if (!config('normcache.enabled', true)) {
+            return parent::newMorphToMany($query, $parent, $name, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName, $inverse);
+        }
         return new CacheableMorphToMany(
             $query, $parent, $name, $table, $foreignPivotKey,
             $relatedPivotKey, $parentKey, $relatedKey, $relationName, $inverse,
@@ -57,43 +62,52 @@ trait Cacheable
     }
 
     protected function newHasManyThrough(
-        Builder $query,
-        Model $farParent,
-        Model $throughParent,
+        \Illuminate\Contracts\Database\Eloquent\Builder $query,
+        \Illuminate\Database\Eloquent\Model $farParent,
+        \Illuminate\Database\Eloquent\Model $throughParent,
         $firstKey,
         $secondKey,
         $localKey,
         $secondLocalKey,
-    ): CacheableHasManyThrough {
+    ) {
+        if (!config('normcache.enabled', true)) {
+            return parent::newHasManyThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
+        }
         return new CacheableHasManyThrough(
             $query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey,
         );
     }
 
     protected function newHasOneThrough(
-        Builder $query,
-        Model $farParent,
-        Model $throughParent,
+        \Illuminate\Contracts\Database\Eloquent\Builder $query,
+        \Illuminate\Database\Eloquent\Model $farParent,
+        \Illuminate\Database\Eloquent\Model $throughParent,
         $firstKey,
         $secondKey,
         $localKey,
         $secondLocalKey,
-    ): CacheableHasOneThrough {
+    ) {
+        if (!config('normcache.enabled', true)) {
+            return parent::newHasOneThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
+        }
         return new CacheableHasOneThrough(
             $query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey,
         );
     }
 
     protected function newBelongsToMany(
-        Builder $query,
-        Model $parent,
+        \Illuminate\Contracts\Database\Eloquent\Builder $query,
+        \Illuminate\Database\Eloquent\Model $parent,
         $table,
         $foreignPivotKey,
         $relatedPivotKey,
         $parentKey,
         $relatedKey,
         $relationName = null,
-    ): CacheableBelongsToMany {
+    ) {
+        if (!config('normcache.enabled', true)) {
+            return parent::newBelongsToMany($query, $parent, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName);
+        }
         return new CacheableBelongsToMany(
             $query, $parent, $table, $foreignPivotKey,
             $relatedPivotKey, $parentKey, $relatedKey, $relationName,

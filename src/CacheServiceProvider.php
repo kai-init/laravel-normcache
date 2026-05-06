@@ -27,22 +27,24 @@ class CacheServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        Event::listen(TransactionCommitted::class, function (TransactionCommitted $event) {
-            if ($event->connection->transactionLevel() === 0) {
-                $this->app->make(CacheManager::class)->commitPending($event->connection->getName());
-            }
-        });
+        if (config('normcache.enabled', true)) {
+            Event::listen(TransactionCommitted::class, function (TransactionCommitted $event) {
+                if ($event->connection->transactionLevel() === 0) {
+                    $this->app->make(CacheManager::class)->commitPending($event->connection->getName());
+                }
+            });
 
-        Event::listen(TransactionRolledBack::class, function (TransactionRolledBack $event) {
-            if ($event->connection->transactionLevel() === 0) {
-                $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
-            }
-        });
+            Event::listen(TransactionRolledBack::class, function (TransactionRolledBack $event) {
+                if ($event->connection->transactionLevel() === 0) {
+                    $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
+                }
+            });
 
-        // Reset L1 version cache between requests when running under Octane.
-        foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
-            if (class_exists($octaneEvent)) {
-                Event::listen($octaneEvent, fn() => $this->app->make(CacheManager::class)->flushVersionLocal());
+            // Reset L1 version cache between requests when running under Octane.
+            foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
+                if (class_exists($octaneEvent)) {
+                    Event::listen($octaneEvent, fn() => $this->app->make(CacheManager::class)->flushVersionLocal());
+                }
             }
         }
 
