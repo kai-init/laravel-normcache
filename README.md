@@ -97,14 +97,14 @@ php artisan vendor:publish --tag=normcache-config
 
 ## Setup
 
-Add the `NormCacheable` trait to any Eloquent model you want cached:
+Add the `Cacheable` trait to any Eloquent model you want cached:
 
 ```php
-use NormCache\Traits\NormCacheable;
+use NormCache\Traits\Cacheable;
 
 class User extends Model
 {
-    use NormCacheable;
+    use Cacheable;
 }
 ```
 
@@ -142,6 +142,20 @@ User::query()->remember(600)->get();
 // withCount, withSum, withAvg, withMin, withMax, withExists
 User::cacheAggregates()->withCount('posts')->get();
 ```
+
+### Relationship caching
+
+`BelongsToMany` and `MorphToMany` relationships are cached when eager-loaded. On a warm hit, no SQL is executed — the pivot mapping is served from Redis and related models are loaded from the model cache.
+
+```php
+// First load: runs the join SQL, caches the pivot map + related models
+Post::with('tags')->get();
+
+// Subsequent loads: zero SQL
+Post::with('tags')->get();
+```
+
+Invalidation is automatic. Calling `attach`, `detach`, `sync`, or `updateExistingPivot` bumps the version on both sides, which makes the pivot cache keys unreachable on the next read.
 
 ### Manual flush
 
@@ -220,6 +234,7 @@ Invalidations that happen inside a database transaction are deferred until the t
 - **Writes use pipelining**: cache warm-up for missed model keys is batched in one pipeline call.
 - **Bulk deletes use `UNLINK`**: non-blocking async deletion (Redis 4.0+) with 1000-key chunking.
 - **No cache scanning on invalidation**: version shift makes stale keys unreachable without touching them.
+- **igbinary serialization**: when the `igbinary` PHP extension is installed, model attributes are serialized with igbinary instead of PHP's native `serialize`
 
 ## License
 
