@@ -16,15 +16,14 @@ trait CachesOneOrManyThrough
 
         $builder = $this->prepareQueryBuilder($columns);
         $base = $builder->toBase();
+        $hash = QueryHasher::hash($base);
 
-        $key = 'through:v' . NormCache::currentVersion($this->related::class)
-            . ':v' . NormCache::currentVersion($this->throughParent::class)
-            . ':' . QueryHasher::hash($base);
-
-        $cached = NormCache::get($key);
+        $cacheData = NormCache::getThroughCache($this->related::class, $this->throughParent::class, $hash);
+        $key = $cacheData['key'];
+        $cached = $cacheData['data'];
 
         if ($cached !== null) {
-            $prototype = new ($this->related::class);
+            $prototype = $this->related;
 
             $models = array_map(function ($attrs) use ($prototype) {
                 $instance = clone $prototype;

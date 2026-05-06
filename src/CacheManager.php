@@ -119,6 +119,153 @@ class CacheManager
         });
     }
 
+    public function setAndReleaseLock(string $key, mixed $value, int $ttl, string $lockKey): void
+    {
+        $this->connection()->pipeline(function ($pipe) use ($key, $value, $ttl, $lockKey) {
+            $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
+            $pipe->del($this->prefix($lockKey));
+        });
+    }
+
+    public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
+    {
+        $classKey = $this->classKey($modelClass);
+        $ver = $this->versionLocal[$classKey] ?? null;
+
+        if ($ver === null) {
+            $script = <<<'LUA'
+                local v = redis.call('GET', KEYS[1]) or '0'
+                return {v, redis.call('GET', ARGV[1] .. v .. ARGV[2])}
+            LUA;
+
+            [$ver, $raw] = $this->connection()->eval(
+                $script, 1,
+                $this->prefix('ver:' . $classKey),
+                $this->prefix("{$namespace}:{$classKey}:v"),
+                ":{$hash}"
+            );
+
+            $this->versionLocal[$classKey] = $ver = (int) $ver;
+            $data = $raw !== false && $raw !== null ? $this->unserialize($raw) : null;
+        } else {
+            $data = $this->get("{$namespace}:{$classKey}:v{$ver}:{$hash}");
+        }
+
+        return [
+            'key' => "{$namespace}:{$classKey}:v{$ver}:{$hash}",
+            'data' => $data,
+            'version' => $ver,
+        ];
+    }
+
+    public function getThroughCache(string $relatedClass, string $throughClass, string $hash): array
+    {
+        $rk = $this->classKey($relatedClass);
+        $tk = $this->classKey($throughClass);
+
+        $rv = $this->versionLocal[$rk] ?? null;
+        $tv = $this->versionLocal[$tk] ?? null;
+
+        if ($rv === null || $tv === null) {
+            $script = <<<'LUA'
+                local rv = redis.call('GET', KEYS[1]) or '0'
+                local tv = redis.call('GET', KEYS[2]) or '0'
+                local data = redis.call('GET', ARGV[1] .. rv .. ':v' .. tv .. ARGV[2])
+                return {rv, tv, data}
+            LUA;
+
+            $result = $this->connection()->eval(
+                $script, 2,
+                $this->prefix('ver:' . $rk),
+                $this->prefix('ver:' . $tk),
+                $this->prefix('through:v'),
+                ":{$hash}"
+            );
+
+            $this->versionLocal[$rk] = $rv = (int) ($result[0] ?? 0);
+            $this->versionLocal[$tk] = $tv = (int) ($result[1] ?? 0);
+            $raw = $result[2] ?? null;
+            $data = $raw !== false && $raw !== null ? $this->unserialize($raw) : null;
+        } else {
+            $data = $this->get("through:v{$rv}:v{$tv}:{$hash}");
+        }
+
+        return [
+            'key' => "through:v{$rv}:v{$tv}:{$hash}",
+            'data' => $data,
+        ];
+    }
+
+    public function getAggregateCache(string $modelClass, string $versionClass, array $ids, string $column, string $function, string $relation, string $hash): array
+    {
+        $classKey = $this->classKey($modelClass);
+        $vClassKey = $this->classKey($versionClass);
+        $ver = $this->versionLocal[$vClassKey] ?? null;
+        
+        $aggPrefix = "agg:{$classKey}:";
+        $aggSuffix = ":{$column}:{$function}:{$relation}:{$hash}:v";
+
+        if ($ver === null) {
+            $script = <<<'LUA'
+                local v = redis.call('GET', KEYS[1]) or '0'
+                local res = {}
+                local prefix = ARGV[1]
+                local suffix = ARGV[2] .. v
+                for i, id in ipairs(ARGV) do
+                    if i > 2 then
+                        res[#res + 1] = redis.call('GET', prefix .. id .. suffix)
+                    end
+                end
+                return {v, res}
+            LUA;
+
+            $args = array_merge([$this->prefix($aggPrefix), $aggSuffix], $ids);
+            [$ver, $raws] = $this->connection()->eval($script, 1, $this->prefix('ver:' . $vClassKey), ...$args);
+
+            $this->versionLocal[$vClassKey] = $ver = (int) $ver;
+            $data = array_map(fn($v) => $v !== false && $v !== null ? $this->unserialize($v) : null, $raws);
+        } else {
+            $keys = array_map(fn($id) => "{$aggPrefix}{$id}{$aggSuffix}{$ver}", $ids);
+            $data = $this->getMany($keys);
+        }
+
+        return [
+            'version' => $ver,
+            'data' => array_combine($ids, $data),
+        ];
+    }
+
+    public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
+    {
+        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
+            foreach ($modelClasses as $modelClass) {
+                $this->invalidationQueue[$connectionName][$modelClass] = true;
+            }
+            return;
+        }
+
+        $this->connection()->pipeline(function ($pipe) use ($modelClasses) {
+            foreach ($modelClasses as $modelClass) {
+                $classKey = $this->classKey($modelClass);
+                
+                if ($this->cooldown > 0) {
+                    $cooldownKey = $this->prefix("cooldown:$classKey");
+                    $verKey = $this->prefix('ver:' . $classKey);
+                    $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
+                    $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
+                } else {
+                    $pipe->incr($this->prefix('ver:' . $classKey));
+                }
+            }
+        });
+
+        // We don't update versionLocal here because we don't know the new values without another round trip or complex Lua.
+        // It will be lazily updated on next fetch.
+        foreach ($modelClasses as $modelClass) {
+            unset($this->versionLocal[$this->classKey($modelClass)]);
+        }
+    }
+
     public function getModels(array $ids, string $modelClass, ?array $columns = null): array
     {
         if ($ids === []) {
@@ -265,12 +412,41 @@ class CacheManager
 
         unset($this->invalidationQueue[$connectionName], $this->deleteQueue[$connectionName]);
 
-        foreach ($invalidations as $modelClass) {
-            $this->doInvalidateVersion($modelClass);
+        if (empty($invalidations) && empty($deletes)) {
+            return;
         }
 
-        if ($deletes !== []) {
-            $this->asyncDel(array_map(fn($k) => $this->prefix($k), $deletes));
+        $results = $this->connection()->pipeline(function ($pipe) use ($invalidations, $deletes) {
+            foreach ($invalidations as $modelClass) {
+                $classKey = $this->classKey($modelClass);
+                
+                if ($this->cooldown > 0) {
+                    $cooldownKey = $this->prefix("cooldown:$classKey");
+                    $verKey = $this->prefix('ver:' . $classKey);
+                    $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
+                    $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
+                } else {
+                    $pipe->incr($this->prefix('ver:' . $classKey));
+                }
+            }
+
+            if (!empty($deletes)) {
+                $prefixed = array_map(fn($k) => $this->prefix($k), $deletes);
+                foreach (array_chunk($prefixed, 1000) as $chunk) {
+                    try {
+                        $pipe->unlink(...$chunk);
+                    } catch (\Throwable) {
+                        $pipe->del(...$chunk);
+                    }
+                }
+            }
+        });
+
+        foreach ($invalidations as $i => $modelClass) {
+            $classKey = $this->classKey($modelClass);
+            if (isset($results[$i]) && is_numeric($results[$i])) {
+                $this->versionLocal[$classKey] = (int) $results[$i];
+            }
         }
     }
 
@@ -285,10 +461,15 @@ class CacheManager
 
         if ($this->cooldown > 0) {
             $cooldownKey = $this->prefix("cooldown:$classKey");
+            $verKey = $this->prefix('ver:' . $classKey);
 
-            if (!$this->connection()->set($cooldownKey, 1, 'EX', $this->cooldown, 'NX')) {
-                return;
+            $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
+            $newVer = $this->connection()->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
+
+            if (is_numeric($newVer)) {
+                $this->versionLocal[$classKey] = (int) $newVer;
             }
+            return;
         }
 
         $this->versionLocal[$classKey] = (int) $this->connection()->incr(
@@ -307,6 +488,33 @@ class CacheManager
     public function modelKey(string $modelClass, int|string $id): string
     {
         return 'model:' . $this->classKey($modelClass) . ':' . $id;
+    }
+
+    public function flushInstance(string $modelClass, int|string $id, ?string $connectionName = null): void
+    {
+        $key = $this->modelKey($modelClass, $id);
+
+        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
+            $this->deleteQueue[$connectionName][$key] = true;
+            $this->invalidationQueue[$connectionName][$modelClass] = true;
+            return;
+        }
+
+        $this->connection()->pipeline(function ($pipe) use ($key, $modelClass) {
+            $pipe->del($this->prefix($key));
+            
+            $classKey = $this->classKey($modelClass);
+            if ($this->cooldown > 0) {
+                $cooldownKey = $this->prefix("cooldown:$classKey");
+                $verKey = $this->prefix('ver:' . $classKey);
+                $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
+                $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
+            } else {
+                $pipe->incr($this->prefix('ver:' . $classKey));
+            }
+        });
+
+        unset($this->versionLocal[$this->classKey($modelClass)]);
     }
 
     public function flushModel(string $modelClass): void
@@ -342,13 +550,19 @@ class CacheManager
 
     protected function asyncDel(array $prefixedKeys): void
     {
-        foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
-            try {
-                $this->connection()->unlink(...$chunk);
-            } catch (\Throwable) {
-                $this->connection()->del(...$chunk);
-            }
+        if (empty($prefixedKeys)) {
+            return;
         }
+
+        $this->connection()->pipeline(function ($pipe) use ($prefixedKeys) {
+            foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
+                try {
+                    $pipe->unlink(...$chunk);
+                } catch (\Throwable) {
+                    $pipe->del(...$chunk);
+                }
+            }
+        });
     }
 
     protected function scan(string $pattern): array
@@ -383,27 +597,19 @@ class CacheManager
 
     protected function serialize(mixed $value): mixed
     {
-        if ($this->igbinary) {
-            return igbinary_serialize($value);
-        }
-
         if (is_numeric($value) && is_finite($value)) {
             return $value;
         }
 
-        return serialize($value);
+        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
     }
 
     protected function unserialize(mixed $value): mixed
     {
-        if ($this->igbinary) {
-            return igbinary_unserialize($value);
-        }
-
         if (is_numeric($value)) {
             return $value;
         }
 
-        return unserialize($value);
+        return $this->igbinary ? igbinary_unserialize($value) : unserialize($value);
     }
 }

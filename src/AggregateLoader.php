@@ -26,19 +26,15 @@ class AggregateLoader
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
             $relation = $this->model->{$name}();
-            $relatedClass = $relation->getRelated()::class;
-            $relatedVersion = NormCache::currentVersion($relatedClass);
-            $constraintHash = $this->constraintKey($relatedClass, $constraint);
+            $relatedModel = $relation->getRelated();
+            $relatedClass = $relatedModel::class;
+            $constraintHash = $this->constraintKey($relatedModel, $constraint);
             $alias = $this->resolveAlias($name, $function, $column);
 
-            $keyMap = [];
-            foreach ($models as $model) {
-                $id = $model->getKey();
-                $keyMap[$id] = "agg:{$classKey}:{$id}:{$column}:{$function}:{$name}:{$constraintHash}:v{$relatedVersion}";
-            }
-
-            $fetched = NormCache::getMany(array_values($keyMap));
-            $cachedById = array_combine(array_keys($keyMap), $fetched);
+            $ids = array_map(fn($m) => $m->getKey(), $models);
+            $cache = NormCache::getAggregateCache($parentClass, $relatedClass, $ids, $column, $function, $name, $constraintHash);
+            $relatedVersion = $cache['version'];
+            $cachedById = $cache['data'];
 
             $missed = array_keys(array_filter($cachedById, fn($v) => !is_array($v)));
 
@@ -48,7 +44,8 @@ class AggregateLoader
 
                 $toCache = [];
                 foreach ($missed as $id) {
-                    $toCache[$keyMap[$id]] = ['v' => $fromDb[$id] ?? null];
+                    $key = "agg:{$classKey}:{$id}:{$column}:{$function}:{$name}:{$constraintHash}:v{$relatedVersion}";
+                    $toCache[$key] = ['v' => $fromDb[$id] ?? null];
                 }
 
                 NormCache::setMany($toCache, NormCache::queryTtl());
@@ -85,13 +82,13 @@ class AggregateLoader
             ->all();
     }
 
-    private function constraintKey(string $relatedClass, ?callable $constraint): string
+    private function constraintKey(Model $relatedModel, ?callable $constraint): string
     {
         if ($constraint === null) {
             return 'nc';
         }
 
-        $builder = (new $relatedClass)->newQueryWithoutScopes()->withoutCache();
+        $builder = $relatedModel->newQueryWithoutScopes()->withoutCache();
         $constraint($builder);
         $base = $builder->toBase();
 

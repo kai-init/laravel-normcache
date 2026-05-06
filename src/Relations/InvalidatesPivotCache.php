@@ -54,7 +54,9 @@ trait InvalidatesPivotCache
     private function invalidatePivotCache(): void
     {
         $conn = $this->parent->getConnectionName();
-        NormCache::invalidateVersion($this->parent::class, $conn);
-        NormCache::invalidateVersion($this->related::class, $conn);
+        NormCache::invalidateMultipleVersions([
+            $this->parent::class,
+            $this->related::class,
+        ], $conn);
     }
 }

@@ -96,9 +96,18 @@ class CacheableBuilder extends Builder
 
         $keyBase = (clone $base);
         $keyBase->columns = null;
+        $hash = $this->queryCacheKey($keyBase);
 
-        $key = 'query:' . NormCache::classKey($model) . ':v' . NormCache::currentVersion($model) . ':' . $this->queryCacheKey($keyBase);
-        $ids = $this->resolveIds($key, $base);
+        $cacheData = NormCache::getNamespacedCache('query', $model, $hash);
+        $key = $cacheData['key'];
+
+        if ($cacheData['data'] !== null) {
+            $ids = $cacheData['data'];
+            event(new QueryCacheHit($model, $key));
+        } else {
+            $ids = $this->resolveIds($key, $base);
+        }
+
         $models = NormCache::getModels($ids, $model, $selectedCols);
 
         if (!empty($this->pendingAggregates)) {
@@ -136,10 +145,11 @@ class CacheableBuilder extends Builder
         }
 
         $base = $this->toBase();
-        $classKey = NormCache::classKey($this->model::class);
-        $countKey = "count:{$classKey}:v" . NormCache::currentVersion($this->model::class) . ':' . QueryHasher::hash($base);
+        $hash = QueryHasher::hash($base);
 
-        $cachedTotal = NormCache::get($countKey);
+        $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
+        $countKey = $cacheData['key'];
+        $cachedTotal = $cacheData['data'];
 
         if ($cachedTotal === null) {
             $cachedTotal = $base->getCountForPagination();
@@ -255,12 +265,6 @@ class CacheableBuilder extends Builder
 
     private function resolveIds(string $key, QueryBuilder $base): array
     {
-        if (($ids = NormCache::get($key)) !== null) {
-            event(new QueryCacheHit($this->model::class, $key));
-
-            return $ids;
-        }
-
         $lockKey = 'building:' . $key;
 
         if (!NormCache::setIfAbsent($lockKey, 1, 5)) {
@@ -273,9 +277,12 @@ class CacheableBuilder extends Builder
 
         try {
             $ids = $this->buildIds($base);
-            NormCache::set($key, $ids, $this->queryTtl ?? NormCache::queryTtl());
+            NormCache::setAndReleaseLock($key, $ids, $this->queryTtl ?? NormCache::queryTtl(), $lockKey);
+            $lockKey = null;
         } finally {
-            NormCache::delete($lockKey);
+            if ($lockKey) {
+                NormCache::delete($lockKey);
+            }
         }
 
         return $ids;

@@ -30,9 +30,7 @@ trait Cacheable
 
     public function flush(): void
     {
-        $conn = $this->getConnectionName();
-        NormCache::deferDelete(NormCache::modelKey(static::class, $this->getKey()), $conn);
-        NormCache::invalidateVersion(static::class, $conn);
+        NormCache::flushInstance(static::class, $this->getKey(), $this->getConnectionName());
     }
 
     public function newEloquentBuilder($query): CacheableBuilder
