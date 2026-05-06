@@ -211,7 +211,7 @@ class CacheManagerTest extends TestCase
 
         $raw = Redis::connection('model-cache-test')->get('test:num');
 
-        $this->assertSame('99', $raw);
         $this->assertStringNotContainsString('i:', $raw);
+        $this->assertSame(99, $this->manager->get('num'));
     }
 }
