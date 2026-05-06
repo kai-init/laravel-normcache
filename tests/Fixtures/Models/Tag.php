@@ -4,11 +4,11 @@ namespace NormCache\Tests\Fixtures\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphToMany;
-use NormCache\Traits\NormCacheable;
+use NormCache\Traits\Cacheable;
 
 class Tag extends Model
 {
-    use NormCacheable;
+    use Cacheable;
 
     protected $guarded = [];
 

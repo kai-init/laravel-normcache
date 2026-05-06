@@ -4,7 +4,7 @@ namespace NormCache\Console;
 
 use Illuminate\Console\Command;
 use NormCache\Facades\NormCache;
-use NormCache\Traits\NormCacheable;
+use NormCache\Traits\Cacheable;
 
 class FlushCommand extends Command
 {
@@ -37,7 +37,7 @@ class FlushCommand extends Command
             return Command::FAILURE;
         }
 
-        if (!in_array(NormCacheable::class, class_uses_recursive($model), true)) {
+        if (!in_array(Cacheable::class, class_uses_recursive($model), true)) {
             $this->error("Class [{$model}] does not use the Cacheable trait.");
 
             return Command::FAILURE;

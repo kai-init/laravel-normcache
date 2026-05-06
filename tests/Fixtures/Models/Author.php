@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use NormCache\Traits\NormCacheable;
+use NormCache\Traits\Cacheable;
 
 class Author extends Model
 {
-    use NormCacheable;
+    use Cacheable;
 
     protected $guarded = [];
 

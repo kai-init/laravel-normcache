@@ -14,9 +14,9 @@ use NormCache\Relations\CacheableMorphToMany;
 /**
  * @mixin Model
  */
-trait NormCacheable
+trait Cacheable
 {
-    public static function bootNormCacheable(): void
+    public static function bootCacheable(): void
     {
         if (!config('normcache.enabled', true)) {
             return;

@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use NormCache\Traits\NormCacheable;
+use NormCache\Traits\Cacheable;
 
 class Post extends Model
 {
-    use NormCacheable;
+    use Cacheable;
     use SoftDeletes;
 
     protected $guarded = [];
