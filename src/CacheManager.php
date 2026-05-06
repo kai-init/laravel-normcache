@@ -26,13 +26,17 @@ class CacheManager
     /** @var array<string, int> L1 in-process version cache, keyed by classKey */
     protected array $versionLocal = [];
 
+    protected bool $igbinary;
+
     public function __construct(
         protected string $redisConnection,
         protected int $ttl,
         protected int $queryTtl,
         protected string $keyPrefix,
         protected int $cooldown,
-    ) {}
+    ) {
+        $this->igbinary = \extension_loaded('igbinary');
+    }
 
     public function isEnabled(): bool
     {
@@ -374,6 +378,10 @@ class CacheManager
 
     protected function serialize(mixed $value): mixed
     {
+        if ($this->igbinary) {
+            return igbinary_serialize($value);
+        }
+
         if (is_numeric($value) && is_finite($value)) {
             return $value;
         }
@@ -383,6 +391,10 @@ class CacheManager
 
     protected function unserialize(mixed $value): mixed
     {
+        if ($this->igbinary) {
+            return igbinary_unserialize($value);
+        }
+
         if (is_numeric($value)) {
             return $value;
         }
