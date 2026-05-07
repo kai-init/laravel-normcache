@@ -101,7 +101,7 @@ trait CachesPivotRelation
         NormCache::setMany($toPivotCache, NormCache::queryTtl());
 
         if (!empty($toModelCache)) {
-            NormCache::setMany($toModelCache, NormCache::ttl());
+            NormCache::setManyModels($relatedClass, $toModelCache, NormCache::ttl());
         }
     }
 

@@ -190,6 +190,11 @@ class CacheableBuilder extends Builder
         }
 
         $base = $this->toBase();
+
+        if (!$this->isPureModelQuery($base)) {
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        }
+
         $hash = QueryHasher::hash($base);
 
         $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
@@ -267,9 +272,17 @@ class CacheableBuilder extends Builder
         $lockKey = 'building:' . $key;
 
         if (!NormCache::setIfAbsent($lockKey, 1, 5)) {
-            usleep(50_000);
+            $delay = 25_000;
+            for ($i = 0; $i < 5; $i++) {
+                usleep($delay);
+                $ids = NormCache::getQueryIds($key);
+                if ($ids !== null) {
+                    return $ids;
+                }
+                $delay = min($delay * 2, 200_000);
+            }
 
-            return NormCache::get($key) ?? $this->buildIds($base);
+            return $this->buildIds($base);
         }
 
         event(new QueryCacheMiss($this->model::class, $key));

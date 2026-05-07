@@ -10,7 +10,7 @@ trait CachesOneOrManyThrough
 {
     public function get($columns = ['*']): Collection
     {
-        if (!NormCache::isEnabled()) {
+        if (!NormCache::isEnabled() || $this->parent->getConnection()->transactionLevel() > 0) {
             return parent::get($columns);
         }
 

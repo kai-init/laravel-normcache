@@ -150,6 +150,39 @@ class CacheManager
         }
     }
 
+    public function setManyModels(string $modelClass, array $attrsByKey, int $ttl): void
+    {
+        if (empty($attrsByKey)) {
+            return;
+        }
+
+        $classKey = $this->classKey($modelClass);
+        $memberKey = $this->prefix("members:model:{{$classKey}}");
+        $groups = $this->groupByTag(array_keys($attrsByKey));
+        $connection = $this->connection();
+
+        foreach ($groups as $keys) {
+            $connection->pipeline(function ($pipe) use ($keys, $attrsByKey, $ttl, $memberKey) {
+                foreach ($keys as $key) {
+                    $prefixed = $this->prefix($key);
+                    $pipe->setex($prefixed, $ttl, $this->serialize($attrsByKey[$key]));
+                    $pipe->sadd($memberKey, $prefixed);
+                }
+            });
+        }
+    }
+
+    public function getQueryIds(string $key): ?array
+    {
+        $value = $this->connection()->get($this->prefix($key));
+        if ($value === null) {
+            return null;
+        }
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
     public function setAndReleaseLock(string $key, mixed $value, int $ttl, string $lockKey): void
     {
         $keys = [$key, $lockKey];
@@ -187,41 +220,23 @@ class CacheManager
         $classKey = $this->classKey($modelClass);
         $version = $this->currentVersion($modelClass);
         $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
-        
-        $script = <<<'LUA'
-            local ids_raw = redis.call('GET', KEYS[1])
-            if not ids_raw then
-                return nil
-            end
-            
-            local ids = cjson.decode(ids_raw)
-            if #ids == 0 then
-                return {{}, {}}
-            end
-            
-            local model_keys = {}
-            for i, id in ipairs(ids) do
-                table.insert(model_keys, ARGV[1] .. id)
-            end
-            
-            return {ids, redis.call('MGET', unpack(model_keys))}
-        LUA;
 
-        $result = $this->connection()->eval(
-            $script,
-            1,
-            $this->prefix($queryKey),
-            $this->prefix("model:{{$classKey}}:")
-        );
+        $ids = $this->getQueryIds($queryKey);
 
-        if (!is_array($result)) {
+        if ($ids === null) {
             return ['key' => $queryKey, 'ids' => null, 'models' => null];
         }
 
+        if (empty($ids)) {
+            return ['key' => $queryKey, 'ids' => [], 'models' => []];
+        }
+
+        $modelKeys = array_map(fn($id) => "model:{{$classKey}}:{$id}", $ids);
+
         return [
-            'key' => $queryKey,
-            'ids' => $result[0],
-            'models' => $result[1]
+            'key'    => $queryKey,
+            'ids'    => $ids,
+            'models' => $this->getMany($modelKeys),
         ];
     }
 
@@ -543,21 +558,8 @@ class CacheManager
             return;
         }
 
-        $this->connection()->pipeline(function ($pipe) use ($key, $class) {
-            $pipe->del($this->prefix($key));
-            
-            $classKey = $this->classKey($class);
-            if ($this->cooldown > 0) {
-                $cooldownKey = $this->prefix("cooldown:{{$classKey}}:");
-                $verKey = $this->prefix("ver:{{$classKey}}:");
-                $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
-                $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
-            } else {
-                $pipe->incr($this->prefix("ver:{{$classKey}}:"));
-            }
-        });
-
-        unset($this->versionLocal[$this->classKey($class)]);
+        $this->connection()->del($this->prefix($key));
+        $this->doInvalidateVersion($class);
     }
 
     public function flushModel(string $modelClass): void
@@ -583,20 +585,32 @@ class CacheManager
         $connection = $this->connection();
         $client = $connection->client();
 
+        // PhpRedis RedisCluster
         if ($this->cluster && method_exists($client, '_masters')) {
             foreach ($client->_masters() as $node) {
                 foreach ($patterns as $pattern) {
                     $it = null;
-                    while ($keys = $client->scan($it, $node, $this->prefix($pattern), 1000)) {
-                        $total += count($keys);
-                        $this->asyncDel($keys);
-                    }
+                    do {
+                        $keys = $client->scan($it, $node, $this->prefix($pattern), 1000);
+                        if ($keys !== false && !empty($keys)) {
+                            $total += count($keys);
+                            $this->asyncDel($keys);
+                        }
+                    } while ($it);
                 }
             }
             return $total;
         }
 
-        // Fallback for Predis or Single Node
+        // Predis cluster: getConnection() exposes an iterable pool of per-node connections
+        if ($this->cluster && method_exists($client, 'getConnection') && is_iterable($pool = $client->getConnection())) {
+            foreach ($pool as $node) {
+                $total += $this->flushPredisNode($node, $patterns);
+            }
+            return $total;
+        }
+
+        // Single-node fallback (PhpRedis standalone, Predis standalone, etc.)
         foreach ($patterns as $pattern) {
             $keys = $connection->keys($this->prefix($pattern));
             if (!empty($keys)) {
@@ -606,6 +620,46 @@ class CacheManager
         }
 
         return $total;
+    }
+
+    private function flushPredisNode(mixed $node, array $patterns): int
+    {
+        if (!method_exists($node, 'executeCommand')) {
+            return 0;
+        }
+
+        $total = 0;
+
+        foreach ($patterns as $pattern) {
+            $cursor = 0;
+            do {
+                $command = $this->predisRawCommand('SCAN', [(string) $cursor, 'MATCH', $this->prefix($pattern), 'COUNT', '1000']);
+                if ($command === null) {
+                    return $total;
+                }
+                $result = $node->executeCommand($command);
+                if (!is_array($result) || count($result) < 2) {
+                    break;
+                }
+                $cursor = (int) $result[0];
+                $keys = (array) $result[1];
+                if (!empty($keys)) {
+                    $total += count($keys);
+                    $this->asyncDel($keys);
+                }
+            } while ($cursor !== 0);
+        }
+
+        return $total;
+    }
+
+    private function predisRawCommand(string $id, array $args): ?object
+    {
+        if (class_exists('Predis\Command\RawCommand')) {
+            return new \Predis\Command\RawCommand([$id, ...$args]);
+        }
+
+        return null;
     }
 
     protected function connection(): Connection
