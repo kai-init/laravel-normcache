@@ -115,13 +115,21 @@ class CacheManager
             return [];
         }
 
-        $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
-        $raw = $this->connection()->mget($prefixed);
+        $groups = $this->groupByTag($keys);
+        $results = [];
 
-        return array_map(
-            fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
-            $raw
-        );
+        foreach ($groups as $groupKeys) {
+            $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
+            $raw = $this->connection()->mget($prefixed);
+            
+            foreach ($groupKeys as $i => $key) {
+                $v = $raw[$i];
+                $results[$key] = ($v !== null && $v !== false) ? $this->unserialize($v) : null;
+            }
+        }
+
+        // Return in original order
+        return array_map(fn($k) => $results[$k], $keys);
     }
 
     public function setMany(array $pairs, int $ttl): void
@@ -229,11 +237,9 @@ class CacheManager
         }
 
         $classKey = $this->classKey($modelClass);
-        $prefix = $this->keyPrefix . "model:{{$classKey}}:";
+        $keys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
 
-        $keys = array_map(fn($id) => $prefix . $id, $ids);
-
-        $raw = $this->connection()->mget($keys);
+        $raw = $this->getMany($keys);
         $cached = array_combine($ids, $raw);
 
         $missed = [];
@@ -250,13 +256,11 @@ class CacheManager
             }
         }
 
-        foreach ($cached as $id => $item) {
-            if (!$item) {
+        foreach ($cached as $id => $attrs) {
+            if (!$attrs) {
                 $missed[] = $id;
                 continue;
             }
-
-            $attrs = $this->unserialize($item);
 
             if (!is_array($attrs)) {
                 $missed[] = $id;
@@ -293,7 +297,8 @@ class CacheManager
             $inserts = [];
 
             foreach ($loaded as $id => $model) {
-                $inserts[$prefix . $id] = $this->serialize($model->getAttributes());
+                $key = "model:{{$classKey}}:" . $id;
+                $inserts[$key] = $this->serialize($model->getAttributes());
 
                 if ($normalizedCols !== null) {
                     $model->setRawAttributes(
@@ -309,8 +314,8 @@ class CacheManager
                 $memberKey = $this->prefix("members:model:{{$classKey}}");
                 $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
                     foreach ($inserts as $key => $value) {
-                        $pipe->setex($key, $this->ttl, $value);
-                        $pipe->sadd($memberKey, $key);
+                        $pipe->setex($this->prefix($key), $this->ttl, $value);
+                        $pipe->sadd($memberKey, $this->prefix($key));
                     }
                 });
             }
