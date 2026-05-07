@@ -229,14 +229,16 @@ class CacheManager
     {
         $classKey = $this->classKey($modelClass);
 
-        // Single EVAL: version + query IDs + model attributes in one round trip.
-        // KEYS[1]=ver:{classKey}:  KEYS[2]=model:{classKey}: prefix  KEYS[3]=query:{classKey}:v prefix
-        // Returns {ver} on miss, {ver, ids, models} on hit.
+        // Single EVAL: version + query + lock (miss) or version + query + model MGET (hit).
+        // Miss: {ver, 1} = lock acquired, {ver, 0} = contended. Hit: {ver, ids, models}.
         $script = <<<'LUA'
             local ver = redis.call('GET', KEYS[1])
             if not ver then ver = '0' end
             local ids_raw = redis.call('GET', KEYS[3] .. ver .. ':' .. ARGV[1])
-            if not ids_raw then return {ver} end
+            if not ids_raw then
+                local acquired = redis.call('SET', KEYS[4] .. ver .. ':' .. ARGV[1], 1, 'EX', 5, 'NX') -- 5s TTL: auto-expires if builder dies
+                return {ver, acquired and 1 or 0}
+            end
             local ids = cjson.decode(ids_raw)
             if #ids == 0 then return {ver, {}, {}} end
             local model_keys = {}
@@ -248,29 +250,33 @@ class CacheManager
 
         $result = $this->connection()->eval(
             $script,
-            3,
+            4,
             $this->prefix("ver:{{$classKey}}:"),
             $this->prefix("model:{{$classKey}}:"),
             $this->prefix("query:{{$classKey}}:v"),
+            $this->prefix("building:query:{{$classKey}}:v"),
             $hash
         );
 
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
-            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null];
+            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null, 'lock' => null];
         }
 
         $this->versionLocal[$classKey] = (int) $result[0];
         $queryKey = "query:{{$classKey}}:v{$result[0]}:{$hash}";
 
-        if (count($result) === 1) {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null];
+        // Miss: {ver, 1|0} — 1 = lock acquired, 0 = contended
+        if (count($result) === 2) {
+            $lock = (int) $result[1] === 1 ? "building:{$queryKey}" : null;
+            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => $lock];
         }
 
         return [
             'key'    => $queryKey,
             'ids'    => $result[1],
             'models' => $result[2],
+            'lock'   => null,
         ];
     }
 

@@ -117,7 +117,7 @@ class CacheableBuilder extends Builder
             event(new QueryCacheHit($model, $key));
             $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
         } else {
-            $ids = $this->resolveIds($key, $base);
+            $ids = $this->resolveIds($key, $base, $cacheData['lock']);
             $models = NormCache::getModels($ids, $model, $selectedCols);
         }
 
@@ -271,24 +271,25 @@ class CacheableBuilder extends Builder
         return QueryHasher::hash($base);
     }
 
-    private function resolveIds(string $key, QueryBuilder $base): array
+    private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
     {
-        $lockKey = 'building:' . $key;
-
-        if (!NormCache::setIfAbsent($lockKey, 1, 5)) {
-            $delay = 25_000;
+        // Lock is held by another process — poll until it populates the cache.
+        // Exponential backoff: 20ms → 40ms → 80ms → 160ms → 200ms (500ms total).
+        if ($lockKey === null) {
+            $delay = 20_000; // 20ms
             for ($i = 0; $i < 5; $i++) {
                 usleep($delay);
                 $ids = NormCache::getQueryIds($key);
                 if ($ids !== null) {
                     return $ids;
                 }
-                $delay = min($delay * 2, 200_000);
+                $delay = min($delay * 2, 200_000); // cap at 200ms
             }
 
             return $this->buildIds($base);
         }
 
+        // We own the lock (acquired in Lua eval).
         event(new QueryCacheMiss($this->model::class, $key));
 
         try {
