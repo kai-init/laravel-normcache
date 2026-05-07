@@ -20,6 +20,7 @@ class CacheServiceProvider extends ServiceProvider
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             config('normcache.cooldown'),
+            config('normcache.cluster', false),
         ));
 
         $this->app->alias(CacheManager::class, 'normcache');

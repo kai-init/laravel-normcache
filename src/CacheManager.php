@@ -37,6 +37,7 @@ class CacheManager
         protected int $queryTtl,
         protected string $keyPrefix,
         protected int $cooldown,
+        protected bool $cluster = false,
     ) {
         $this->igbinary = \extension_loaded('igbinary');
     }
@@ -44,6 +45,20 @@ class CacheManager
     public function isEnabled(): bool
     {
         return config('normcache.enabled', true);
+    }
+
+    protected function groupByTag(array $keys): array
+    {
+        $groups = [];
+        foreach ($keys as $key) {
+            $tag = $key;
+            if (preg_match('/\{([^}]+)\}/', $key, $matches)) {
+                $tag = $matches[1];
+            }
+            $groups[$tag][] = $key;
+        }
+
+        return $groups;
     }
 
     public function ttl(): int
@@ -115,47 +130,45 @@ class CacheManager
             return;
         }
 
-        $this->connection()->pipeline(function ($pipe) use ($pairs, $ttl) {
-            foreach ($pairs as $key => $value) {
-                $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
-            }
-        });
+        $groups = $this->groupByTag(array_keys($pairs));
+        $connection = $this->connection();
+
+        foreach ($groups as $keys) {
+            $connection->pipeline(function ($pipe) use ($keys, $pairs, $ttl) {
+                foreach ($keys as $key) {
+                    $pipe->setex($this->prefix($key), $ttl, $this->serialize($pairs[$key]));
+                }
+            });
+        }
     }
 
     public function setAndReleaseLock(string $key, mixed $value, int $ttl, string $lockKey): void
     {
-        $this->connection()->pipeline(function ($pipe) use ($key, $value, $ttl, $lockKey) {
-            $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
-            $pipe->del($this->prefix($lockKey));
-        });
+        $keys = [$key, $lockKey];
+        $groups = $this->groupByTag($keys);
+
+        if (count($groups) === 1) {
+            $this->connection()->pipeline(function ($pipe) use ($key, $value, $ttl, $lockKey) {
+                $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
+                $pipe->del($this->prefix($lockKey));
+            });
+        } else {
+            // Keys are in different slots, cannot pipeline atomically
+            $this->set($key, $value, $ttl);
+            $this->delete($lockKey);
+        }
     }
 
     public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
     {
         $classKey = $this->classKey($modelClass);
-        $version = $this->versionLocal[$classKey] ?? null;
-
-        if ($version === null) {
-            $script = <<<'LUA'
-                local v = redis.call('GET', KEYS[1]) or '0'
-                return {v, redis.call('GET', ARGV[1] .. v .. ARGV[2])}
-            LUA;
-
-            [$version, $raw] = $this->connection()->eval(
-                $script, 1,
-                $this->prefix('ver:' . $classKey . ':'),
-                $this->prefix("{$namespace}:{$classKey}:v"),
-                ":{$hash}"
-            );
-
-            $this->versionLocal[$classKey] = $version = (int) $version;
-            $data = $raw !== false && $raw !== null ? $this->unserialize($raw) : null;
-        } else {
-            $data = $this->get("{$namespace}:{$classKey}:v{$version}:{$hash}");
-        }
+        $version = $this->currentVersion($modelClass);
+        
+        $key = "{$namespace}:{{$classKey}}:v{$version}:{$hash}";
+        $data = $this->get($key);
 
         return [
-            'key' => "{$namespace}:{$classKey}:v{$version}:{$hash}",
+            'key' => $key,
             'data' => $data,
             'version' => $version,
         ];
@@ -166,35 +179,14 @@ class CacheManager
         $relatedKey = $this->classKey($relatedClass);
         $throughKey = $this->classKey($throughClass);
 
-        $relatedVersion = $this->versionLocal[$relatedKey] ?? null;
-        $throughVersion = $this->versionLocal[$throughKey] ?? null;
+        $relatedVersion = $this->currentVersion($relatedClass);
+        $throughVersion = $this->currentVersion($throughClass);
 
-        if ($relatedVersion === null || $throughVersion === null) {
-            $script = <<<'LUA'
-                local rv = redis.call('GET', KEYS[1]) or '0'
-                local tv = redis.call('GET', KEYS[2]) or '0'
-                local data = redis.call('GET', ARGV[1] .. rv .. ':v' .. tv .. ARGV[2])
-                return {rv, tv, data}
-            LUA;
-
-            $result = $this->connection()->eval(
-                $script, 2,
-                $this->prefix('ver:' . $relatedKey . ':'),
-                $this->prefix('ver:' . $throughKey . ':'),
-                $this->prefix("through:{$relatedKey}:{$throughKey}:v"),
-                ":{$hash}"
-            );
-
-            $this->versionLocal[$relatedKey] = $relatedVersion = (int) ($result[0] ?? 0);
-            $this->versionLocal[$throughKey] = $throughVersion = (int) ($result[1] ?? 0);
-            $raw = $result[2] ?? null;
-            $data = $raw !== false && $raw !== null ? $this->unserialize($raw) : null;
-        } else {
-            $data = $this->get("through:{$relatedKey}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}");
-        }
+        $key = "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}";
+        $data = $this->get($key);
 
         return [
-            'key' => "through:{$relatedKey}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}",
+            'key' => $key,
             'data' => $data,
         ];
     }
@@ -202,35 +194,13 @@ class CacheManager
     public function getAggregateCache(string $modelClass, string $versionClass, array $ids, string $column, string $function, string $relation, string $hash): array
     {
         $classKey = $this->classKey($modelClass);
-        $versionClassKey = $this->classKey($versionClass);
-        $version = $this->versionLocal[$versionClassKey] ?? null;
+        $version = $this->currentVersion($versionClass);
         
-        $aggPrefix = "agg:{$classKey}:";
-        $aggSuffix = ":{$column}:{$function}:{$relation}:{$hash}:v";
+        $aggPrefix = "agg:{{$classKey}}:";
+        $aggSuffix = ":{$column}:{$function}:{$relation}:{$hash}:v{$version}";
 
-        if ($version === null) {
-            $script = <<<'LUA'
-                local v = redis.call('GET', KEYS[1]) or '0'
-                local res = {}
-                local prefix = ARGV[1]
-                local suffix = ARGV[2] .. v
-                for i, id in ipairs(ARGV) do
-                    if i > 2 then
-                        res[#res + 1] = redis.call('GET', prefix .. id .. suffix)
-                    end
-                end
-                return {v, res}
-            LUA;
-
-            $args = array_merge([$this->prefix($aggPrefix), $aggSuffix], $ids);
-            [$version, $raws] = $this->connection()->eval($script, 1, $this->prefix('ver:' . $versionClassKey . ':'), ...$args);
-
-            $this->versionLocal[$versionClassKey] = $version = (int) $version;
-            $data = array_map(fn($v) => $v !== false && $v !== null ? $this->unserialize($v) : null, $raws);
-        } else {
-            $keys = array_map(fn($id) => "{$aggPrefix}{$id}{$aggSuffix}{$version}", $ids);
-            $data = $this->getMany($keys);
-        }
+        $keys = array_map(fn($id) => "{$aggPrefix}{$id}{$aggSuffix}", $ids);
+        $data = $this->getMany($keys);
 
         return [
             'version' => $version,
@@ -247,25 +217,8 @@ class CacheManager
             return;
         }
 
-        $this->connection()->pipeline(function ($pipe) use ($modelClasses) {
-            foreach ($modelClasses as $modelClass) {
-                $classKey = $this->classKey($modelClass);
-                
-                if ($this->cooldown > 0) {
-                    $cooldownKey = $this->prefix("cooldown:{$classKey}:");
-                    $verKey = $this->prefix("ver:{$classKey}:");
-                    $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
-                    $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
-                } else {
-                    $pipe->incr($this->prefix("ver:{$classKey}:"));
-                }
-            }
-        });
-
-        // We don't update versionLocal here because we don't know the new values without another round trip or complex Lua.
-        // It will be lazily updated on next fetch.
         foreach ($modelClasses as $modelClass) {
-            unset($this->versionLocal[$this->classKey($modelClass)]);
+            $this->doInvalidateVersion($modelClass);
         }
     }
 
@@ -276,7 +229,7 @@ class CacheManager
         }
 
         $classKey = $this->classKey($modelClass);
-        $prefix = $this->keyPrefix . "model:{$classKey}:";
+        $prefix = $this->keyPrefix . "model:{{$classKey}}:";
 
         $keys = array_map(fn($id) => $prefix . $id, $ids);
 
@@ -353,7 +306,7 @@ class CacheManager
             }
 
             if ($inserts !== []) {
-                $memberKey = $this->prefix("members:model:{$classKey}");
+                $memberKey = $this->prefix("members:model:{{$classKey}}");
                 $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
                     foreach ($inserts as $key => $value) {
                         $pipe->setex($key, $this->ttl, $value);
@@ -381,7 +334,7 @@ class CacheManager
             return $this->versionLocal[$classKey];
         }
 
-        $value = $this->connection()->get($this->prefix("ver:{$classKey}:"));
+        $value = $this->connection()->get($this->prefix("ver:{{$classKey}}:"));
 
         return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
     }
@@ -441,37 +394,12 @@ class CacheManager
             return;
         }
 
-        $results = $this->connection()->pipeline(function ($pipe) use ($invalidations, $deletes) {
-            foreach ($invalidations as $modelClass) {
-                $classKey = $this->classKey($modelClass);
-                
-                if ($this->cooldown > 0) {
-                    $cooldownKey = $this->prefix("cooldown:{$classKey}:");
-                    $verKey = $this->prefix("ver:{$classKey}:");
-                    $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
-                    $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
-                } else {
-                    $pipe->incr($this->prefix("ver:{$classKey}:"));
-                }
-            }
+        foreach ($invalidations as $modelClass) {
+            $this->doInvalidateVersion($modelClass);
+        }
 
-            if (!empty($deletes)) {
-                $prefixed = array_map(fn($k) => $this->prefix($k), $deletes);
-                foreach (array_chunk($prefixed, 1000) as $chunk) {
-                    try {
-                        $pipe->unlink(...$chunk);
-                    } catch (\Throwable) {
-                        $pipe->del(...$chunk);
-                    }
-                }
-            }
-        });
-
-        foreach ($invalidations as $i => $modelClass) {
-            $classKey = $this->classKey($modelClass);
-            if (isset($results[$i]) && is_numeric($results[$i])) {
-                $this->versionLocal[$classKey] = (int) $results[$i];
-            }
+        if (!empty($deletes)) {
+            $this->asyncDel(array_map(fn($k) => $this->prefix($k), $deletes));
         }
 
         foreach ($flushes as $modelClass) {
@@ -493,8 +421,8 @@ class CacheManager
         $classKey = $this->classKey($modelClass);
 
         if ($this->cooldown > 0) {
-            $cooldownKey = $this->prefix("cooldown:{$classKey}:");
-            $verKey = $this->prefix("ver:{$classKey}:");
+            $cooldownKey = $this->prefix("cooldown:{{$classKey}}:");
+            $verKey = $this->prefix("ver:{{$classKey}}:");
 
             $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
             $newVer = $this->connection()->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
@@ -506,7 +434,7 @@ class CacheManager
         }
 
         $this->versionLocal[$classKey] = (int) $this->connection()->incr(
-            $this->prefix("ver:{$classKey}:")
+            $this->prefix("ver:{{$classKey}}:")
         );
     }
 
@@ -520,7 +448,7 @@ class CacheManager
 
     public function modelKey(string $modelClass, int|string $id): string
     {
-        return 'model:' . $this->classKey($modelClass) . ':' . $id;
+        return 'model:{' . $this->classKey($modelClass) . '}:' . $id;
     }
 
     public function flushInstance(Model $model): void
@@ -540,12 +468,12 @@ class CacheManager
             
             $classKey = $this->classKey($class);
             if ($this->cooldown > 0) {
-                $cooldownKey = $this->prefix("cooldown:{$classKey}:");
-                $verKey = $this->prefix("ver:{$classKey}:");
+                $cooldownKey = $this->prefix("cooldown:{{$classKey}}:");
+                $verKey = $this->prefix("ver:{{$classKey}}:");
                 $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
                 $pipe->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
             } else {
-                $pipe->incr($this->prefix("ver:{$classKey}:"));
+                $pipe->incr($this->prefix("ver:{{$classKey}}:"));
             }
         });
 
@@ -558,7 +486,7 @@ class CacheManager
 
         $this->doInvalidateVersion($modelClass);
 
-        $memberKey = $this->prefix("members:model:{$classKey}");
+        $memberKey = $this->prefix("members:model:{{$classKey}}");
         $keys = $this->connection()->smembers($memberKey);
 
         if (!empty($keys)) {
@@ -572,9 +500,25 @@ class CacheManager
     {
         $patterns = ['query:*', 'model:*', 'members:model:*', 'ver:*', 'agg:*', 'count:*', 'pivot:*', 'through:*', 'cooldown:*', 'building:*'];
         $total = 0;
+        $connection = $this->connection();
+        $client = $connection->client();
 
+        if ($this->cluster && method_exists($client, '_masters')) {
+            foreach ($client->_masters() as $node) {
+                foreach ($patterns as $pattern) {
+                    $it = null;
+                    while ($keys = $client->scan($it, $node, $this->prefix($pattern), 1000)) {
+                        $total += count($keys);
+                        $this->asyncDel($keys);
+                    }
+                }
+            }
+            return $total;
+        }
+
+        // Fallback for Predis or Single Node
         foreach ($patterns as $pattern) {
-            $keys = $this->connection()->keys($this->prefix($pattern));
+            $keys = $connection->keys($this->prefix($pattern));
             if (!empty($keys)) {
                 $total += count($keys);
                 $this->asyncDel($keys);
@@ -595,11 +539,14 @@ class CacheManager
             return;
         }
 
-        $this->connection()->pipeline(function ($pipe) use ($prefixedKeys) {
-            foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
-                $pipe->unlink(...$chunk);
+        $groups = $this->groupByTag($prefixedKeys);
+        $connection = $this->connection();
+
+        foreach ($groups as $keys) {
+            foreach (array_chunk($keys, 1000) as $chunk) {
+                $connection->unlink(...$chunk);
             }
-        });
+        }
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds): array
@@ -607,56 +554,14 @@ class CacheManager
         $parentKey = $this->classKey($parentClass);
         $relatedKey = $this->classKey($relatedClass);
 
-        $parentVersionKnown = array_key_exists($parentKey, $this->versionLocal);
-        $relatedVersionKnown = array_key_exists($relatedKey, $this->versionLocal);
+        $parentVersion = $this->currentVersion($parentClass);
+        $relatedVersion = $this->currentVersion($relatedClass);
 
-        $prefix = "pivot:{$parentKey}:{$relatedKey}:{$relation}:";
-
-        if ($parentVersionKnown && $relatedVersionKnown) {
-            $parentVersion = $this->versionLocal[$parentKey];
-            $relatedVersion = $this->versionLocal[$relatedKey];
-            $keyPrefix = "{$prefix}v{$parentVersion}:v{$relatedVersion}:";
-            
-            $keys = array_map(fn($id) => $keyPrefix . $id, $parentIds);
-            $data = $this->getMany($keys);
-            
-            return [
-                'parentVersion' => $parentVersion,
-                'relatedVersion' => $relatedVersion,
-                'data' => array_combine($parentIds, $data),
-            ];
-        }
-
-        $script = <<<'LUA'
-            local pv = redis.call('GET', KEYS[1]) or '0'
-            local rv = redis.call('GET', KEYS[2]) or '0'
-            local res = {}
-            local prefix = ARGV[1] .. 'v' .. pv .. ':v' .. rv .. ':'
-            for i, id in ipairs(ARGV) do
-                if i > 1 then
-                    res[#res + 1] = redis.call('GET', prefix .. id)
-                end
-            end
-            return {pv, rv, res}
-        LUA;
-
-        $result = $this->connection()->eval(
-            $script, 2,
-            $this->prefix('ver:' . $parentKey . ':'),
-            $this->prefix('ver:' . $relatedKey . ':'),
-            $this->prefix($prefix),
-            ...$parentIds
-        );
-
-        $parentVersion = (int) ($result[0] ?? 0);
-        $relatedVersion = (int) ($result[1] ?? 0);
-
-        $this->versionLocal[$parentKey] = $parentVersion;
-        $this->versionLocal[$relatedKey] = $relatedVersion;
-
-        $raws = $result[2] ?? [];
-        $data = array_map(fn($v) => $v !== false && $v !== null ? $this->unserialize($v) : null, $raws);
-
+        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:v{$parentVersion}:v{$relatedVersion}:";
+        
+        $keys = array_map(fn($id) => $prefix . $id, $parentIds);
+        $data = $this->getMany($keys);
+        
         return [
             'parentVersion' => $parentVersion,
             'relatedVersion' => $relatedVersion,

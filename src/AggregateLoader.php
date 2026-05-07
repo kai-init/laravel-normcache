@@ -44,7 +44,7 @@ class AggregateLoader
 
                 $toCache = [];
                 foreach ($missed as $id) {
-                    $key = "agg:{$classKey}:{$id}:{$column}:{$function}:{$name}:{$constraintHash}:v{$relatedVersion}";
+                    $key = "agg:{{$classKey}}:{$id}:{$column}:{$function}:{$name}:{$constraintHash}:v{$relatedVersion}";
                     $toCache[$key] = ['v' => $fromDb[$id] ?? null];
                 }
 

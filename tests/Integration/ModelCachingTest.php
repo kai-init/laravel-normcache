@@ -167,8 +167,8 @@ class ModelCachingTest extends TestCase
 
         $this->artisan('normcache:flush', ['--model' => Author::class])->assertSuccessful();
 
-        $this->assertEmpty($this->redisKeys('test:model:author:*'));
-        $this->assertNotEmpty($this->redisKeys('test:model:post:*'));
+        $this->assertEmpty($this->redisKeys('test:model:{author}:*'));
+        $this->assertNotEmpty($this->redisKeys('test:model:{post}:*'));
     }
 
     public function test_flush_command_rejects_nonexistent_class(): void

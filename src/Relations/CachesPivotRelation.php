@@ -52,7 +52,7 @@ trait CachesPivotRelation
             $relatedKey = NormCache::classKey($relatedClass);
             $keyMap = [];
             foreach ($this->eagerParentIds as $parentId) {
-                $keyMap[$parentId] = "pivot:{$parentClassKey}:{$relatedKey}:{$this->relationName}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
+                $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
             }
             
             $this->populatePivotCache($results, $keyMap, $relatedClass);

@@ -7,4 +7,5 @@ return [
     'query_ttl'     => (int) env('NORMCACHE_QUERY_TTL', 3600),
     'key_prefix'    => env('NORMCACHE_PREFIX', ''),
     'cooldown'      => (int) env('NORMCACHE_COOLDOWN', 0),
+    'cluster'       => (bool) env('NORMCACHE_CLUSTER', false),
 ];

@@ -99,8 +99,6 @@ class CacheEventsTest extends TestCase
 
         Author::all(); // query cache miss (version bumped), so fetches both IDs then mget
 
-        // Bob's key won't be in cache, Alice's will be stale (version bumped on Bob create)
-        // Both model keys could be misses here depending on timing; what matters is the events fire
         Event::assertDispatched(ModelCacheHit::class);
         Event::assertDispatched(ModelCacheMiss::class);
     }
@@ -115,7 +113,7 @@ class CacheEventsTest extends TestCase
         Author::all();
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
-            return str_starts_with($e->key, 'query:author:v');
+            return str_starts_with($e->key, 'query:{author}:v');
         });
     }
 
