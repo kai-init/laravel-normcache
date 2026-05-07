@@ -21,15 +21,15 @@ trait Cacheable
             return;
         }
 
-        static::created(fn($model) => NormCache::invalidateVersion($model::class, $model->getConnectionName()));
+        static::created(fn($model) => NormCache::invalidateVersion($model));
         static::updated(fn($model) => $model->flush());
         static::deleting(fn($model) => $model->flush());
-        static::registerModelEvent('restored', fn($model) => NormCache::invalidateVersion($model::class, $model->getConnectionName()));
+        static::registerModelEvent('restored', fn($model) => NormCache::invalidateVersion($model));
     }
 
     public function flush(): void
     {
-        NormCache::flushInstance(static::class, $this->getKey(), $this->getConnectionName());
+        NormCache::flushInstance($this);
     }
 
     public function newEloquentBuilder($query)

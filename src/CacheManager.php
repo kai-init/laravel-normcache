@@ -4,6 +4,7 @@ namespace NormCache;
 
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Redis\Connections\Connection;
@@ -22,6 +23,9 @@ class CacheManager
 
     /** @var array<string, array<string, true>> */
     protected array $deleteQueue = [];
+
+    /** @var array<string, array<string, true>> */
+    protected array $flushQueue = [];
 
     /** @var array<string, int> L1 in-process version cache, keyed by classKey */
     protected array $versionLocal = [];
@@ -386,14 +390,16 @@ class CacheManager
         $this->versionLocal = [];
     }
 
-    public function invalidateVersion(string $modelClass, ?string $connectionName = null): void
+    public function invalidateVersion(Model $model): void
     {
-        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
-            $this->invalidationQueue[$connectionName][$modelClass] = true;
+        $conn = $model->getConnectionName();
+
+        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+            $this->invalidationQueue[$conn][$model::class] = true;
             return;
         }
 
-        $this->doInvalidateVersion($modelClass);
+        $this->doInvalidateVersion($model::class);
     }
 
     public function deferDelete(string $key, ?string $connectionName = null): void
@@ -406,14 +412,31 @@ class CacheManager
         $this->connection()->del($this->prefix($key));
     }
 
+    public function deferFlushModel(Model $model): void
+    {
+        $conn = $model->getConnectionName();
+
+        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+            $this->flushQueue[$conn][$model::class] = true;
+            return;
+        }
+
+        $this->flushModel($model::class);
+    }
+
     public function commitPending(string $connectionName): void
     {
         $invalidations = array_keys($this->invalidationQueue[$connectionName] ?? []);
         $deletes = array_keys($this->deleteQueue[$connectionName] ?? []);
+        $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
 
-        unset($this->invalidationQueue[$connectionName], $this->deleteQueue[$connectionName]);
+        unset(
+            $this->invalidationQueue[$connectionName],
+            $this->deleteQueue[$connectionName],
+            $this->flushQueue[$connectionName]
+        );
 
-        if (empty($invalidations) && empty($deletes)) {
+        if (empty($invalidations) && empty($deletes) && empty($flushes)) {
             return;
         }
 
@@ -449,11 +472,19 @@ class CacheManager
                 $this->versionLocal[$classKey] = (int) $results[$i];
             }
         }
+
+        foreach ($flushes as $modelClass) {
+            $this->flushModel($modelClass);
+        }
     }
 
     public function discardPending(string $connectionName): void
     {
-        unset($this->invalidationQueue[$connectionName], $this->deleteQueue[$connectionName]);
+        unset(
+            $this->invalidationQueue[$connectionName],
+            $this->deleteQueue[$connectionName],
+            $this->flushQueue[$connectionName]
+        );
     }
 
     protected function doInvalidateVersion(string $modelClass): void
@@ -491,20 +522,22 @@ class CacheManager
         return 'model:' . $this->classKey($modelClass) . ':' . $id;
     }
 
-    public function flushInstance(string $modelClass, int|string $id, ?string $connectionName = null): void
+    public function flushInstance(Model $model): void
     {
-        $key = $this->modelKey($modelClass, $id);
+        $conn  = $model->getConnectionName();
+        $class = $model::class;
+        $key   = $this->modelKey($class, $model->getKey());
 
-        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
-            $this->deleteQueue[$connectionName][$key] = true;
-            $this->invalidationQueue[$connectionName][$modelClass] = true;
+        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+            $this->deleteQueue[$conn][$key] = true;
+            $this->invalidationQueue[$conn][$class] = true;
             return;
         }
 
-        $this->connection()->pipeline(function ($pipe) use ($key, $modelClass) {
+        $this->connection()->pipeline(function ($pipe) use ($key, $class) {
             $pipe->del($this->prefix($key));
             
-            $classKey = $this->classKey($modelClass);
+            $classKey = $this->classKey($class);
             if ($this->cooldown > 0) {
                 $cooldownKey = $this->prefix("cooldown:{$classKey}:");
                 $verKey = $this->prefix("ver:{$classKey}:");
@@ -515,7 +548,7 @@ class CacheManager
             }
         });
 
-        unset($this->versionLocal[$this->classKey($modelClass)]);
+        unset($this->versionLocal[$this->classKey($class)]);
     }
 
     public function flushModel(string $modelClass): void
@@ -525,8 +558,17 @@ class CacheManager
         $this->doInvalidateVersion($modelClass);
 
         $patterns = [
-            $this->prefix("*:{$classKey}:*"),
-            $this->prefix("*:*:{$classKey}:*"),
+            $this->prefix("model:{$classKey}:*"),
+            $this->prefix("query:{$classKey}:*"),
+            $this->prefix("agg:{$classKey}:*"),
+            $this->prefix("count:{$classKey}:*"),
+            $this->prefix("pivot:{$classKey}:*"),
+            $this->prefix("pivot:*:{$classKey}:*"),
+            $this->prefix("through:{$classKey}:*"),
+            $this->prefix("through:*:{$classKey}:*"),
+            $this->prefix("cooldown:{$classKey}:*"),
+            $this->prefix("building:query:{$classKey}:*"),
+            $this->prefix("building:count:{$classKey}:*"),
         ];
 
         foreach ($patterns as $pattern) {

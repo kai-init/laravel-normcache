@@ -12,9 +12,12 @@ use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
+use NormCache\Traits\HandlesCacheInvalidation;
 
 class CacheableBuilder extends Builder
 {
+    use HandlesCacheInvalidation;
+
     protected bool $skipCache = false;
     protected ?int $queryTtl = null;
     protected bool $cacheAggregates = false;
@@ -157,52 +160,6 @@ class CacheableBuilder extends Builder
         }
 
         return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
-    }
-
-    public function insert(array $values): bool
-    {
-        $result = parent::insert($values);
-        NormCache::invalidateVersion($this->model::class, $this->model->getConnectionName());
-
-        return $result;
-    }
-
-    public function update(array $values): int
-    {
-        $result = parent::update($values);
-        NormCache::invalidateVersion($this->model::class, $this->model->getConnectionName());
-
-        return $result;
-    }
-
-    public function delete(): mixed
-    {
-        $result = parent::delete();
-        NormCache::invalidateVersion($this->model::class, $this->model->getConnectionName());
-
-        return $result;
-    }
-
-    public function increment($column, $amount = 1, array $extra = []): int
-    {
-        $result = parent::increment($column, $amount, $extra);
-        NormCache::invalidateVersion($this->model::class, $this->model->getConnectionName());
-
-        return $result;
-    }
-
-    public function decrement($column, $amount = 1, array $extra = []): int
-    {
-        $result = parent::decrement($column, $amount, $extra);
-        NormCache::invalidateVersion($this->model::class, $this->model->getConnectionName());
-
-        return $result;
-    }
-
-    public function truncate(): void
-    {
-        parent::truncate();
-        NormCache::flushModel($this->model::class);
     }
 
     private function isPureModelQuery(QueryBuilder $base): bool
