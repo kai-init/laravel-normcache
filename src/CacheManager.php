@@ -182,6 +182,75 @@ class CacheManager
         ];
     }
 
+    public function getModelsFromQuery(string $modelClass, string $hash): array
+    {
+        $classKey = $this->classKey($modelClass);
+        $version = $this->currentVersion($modelClass);
+        $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
+        
+        $script = <<<'LUA'
+            local ids_raw = redis.call('GET', KEYS[1])
+            if not ids_raw then
+                return nil
+            end
+            
+            local ids = cjson.decode(ids_raw)
+            if #ids == 0 then
+                return {{}, {}}
+            end
+            
+            local model_keys = {}
+            for i, id in ipairs(ids) do
+                table.insert(model_keys, ARGV[1] .. id)
+            end
+            
+            return {ids, redis.call('MGET', unpack(model_keys))}
+        LUA;
+
+        $result = $this->connection()->eval(
+            $script,
+            1,
+            $this->prefix($queryKey),
+            $this->prefix("model:{{$classKey}}:")
+        );
+
+        if (!is_array($result)) {
+            return ['key' => $queryKey, 'ids' => null, 'models' => null];
+        }
+
+        return [
+            'key' => $queryKey,
+            'ids' => $result[0],
+            'models' => $result[1]
+        ];
+    }
+
+    public function setQueryResults(string $key, array $ids, int $ttl): void
+    {
+        $this->connection()->setex(
+            $this->prefix($key),
+            $ttl,
+            json_encode($ids)
+        );
+    }
+
+    public function setQueryResultsAndReleaseLock(string $key, array $ids, int $ttl, string $lockKey): void
+    {
+        $keys = [$key, $lockKey];
+        $groups = $this->groupByTag($keys);
+        $json = json_encode($ids);
+
+        if (count($groups) === 1) {
+            $this->connection()->pipeline(function ($pipe) use ($key, $json, $ttl, $lockKey) {
+                $pipe->setex($this->prefix($key), $ttl, $json);
+                $pipe->del($this->prefix($lockKey));
+            });
+        } else {
+            $this->setQueryResults($key, $ids, $ttl);
+            $this->delete($lockKey);
+        }
+    }
+
     public function getThroughCache(string $relatedClass, string $throughClass, string $hash): array
     {
         $relatedKey = $this->classKey($relatedClass);
@@ -230,18 +299,19 @@ class CacheManager
         }
     }
 
-    public function getModels(array $ids, string $modelClass, ?array $columns = null): array
+    public function getModels(array $ids, string $modelClass, ?array $columns = null, ?array $raw = null): array
     {
         if ($ids === []) {
             return [];
         }
 
         $classKey = $this->classKey($modelClass);
-        $keys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
+        if ($raw === null) {
+            $keys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
+            $raw = $this->getMany($keys);
+        }
 
-        $raw = $this->getMany($keys);
         $cached = array_combine($ids, $raw);
-
         $missed = [];
         $result = [];
         $prototype = new $modelClass;
@@ -257,9 +327,14 @@ class CacheManager
         }
 
         foreach ($cached as $id => $attrs) {
-            if (!$attrs) {
+            if ($attrs === null || $attrs === false) {
                 $missed[] = $id;
                 continue;
+            }
+
+            // Unserialize if it's a raw string from Redis (Lua path)
+            if (is_string($attrs)) {
+                $attrs = $this->unserialize($attrs);
             }
 
             if (!is_array($attrs)) {

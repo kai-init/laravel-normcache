@@ -83,6 +83,15 @@ class CacheableBuilder extends Builder
         $model = $this->model::class;
         $base = $this->toBase();
 
+        if ($ids = $this->extractPrimaryKeyValues($base)) {
+            $selectedCols = $this->resolveSelectedColumns($base, $columns);
+            if (!$this->hasCalculatedColumns($selectedCols)) {
+                $models = NormCache::getModels($ids, $model, $selectedCols);
+
+                return $this->finalizeResult($models);
+            }
+        }
+
         if (!$this->isPureModelQuery($base)) {
             $this->replayPendingAggregates();
 
@@ -101,18 +110,22 @@ class CacheableBuilder extends Builder
         $keyBase->columns = null;
         $hash = $this->queryCacheKey($keyBase);
 
-        $cacheData = NormCache::getNamespacedCache('query', $model, $hash);
+        $cacheData = NormCache::getModelsFromQuery($model, $hash);
         $key = $cacheData['key'];
 
-        if ($cacheData['data'] !== null) {
-            $ids = $cacheData['data'];
+        if ($cacheData['ids'] !== null) {
             event(new QueryCacheHit($model, $key));
+            $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
         } else {
             $ids = $this->resolveIds($key, $base);
+            $models = NormCache::getModels($ids, $model, $selectedCols);
         }
 
-        $models = NormCache::getModels($ids, $model, $selectedCols);
+        return $this->finalizeResult($models);
+    }
 
+    protected function finalizeResult(array $models): Collection
+    {
         if (!empty($this->pendingAggregates)) {
             $models = (new AggregateLoader($this->model))->load($models, $this->pendingAggregates);
         }
@@ -122,6 +135,35 @@ class CacheableBuilder extends Builder
         }
 
         return $this->model->newCollection($models);
+    }
+
+    protected function extractPrimaryKeyValues(QueryBuilder $base): ?array
+    {
+        if (!$this->isPureModelQuery($base) || !empty($base->orders) || $base->offset > 0) {
+            return null;
+        }
+
+        if (count($base->wheres) !== 1) {
+            return null;
+        }
+
+        $where = $base->wheres[0];
+        $pk = $this->model->getKeyName();
+        $qualifiedPk = $this->model->getQualifiedKeyName();
+
+        if ($where['column'] !== $pk && $where['column'] !== $qualifiedPk) {
+            return null;
+        }
+
+        if ($where['type'] === 'Basic' && $where['operator'] === '=') {
+            return [$where['value']];
+        }
+
+        if ($where['type'] === 'In') {
+            return $where['values'];
+        }
+
+        return null;
     }
 
     public function eagerLoadRelations(array $models): array
@@ -234,7 +276,7 @@ class CacheableBuilder extends Builder
 
         try {
             $ids = $this->buildIds($base);
-            NormCache::setAndReleaseLock($key, $ids, $this->queryTtl ?? NormCache::queryTtl(), $lockKey);
+            NormCache::setQueryResultsAndReleaseLock($key, $ids, $this->queryTtl ?? NormCache::queryTtl(), $lockKey);
             $lockKey = null;
         } finally {
             if ($lockKey) {
