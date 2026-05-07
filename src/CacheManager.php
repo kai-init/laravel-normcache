@@ -150,6 +150,28 @@ class CacheManager
         }
     }
 
+    public function setManyModels(string $modelClass, array $attrsByKey, int $ttl): void
+    {
+        if (empty($attrsByKey)) {
+            return;
+        }
+
+        $classKey = $this->classKey($modelClass);
+        $memberKey = $this->prefix("members:model:{{$classKey}}");
+        $groups = $this->groupByTag(array_keys($attrsByKey));
+        $connection = $this->connection();
+
+        foreach ($groups as $keys) {
+            $connection->pipeline(function ($pipe) use ($keys, $attrsByKey, $ttl, $memberKey) {
+                foreach ($keys as $key) {
+                    $prefixed = $this->prefix($key);
+                    $pipe->setex($prefixed, $ttl, $this->serialize($attrsByKey[$key]));
+                    $pipe->sadd($memberKey, $prefixed);
+                }
+            });
+        }
+    }
+
     public function setAndReleaseLock(string $key, mixed $value, int $ttl, string $lockKey): void
     {
         $keys = [$key, $lockKey];

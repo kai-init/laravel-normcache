@@ -4,84 +4,39 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-**Laravel caching, redesigned around normalized models.**
+**Normalized, self-invalidating Redis cache for Laravel Eloquent.**
+**Works with standalone Redis and Redis Cluster out of the box.**
 
-Most cache packages store full query results. Normcache stores IDs and models separately, then reconstructs results at read time — the same way normalized frontend stores (Redux, Apollo) work. This makes invalidation instant and storage efficient, regardless of how many different queries touch the same model.
+## The Core Idea
 
-## The problem with traditional query caching
-
-```
-// Traditional: cache the full result set
-User::where('active', true)->get()  →  cache full User objects
-
-// When any user changes, you must invalidate this key.
-// But you also have:
-User::where('role', 'admin')->get()
-User::where('country', 'AU')->get()
-User::orderBy('created_at')->paginate(20)
-// ...and dozens more query shapes, all stale.
-```
-
-Tracking which cache keys to invalidate becomes a dependency graph problem. Most packages solve this with tags or scans — both expensive at scale.
-
-## The normcache approach
+Most caching packages store the full result of every query as a separate blob. Normcache doesn't. It separates *what rows match* from *what those rows look like*, and stores each model exactly once.
 
 ```
-// Layer 1 — query cache (stores only IDs, versioned and model-scoped)
-User::where('active', true)->get()
-  →  query:user:v14:a3f9...  =  [1, 5, 9, 22]
-
-// Layer 2 — model cache (stores model attributes by PK)
-  →  model:user:1   =  { id: 1, name: "Kai", ... }
-  →  model:user:5   =  { id: 5, name: "Alice", ... }
-  →  ...
+Query cache  →  "posts where active=1, page 2"  →  [4, 7, 12]
+Model cache  →  post:4  →  { id:4, title:..., body:... }
+             →  post:7  →  { id:7, title:..., body:... }
+             →  post:12 →  { id:12, title:..., body:... }
 ```
 
-The same model entry `model:user:5` is reused across every query that includes user 5. There is no duplication.
+When post 7 is updated, Normcache deletes `post:7` and bumps a version counter. Every query that included post 7 — regardless of how it was filtered, sorted, or paginated — instantly misses on the next read, without needing to know which queries those were.
 
-## How versioned invalidation works
+### Why this matters
 
-Each model class has a Redis version counter:
+- **You never store the same record twice.**
+  - A popular model appearing in 50 cached query results is stored once, not 50 times. This massively reduces your redis memory usage.
+- **Warming one query warms every query.**
+  - When a model is fetched by ID, its attributes land in the model cache. Every other query that later includes that model — a search, a paginated list, a relationship — gets a model cache hit on that record for free.
+- **Invalidation is O(1).**
+  - A single `INCR` on a version key makes all cached queries for a model stale. No tag scanning, no key enumeration, no O(n) overhead as your cache grows.
 
-```
-ver:user  =  14
-```
+---
 
-When a query is cached, both the model name and its current version are embedded in the key:
-
-```
-query:user:v14:a3f9...  →  [1, 5, 9]    ← User query, version from ver:user
-```
-
-When any user is written:
-
-```
-INCR ver:user   →   15
-```
-
-All User query keys (`v14`) are now permanently bypassed. Stale keys expire naturally; the next User query writes fresh `v15` keys.
-
-```
-┌─────────────────────────────────────────────────────┐
-│  User::where('active', true)->get()                 │
-│                                                     │
-│  1. Check  query:user:v15:a3f9...  →  cache miss    │
-│  2. SELECT id FROM users WHERE active = 1           │
-│     →  [1, 5, 9]                                    │
-│  3. MGET model:user:1, model:user:5, model:user:9   │
-│     →  hits: [1, 5]   misses: [9]                   │
-│  4. SELECT * FROM users WHERE id IN (9)  (miss only)│
-│  5. Return hydrated collection                      │
-└─────────────────────────────────────────────────────┘
-```
-
-Individual model entries are reused across all query shapes. A cache hit on `model:user:5` serves every query that includes user 5, regardless of how the query was structured.
-
-## Requirements
-
+**Requirements:**
 - PHP 8.2+
-- Laravel 11+
-- Redis 4.0+ (PhpRedis or Predis)
+- Laravel 11, 12, or 13
+- Redis 4.0+
+
+---
 
 ## Installation
 
@@ -95,6 +50,8 @@ Publish the config:
 php artisan vendor:publish --tag=normcache-config
 ```
 
+---
+
 ## Setup
 
 Add the `Cacheable` trait to any Eloquent model you want cached:
@@ -102,7 +59,7 @@ Add the `Cacheable` trait to any Eloquent model you want cached:
 ```php
 use NormCache\Traits\Cacheable;
 
-class User extends Model
+class Post extends Model
 {
     use Cacheable;
 }
@@ -110,98 +67,128 @@ class User extends Model
 
 That's it. All queries on that model now go through the two-layer cache automatically.
 
+---
+
 ## Usage
 
 ### Basic queries
 
 ```php
-// Cached automatically
-User::all();
-User::where('active', true)->get();
-User::find(1);
-User::paginate(20);
-User::cursorPaginate(20);
+Post::all();
+Post::where('active', true)->get();
+Post::find(1);
+Post::paginate(20);
 ```
 
 ### Bypassing the cache
 
 ```php
-User::withoutCache()->get();
+Post::withoutCache()->get();
 ```
 
 ### Per-query TTL
 
 ```php
-// Cache this result for 10 minutes regardless of global TTL
-User::query()->remember(600)->get();
+Post::query()->remember(600)->get(); // cache this result for 10 minutes
 ```
 
-### Aggregates with caching
+### Aggregates
 
 ```php
 // withCount, withSum, withAvg, withMin, withMax, withExists
-User::cacheAggregates()->withCount('posts')->get();
+Post::cacheAggregates()->withCount('comments')->get();
 ```
 
 ### Relationship caching
 
-`BelongsToMany` and `MorphToMany` relationships are cached when eager-loaded. On a warm hit, no SQL is executed — the pivot mapping is served from Redis and related models are loaded from the model cache.
+`BelongsToMany`, `MorphToMany`, `HasManyThrough`, and `HasOneThrough` relationships are cached when eager-loaded. On a warm hit no SQL is executed.
 
 ```php
-// First load: runs the join SQL, caches the pivot map + related models
+// First load: runs SQL, caches pivot map + related models
 Post::with('tags')->get();
 
 // Subsequent loads: zero SQL
 Post::with('tags')->get();
 ```
 
-Invalidation is automatic. Calling `attach`, `detach`, `sync`, or `updateExistingPivot` bumps the version on both sides, which makes the pivot cache keys unreachable on the next read.
+`attach`, `detach`, `sync`, and `updateExistingPivot` automatically invalidate the relevant pivot cache.
 
 ### Manual flush
 
 ```bash
-# Flush a specific model
-php artisan normcache:flush --model="App\Models\User"
-
-# Flush everything
-php artisan normcache:flush
+php artisan normcache:flush --model="App\Models\Post"
+php artisan normcache:flush   # flush everything
 ```
-
-Or programmatically:
 
 ```php
 use NormCache\Facades\NormCache;
 
-NormCache::flushModel(User::class);
+NormCache::flushModel(Post::class);
 NormCache::flushAll();
 ```
 
-## Observability
+---
 
-Normcache fires events on every cache operation with zero overhead when no listeners are registered:
+## Redis Cluster
+
+Normcache is designed for Redis Cluster from the ground up. Every key uses a hash tag derived from the model class name — `{post}`, `{user}`, etc. — so all keys for a given model land on the same cluster slot. This means:
+
+- `MGET` batches across an entire result set are always single-slot and never cross node boundaries.
+- Lua scripts (`EVAL`) that combine a version read + data fetch in one round trip are always operating on co-located keys.
+- Pipelines that write model attributes and register them in a member set never split across nodes.
+
+Enable cluster mode in the config:
 
 ```php
-use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheMiss;
-use NormCache\Events\ModelCacheHit;
-use NormCache\Events\ModelCacheMiss;
+// config/normcache.php
+'cluster' => env('NORMCACHE_CLUSTER', false),
+```
 
-// Wire into Pulse, Telescope, StatsD, or a simple log
-Event::listen(QueryCacheMiss::class, function (QueryCacheMiss $e) {
-    Log::debug("Query miss: {$e->modelClass}", ['key' => $e->key]);
-});
+`flushAll()` works correctly in cluster mode for both PhpRedis (`RedisCluster`) and Predis. It scans and deletes keys on each master node individually.
 
-Event::listen(ModelCacheMiss::class, function (ModelCacheMiss $e) {
-    Pulse::record('model_cache_miss', $e->modelClass, count($e->ids));
-});
+> **Note:** If your Redis connection has a driver-level prefix configured (e.g. `options.prefix` in `config/database.php`), use Normcache's own `key_prefix` config instead to avoid conflicts. Stacking both is not supported.
+
+---
+
+## What gets cached, what doesn't
+
+Normcache caches queries it can fully reconstruct from a list of primary keys. The following bypass the cache and always hit the database:
+
+| Query feature | Reason |
+|---|---|
+| `JOIN` | Result depends on joined table, not just this model |
+| `GROUP BY` / `HAVING` | Aggregated results can't be mapped to individual model keys |
+| `UNION` | Multi-model result set |
+| Raw `ORDER BY` | Can't be applied to cached key list |
+| `SELECT` with expressions | Computed columns aren't in the model cache |
+| Pessimistic locking (`lockForUpdate` / `sharedLock`) | Must always read from DB |
+| Inside a database transaction | Reads inside a transaction must see uncommitted data |
+
+---
+
+## Transaction safety
+
+Invalidations inside a database transaction are deferred until commit. On rollback, nothing is touched — the version counter is never bumped and no model keys are evicted.
+
+---
+
+## Observability
+
+```php
+use NormCache\Events\{QueryCacheHit, QueryCacheMiss, ModelCacheHit, ModelCacheMiss};
+
+Event::listen(QueryCacheMiss::class, fn($e) => Pulse::record('query_miss', $e->modelClass));
+Event::listen(ModelCacheMiss::class, fn($e) => Pulse::record('model_miss', $e->modelClass, count($e->ids)));
 ```
 
 | Event | Fired when | Properties |
 |---|---|---|
-| `QueryCacheHit` | Query ID list served from Redis | `modelClass`, `key` |
+| `QueryCacheHit` | ID list served from Redis | `modelClass`, `key` |
 | `QueryCacheMiss` | ID list not cached — DB queried | `modelClass`, `key` |
 | `ModelCacheHit` | Model attributes served from Redis | `modelClass`, `ids[]` |
 | `ModelCacheMiss` | Attributes not cached — DB queried | `modelClass`, `ids[]` |
+
+---
 
 ## Configuration
 
@@ -210,31 +197,30 @@ Event::listen(ModelCacheMiss::class, function (ModelCacheMiss $e) {
 return [
     'connection'  => env('NORMCACHE_CONNECTION', 'cache'),
     'enabled'     => env('NORMCACHE_ENABLED', true),
-    'ttl'         => env('NORMCACHE_TTL', 604800),        // model keys: 7 days
-    'query_ttl'   => env('NORMCACHE_QUERY_TTL', 3600),    // query keys: 1 hour
+    'ttl'         => env('NORMCACHE_TTL', 604800),      // model keys: 7 days
+    'query_ttl'   => env('NORMCACHE_QUERY_TTL', 3600),  // query/pivot/through keys: 1 hour
     'key_prefix'  => env('NORMCACHE_PREFIX', ''),
-    'cooldown'    => env('NORMCACHE_COOLDOWN', 0),        // debounce rapid writes (seconds)
+    'cooldown'    => env('NORMCACHE_COOLDOWN', 0),      // version bump debounce in seconds
+    'cluster'     => env('NORMCACHE_CLUSTER', false),
 ];
 ```
 
-**`cooldown`** — When set, consecutive writes to the same model within the cooldown window only bump the version once. Useful for write-heavy models where you want to avoid thrashing the version counter.
+**`cooldown`** — Consecutive writes within the cooldown window only bump the version once. Useful for write-heavy models to avoid thrashing the version counter.
 
-## What gets cached, what doesn't
+---
 
-Normcache caches queries it can fully reconstruct from a list of primary keys. Queries with joins, GROUP BY, HAVING, UNION, raw ORDER BY, aggregate functions (unless opted-in), or pessimistic locks bypass the cache automatically and hit the database directly — no configuration needed.
+## Performance
 
-## Transaction safety
+- **Single round trip on cache hit** — version read + query ID fetch + model MGET are combined into one Lua `EVAL` call.
+- **Invalidation is O(1)** — one `INCR` on a version key, regardless of how many cached queries exist for that model.
+- **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
+- **Pipelined writes** — cache warm-up for missed models is batched in a single pipeline.
+- **`UNLINK` for deletes** — non-blocking async deletion (Redis 4.0+), chunked at 1000 keys.
+- **No scanning on invalidation** — version shift makes stale keys unreachable without touching them. Eviction is handled by TTL.
+- **igbinary support** — when the `igbinary` PHP extension is installed, model attributes are serialized with igbinary for faster serialization and smaller payloads.
+- **In-process version cache** — version numbers are cached in-process per request (with Octane support) to eliminate redundant Redis reads within the same request.
 
-Invalidations that happen inside a database transaction are deferred until the transaction commits. If the transaction rolls back, the cache is untouched — the version counter is never bumped and no model keys are evicted.
-
-## Performance notes
-
-- **Invalidation is O(1)**: one `INCR` on a version key, regardless of how many cached queries exist for that model.
-- **Bulk reads use `MGET`**: all model keys for a result set are fetched in a single Redis round-trip.
-- **Writes use pipelining**: cache warm-up for missed model keys is batched in one pipeline call.
-- **Bulk deletes use `UNLINK`**: non-blocking async deletion (Redis 4.0+) with 1000-key chunking.
-- **No cache scanning on invalidation**: version shift makes stale keys unreachable without touching them.
-- **igbinary serialization**: when the `igbinary` PHP extension is installed, model attributes are serialized with igbinary instead of PHP's native `serialize`
+---
 
 ## License
 
