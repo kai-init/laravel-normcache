@@ -139,7 +139,11 @@ class CacheableBuilder extends Builder
 
     protected function extractPrimaryKeyValues(QueryBuilder $base): ?array
     {
-        if (!$this->isPureModelQuery($base) || !empty($base->orders) || $base->offset > 0) {
+        if (!$this->isPureModelQuery($base) 
+            || !empty($base->orders) 
+            || $base->offset > 0 
+            || $base->limit > 0
+        ) {
             return null;
         }
 
