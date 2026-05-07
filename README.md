@@ -131,7 +131,7 @@ NormCache::flushAll();
 
 ## Redis Cluster
 
-Normcache is designed for Redis Cluster from the ground up. Every key uses a hash tag derived from the model class name — `{post}`, `{user}`, etc. — so all keys for a given model land on the same cluster slot. This means:
+Normcache is optimised for Redis Cluster. Every key uses a hash tag derived from the model class name — `{post}`, `{user}`, etc. — so all keys for a given model land on the same cluster slot. This means:
 
 - `MGET` batches across an entire result set are always single-slot and never cross node boundaries.
 - Lua scripts (`EVAL`) that combine a version read + data fetch in one round trip are always operating on co-located keys.
@@ -144,15 +144,20 @@ Enable cluster mode in the config:
 'cluster' => env('NORMCACHE_CLUSTER', false),
 ```
 
-`flushAll()` works correctly in cluster mode for both PhpRedis (`RedisCluster`) and Predis. It scans and deletes keys on each master node individually.
-
-> **Note:** If your Redis connection has a driver-level prefix configured (e.g. `options.prefix` in `config/database.php`), use Normcache's own `key_prefix` config instead to avoid conflicts. Stacking both is not supported.
+> **Note:** `flushAll()` is not supported in cluster mode. To perform a full flush on a cluster, use `NormCache::getFlushPatterns()` to get the key patterns and run your own per-node scan and delete:
+>
+> ```php
+> $patterns = NormCache::getFlushPatterns();
+> // ['query:*', 'model:*', 'ver:*', ...]
+>
+> // Scan and UNLINK each pattern on every master node using your preferred approach.
+> ```
 
 ---
 
-## What gets cached, what doesn't
+## What bypasses the cache
 
-Normcache caches queries it can fully reconstruct from a list of primary keys. The following bypass the cache and always hit the database:
+The following query types always hit the database directly:
 
 | Query feature | Reason |
 |---|---|
