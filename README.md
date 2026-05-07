@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
 **Normalized, self-invalidating Redis cache for Laravel Eloquent.**
-**Works with standalone Redis and Redis Cluster out of the box.**
+**Cluster Ready**
 
 ## The Core Idea
 
