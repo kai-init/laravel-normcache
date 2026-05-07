@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Redis\Connections\Connection;
-use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
@@ -354,9 +353,11 @@ class CacheManager
             }
 
             if ($inserts !== []) {
-                $this->connection()->pipeline(function ($pipe) use ($inserts) {
+                $memberKey = $this->prefix("members:model:{$classKey}");
+                $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
                     foreach ($inserts as $key => $value) {
                         $pipe->setex($key, $this->ttl, $value);
+                        $pipe->sadd($memberKey, $key);
                     }
                 });
             }
@@ -557,36 +558,26 @@ class CacheManager
 
         $this->doInvalidateVersion($modelClass);
 
-        $patterns = [
-            $this->prefix("model:{$classKey}:*"),
-            $this->prefix("query:{$classKey}:*"),
-            $this->prefix("agg:{$classKey}:*"),
-            $this->prefix("count:{$classKey}:*"),
-            $this->prefix("pivot:{$classKey}:*"),
-            $this->prefix("pivot:*:{$classKey}:*"),
-            $this->prefix("through:{$classKey}:*"),
-            $this->prefix("through:*:{$classKey}:*"),
-            $this->prefix("cooldown:{$classKey}:*"),
-            $this->prefix("building:query:{$classKey}:*"),
-            $this->prefix("building:count:{$classKey}:*"),
-        ];
+        $memberKey = $this->prefix("members:model:{$classKey}");
+        $keys = $this->connection()->smembers($memberKey);
 
-        foreach ($patterns as $pattern) {
-            foreach ($this->scan($pattern) as $batch) {
-                $this->asyncDel($batch);
-            }
+        if (!empty($keys)) {
+            $this->asyncDel($keys);
         }
+
+        $this->connection()->del($memberKey);
     }
 
     public function flushAll(): int
     {
-        $patterns = ['query:*', 'model:*', 'ver:*', 'agg:*', 'count:*', 'pivot:*', 'through:*', 'cooldown:*', 'building:*'];
+        $patterns = ['query:*', 'model:*', 'members:model:*', 'ver:*', 'agg:*', 'count:*', 'pivot:*', 'through:*', 'cooldown:*', 'building:*'];
         $total = 0;
 
         foreach ($patterns as $pattern) {
-            foreach ($this->scan($this->prefix($pattern)) as $batch) {
-                $total += count($batch);
-                $this->asyncDel($batch);
+            $keys = $this->connection()->keys($this->prefix($pattern));
+            if (!empty($keys)) {
+                $total += count($keys);
+                $this->asyncDel($keys);
             }
         }
 
@@ -606,11 +597,7 @@ class CacheManager
 
         $this->connection()->pipeline(function ($pipe) use ($prefixedKeys) {
             foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
-                try {
-                    $pipe->unlink(...$chunk);
-                } catch (\Throwable) {
-                    $pipe->del(...$chunk);
-                }
+                $pipe->unlink(...$chunk);
             }
         });
     }
@@ -675,37 +662,6 @@ class CacheManager
             'relatedVersion' => $relatedVersion,
             'data' => array_combine($parentIds, $data),
         ];
-    }
-
-    /**
-     * @return \Generator<array<string>>
-     */
-    protected function scan(string $pattern): \Generator
-    {
-        $connection = $this->connection();
-
-        $cursor = $connection instanceof PhpRedisConnection
-            && version_compare(phpversion('redis'), '6.0.0', '>=')
-                ? null
-                : 0;
-
-        do {
-            $result = $connection->scan($cursor, ['match' => $pattern, 'count' => 1000]);
-
-            if ($result === false) {
-                break;
-            }
-
-            if (is_array($result) && count($result) === 2 && is_array($result[1])) {
-                [$cursor, $batch] = $result;
-            } else {
-                break;
-            }
-
-            if (!empty($batch)) {
-                yield $batch;
-            }
-        } while ($cursor);
     }
 
     protected function prefix(string $key): string

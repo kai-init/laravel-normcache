@@ -81,7 +81,7 @@ Individual model entries are reused across all query shapes. A cache hit on `mod
 
 - PHP 8.2+
 - Laravel 11+
-- Redis (PhpRedis or Predis)
+- Redis 4.0+ (PhpRedis or Predis)
 
 ## Installation
 
