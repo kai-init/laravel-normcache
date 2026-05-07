@@ -9,7 +9,7 @@
 
 ## The Core Idea
 
-Most caching packages store the full result of every query as a separate blob. Normcache doesn't. It separates *what rows match* from *what those rows look like*, and stores each model exactly once.
+Most caching packages cache query results as a single blob — the entire collection, serialized and stored together. Normcache takes a different approach: it stores the list of matching IDs separately from the model data, and keeps each model's attributes in its own key. Every model is stored exactly once, no matter how many queries return it.
 
 ```
 Query cache  →  "posts where active=1, page 2"  →  [4, 7, 12]
@@ -18,7 +18,7 @@ Model cache  →  post:4  →  { id:4, title:..., body:... }
              →  post:12 →  { id:12, title:..., body:... }
 ```
 
-When post 7 is updated, Normcache deletes `post:7` and bumps a version counter. Every query that included post 7 — regardless of how it was filtered, sorted, or paginated — instantly misses on the next read, without needing to know which queries those were.
+When post 7 is updated, Normcache deletes `post:7` and increments a version counter. The version is embedded in every query cache key, so all cached queries that returned post 7 — filtered, paginated, or sorted however they were — automatically miss on the next read. No index of which queries to invalidate is needed.
 
 ### Why this matters
 
