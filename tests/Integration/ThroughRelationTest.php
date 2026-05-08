@@ -52,4 +52,19 @@ class ThroughRelationTest extends TestCase
 
         $this->assertSame(['Post A', 'Post B'], $titles->all());
     }
+
+    public function test_updating_related_model_reflected_after_through_cache_warm(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Original', 'author_id' => $author->id]);
+
+        $country->posts()->get(); // warm through + model cache
+
+        $post->update(['title' => 'Updated']); // flushes model key, bumps version
+
+        $title = $country->posts()->get()->first()->title;
+
+        $this->assertSame('Updated', $title);
+    }
 }

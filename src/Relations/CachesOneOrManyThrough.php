@@ -23,15 +23,7 @@ trait CachesOneOrManyThrough
         $cached = $cacheData['data'];
 
         if ($cached !== null) {
-            $prototype = $this->related;
-
-            $models = array_map(function ($attrs) use ($prototype) {
-                $instance = clone $prototype;
-                $instance->exists = true;
-                $instance->setRawAttributes($attrs, true);
-
-                return $instance;
-            }, $cached);
+            $models = NormCache::getModels($cached, $this->related::class);
 
             if ($models && $builder->getEagerLoads()) {
                 $models = $builder->eagerLoadRelations($models);
@@ -44,11 +36,20 @@ trait CachesOneOrManyThrough
 
         $result = parent::get($columns);
 
-        NormCache::set(
-            $key,
-            array_map(fn($m) => $m->getAttributes(), $result->all()),
-            NormCache::queryTtl(),
-        );
+        $relatedClass = $this->related::class;
+        $ids = array_map(fn($m) => $m->getKey(), $result->all());
+        NormCache::set($key, $ids, NormCache::queryTtl());
+
+        // Populate model cache while we have full model
+        if ($columns === ['*']) {
+            $attrsByKey = [];
+            foreach ($result as $model) {
+                $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getAttributes();
+            }
+            if (!empty($attrsByKey)) {
+                NormCache::setManyModels($relatedClass, $attrsByKey, NormCache::ttl());
+            }
+        }
 
         return $result;
     }
