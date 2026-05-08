@@ -83,6 +83,12 @@ class CacheableBuilder extends Builder
         $model = $this->model::class;
         $base = $this->toBase();
 
+        if (!$this->isPureModelQuery($base)) {
+            $this->replayPendingAggregates();
+
+            return parent::get($columns);
+        }
+
         if ($ids = $this->extractPrimaryKeyValues($base)) {
             $selectedCols = $this->resolveSelectedColumns($base, $columns);
             if (!$this->hasCalculatedColumns($selectedCols)) {
@@ -90,12 +96,6 @@ class CacheableBuilder extends Builder
 
                 return $this->finalizeResult($models);
             }
-        }
-
-        if (!$this->isPureModelQuery($base)) {
-            $this->replayPendingAggregates();
-
-            return parent::get($columns);
         }
 
         $selectedCols = $this->resolveSelectedColumns($base, $columns);
@@ -106,15 +106,16 @@ class CacheableBuilder extends Builder
             return parent::get($columns);
         }
 
-        $keyBase = (clone $base);
-        $keyBase->columns = null;
-        $hash = $this->queryCacheKey($keyBase);
+        $base->columns = null;
+        $hash = $this->queryCacheKey($base);
 
         $cacheData = NormCache::getModelsFromQuery($model, $hash);
         $key = $cacheData['key'];
 
         if ($cacheData['ids'] !== null) {
-            event(new QueryCacheHit($model, $key));
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheHit($model, $key));
+            }
             $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
         } else {
             $ids = $this->resolveIds($key, $base, $cacheData['lock']);
@@ -139,11 +140,7 @@ class CacheableBuilder extends Builder
 
     protected function extractPrimaryKeyValues(QueryBuilder $base): ?array
     {
-        if (!$this->isPureModelQuery($base) 
-            || !empty($base->orders) 
-            || $base->offset > 0 
-            || $base->limit > 0
-        ) {
+        if (!empty($base->orders) || $base->offset > 0 || $base->limit > 0) {
             return null;
         }
 
@@ -290,7 +287,9 @@ class CacheableBuilder extends Builder
         }
 
         // We own the lock (acquired in Lua eval).
-        event(new QueryCacheMiss($this->model::class, $key));
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryCacheMiss($this->model::class, $key));
+        }
 
         try {
             $ids = $this->buildIds($base);

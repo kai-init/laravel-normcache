@@ -8,4 +8,5 @@ return [
     'key_prefix'    => env('NORMCACHE_PREFIX', ''),
     'cooldown'      => (int) env('NORMCACHE_COOLDOWN', 0),
     'cluster'       => (bool) env('NORMCACHE_CLUSTER', false),
+    'events'        => (bool) env('NORMCACHE_EVENTS', true),
 ];

@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Redis;
 class CacheManager
 {
     protected static array $classKeyCache = [];
+    protected static array $modelPrototypes = [];
 
     protected ?Connection $connection = null;
 
@@ -38,17 +39,28 @@ class CacheManager
         protected string $keyPrefix,
         protected int $cooldown,
         protected bool $cluster = false,
+        protected bool $enabled = true,
+        protected bool $dispatchEvents = true,
     ) {
         $this->igbinary = \extension_loaded('igbinary');
     }
 
     public function isEnabled(): bool
     {
-        return config('normcache.enabled', true);
+        return $this->enabled;
+    }
+
+    public function isEventsEnabled(): bool
+    {
+        return $this->dispatchEvents;
     }
 
     protected function groupByTag(array $keys): array
     {
+        if (!$this->cluster) {
+            return [$keys];
+        }
+
         $groups = [];
         foreach ($keys as $key) {
             $tag = $key;
@@ -121,14 +133,13 @@ class CacheManager
         foreach ($groups as $groupKeys) {
             $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
             $raw = $this->connection()->mget($prefixed);
-            
+
             foreach ($groupKeys as $i => $key) {
                 $v = $raw[$i];
                 $results[$key] = ($v !== null && $v !== false) ? $this->unserialize($v) : null;
             }
         }
 
-        // Return in original order
         return array_map(fn($k) => $results[$k], $keys);
     }
 
@@ -183,7 +194,6 @@ class CacheManager
                 $pipe->del($this->prefix($lockKey));
             });
         } else {
-            // Keys are in different slots, cannot pipeline atomically
             $this->set($key, $value, $ttl);
             $this->delete($lockKey);
         }
@@ -337,7 +347,7 @@ class CacheManager
     {
         $classKey = $this->classKey($modelClass);
         $version = $this->currentVersion($versionClass);
-        
+
         $aggPrefix = "agg:{{$classKey}}:";
         $aggSuffix = ":{$column}:{$function}:{$relation}:{$hash}:v{$version}";
 
@@ -376,10 +386,7 @@ class CacheManager
             $raw = $this->getMany($keys);
         }
 
-        $cached = array_combine($ids, $raw);
-        $missed = [];
-        $result = [];
-        $prototype = new $modelClass;
+        $prototype = self::$modelPrototypes[$modelClass] ??= new $modelClass;
 
         $normalizedCols = null;
         if ($columns !== null) {
@@ -391,7 +398,12 @@ class CacheManager
             }
         }
 
-        foreach ($cached as $id => $attrs) {
+        $result = [];
+        $missed = [];
+
+        foreach ($ids as $i => $id) {
+            $attrs = $raw[$i];
+
             if ($attrs === null || $attrs === false) {
                 $missed[] = $id;
                 continue;
@@ -417,47 +429,51 @@ class CacheManager
             $result[$id] = $instance;
         }
 
-        $hitIds = array_diff($ids, $missed);
-        if ($hitIds !== []) {
-            event(new ModelCacheHit($modelClass, array_values($hitIds)));
+        if ($missed === []) {
+            if ($this->dispatchEvents && $result !== []) {
+                event(new ModelCacheHit($modelClass, array_keys($result)));
+            }
+            return array_values($result);
         }
-        if ($missed !== []) {
+
+        if ($this->dispatchEvents) {
+            if ($result !== []) {
+                event(new ModelCacheHit($modelClass, array_keys($result)));
+            }
             event(new ModelCacheMiss($modelClass, $missed));
         }
 
-        if ($missed !== []) {
-            $pk = $prototype->getKeyName();
-            $loaded = $modelClass::query()
-                ->withoutCache()
-                ->withoutGlobalScope(SoftDeletingScope::class)
-                ->findMany($missed)
-                ->keyBy($pk);
+        $pk = $prototype->getKeyName();
+        $loaded = $modelClass::query()
+            ->withoutCache()
+            ->withoutGlobalScope(SoftDeletingScope::class)
+            ->findMany($missed)
+            ->keyBy($pk);
 
-            $inserts = [];
+        $inserts = [];
 
-            foreach ($loaded as $id => $model) {
-                $key = "model:{{$classKey}}:" . $id;
-                $inserts[$key] = $this->serialize($model->getAttributes());
+        foreach ($loaded as $id => $model) {
+            $key = "model:{{$classKey}}:" . $id;
+            $inserts[$key] = $this->serialize($model->getAttributes());
 
-                if ($normalizedCols !== null) {
-                    $model->setRawAttributes(
-                        array_intersect_key($model->getAttributes(), $normalizedCols),
-                        true
-                    );
+            if ($normalizedCols !== null) {
+                $model->setRawAttributes(
+                    array_intersect_key($model->getAttributes(), $normalizedCols),
+                    true
+                );
+            }
+
+            $result[$id] = $model;
+        }
+
+        if ($inserts !== []) {
+            $memberKey = $this->prefix("members:model:{{$classKey}}");
+            $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
+                foreach ($inserts as $key => $value) {
+                    $pipe->setex($this->prefix($key), $this->ttl, $value);
+                    $pipe->sadd($memberKey, $this->prefix($key));
                 }
-
-                $result[$id] = $model;
-            }
-
-            if ($inserts !== []) {
-                $memberKey = $this->prefix("members:model:{{$classKey}}");
-                $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
-                    foreach ($inserts as $key => $value) {
-                        $pipe->setex($this->prefix($key), $this->ttl, $value);
-                        $pipe->sadd($memberKey, $this->prefix($key));
-                    }
-                });
-            }
+            });
         }
 
         $ordered = [];
@@ -689,10 +705,10 @@ class CacheManager
         $relatedVersion = $this->currentVersion($relatedClass);
 
         $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:v{$parentVersion}:v{$relatedVersion}:";
-        
+
         $keys = array_map(fn($id) => $prefix . $id, $parentIds);
         $data = $this->getMany($keys);
-        
+
         return [
             'parentVersion' => $parentVersion,
             'relatedVersion' => $relatedVersion,
