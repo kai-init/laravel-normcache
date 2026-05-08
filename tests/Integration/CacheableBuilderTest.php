@@ -116,8 +116,8 @@ class CacheableBuilderTest extends TestCase
         Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
         Post::create(['title' => 'Post 2', 'author_id' => $author->id]);
 
-        $first = Author::cacheAggregates()->withCount('posts')->get()->firstWhere('id', $author->id);
-        $second = Author::cacheAggregates()->withCount('posts')->get()->firstWhere('id', $author->id);
+        $first = Author::withCount('posts')->get()->firstWhere('id', $author->id);
+        $second = Author::withCount('posts')->get()->firstWhere('id', $author->id);
 
         $this->assertSame(2, $first->posts_count);
         $this->assertSame(2, $second->posts_count);
@@ -129,8 +129,8 @@ class CacheableBuilderTest extends TestCase
         Post::create(['title' => 'Post 1', 'views' => 10, 'author_id' => $author->id]);
         Post::create(['title' => 'Post 2', 'views' => 20, 'author_id' => $author->id]);
 
-        $first = Author::cacheAggregates()->withSum('posts', 'views')->get()->firstWhere('id', $author->id);
-        $second = Author::cacheAggregates()->withSum('posts', 'views')->get()->firstWhere('id', $author->id);
+        $first = Author::withSum('posts', 'views')->get()->firstWhere('id', $author->id);
+        $second = Author::withSum('posts', 'views')->get()->firstWhere('id', $author->id);
 
         $this->assertEquals(30, $first->posts_sum_views);
         $this->assertEquals(30, $second->posts_sum_views);
@@ -142,8 +142,8 @@ class CacheableBuilderTest extends TestCase
         Post::create(['title' => 'Post 1', 'views' => 10, 'author_id' => $author->id]);
         Post::create(['title' => 'Post 2', 'views' => 20, 'author_id' => $author->id]);
 
-        $first = Author::cacheAggregates()->withAvg('posts', 'views')->get()->firstWhere('id', $author->id);
-        $second = Author::cacheAggregates()->withAvg('posts', 'views')->get()->firstWhere('id', $author->id);
+        $first = Author::withAvg('posts', 'views')->get()->firstWhere('id', $author->id);
+        $second = Author::withAvg('posts', 'views')->get()->firstWhere('id', $author->id);
 
         $this->assertEquals(15, $first->posts_avg_views);
         $this->assertEquals(15, $second->posts_avg_views);
@@ -155,8 +155,8 @@ class CacheableBuilderTest extends TestCase
         Post::create(['title' => 'Post 1', 'views' => 10, 'author_id' => $author->id]);
         Post::create(['title' => 'Post 2', 'views' => 20, 'author_id' => $author->id]);
 
-        $first = Author::cacheAggregates()->withMin('posts', 'views')->get()->firstWhere('id', $author->id);
-        $second = Author::cacheAggregates()->withMin('posts', 'views')->get()->firstWhere('id', $author->id);
+        $first = Author::withMin('posts', 'views')->get()->firstWhere('id', $author->id);
+        $second = Author::withMin('posts', 'views')->get()->firstWhere('id', $author->id);
 
         $this->assertEquals(10, $first->posts_min_views);
         $this->assertEquals(10, $second->posts_min_views);
@@ -168,8 +168,8 @@ class CacheableBuilderTest extends TestCase
         Post::create(['title' => 'Post 1', 'views' => 10, 'author_id' => $author->id]);
         Post::create(['title' => 'Post 2', 'views' => 20, 'author_id' => $author->id]);
 
-        $first = Author::cacheAggregates()->withMax('posts', 'views')->get()->firstWhere('id', $author->id);
-        $second = Author::cacheAggregates()->withMax('posts', 'views')->get()->firstWhere('id', $author->id);
+        $first = Author::withMax('posts', 'views')->get()->firstWhere('id', $author->id);
+        $second = Author::withMax('posts', 'views')->get()->firstWhere('id', $author->id);
 
         $this->assertEquals(20, $first->posts_max_views);
         $this->assertEquals(20, $second->posts_max_views);
@@ -181,8 +181,8 @@ class CacheableBuilderTest extends TestCase
         $authorWithout = Author::create(['name' => 'Bob']);
         Post::create(['title' => 'Post 1', 'author_id' => $authorWith->id]);
 
-        $first = Author::cacheAggregates()->withExists('posts')->get();
-        $second = Author::cacheAggregates()->withExists('posts')->get();
+        $first = Author::withExists('posts')->get();
+        $second = Author::withExists('posts')->get();
 
         $this->assertTrue((bool) $first->firstWhere('id', $authorWith->id)->posts_exists);
         $this->assertFalse((bool) $first->firstWhere('id', $authorWithout->id)->posts_exists);
@@ -306,7 +306,7 @@ class CacheableBuilderTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
 
-        Author::cacheAggregates()->withCount('posts')->get();
+        Author::withCount('posts')->get();
 
         DB::table('posts')->insert([
             'title' => 'Post 2',
@@ -316,7 +316,7 @@ class CacheableBuilderTest extends TestCase
         ]);
 
         $post->update(['title' => 'Updated']);
-        $result = Author::cacheAggregates()->withCount('posts')->get()
+        $result = Author::withCount('posts')->get()
             ->firstWhere('id', $author->id);
 
         $this->assertSame(2, $result->posts_count);

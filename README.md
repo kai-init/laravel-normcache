@@ -94,9 +94,17 @@ Post::query()->remember(600)->get(); // cache this result for 10 minutes
 
 ### Aggregates
 
+`withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached automatically. Aggregate values are stored per model ID and invalidated when the related model changes.
+
 ```php
-// withCount, withSum, withAvg, withMin, withMax, withExists
-Post::cacheAggregates()->withCount('comments')->get();
+Post::withCount('comments')->get();
+Post::withSum('orders', 'total')->get();
+```
+
+To skip aggregate caching for a specific query:
+
+```php
+Post::withoutAggregateCache()->withCount('comments')->get();
 ```
 
 ### Relationship caching
@@ -223,6 +231,7 @@ return [
 ## Performance
 
 - **Single round trip on cache hit** — version read + query ID fetch + model MGET are combined into one Lua `EVAL` call.
+- **Cached paginate count** — `paginate()` caches the `COUNT(*)` query under a versioned key so navigating between pages never re-runs the count query.
 - **Invalidation is O(1)** — one `INCR` on a version key, regardless of how many cached queries exist for that model.
 - **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
 - **Pipelined writes** — cache warm-up for missed models is batched in a single pipeline.

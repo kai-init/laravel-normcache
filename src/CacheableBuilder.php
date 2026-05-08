@@ -20,7 +20,7 @@ class CacheableBuilder extends Builder
 
     protected bool $skipCache = false;
     protected ?int $queryTtl = null;
-    protected bool $cacheAggregates = false;
+    protected bool $cacheAggregates = true;
     protected array $pendingAggregates = [];
 
     public function withoutCache(): static
@@ -42,9 +42,9 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
-    public function cacheAggregates(): static
+    public function withoutAggregateCache(): static
     {
-        $this->cacheAggregates = true;
+        $this->cacheAggregates = false;
 
         return $this;
     }
