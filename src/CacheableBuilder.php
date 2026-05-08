@@ -89,15 +89,6 @@ class CacheableBuilder extends Builder
             return parent::get($columns);
         }
 
-        if ($ids = $this->extractPrimaryKeyValues($base)) {
-            $selectedCols = $this->resolveSelectedColumns($base, $columns);
-            if (!$this->hasCalculatedColumns($selectedCols)) {
-                $models = NormCache::getModels($ids, $model, $selectedCols);
-
-                return $this->finalizeResult($models);
-            }
-        }
-
         $selectedCols = $this->resolveSelectedColumns($base, $columns);
 
         if ($this->hasCalculatedColumns($selectedCols)) {
@@ -106,23 +97,46 @@ class CacheableBuilder extends Builder
             return parent::get($columns);
         }
 
+        if ($ids = $this->extractPrimaryKeyValues($base)) {
+            try {
+                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols));
+            } catch (\Exception $e) {
+                return $this->fallback($e, $columns);
+            }
+        }
+
         $base->columns = null;
         $hash = $this->queryCacheKey($base);
 
-        $cacheData = NormCache::getModelsFromQuery($model, $hash);
-        $key = $cacheData['key'];
+        try {
+            $cacheData = NormCache::getModelsFromQuery($model, $hash);
+            $key = $cacheData['key'];
 
-        if ($cacheData['ids'] !== null) {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryCacheHit($model, $key));
+            if ($cacheData['ids'] !== null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheHit($model, $key));
+                }
+                $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
+            } else {
+                $ids = $this->resolveIds($key, $base, $cacheData['lock']);
+                $models = NormCache::getModels($ids, $model, $selectedCols);
             }
-            $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
-        } else {
-            $ids = $this->resolveIds($key, $base, $cacheData['lock']);
-            $models = NormCache::getModels($ids, $model, $selectedCols);
-        }
 
-        return $this->finalizeResult($models);
+            return $this->finalizeResult($models);
+        } catch (\Exception $e) {
+            return $this->fallback($e, $columns);
+        }
+    }
+
+    private function fallback(\Exception $e, $columns): Collection
+    {
+        if (!NormCache::isFallbackEnabled()) {
+            throw $e;
+        }
+        report($e);
+        NormCache::disable();
+        $this->replayPendingAggregates();
+        return parent::get($columns);
     }
 
     protected function finalizeResult(array $models): Collection
@@ -198,16 +212,25 @@ class CacheableBuilder extends Builder
 
         $hash = QueryHasher::hash($base);
 
-        $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
-        $countKey = $cacheData['key'];
-        $cachedTotal = $cacheData['data'];
+        try {
+            $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
+            $countKey = $cacheData['key'];
+            $cachedTotal = $cacheData['data'];
 
-        if ($cachedTotal === null) {
-            $cachedTotal = $base->getCountForPagination();
-            NormCache::set($countKey, $cachedTotal, $this->queryTtl ?? NormCache::queryTtl());
+            if ($cachedTotal === null) {
+                $cachedTotal = $base->getCountForPagination();
+                NormCache::set($countKey, $cachedTotal, $this->queryTtl ?? NormCache::queryTtl());
+            }
+
+            return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
+        } catch (\Exception $e) {
+            if (!NormCache::isFallbackEnabled()) {
+                throw $e;
+            }
+            report($e);
+            NormCache::disable();
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
-
-        return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
     }
 
     private function isPureModelQuery(QueryBuilder $base): bool

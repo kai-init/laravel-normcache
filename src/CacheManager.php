@@ -40,6 +40,7 @@ class CacheManager
         protected bool $cluster = false,
         protected bool $enabled = true,
         protected bool $dispatchEvents = true,
+        protected bool $fallback = false,
     ) {
         $this->igbinary = \extension_loaded('igbinary');
     }
@@ -52,6 +53,21 @@ class CacheManager
     public function isEventsEnabled(): bool
     {
         return $this->dispatchEvents;
+    }
+
+    public function isFallbackEnabled(): bool
+    {
+        return $this->fallback;
+    }
+
+    public function disable(): void
+    {
+        $this->enabled = false;
+    }
+
+    public function enable(): void
+    {
+        $this->enabled = true;
     }
 
     protected function groupByTag(array $keys): array
@@ -289,7 +305,7 @@ class CacheManager
         ];
     }
 
-    protected function getQueryIds(string $key): ?array
+    public function getQueryIds(string $key): ?array
     {
         $value = $this->connection()->get($this->prefix($key));
         if ($value === null) {
@@ -339,23 +355,6 @@ class CacheManager
         return [
             'key' => $key,
             'data' => $data,
-        ];
-    }
-
-    public function getAggregateCache(string $modelClass, string $versionClass, array $ids, string $column, string $function, string $relation, string $hash): array
-    {
-        $classKey = $this->classKey($modelClass);
-        $version = $this->currentVersion($versionClass);
-
-        $aggPrefix = "agg:{{$classKey}}:";
-        $aggSuffix = ":{$column}:{$function}:{$relation}:{$hash}:v{$version}";
-
-        $keys = array_map(fn($id) => "{$aggPrefix}{$id}{$aggSuffix}", $ids);
-        $data = $this->getMany($keys);
-
-        return [
-            'version' => $version,
-            'data' => array_combine($ids, $data),
         ];
     }
 
@@ -559,6 +558,16 @@ class CacheManager
 
         if (!empty($deletes)) {
             $this->asyncDel(array_map(fn($k) => $this->prefix($k), $deletes));
+
+            $byClass = [];
+            foreach ($deletes as $k) {
+                if (preg_match('/\{([^}]+)\}/', $k, $m)) {
+                    $byClass[$m[1]][] = $this->prefix($k);
+                }
+            }
+            foreach ($byClass as $classKey => $prefixedKeys) {
+                $this->connection()->srem($this->prefix("members:model:{{$classKey}}"), ...$prefixedKeys);
+            }
         }
 
         foreach ($flushes as $modelClass) {
@@ -619,7 +628,13 @@ class CacheManager
             return;
         }
 
-        $this->connection()->del($this->prefix($key));
+        $classKey = $this->classKey($class);
+        $prefixedKey = $this->prefix($key);
+        $memberKey = $this->prefix("members:model:{{$classKey}}");
+        $this->connection()->pipeline(function ($pipe) use ($prefixedKey, $memberKey) {
+            $pipe->del($prefixedKey);
+            $pipe->srem($memberKey, $prefixedKey);
+        });
         $this->doInvalidateVersion($class);
     }
 

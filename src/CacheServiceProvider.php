@@ -23,6 +23,7 @@ class CacheServiceProvider extends ServiceProvider
             config('normcache.cluster', false),
             config('normcache.enabled', true),
             config('normcache.events', true),
+            config('normcache.fallback', false),
         ));
 
         $this->app->alias(CacheManager::class, 'normcache');
@@ -43,10 +44,14 @@ class CacheServiceProvider extends ServiceProvider
                 }
             });
 
-            // Reset L1 version cache between requests when running under Octane.
+            // Reset L1 version cache and re-enable (in case fallback disabled it) between Octane requests.
             foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
                 if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, fn() => $this->app->make(CacheManager::class)->flushVersionLocal());
+                    Event::listen($octaneEvent, function () {
+                        $manager = $this->app->make(CacheManager::class);
+                        $manager->flushVersionLocal();
+                        $manager->enable();
+                    });
                 }
             }
         }
