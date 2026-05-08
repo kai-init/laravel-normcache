@@ -68,6 +68,16 @@ trait HandlesCacheInvalidation
         return $this->coordinateInvalidation(true, fn() => parent::delete());
     }
 
+    public function forceDelete(): mixed
+    {
+        return $this->coordinateInvalidation(true, fn() => parent::forceDelete());
+    }
+
+    public function touch($column = null): int|bool
+    {
+        return $this->coordinateInvalidation(true, fn() => parent::touch($column));
+    }
+
     public function increment($column, $amount = 1, array $extra = []): int
     {
         return $this->coordinateInvalidation(true, fn() => parent::increment($column, $amount, $extra));
