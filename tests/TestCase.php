@@ -56,8 +56,8 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function resetClassKeyCache(): void
     {
-        $prop = new ReflectionProperty(CacheManager::class, 'classKeyCache');
-        $prop->setValue(null, []);
+        (new ReflectionProperty(CacheManager::class, 'classKeyCache'))->setValue(null, []);
+        (new ReflectionProperty(CacheManager::class, 'modelPrototypes'))->setValue(null, []);
     }
 
     protected function redisKeys(string $pattern = '*'): array

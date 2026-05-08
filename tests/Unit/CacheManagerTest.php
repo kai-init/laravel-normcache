@@ -2,10 +2,10 @@
 
 namespace NormCache\Tests\Unit;
 
-use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 class CacheManagerTest extends TestCase
@@ -76,7 +76,7 @@ class CacheManagerTest extends TestCase
 
     public function test_current_version_returns_zero_before_any_invalidation(): void
     {
-        $this->assertSame(0, $this->manager->currentVersion('SomeModel'));
+        $this->assertSame(0, $this->manager->currentVersion(Post::class));
     }
 
     public function test_invalidate_version_increments_version(): void
@@ -112,109 +112,86 @@ class CacheManagerTest extends TestCase
 
     public function test_current_version_is_served_from_local_after_first_read(): void
     {
-        $this->manager->currentVersion('SomeModel'); // populates local cache
+        $this->manager->currentVersion(Post::class);
 
-        // Modify Redis directly, bypassing the manager
-        Redis::connection('model-cache-test')->set('test:ver:{somemodel}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{posts}:', 99);
 
-        // Should still return locally cached value, not the new Redis value
-        $this->assertSame(0, $this->manager->currentVersion('SomeModel'));
+        $this->assertSame(0, $this->manager->currentVersion(Post::class));
     }
 
     public function test_flush_version_local_forces_redis_read_on_next_call(): void
     {
-        $this->manager->currentVersion('SomeModel'); // populates local cache
+        $this->manager->currentVersion(Post::class);
 
-        Redis::connection('model-cache-test')->set('test:ver:{somemodel}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{posts}:', 99);
 
         $this->manager->flushVersionLocal();
 
-        $this->assertSame(99, $this->manager->currentVersion('SomeModel'));
+        $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
 
     public function test_invalidate_version_updates_local_with_new_value(): void
     {
-        $this->manager->invalidateVersion(new Author()); // version = 1, local cache updated
+        $this->manager->invalidateVersion(new Author());
 
-        // Modify Redis directly to simulate external change
-        Redis::connection('model-cache-test')->set('test:ver:{author}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{authors}:', 99);
 
-        // local cache should have 1 (from the invalidation), not 99
         $this->assertSame(1, $this->manager->currentVersion(Author::class));
     }
 
-    public function test_class_key_falls_back_to_class_basename(): void
+    public function test_class_key_uses_table_name(): void
     {
-        $key = $this->manager->classKey('App\\Models\\Commission');
-
-        $this->assertSame('commission', $key);
-    }
-
-    public function test_class_key_uses_morph_map_when_registered(): void
-    {
-        Relation::morphMap(['post' => 'App\\Models\\Post']);
-
-        $key = $this->manager->classKey('App\\Models\\Post');
-
-        $this->assertSame('post', $key);
-
-        Relation::morphMap([], false);
-        $this->resetClassKeyCache();
+        $this->assertSame('posts', $this->manager->classKey(Post::class));
+        $this->assertSame('authors', $this->manager->classKey(Author::class));
     }
 
     public function test_model_key_returns_expected_format(): void
     {
-        $key = $this->manager->modelKey('App\\Models\\Commission', 42);
+        $key = $this->manager->modelKey(Post::class, 42);
 
-        $this->assertSame('model:{commission}:42', $key);
+        $this->assertSame('model:{posts}:42', $key);
     }
 
     public function test_flush_model_bumps_version_and_clears_related_keys(): void
     {
         $redis = Redis::connection('model-cache-test');
 
-        // Seed the tag set as getModels would
-        $redis->sadd('test:members:model:{post}', 'test:model:{post}:1', 'test:model:{post}:2');
-        $this->manager->set('model:{post}:1', ['id' => 1]);
-        $this->manager->set('model:{post}:2', ['id' => 2]);
+        $redis->sadd('test:members:model:{posts}', 'test:model:{posts}:1', 'test:model:{posts}:2');
+        $this->manager->set('model:{posts}:1', ['id' => 1]);
+        $this->manager->set('model:{posts}:2', ['id' => 2]);
 
-        // Versioned keys — not SCANned, expire via TTL
-        $this->manager->set('query:{post}:v1:abc', [1, 2]);
-        $this->manager->set('agg:{post}:1:count:*:comments:nc:v1', ['v' => 3]);
+        $this->manager->set('query:{posts}:v1:abc', [1, 2]);
+        $this->manager->set('agg:{posts}:1:count:*:comments:nc:v1', ['v' => 3]);
 
-        $this->manager->set('model:{author}:1', ['id' => 1]); // different model — untouched
+        $this->manager->set('model:{authors}:1', ['id' => 1]);
 
-        $versionBefore = $this->manager->currentVersion('App\\Models\\Post');
+        $versionBefore = $this->manager->currentVersion(Post::class);
 
-        $this->manager->flushModel('App\\Models\\Post');
+        $this->manager->flushModel(Post::class);
 
-        // Model instance keys from tag set are deleted
-        $this->assertNull($this->manager->get('model:{post}:1'));
-        $this->assertNull($this->manager->get('model:{post}:2'));
+        $this->assertNull($this->manager->get('model:{posts}:1'));
+        $this->assertNull($this->manager->get('model:{posts}:2'));
 
-        // Tag set itself is deleted
-        $this->assertSame(0, $redis->exists('test:members:model:{post}'));
+        $this->assertSame(0, $redis->exists('test:members:model:{posts}'));
 
-        // Versioned keys are NOT eagerly deleted — they expire naturally
-        $this->assertNotNull($this->manager->get('query:{post}:v1:abc'));
-        $this->assertNotNull($this->manager->get('agg:{post}:1:count:*:comments:nc:v1'));
+        $this->assertNotNull($this->manager->get('query:{posts}:v1:abc'));
+        $this->assertNotNull($this->manager->get('agg:{posts}:1:count:*:comments:nc:v1'));
 
-        // Other model untouched
-        $this->assertNotNull($this->manager->get('model:{author}:1'));
+        $this->assertNotNull($this->manager->get('model:{authors}:1'));
 
-        $this->assertGreaterThan($versionBefore, $this->manager->currentVersion('App\\Models\\Post'));
+        $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Post::class));
     }
 
     public function test_flush_all_removes_all_package_keys_and_returns_count(): void
     {
-        $this->manager->set('query:{post}:v1:abc', [1, 2]);
-        $this->manager->set('model:{post}:1', ['id' => 1]);
-        $this->manager->set('ver:{post}:', 3);
-        $this->manager->set('agg:{post}:1:count:*:posts:nc:v1', ['v' => 5]);
-        $this->manager->set('through:{post}:author:v1:v1:abc', [1]);
-        $this->manager->set('cooldown:{post}:', 1);
-        $this->manager->set('building:query:{post}:v1:abc', 1);
-        Redis::connection('model-cache-test')->sadd('test:members:model:{post}', 'test:model:{post}:1');
+        $this->manager->set('query:{posts}:v1:abc', [1, 2]);
+        $this->manager->set('model:{posts}:1', ['id' => 1]);
+        $this->manager->set('ver:{posts}:', 3);
+        $this->manager->set('agg:{posts}:1:count:*:posts:nc:v1', ['v' => 5]);
+        $this->manager->set('through:{posts}:author:v1:v1:abc', [1]);
+        $this->manager->set('cooldown:{posts}:', 1);
+        $this->manager->set('building:query:{posts}:v1:abc', 1);
+        Redis::connection('model-cache-test')->sadd('test:members:model:{posts}', 'test:model:{posts}:1');
 
         $deleted = $this->manager->flushAll();
 

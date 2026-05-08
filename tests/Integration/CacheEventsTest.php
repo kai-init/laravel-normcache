@@ -113,7 +113,7 @@ class CacheEventsTest extends TestCase
         Author::all();
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
-            return str_starts_with($e->key, 'query:{author}:v');
+            return str_starts_with($e->key, 'query:{authors}:v');
         });
     }
 
