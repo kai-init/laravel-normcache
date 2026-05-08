@@ -109,7 +109,7 @@ trait HandlesCacheInvalidation
                 NormCache::deferFlushModel($this->model);
             } else {
                 $class = $this->model::class;
-                $conn  = $this->model->getConnectionName();
+                $conn = $this->model->getConnectionName();
                 foreach ($ids as $id) {
                     NormCache::deferDelete(NormCache::modelKey($class, $id), $conn);
                 }

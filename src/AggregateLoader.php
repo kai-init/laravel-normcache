@@ -10,6 +10,8 @@ use NormCache\Support\QueryHasher;
 
 class AggregateLoader
 {
+    protected static array $cache = [];
+
     public function __construct(private Model $model) {}
 
     public function load(array $models, array $pendingAggregates): array
@@ -20,45 +22,76 @@ class AggregateLoader
 
         $parentClass = $this->model::class;
         $pkName = $this->model->getKeyName();
-        $classKey = NormCache::classKey($parentClass);
+        $prefix = "agg:{" . NormCache::classKey($parentClass) . "}:";
+
+        $ids = array_map(fn($m) => $m->getKey(), $models);
+        $idCount = count($ids);
+
+        $specs = [];
+        $keys = [];
+        $offset = 0;
 
         foreach ($pendingAggregates as $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
-            $relation = $this->model->{$name}();
-            $relatedModel = $relation->getRelated();
-            $relatedClass = $relatedModel::class;
-            $constraintHash = $this->constraintKey($relatedModel, $constraint);
+            $relatedClass = $this->resolveRelatedClass($parentClass, $name);
             $alias = $this->resolveAlias($name, $function, $column);
+            $constraintHash = $this->constraintKey($relatedClass, $constraint);
+            $version = NormCache::currentVersion($relatedClass);
+            $suffix = ":{$column}:{$function}:{$name}:{$constraintHash}:v{$version}";
 
-            $ids = array_map(fn($m) => $m->getKey(), $models);
-            $cache = NormCache::getAggregateCache($parentClass, $relatedClass, $ids, $column, $function, $name, $constraintHash);
-            $relatedVersion = $cache['version'];
-            $cachedById = $cache['data'];
+            foreach ($ids as $id) {
+                $keys[] = "{$prefix}{$id}{$suffix}";
+            }
 
-            $missed = array_keys(array_filter($cachedById, fn($v) => !is_array($v)));
+            $specs[] = ['agg' => $agg, 'alias' => $alias, 'suffix' => $suffix, 'offset' => $offset];
+            $offset += $idCount;
+        }
 
-            $fromDb = [];
-            if (!empty($missed)) {
-                $fromDb = $this->fetchMissed($missed, $name, $constraint, $function, $column, $pkName, $alias);
+        $data = NormCache::getMany($keys);
+        $toCache = [];
 
-                $toCache = [];
-                foreach ($missed as $id) {
-                    $key = "agg:{{$classKey}}:{$id}:{$column}:{$function}:{$name}:{$constraintHash}:v{$relatedVersion}";
-                    $toCache[$key] = ['v' => $fromDb[$id] ?? null];
+        foreach ($specs as $spec) {
+            ['agg' => $agg, 'alias' => $alias, 'suffix' => $suffix, 'offset' => $offset] = $spec;
+            ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
+
+            $missed = [];
+            $cachedValues = [];
+
+            foreach ($ids as $j => $id) {
+                $v = $data[$offset + $j];
+                if (is_array($v)) {
+                    $cachedValues[$id] = $v['v'];
+                } else {
+                    $missed[] = $id;
                 }
+            }
 
-                NormCache::setMany($toCache, NormCache::queryTtl());
+            $fetched = [];
+            if (!empty($missed)) {
+                $fetched = $this->fetchMissed($missed, $name, $constraint, $function, $column, $pkName, $alias);
+
+                foreach ($missed as $id) {
+                    $toCache["{$prefix}{$id}{$suffix}"] = ['v' => $fetched[$id] ?? null];
+                }
             }
 
             foreach ($models as $model) {
                 $id = $model->getKey();
-                $value = is_array($cachedById[$id]) ? $cachedById[$id]['v'] : ($fromDb[$id] ?? null);
-                $model->setAttribute($alias, $value);
+                $model->setAttribute($alias, $cachedValues[$id] ?? $fetched[$id] ?? null);
             }
         }
 
+        if (!empty($toCache)) {
+            NormCache::setMany($toCache, NormCache::queryTtl());
+        }
+
         return $models;
+    }
+
+    private function resolveRelatedClass(string $parentClass, string $name): string
+    {
+        return self::$cache["rc:{$parentClass}:{$name}"] ??= $this->model->{$name}()->getRelated()::class;
     }
 
     private function fetchMissed(
@@ -82,21 +115,20 @@ class AggregateLoader
             ->all();
     }
 
-    private function constraintKey(Model $relatedModel, ?callable $constraint): string
+    private function constraintKey(string $relatedClass, ?callable $constraint): string
     {
         if ($constraint === null) {
             return 'nc';
         }
 
-        $builder = $relatedModel->newQueryWithoutScopes()->withoutCache();
+        $builder = (new $relatedClass)->newQueryWithoutScopes()->withoutCache();
         $constraint($builder);
-        $base = $builder->toBase();
 
-        return QueryHasher::hash($base);
+        return QueryHasher::hash($builder->toBase());
     }
 
     private function resolveAlias(string $name, string $function, string $column): string
     {
-        return Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "$name $column $function"));
+        return self::$cache["al:{$name}:{$function}:{$column}"] ??= Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "$name $column $function"));
     }
 }

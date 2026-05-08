@@ -5,7 +5,6 @@ namespace NormCache;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\DB;
@@ -27,7 +26,7 @@ class CacheManager
     /** @var array<string, array<string, true>> */
     protected array $flushQueue = [];
 
-    /** @var array<string, int> L1 in-process version cache, keyed by classKey */
+    /** @var array<string, int> */
     protected array $versionLocal = [];
 
     protected bool $igbinary;
@@ -600,10 +599,7 @@ class CacheManager
 
     public function classKey(string $class): string
     {
-        return self::$classKeyCache[$class] ??= (
-            array_search($class, Relation::morphMap(), true)
-                ?: strtolower(class_basename($class))
-        );
+        return self::$classKeyCache[$class] ??= (self::$modelPrototypes[$class] ??= new $class)->getTable();
     }
 
     public function modelKey(string $modelClass, int|string $id): string
@@ -613,9 +609,9 @@ class CacheManager
 
     public function flushInstance(Model $model): void
     {
-        $conn  = $model->getConnectionName();
+        $conn = $model->getConnectionName();
         $class = $model::class;
-        $key   = $this->modelKey($class, $model->getKey());
+        $key = $this->modelKey($class, $model->getKey());
 
         if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
             $this->deleteQueue[$conn][$key] = true;
