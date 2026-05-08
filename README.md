@@ -207,10 +207,16 @@ return [
     'key_prefix'  => env('NORMCACHE_PREFIX', ''),
     'cooldown'    => env('NORMCACHE_COOLDOWN', 0),      // version bump debounce in seconds
     'cluster'     => env('NORMCACHE_CLUSTER', false),
+    'events'      => env('NORMCACHE_EVENTS', true),     // fire cache hit/miss events
+    'fallback'    => env('NORMCACHE_FALLBACK', false),  // fall back to DB on Redis error
 ];
 ```
 
 **`cooldown`** — Consecutive writes within the cooldown window only bump the version once. Useful for write-heavy models to avoid thrashing the version counter.
+
+**`events`** — Set to `false` to disable all `QueryCacheHit`, `QueryCacheMiss`, `ModelCacheHit`, and `ModelCacheMiss` event dispatches. Useful in high-throughput scenarios where the event overhead is not needed.
+
+**`fallback`** — When `true`, any Redis exception during a read is caught, reported via `report()`, the cache is disabled for the remainder of the request, and the query falls back to the database. When `false` (the default), Redis errors propagate normally. Enable this if you want your application to stay available during Redis outages.
 
 ---
 
