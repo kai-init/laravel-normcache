@@ -4,7 +4,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-**Normalized, self-invalidating Redis cache for Laravel Eloquent.**
+**Memory Efficient, Normalized, self-invalidating Redis cache for Laravel Eloquent.**
 **Cluster Ready**
 
 ## The Core Idea

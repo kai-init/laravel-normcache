@@ -13,6 +13,11 @@ class UncachedPost extends Model
     protected $table = 'posts';
     protected $guarded = [];
 
+    protected $casts = [
+        'published' => 'boolean',
+        'metadata'  => 'array',
+    ];
+
     public function author(): BelongsTo
     {
         return $this->belongsTo(UncachedAuthor::class, 'author_id');

@@ -15,6 +15,11 @@ class Post extends Model
 
     protected $guarded = [];
 
+    protected $casts = [
+        'published' => 'boolean',
+        'metadata'  => 'array',
+    ];
+
     public function author(): BelongsTo
     {
         return $this->belongsTo(Author::class);

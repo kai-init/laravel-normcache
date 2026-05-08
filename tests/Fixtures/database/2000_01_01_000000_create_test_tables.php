@@ -24,6 +24,8 @@ return new class extends Migration {
             $table->id();
             $table->string('title');
             $table->unsignedInteger('views')->default(0);
+            $table->boolean('published')->default(false);
+            $table->json('metadata')->nullable();
             $table->foreignId('author_id')->constrained('authors')->cascadeOnDelete();
             $table->timestamps();
             $table->softDeletes();

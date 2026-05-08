@@ -149,8 +149,9 @@ class CacheManager
             $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
             $raw = $this->connection()->mget($prefixed);
 
-            foreach ($groupKeys as $i => $key) {
-                $v = $raw[$i];
+            $idx = 0;
+            foreach ($groupKeys as $key) {
+                $v = $raw[$idx++];
                 $results[$key] = ($v !== null && $v !== false) ? $this->unserialize($v) : null;
             }
         }
@@ -346,16 +347,52 @@ class CacheManager
     {
         $relatedKey = $this->classKey($relatedClass);
         $throughKey = $this->classKey($throughClass);
-        $relatedVersion = $this->currentVersion($relatedClass);
+
+        // throughVersion is fetched separately: in cluster mode ver:{throughKey}: lives on a
+        // different slot than the {relatedKey}-tagged through/lock keys, so it can't share an EVAL.
+        // Single EVAL: ver:{relatedKey} + through-key (hit) or lock NX (miss).
+        // Hit: {ver, 1, data}. Miss: {ver, 0, 1} = lock acquired, {ver, 0, 0} = contended.
         $throughVersion = $this->currentVersion($throughClass);
 
-        $key = "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}";
-        $data = $this->get($key);
+        $script = <<<'LUA'
+            local ver1 = redis.call('GET', KEYS[1])
+            if not ver1 then ver1 = '0' end
+            local suffix = ver1 .. ':v' .. ARGV[2] .. ':' .. ARGV[1]
+            local data = redis.call('GET', KEYS[2] .. suffix)
+            if data then return {ver1, 1, data} end
+            local acquired = redis.call('SET', KEYS[3] .. suffix, 1, 'EX', 5, 'NX')
+            return {ver1, 0, acquired and 1 or 0}
+        LUA;
 
-        return [
-            'key' => $key,
-            'data' => $data,
-        ];
+        $result = $this->connection()->eval(
+            $script,
+            3,
+            $this->prefix("ver:{{$relatedKey}}:"),
+            $this->prefix("through:{{$relatedKey}}:{$throughKey}:v"),
+            $this->prefix("building:through:{{$relatedKey}}:{$throughKey}:v"),
+            $hash,
+            $throughVersion
+        );
+
+        if (!is_array($result)) {
+            $relatedVersion = $this->currentVersion($relatedClass);
+            return [
+                'key'  => "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}",
+                'data' => null,
+                'lock' => null,
+            ];
+        }
+
+        $relatedVersion = (int) $result[0];
+        $this->versionLocal[$relatedKey] = $relatedVersion;
+        $key = "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}";
+
+        if ((int) $result[1] === 1) {
+            return ['key' => $key, 'data' => $this->unserialize($result[2]), 'lock' => null];
+        }
+
+        $lockKey = (int) $result[2] === 1 ? "building:{$key}" : null;
+        return ['key' => $key, 'data' => null, 'lock' => $lockKey];
     }
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
@@ -452,11 +489,11 @@ class CacheManager
 
         foreach ($loaded as $id => $model) {
             $key = "model:{{$classKey}}:" . $id;
-            $inserts[$key] = $this->serialize($model->getAttributes());
+            $inserts[$key] = $this->serialize($model->getRawOriginal());
 
             if ($normalizedCols !== null) {
                 $model->setRawAttributes(
-                    array_intersect_key($model->getAttributes(), $normalizedCols),
+                    array_intersect_key($model->getRawOriginal(), $normalizedCols),
                     true
                 );
             }

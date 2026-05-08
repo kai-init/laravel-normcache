@@ -2,6 +2,7 @@
 
 namespace NormCache\Relations;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
@@ -15,36 +16,45 @@ trait CachesOneOrManyThrough
         }
 
         $builder = $this->prepareQueryBuilder($columns);
-        $base = $builder->toBase();
-        $hash = QueryHasher::hash($base);
+        $hash = QueryHasher::hash($builder->toBase());
+        $relatedClass = $this->related::class;
 
-        $cacheData = NormCache::getThroughCache($this->related::class, $this->throughParent::class, $hash);
+        $cacheData = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
         $key = $cacheData['key'];
-        $cached = $cacheData['data'];
+        $lockKey = $cacheData['lock'];
 
-        if ($cached !== null) {
-            $models = NormCache::getModels($cached, $this->related::class);
-
-            if ($models && $builder->getEagerLoads()) {
-                $models = $builder->eagerLoadRelations($models);
-            }
-
-            return $this->query->applyAfterQueryCallbacks(
-                $this->related->newCollection($models)
-            );
+        if ($cacheData['data'] !== null) {
+            return $this->hydrateFromIds($cacheData['data'], $relatedClass, $builder);
         }
 
-        $result = parent::get($columns);
+        if ($lockKey === null) {
+            $ids = $this->pollForThroughCache($key);
+            if ($ids !== null) {
+                return $this->hydrateFromIds($ids, $relatedClass, $builder);
+            }
+        }
 
-        $relatedClass = $this->related::class;
-        $ids = array_map(fn($m) => $m->getKey(), $result->all());
-        NormCache::set($key, $ids, NormCache::queryTtl());
+        try {
+            $result = parent::get($columns);
+            $ids = array_map(fn($m) => $m->getKey(), $result->all());
+
+            if ($lockKey !== null) {
+                NormCache::setAndReleaseLock($key, $ids, NormCache::queryTtl(), $lockKey);
+                $lockKey = null;
+            } else {
+                NormCache::set($key, $ids, NormCache::queryTtl());
+            }
+        } finally {
+            if ($lockKey !== null) {
+                NormCache::delete($lockKey);
+            }
+        }
 
         // Populate model cache while we have full model
         if ($columns === ['*']) {
             $attrsByKey = [];
             foreach ($result as $model) {
-                $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getAttributes();
+                $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
             }
             if (!empty($attrsByKey)) {
                 NormCache::setManyModels($relatedClass, $attrsByKey, NormCache::ttl());
@@ -52,5 +62,33 @@ trait CachesOneOrManyThrough
         }
 
         return $result;
+    }
+
+    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder): Collection
+    {
+        $models = NormCache::getModels($ids, $relatedClass);
+
+        if ($models && $builder->getEagerLoads()) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        return $this->query->applyAfterQueryCallbacks(
+            $this->related->newCollection($models)
+        );
+    }
+
+    private function pollForThroughCache(string $key): ?array
+    {
+        // Exponential backoff: 20ms → 40ms → 80ms → 160ms → 200ms (500ms total).
+        $delay = 20_000;
+        for ($i = 0; $i < 5; $i++) {
+            usleep($delay);
+            $ids = NormCache::get($key);
+            if ($ids !== null) {
+                return $ids;
+            }
+            $delay = min($delay * 2, 200_000);
+        }
+        return null;
     }
 }

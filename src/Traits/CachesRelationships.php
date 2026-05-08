@@ -4,6 +4,7 @@ namespace NormCache\Traits;
 
 use Illuminate\Contracts\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use NormCache\Facades\NormCache;
 use NormCache\Relations\CacheableBelongsToMany;
 use NormCache\Relations\CacheableHasManyThrough;
 use NormCache\Relations\CacheableHasOneThrough;
@@ -23,7 +24,7 @@ trait CachesRelationships
         $relationName = null,
         $inverse = false,
     ) {
-        if (!config('normcache.enabled', true)) {
+        if (!NormCache::isEnabled()) {
             return parent::newMorphToMany($query, $parent, $name, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName, $inverse);
         }
         return new CacheableMorphToMany(
@@ -41,7 +42,7 @@ trait CachesRelationships
         $localKey,
         $secondLocalKey,
     ) {
-        if (!config('normcache.enabled', true)) {
+        if (!NormCache::isEnabled()) {
             return parent::newHasManyThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
         }
         return new CacheableHasManyThrough(
@@ -58,7 +59,7 @@ trait CachesRelationships
         $localKey,
         $secondLocalKey,
     ) {
-        if (!config('normcache.enabled', true)) {
+        if (!NormCache::isEnabled()) {
             return parent::newHasOneThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
         }
         return new CacheableHasOneThrough(
@@ -76,7 +77,7 @@ trait CachesRelationships
         $relatedKey,
         $relationName = null,
     ) {
-        if (!config('normcache.enabled', true)) {
+        if (!NormCache::isEnabled()) {
             return parent::newBelongsToMany($query, $parent, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName);
         }
         return new CacheableBelongsToMany(

@@ -87,11 +87,11 @@ trait CachesPivotRelation
             if (array_key_exists($parentId, $pivotMap)) {
                 $pivotMap[$parentId][] = [
                     'id' => $model->getKey(),
-                    'pivot' => $pivotModel->getAttributes(),
+                    'pivot' => $pivotModel->getRawOriginal(),
                 ];
             }
 
-            $toModelCache[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getAttributes();
+            $toModelCache[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
         }
 
         $toPivotCache = [];
