@@ -748,7 +748,7 @@ class CacheManager
         }
     }
 
-    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds): array
+    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
     {
         $parentKey = $this->classKey($parentClass);
         $relatedKey = $this->classKey($relatedClass);
@@ -756,7 +756,7 @@ class CacheManager
         $parentVersion = $this->currentVersion($parentClass);
         $relatedVersion = $this->currentVersion($relatedClass);
 
-        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:v{$parentVersion}:v{$relatedVersion}:";
+        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:";
 
         $keys = array_map(fn($id) => $prefix . $id, $parentIds);
         $data = $this->getMany($keys);

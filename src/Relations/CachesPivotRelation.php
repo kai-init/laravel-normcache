@@ -7,6 +7,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
+use NormCache\Support\QueryHasher;
 
 /** @mixin \Illuminate\Database\Eloquent\Relations\BelongsToMany */
 trait CachesPivotRelation
@@ -30,12 +31,14 @@ trait CachesPivotRelation
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
+        $constraintHash = $this->currentConstraintHash();
 
         $cache = NormCache::getPivotCache(
             $parentClass,
             $relatedClass,
             $this->relationName,
-            $this->eagerParentIds
+            $this->eagerParentIds,
+            $constraintHash
         );
 
         $parentVersion = $cache['parentVersion'];
@@ -46,15 +49,15 @@ trait CachesPivotRelation
 
         if (!empty($missedIds)) {
             event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
-            
+
             $results = parent::get($columns);
-            
+
             $relatedKey = NormCache::classKey($relatedClass);
             $keyMap = [];
             foreach ($this->eagerParentIds as $parentId) {
-                $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
+                $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
             }
-            
+
             $this->populatePivotCache($results, $keyMap, $relatedClass);
 
             return $results;
@@ -63,6 +66,22 @@ trait CachesPivotRelation
         event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
 
         return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass);
+    }
+
+    private function currentConstraintHash(): string
+    {
+        $base = $this->query->toBase();
+        $qualifiedKey = $this->getQualifiedForeignPivotKeyName();
+
+        $userWheres = array_filter($base->wheres, function ($where) use ($qualifiedKey) {
+            return ($where['column'] ?? null) !== $qualifiedKey;
+        });
+
+        if (empty($userWheres)) {
+            return 'nc';
+        }
+
+        return QueryHasher::hash(json_encode($userWheres));
     }
 
     private function shouldUsePivotCache(): bool

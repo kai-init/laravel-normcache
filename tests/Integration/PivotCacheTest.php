@@ -217,4 +217,40 @@ class PivotCacheTest extends TestCase
         $this->assertSame('Fiction', $authors['Alice']->tags->first()->name);
         $this->assertSame('Drama', $authors['Bob']->tags->first()->name);
     }
+
+    public function test_pivot_cache_constrained_eager_load_does_not_collide_with_unconstrained(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag1 = Tag::create(['name' => 'Fiction']);
+        $tag2 = Tag::create(['name' => 'Drama']);
+        $author->tags()->attach($tag1->id, ['notes' => 'special']);
+        $author->tags()->attach($tag2->id);
+
+        Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'special')])->get();
+
+        $tags = Author::with('tags')->get()->first()->tags;
+
+        $this->assertCount(2, $tags);
+    }
+
+    public function test_pivot_cache_two_different_constraints_stay_separate(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag1 = Tag::create(['name' => 'Fiction']);
+        $tag2 = Tag::create(['name' => 'Drama']);
+        $author->tags()->attach($tag1->id, ['notes' => 'a']);
+        $author->tags()->attach($tag2->id, ['notes' => 'b']);
+
+        Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'a')])->get();
+        Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'b')])->get();
+
+        $tagsA = Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'a')])->get()->first()->tags;
+        $tagsB = Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'b')])->get()->first()->tags;
+
+        $this->assertCount(1, $tagsA);
+        $this->assertSame('Fiction', $tagsA->first()->name);
+
+        $this->assertCount(1, $tagsB);
+        $this->assertSame('Drama', $tagsB->first()->name);
+    }
 }
