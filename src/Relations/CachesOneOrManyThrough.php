@@ -4,6 +4,7 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
@@ -11,12 +12,20 @@ trait CachesOneOrManyThrough
 {
     public function get($columns = ['*']): Collection
     {
-        if (!NormCache::isEnabled() || $this->parent->getConnection()->transactionLevel() > 0) {
+        if (!NormCache::isEnabled()) {
+            return parent::get($columns);
+        }
+
+        if ($this->parent->getConnection()->transactionLevel() > 0) {
+            return parent::get($columns);
+        }
+
+        if ($this->query instanceof CacheableBuilder && $this->query->isCacheSkipped()) {
             return parent::get($columns);
         }
 
         $builder = $this->prepareQueryBuilder($columns);
-        $hash = QueryHasher::hash($builder->toBase());
+        $hash = QueryHasher::fromQuery($builder->toBase());
         $relatedClass = $this->related::class;
 
         $cacheData = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);

@@ -124,7 +124,7 @@ class AggregateLoader
         $builder = (new $relatedClass)->newQueryWithoutScopes()->withoutCache();
         $constraint($builder);
 
-        return QueryHasher::hash($builder->toBase());
+        return QueryHasher::fromQuery($builder->toBase());
     }
 
     private function resolveAlias(string $name, string $function, string $column): string

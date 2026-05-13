@@ -321,4 +321,34 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(2, $result->posts_count);
     }
+
+    public function test_bulk_delete_with_rows_affected_invalidates_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+        Post::create(['title' => 'P2', 'author_id' => $author->id]);
+
+        Post::all(); // warm query cache
+        $versionBefore = NormCache::currentVersion(Post::class);
+
+        Post::where('author_id', $author->id)->delete();
+
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Post::class));
+
+        $posts = Post::all();
+        $this->assertCount(0, $posts);
+    }
+
+    public function test_bulk_update_affecting_zero_rows_does_not_invalidate_cache(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::all();
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        $affected = Author::where('id', 99999)->update(['name' => 'Ghost']);
+
+        $this->assertSame(0, $affected);
+        $this->assertSame($versionBefore, NormCache::currentVersion(Author::class));
+    }
 }

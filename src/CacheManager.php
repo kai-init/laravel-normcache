@@ -486,19 +486,23 @@ class CacheManager
             ->keyBy($pk);
 
         $inserts = [];
+        $deletedAtCol = method_exists($prototype, 'getDeletedAtColumn') ? $prototype->getDeletedAtColumn() : null;
 
         foreach ($loaded as $id => $model) {
-            $key = "model:{{$classKey}}:" . $id;
-            $inserts[$key] = $this->serialize($model->getRawOriginal());
+            $attrs = $model->getRawOriginal();
+            $result[$id] = $model;
+
+            $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
+            if (!$isTrashed) {
+                $inserts["model:{{$classKey}}:$id"] = $this->serialize($attrs);
+            }
 
             if ($normalizedCols !== null) {
                 $model->setRawAttributes(
-                    array_intersect_key($model->getRawOriginal(), $normalizedCols),
+                    array_intersect_key($attrs, $normalizedCols),
                     true
                 );
             }
-
-            $result[$id] = $model;
         }
 
         if ($inserts !== []) {

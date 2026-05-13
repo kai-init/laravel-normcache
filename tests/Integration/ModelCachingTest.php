@@ -182,4 +182,67 @@ class ModelCachingTest extends TestCase
         $this->artisan('normcache:flush', ['--model' => stdClass::class])
             ->assertFailed();
     }
+
+    public function test_soft_deleted_model_is_not_written_to_model_cache_on_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $modelKey = NormCache::modelKey(Post::class, $post->id);
+        $this->assertNotNull(NormCache::get($modelKey));
+
+        $post->delete();
+        $this->assertNull(NormCache::get($modelKey));
+
+        // Force a model cache miss. Trashed model should not be re-cached.
+        NormCache::getModels([$post->id], Post::class);
+
+        $this->assertNull(NormCache::get($modelKey));
+    }
+
+    public function test_soft_deleted_model_excluded_from_subsequent_cache_reads(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $post->delete();
+
+        // Populate model cache for the deleted ID
+        NormCache::getModels([$post->id], Post::class);
+
+        $ids = Post::all()->pluck('id');
+        $this->assertNotContains($post->id, $ids);
+    }
+
+    public function test_soft_delete_flushes_model_key_correctly(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $modelKey = NormCache::modelKey(Post::class, $post->id);
+        $this->assertNotNull(NormCache::get($modelKey));
+
+        $post->delete();
+
+        $this->assertNull(NormCache::get($modelKey));
+    }
+
+    public function test_version_bumped_after_soft_delete_not_before(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $versionBefore = NormCache::currentVersion(Post::class);
+
+        $post->delete();
+
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Post::class));
+
+        $fromCache = Post::all()->pluck('id');
+        $this->assertNotContains($post->id, $fromCache);
+    }
 }

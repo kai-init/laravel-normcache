@@ -21,7 +21,7 @@ trait Cacheable
 
         static::created(fn($model) => NormCache::invalidateVersion($model));
         static::updated(fn($model) => $model->flush());
-        static::deleting(fn($model) => $model->flush());
+        static::deleted(fn($model) => $model->flush());
         static::registerModelEvent('restored', fn($model) => NormCache::invalidateVersion($model));
     }
 

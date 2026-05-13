@@ -211,7 +211,7 @@ class CacheableBuilder extends Builder
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
-        $hash = QueryHasher::hash($base);
+        $hash = QueryHasher::fromQuery($base);
 
         try {
             $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
@@ -289,7 +289,7 @@ class CacheableBuilder extends Builder
 
     private function queryCacheKey(QueryBuilder $base): string
     {
-        return QueryHasher::hash($base);
+        return QueryHasher::fromQuery($base);
     }
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
