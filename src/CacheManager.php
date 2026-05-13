@@ -589,10 +589,6 @@ class CacheManager
             return;
         }
 
-        foreach ($invalidations as $modelClass) {
-            $this->doInvalidateVersion($modelClass);
-        }
-
         if (!empty($deletes)) {
             $this->asyncDel(array_map(fn($k) => $this->prefix($k), $deletes));
 
@@ -609,6 +605,10 @@ class CacheManager
 
         foreach ($flushes as $modelClass) {
             $this->flushModel($modelClass);
+        }
+
+        foreach ($invalidations as $modelClass) {
+            $this->doInvalidateVersion($modelClass);
         }
     }
 

@@ -105,8 +105,9 @@ class CacheableBuilder extends Builder
             }
         }
 
-        $base->columns = null;
-        $hash = $this->queryCacheKey($base);
+        $canonicalBase = clone $base;
+        $canonicalBase->columns = null;
+        $hash = $this->queryCacheKey($canonicalBase);
 
         try {
             $cacheData = NormCache::getModelsFromQuery($model, $hash);
