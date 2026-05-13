@@ -220,6 +220,10 @@ class CacheManager
         $classKey = $this->classKey($modelClass);
 
         $script = <<<'LUA'
+            if ARGV[2] == '1' and redis.call('GET', KEYS[3]) and not redis.call('GET', KEYS[4]) then
+                redis.call('DEL', KEYS[3])
+                redis.call('INCR', KEYS[1])
+            end
             local ver = redis.call('GET', KEYS[1])
             if not ver then ver = '0' end
             local data = redis.call('GET', KEYS[2] .. ver .. ':' .. ARGV[1])
@@ -229,10 +233,13 @@ class CacheManager
 
         $result = $this->connection()->eval(
             $script,
-            2,
+            4,
             $this->prefix("ver:{{$classKey}}:"),
             $this->prefix("{$namespace}:{{$classKey}}:v"),
-            $hash
+            $this->prefix("pending:{{$classKey}}:"),
+            $this->prefix("cooldown:{{$classKey}}:"),
+            $hash,
+            $this->cooldown > 0 ? '1' : '0'
         );
 
         if (!is_array($result)) {
@@ -258,6 +265,10 @@ class CacheManager
         // Single EVAL: version + query + lock (miss) or version + query + model MGET (hit).
         // Miss: {ver, 1} = lock acquired, {ver, 0} = contended. Hit: {ver, ids, models}.
         $script = <<<'LUA'
+            if ARGV[2] == '1' and redis.call('GET', KEYS[5]) and not redis.call('GET', KEYS[6]) then
+                redis.call('DEL', KEYS[5])
+                redis.call('INCR', KEYS[1])
+            end
             local ver = redis.call('GET', KEYS[1])
             if not ver then ver = '0' end
             local ids_raw = redis.call('GET', KEYS[3] .. ver .. ':' .. ARGV[1])
@@ -276,12 +287,15 @@ class CacheManager
 
         $result = $this->connection()->eval(
             $script,
-            4,
+            6,
             $this->prefix("ver:{{$classKey}}:"),
             $this->prefix("model:{{$classKey}}:"),
             $this->prefix("query:{{$classKey}}:v"),
             $this->prefix("building:query:{{$classKey}}:v"),
-            $hash
+            $this->prefix("pending:{{$classKey}}:"),
+            $this->prefix("cooldown:{{$classKey}}:"),
+            $hash,
+            $this->cooldown > 0 ? '1' : '0'
         );
 
         if (!is_array($result)) {
@@ -355,6 +369,10 @@ class CacheManager
         $throughVersion = $this->currentVersion($throughClass);
 
         $script = <<<'LUA'
+            if ARGV[3] == '1' and redis.call('GET', KEYS[4]) and not redis.call('GET', KEYS[5]) then
+                redis.call('DEL', KEYS[4])
+                redis.call('INCR', KEYS[1])
+            end
             local ver1 = redis.call('GET', KEYS[1])
             if not ver1 then ver1 = '0' end
             local suffix = ver1 .. ':v' .. ARGV[2] .. ':' .. ARGV[1]
@@ -366,12 +384,15 @@ class CacheManager
 
         $result = $this->connection()->eval(
             $script,
-            3,
+            5,
             $this->prefix("ver:{{$relatedKey}}:"),
             $this->prefix("through:{{$relatedKey}}:{$throughKey}:v"),
             $this->prefix("building:through:{{$relatedKey}}:{$throughKey}:v"),
+            $this->prefix("pending:{{$relatedKey}}:"),
+            $this->prefix("cooldown:{{$relatedKey}}:"),
             $hash,
-            $throughVersion
+            $throughVersion,
+            $this->cooldown > 0 ? '1' : '0'
         );
 
         if (!is_array($result)) {
@@ -533,7 +554,24 @@ class CacheManager
             return $this->versionLocal[$classKey];
         }
 
-        $value = $this->connection()->get($this->prefix("ver:{{$classKey}}:"));
+        if ($this->cooldown > 0) {
+            $script = <<<'LUA'
+                if redis.call('GET', KEYS[2]) and not redis.call('GET', KEYS[3]) then
+                    redis.call('DEL', KEYS[2])
+                    redis.call('INCR', KEYS[1])
+                end
+                return redis.call('GET', KEYS[1])
+            LUA;
+            $value = $this->connection()->eval(
+                $script,
+                3,
+                $this->prefix("ver:{{$classKey}}:"),
+                $this->prefix("pending:{{$classKey}}:"),
+                $this->prefix("cooldown:{{$classKey}}:")
+            );
+        } else {
+            $value = $this->connection()->get($this->prefix("ver:{{$classKey}}:"));
+        }
 
         return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
     }
@@ -632,9 +670,17 @@ class CacheManager
         if ($this->cooldown > 0) {
             $cooldownKey = $this->prefix("cooldown:{{$classKey}}:");
             $verKey = $this->prefix("ver:{{$classKey}}:");
+            $pendingKey = $this->prefix("pending:{{$classKey}}:");
 
-            $script = "if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then return redis.call('INCR', KEYS[2]) end return nil";
-            $newVer = $this->connection()->eval($script, 2, $cooldownKey, $verKey, $this->cooldown);
+            $script = <<<'LUA'
+                if redis.call('SET', KEYS[1], 1, 'EX', ARGV[1], 'NX') then
+                    redis.call('DEL', KEYS[3])
+                    return redis.call('INCR', KEYS[2])
+                end
+                redis.call('SET', KEYS[3], 1)
+                return nil
+            LUA;
+            $newVer = $this->connection()->eval($script, 3, $cooldownKey, $verKey, $pendingKey, $this->cooldown);
 
             if (is_numeric($newVer)) {
                 $this->versionLocal[$classKey] = (int) $newVer;
