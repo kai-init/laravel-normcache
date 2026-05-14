@@ -15,6 +15,7 @@ class CacheManager
     protected static array $classKeyCache = [];
     protected static array $modelPrototypes = [];
     protected static array $modelHydrators = [];
+    protected static array $deletedAtColumns = [];
 
     protected ?Connection $connection = null;
 
@@ -144,6 +145,14 @@ class CacheManager
             return [];
         }
 
+        if (!$this->cluster) {
+            $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
+            return array_map(
+                fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
+                $this->connection()->mget($prefixed)
+            );
+        }
+
         $groups = $this->groupByTag($keys);
         $results = [];
 
@@ -192,11 +201,13 @@ class CacheManager
 
         foreach ($groups as $keys) {
             $connection->pipeline(function ($pipe) use ($keys, $attrsByKey, $ttl, $memberKey) {
+                $prefixedKeys = [];
                 foreach ($keys as $key) {
-                    $prefixed = $this->prefix($key);
-                    $pipe->setex($prefixed, $ttl, $this->serialize($attrsByKey[$key]));
-                    $pipe->sadd($memberKey, $prefixed);
+                    $p = $this->prefix($key);
+                    $prefixedKeys[] = $p;
+                    $pipe->setex($p, $ttl, $this->serialize($attrsByKey[$key]));
                 }
+                $pipe->sadd($memberKey, ...$prefixedKeys);
             });
         }
     }
@@ -520,7 +531,9 @@ class CacheManager
             ->keyBy($pk);
 
         $inserts = [];
-        $deletedAtCol = method_exists($prototype, 'getDeletedAtColumn') ? $prototype->getDeletedAtColumn() : null;
+        $deletedAtCol = self::$deletedAtColumns[$modelClass] ??= method_exists($prototype, 'getDeletedAtColumn')
+            ? $prototype->getDeletedAtColumn()
+            : null;
 
         foreach ($loaded as $id => $model) {
             $attrs = $model->getRawOriginal();
@@ -542,10 +555,13 @@ class CacheManager
         if ($inserts !== []) {
             $memberKey = $this->prefix("members:model:{{$classKey}}");
             $this->connection()->pipeline(function ($pipe) use ($inserts, $memberKey) {
+                $prefixedKeys = [];
                 foreach ($inserts as $key => $value) {
-                    $pipe->setex($this->prefix($key), $this->ttl, $value);
-                    $pipe->sadd($memberKey, $this->prefix($key));
+                    $p = $this->prefix($key);
+                    $prefixedKeys[] = $p;
+                    $pipe->setex($p, $this->ttl, $value);
                 }
+                $pipe->sadd($memberKey, ...$prefixedKeys);
             });
         }
 
@@ -829,7 +845,7 @@ class CacheManager
 
     protected function prefix(string $key): string
     {
-        return $this->keyPrefix . $key;
+        return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
     }
 
     protected function serialize(mixed $value): mixed
