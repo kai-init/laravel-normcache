@@ -105,7 +105,7 @@ class CacheManager
     {
         $value = $this->connection()->get($this->prefix($key));
 
-        return $value !== null ? $this->unserialize($value) : null;
+        return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
 
     public function set(string $key, mixed $value, ?int $ttl = null): mixed
@@ -147,10 +147,7 @@ class CacheManager
 
         if (!$this->cluster) {
             $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
-            return array_map(
-                fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
-                $this->connection()->mget($prefixed)
-            );
+            return array_map(fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null, $this->connection()->mget($prefixed));
         }
 
         $groups = $this->groupByTag($keys);
@@ -456,16 +453,7 @@ class CacheManager
         }
 
         $prototype = self::$modelPrototypes[$modelClass] ??= new $modelClass;
-
-        $normalizedCols = null;
-        if ($columns !== null) {
-            $normalizedCols = [];
-            foreach ($columns as $col) {
-                $col = (string) $col;
-                $dotPos = strrpos($col, '.');
-                $normalizedCols[$dotPos === false ? $col : substr($col, $dotPos + 1)] = true;
-            }
-        }
+        $normalizedCols = $this->normalizeColumns($columns);
 
         $result = [];
         $missed = [];
@@ -505,7 +493,7 @@ class CacheManager
 
             $instance = clone $prototype;
             $hydrator($instance, $attrs, $this->fireRetrieved);
-
+            
             $result[$id] = $instance;
         }
 
@@ -523,6 +511,36 @@ class CacheManager
             event(new ModelCacheMiss($modelClass, $missed));
         }
 
+        $fetched = $this->fetchAndCacheFromDatabase($missed, $modelClass, $classKey, $normalizedCols);
+
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($result[$id]) || isset($fetched[$id])) {
+                $ordered[] = $result[$id] ?? $fetched[$id];
+            }
+        }
+
+        return $ordered;
+    }
+
+    private function normalizeColumns(?array $columns): ?array
+    {
+        if ($columns === null) {
+            return null;
+        }
+
+        $normalized = [];
+        foreach ($columns as $col) {
+            $col = (string) $col;
+            $dotPos = strrpos($col, '.');
+            $normalized[$dotPos === false ? $col : substr($col, $dotPos + 1)] = true;
+        }
+        return $normalized;
+    }
+
+    private function fetchAndCacheFromDatabase(array $missed, string $modelClass, string $classKey, ?array $normalizedCols): array
+    {
+        $prototype = self::$modelPrototypes[$modelClass];
         $pk = $prototype->getKeyName();
         $loaded = $modelClass::query()
             ->withoutCache()
@@ -537,7 +555,6 @@ class CacheManager
 
         foreach ($loaded as $id => $model) {
             $attrs = $model->getRawOriginal();
-            $result[$id] = $model;
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
             if (!$isTrashed) {
@@ -545,10 +562,7 @@ class CacheManager
             }
 
             if ($normalizedCols !== null) {
-                $model->setRawAttributes(
-                    array_intersect_key($attrs, $normalizedCols),
-                    true
-                );
+                $model->setRawAttributes(array_intersect_key($attrs, $normalizedCols), true);
             }
         }
 
@@ -565,14 +579,7 @@ class CacheManager
             });
         }
 
-        $ordered = [];
-        foreach ($ids as $id) {
-            if (isset($result[$id])) {
-                $ordered[] = $result[$id];
-            }
-        }
-
-        return $ordered;
+        return $loaded->all();
     }
 
     public function currentVersion(string $modelClass): int
@@ -727,7 +734,7 @@ class CacheManager
         return self::$classKeyCache[$class] ??= (self::$modelPrototypes[$class] ??= new $class)->getTable();
     }
 
-    public function modelKey(string $modelClass, int|string $id): string
+    public function modelKey(string $modelClass, string $id): string
     {
         return 'model:{' . $this->classKey($modelClass) . '}:' . $id;
     }
