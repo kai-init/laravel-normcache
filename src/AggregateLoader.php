@@ -51,6 +51,11 @@ class AggregateLoader
         $data = NormCache::getMany($keys);
         $toCache = [];
 
+        $hydrator = self::$cache['hydrator'] ??= \Closure::bind(static function ($model, $key, $value) {
+            $model->attributes[$key] = $value;
+            $model->original[$key] = $value;
+        }, null, Model::class);
+
         foreach ($specs as $spec) {
             ['agg' => $agg, 'alias' => $alias, 'suffix' => $suffix, 'offset' => $offset] = $spec;
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
@@ -78,7 +83,8 @@ class AggregateLoader
 
             foreach ($models as $model) {
                 $id = $model->getKey();
-                $model->setAttribute($alias, $cachedValues[$id] ?? $fetched[$id] ?? null);
+                $value = $cachedValues[$id] ?? $fetched[$id] ?? null;
+                $hydrator($model, $alias, $value);
             }
         }
 

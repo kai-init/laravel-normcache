@@ -14,6 +14,7 @@ class CacheManager
 {
     protected static array $classKeyCache = [];
     protected static array $modelPrototypes = [];
+    protected static array $modelHydrators = [];
 
     protected ?Connection $connection = null;
 
@@ -41,6 +42,7 @@ class CacheManager
         protected bool $enabled = true,
         protected bool $dispatchEvents = true,
         protected bool $fallback = false,
+        protected bool $fireRetrieved = false,
     ) {
         $this->igbinary = \extension_loaded('igbinary');
     }
@@ -457,6 +459,18 @@ class CacheManager
         $result = [];
         $missed = [];
 
+        $hydrator = self::$modelHydrators[$modelClass] ??= \Closure::bind(static function ($model, $attributes, $fire) {
+            $model->attributes = $attributes;
+            $model->original = $attributes;
+            $model->exists = true;
+            $model->classCastCache = [];
+            $model->attributeCastCache = [];
+
+            if ($fire) {
+                $model->fireModelEvent('retrieved', false);
+            }
+        }, null, $modelClass);
+
         foreach ($ids as $i => $id) {
             $attrs = $raw[$i];
 
@@ -479,8 +493,7 @@ class CacheManager
             }
 
             $instance = clone $prototype;
-            $instance->exists = true;
-            $instance->setRawAttributes($attrs, true);
+            $hydrator($instance, $attrs, $this->fireRetrieved);
 
             $result[$id] = $instance;
         }

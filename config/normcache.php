@@ -9,5 +9,6 @@ return [
     'cooldown'      => (int) env('NORMCACHE_COOLDOWN', 0),
     'cluster'       => (bool) env('NORMCACHE_CLUSTER', false),
     'events'        => (bool) env('NORMCACHE_EVENTS', true),
-    'fallback'      => (bool) env('NORMCACHE_FALLBACK', false),
+    'fallback'        => (bool) env('NORMCACHE_FALLBACK', false),
+    'fire_retrieved'  => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
 ];
