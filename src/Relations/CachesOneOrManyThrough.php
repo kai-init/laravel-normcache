@@ -45,7 +45,7 @@ trait CachesOneOrManyThrough
 
         try {
             $result = parent::get($columns);
-            $ids = array_map(fn($m) => $m->getKey(), $result->all());
+            $ids = $result->modelKeys();
 
             if ($lockKey !== null) {
                 NormCache::setAndReleaseLock($key, $ids, NormCache::queryTtl(), $lockKey);

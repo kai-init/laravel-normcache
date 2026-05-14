@@ -588,10 +588,7 @@ class CacheManager
         }
 
         $query = clone $missedQuery;
-
-        if (method_exists($query, 'withoutCache')) {
-            $query->withoutCache();
-        }
+        $query->withoutCache();
 
         $query->setEagerLoads([]);
 
