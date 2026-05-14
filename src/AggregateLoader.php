@@ -22,7 +22,7 @@ class AggregateLoader
 
         $parentClass = $this->model::class;
         $pkName = $this->model->getKeyName();
-        $prefix = "agg:{" . NormCache::classKey($parentClass) . "}:";
+        $prefix = 'agg:{' . NormCache::classKey($parentClass) . '}:';
 
         $ids = array_map(fn($m) => $m->getKey(), $models);
         $idCount = count($ids);

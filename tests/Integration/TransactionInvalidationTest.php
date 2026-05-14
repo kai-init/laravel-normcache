@@ -14,7 +14,7 @@ class TransactionInvalidationTest extends TestCase
         $versionBefore = NormCache::currentVersion(Author::class);
         $versionDuring = null;
 
-        DB::transaction(function () use ($versionBefore, &$versionDuring) {
+        DB::transaction(function () use (&$versionDuring) {
             Author::create(['name' => 'Alice']);
             $versionDuring = NormCache::currentVersion(Author::class);
         });
@@ -43,7 +43,8 @@ class TransactionInvalidationTest extends TestCase
                 Author::create(['name' => 'Alice']);
                 throw new \RuntimeException('force rollback');
             });
-        } catch (\RuntimeException) {}
+        } catch (\RuntimeException) {
+        }
 
         $this->assertSame($versionBefore, NormCache::currentVersion(Author::class));
     }
@@ -76,7 +77,8 @@ class TransactionInvalidationTest extends TestCase
                 $author->update(['name' => 'Alicia']);
                 throw new \RuntimeException('force rollback');
             });
-        } catch (\RuntimeException) {}
+        } catch (\RuntimeException) {
+        }
 
         $this->assertNotNull(NormCache::get($modelKey));
     }
@@ -118,7 +120,8 @@ class TransactionInvalidationTest extends TestCase
                 $author->update(['name' => 'Alicia']);
                 throw new \RuntimeException('force rollback');
             });
-        } catch (\RuntimeException) {}
+        } catch (\RuntimeException) {
+        }
 
         $result = Author::all()->firstWhere('id', $author->id);
 

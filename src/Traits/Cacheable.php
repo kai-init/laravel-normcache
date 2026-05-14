@@ -35,6 +35,7 @@ trait Cacheable
         if (!config('normcache.enabled', true)) {
             return parent::newEloquentBuilder($query);
         }
+
         return new CacheableBuilder($query);
     }
 }

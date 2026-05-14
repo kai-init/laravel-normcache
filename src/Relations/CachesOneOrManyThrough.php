@@ -98,6 +98,7 @@ trait CachesOneOrManyThrough
             }
             $delay = min($delay * 2, 200_000);
         }
+
         return null;
     }
 }

@@ -1,0 +1,14 @@
+{
+    "editor.formatOnSave": true,
+    "editor.rulers": [120],
+    "[php]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "editor.trimAutoWhitespace": true,
+        "editor.defaultFormatter": "open-southeners.laravel-pint",
+        "editor.formatOnSave": true
+    },
+    "laravel-pint.enable": true,
+    "laravel-pint.executablePath": "./vendor/bin/pint",
+    "laravel-pint.configPath": "./pint.json"
+}

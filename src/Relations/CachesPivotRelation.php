@@ -3,16 +3,18 @@
 namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use NormCache\CacheableBuilder;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
-/** @mixin \Illuminate\Database\Eloquent\Relations\BelongsToMany */
+/** @mixin BelongsToMany */
 trait CachesPivotRelation
 {
     private array $eagerParentIds = [];
+
     private bool $inEagerLoad = false;
 
     public function addEagerConstraints(array $models): void

@@ -2,19 +2,22 @@
 
 namespace NormCache;
 
-use NormCache\Events\ModelCacheHit;
-use NormCache\Events\ModelCacheMiss;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Events\ModelCacheHit;
+use NormCache\Events\ModelCacheMiss;
 
 class CacheManager
 {
     protected static array $classKeyCache = [];
+
     protected static array $modelPrototypes = [];
+
     protected static array $modelHydrators = [];
+
     protected static array $deletedAtColumns = [];
 
     protected ?Connection $connection = null;
@@ -147,6 +150,7 @@ class CacheManager
 
         if (!$this->cluster) {
             $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
+
             return array_map(fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null, $this->connection()->mget($prefixed));
         }
 
@@ -254,6 +258,7 @@ class CacheManager
 
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
+
             return ['key' => "{$namespace}:{{$classKey}}:v{$version}:{$hash}", 'data' => null, 'version' => $version];
         }
 
@@ -262,8 +267,8 @@ class CacheManager
         $key = "{$namespace}:{{$classKey}}:v{$version}:{$hash}";
 
         return [
-            'key'     => $key,
-            'data'    => count($result) > 1 ? $this->unserialize($result[1]) : null,
+            'key' => $key,
+            'data' => count($result) > 1 ? $this->unserialize($result[1]) : null,
             'version' => $version,
         ];
     }
@@ -310,6 +315,7 @@ class CacheManager
 
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
+
             return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null, 'lock' => null];
         }
 
@@ -319,14 +325,15 @@ class CacheManager
         // Miss: {ver, 1|0} — 1 = lock acquired, 0 = contended
         if (count($result) === 2) {
             $lock = (int) $result[1] === 1 ? "building:{$queryKey}" : null;
+
             return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => $lock];
         }
 
         return [
-            'key'    => $queryKey,
-            'ids'    => $result[1],
+            'key' => $queryKey,
+            'ids' => $result[1],
             'models' => $result[2],
-            'lock'   => null,
+            'lock' => null,
         ];
     }
 
@@ -407,8 +414,9 @@ class CacheManager
 
         if (!is_array($result)) {
             $relatedVersion = $this->currentVersion($relatedClass);
+
             return [
-                'key'  => "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}",
+                'key' => "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}",
                 'data' => null,
                 'lock' => null,
             ];
@@ -423,6 +431,7 @@ class CacheManager
         }
 
         $lockKey = (int) $result[2] === 1 ? "building:{$key}" : null;
+
         return ['key' => $key, 'data' => null, 'lock' => $lockKey];
     }
 
@@ -432,6 +441,7 @@ class CacheManager
             foreach ($modelClasses as $modelClass) {
                 $this->invalidationQueue[$connectionName][$modelClass] = true;
             }
+
             return;
         }
 
@@ -475,6 +485,7 @@ class CacheManager
 
             if ($attrs === null || $attrs === false) {
                 $missed[] = $id;
+
                 continue;
             }
 
@@ -484,6 +495,7 @@ class CacheManager
 
             if (!is_array($attrs)) {
                 $missed[] = $id;
+
                 continue;
             }
 
@@ -493,7 +505,7 @@ class CacheManager
 
             $instance = clone $prototype;
             $hydrator($instance, $attrs, $this->fireRetrieved);
-            
+
             $result[$id] = $instance;
         }
 
@@ -501,6 +513,7 @@ class CacheManager
             if ($this->dispatchEvents && $result !== []) {
                 event(new ModelCacheHit($modelClass, array_keys($result)));
             }
+
             return array_values($result);
         }
 
@@ -535,6 +548,7 @@ class CacheManager
             $dotPos = strrpos($col, '.');
             $normalized[$dotPos === false ? $col : substr($col, $dotPos + 1)] = true;
         }
+
         return $normalized;
     }
 
@@ -589,9 +603,7 @@ class CacheManager
 
         $query = clone $missedQuery;
         $query->withoutCache();
-
         $query->setEagerLoads([]);
-
         $query->setQuery(
             $query->getQuery()
                 ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
@@ -642,6 +654,7 @@ class CacheManager
 
         if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
             $this->invalidationQueue[$conn][$model::class] = true;
+
             return;
         }
 
@@ -652,6 +665,7 @@ class CacheManager
     {
         if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
             $this->deleteQueue[$connectionName][$key] = true;
+
             return;
         }
 
@@ -664,6 +678,7 @@ class CacheManager
 
         if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
             $this->flushQueue[$conn][$model::class] = true;
+
             return;
         }
 
@@ -740,6 +755,7 @@ class CacheManager
             if (is_numeric($newVer)) {
                 $this->versionLocal[$classKey] = (int) $newVer;
             }
+
             return;
         }
 
@@ -767,6 +783,7 @@ class CacheManager
         if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
             $this->deleteQueue[$conn][$key] = true;
             $this->invalidationQueue[$conn][$class] = true;
+
             return;
         }
 

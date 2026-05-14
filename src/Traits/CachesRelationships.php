@@ -38,6 +38,7 @@ trait CachesRelationships
         if (!NormCache::isEnabled()) {
             return parent::newMorphToMany($query, $parent, $name, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName, $inverse);
         }
+
         return new CacheableMorphToMany(
             $query, $parent, $name, $table, $foreignPivotKey,
             $relatedPivotKey, $parentKey, $relatedKey, $relationName, $inverse,
@@ -56,6 +57,7 @@ trait CachesRelationships
         if (!NormCache::isEnabled()) {
             return parent::newHasManyThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
         }
+
         return new CacheableHasManyThrough(
             $query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey,
         );
@@ -73,6 +75,7 @@ trait CachesRelationships
         if (!NormCache::isEnabled()) {
             return parent::newHasOneThrough($query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey);
         }
+
         return new CacheableHasOneThrough(
             $query, $farParent, $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey,
         );
@@ -91,6 +94,7 @@ trait CachesRelationships
         if (!NormCache::isEnabled()) {
             return parent::newBelongsToMany($query, $parent, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName);
         }
+
         return new CacheableBelongsToMany(
             $query, $parent, $table, $foreignPivotKey,
             $relatedPivotKey, $parentKey, $relatedKey, $relationName,

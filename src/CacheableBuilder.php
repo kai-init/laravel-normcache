@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
 use NormCache\Events\QueryCacheHit;
@@ -19,8 +20,11 @@ class CacheableBuilder extends Builder
     use HandlesCacheInvalidation;
 
     protected bool $skipCache = false;
+
     protected ?int $queryTtl = null;
+
     protected bool $cacheAggregates = true;
+
     protected array $pendingAggregates = [];
 
     public function withoutCache(): static
@@ -135,6 +139,7 @@ class CacheableBuilder extends Builder
         report($e);
         NormCache::disable();
         $this->replayPendingAggregates();
+
         return parent::get($columns);
     }
 
@@ -236,6 +241,7 @@ class CacheableBuilder extends Builder
             }
             report($e);
             NormCache::disable();
+
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
     }
@@ -270,7 +276,7 @@ class CacheableBuilder extends Builder
         }
 
         foreach ($cols as $c) {
-            if ($c instanceof \Illuminate\Database\Query\Expression || !str_ends_with((string) $c, '*')) {
+            if ($c instanceof Expression || !str_ends_with((string) $c, '*')) {
                 return $cols;
             }
         }
@@ -285,7 +291,7 @@ class CacheableBuilder extends Builder
         }
 
         foreach ($cols as $col) {
-            if ($col instanceof \Illuminate\Database\Query\Expression) {
+            if ($col instanceof Expression) {
                 return true;
             }
         }

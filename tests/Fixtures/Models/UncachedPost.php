@@ -11,11 +11,12 @@ class UncachedPost extends Model
     use SoftDeletes;
 
     protected $table = 'posts';
+
     protected $guarded = [];
 
     protected $casts = [
         'published' => 'boolean',
-        'metadata'  => 'array',
+        'metadata' => 'array',
     ];
 
     public function author(): BelongsTo

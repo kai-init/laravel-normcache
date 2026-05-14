@@ -81,15 +81,15 @@ class CacheManagerTest extends TestCase
 
     public function test_invalidate_version_increments_version(): void
     {
-        $this->manager->invalidateVersion(new Author());
+        $this->manager->invalidateVersion(new Author);
 
         $this->assertSame(1, $this->manager->currentVersion(Author::class));
     }
 
     public function test_invalidate_version_called_twice_increments_twice(): void
     {
-        $this->manager->invalidateVersion(new Author());
-        $this->manager->invalidateVersion(new Author());
+        $this->manager->invalidateVersion(new Author);
+        $this->manager->invalidateVersion(new Author);
 
         $this->assertSame(2, $this->manager->currentVersion(Author::class));
     }
@@ -104,8 +104,8 @@ class CacheManagerTest extends TestCase
             60,
         );
 
-        $manager->invalidateVersion(new Author());
-        $manager->invalidateVersion(new Author());
+        $manager->invalidateVersion(new Author);
+        $manager->invalidateVersion(new Author);
 
         $this->assertSame(1, $manager->currentVersion(Author::class));
     }
@@ -132,7 +132,7 @@ class CacheManagerTest extends TestCase
 
     public function test_invalidate_version_updates_local_with_new_value(): void
     {
-        $this->manager->invalidateVersion(new Author());
+        $this->manager->invalidateVersion(new Author);
 
         Redis::connection('model-cache-test')->set('test:ver:{authors}:', 99);
 

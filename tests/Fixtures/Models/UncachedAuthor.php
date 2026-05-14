@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class UncachedAuthor extends Model
 {
     protected $table = 'authors';
+
     protected $guarded = [];
 
     public function posts(): HasMany

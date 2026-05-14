@@ -17,7 +17,7 @@ class Post extends Model
 
     protected $casts = [
         'published' => 'boolean',
-        'metadata'  => 'array',
+        'metadata' => 'array',
     ];
 
     public function author(): BelongsTo
