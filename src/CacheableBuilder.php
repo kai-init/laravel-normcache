@@ -105,9 +105,7 @@ class CacheableBuilder extends Builder
             }
         }
 
-        $canonicalBase = clone $base;
-        $canonicalBase->columns = null;
-        $hash = $this->queryCacheKey($canonicalBase);
+        $hash = $this->queryCacheKey($base);
 
         try {
             $cacheData = NormCache::getModelsFromQuery($model, $hash);
@@ -289,7 +287,13 @@ class CacheableBuilder extends Builder
 
     private function queryCacheKey(QueryBuilder $base): string
     {
-        return QueryHasher::fromQuery($base);
+        $cols = $base->columns;
+        $base->columns = null;
+        try {
+            return QueryHasher::fromQuery($base);
+        } finally {
+            $base->columns = $cols;
+        }
     }
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
