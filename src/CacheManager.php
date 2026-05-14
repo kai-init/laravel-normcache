@@ -4,8 +4,8 @@ namespace NormCache;
 
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
@@ -440,7 +440,7 @@ class CacheManager
         }
     }
 
-    public function getModels(array $ids, string $modelClass, ?array $columns = null, ?array $raw = null): array
+    public function getModels(array $ids, string $modelClass, ?array $columns = null, ?array $raw = null, ?EloquentBuilder $missedQuery = null): array
     {
         if ($ids === []) {
             return [];
@@ -511,7 +511,7 @@ class CacheManager
             event(new ModelCacheMiss($modelClass, $missed));
         }
 
-        $fetched = $this->fetchAndCacheFromDatabase($missed, $modelClass, $classKey, $normalizedCols);
+        $fetched = $this->fetchAndCacheFromDatabase($missed, $modelClass, $classKey, $normalizedCols, $missedQuery);
 
         $ordered = [];
         foreach ($ids as $id) {
@@ -538,14 +538,13 @@ class CacheManager
         return $normalized;
     }
 
-    private function fetchAndCacheFromDatabase(array $missed, string $modelClass, string $classKey, ?array $normalizedCols): array
+    private function fetchAndCacheFromDatabase(array $missed, string $modelClass, string $classKey, ?array $normalizedCols, ?EloquentBuilder $missedQuery = null): array
     {
         $prototype = self::$modelPrototypes[$modelClass];
         $pk = $prototype->getKeyName();
-        $loaded = $modelClass::query()
-            ->withoutCache()
-            ->withoutGlobalScope(SoftDeletingScope::class)
-            ->findMany($missed)
+        $query = $this->prepareMissedQuery($modelClass, $missedQuery);
+        $loaded = $query->whereKey($missed)
+            ->get(['*'])
             ->keyBy($pk);
 
         $inserts = [];
@@ -580,6 +579,29 @@ class CacheManager
         }
 
         return $loaded->all();
+    }
+
+    private function prepareMissedQuery(string $modelClass, ?EloquentBuilder $missedQuery): EloquentBuilder
+    {
+        if ($missedQuery === null) {
+            return $modelClass::query()->withoutCache();
+        }
+
+        $query = clone $missedQuery;
+
+        if (method_exists($query, 'withoutCache')) {
+            $query->withoutCache();
+        }
+
+        $query->setEagerLoads([]);
+
+        $query->setQuery(
+            $query->getQuery()
+                ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
+                ->cloneWithoutBindings(['select', 'order'])
+        );
+
+        return $query;
     }
 
     public function currentVersion(string $modelClass): int

@@ -31,7 +31,7 @@ trait CachesPivotRelation
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
-        $constraintHash = $this->currentConstraintHash();
+        $constraintHash = $this->currentConstraintHash($columns);
 
         $cache = NormCache::getPivotCache(
             $parentClass,
@@ -68,20 +68,39 @@ trait CachesPivotRelation
         return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass);
     }
 
-    private function currentConstraintHash(): string
+    private function currentConstraintHash(array $columns): string
     {
         $base = $this->query->toBase();
         $qualifiedKey = $this->getQualifiedForeignPivotKeyName();
 
-        $userWheres = array_filter($base->wheres, function ($where) use ($qualifiedKey) {
-            return ($where['column'] ?? null) !== $qualifiedKey;
-        });
+        $shape = [];
 
-        if (empty($userWheres)) {
+        if ($columns !== ['*']) {
+            $shape['columns'] = $columns;
+        }
+
+        $wheres = [];
+        foreach ($base->wheres as $where) {
+            if (($where['column'] ?? null) !== $qualifiedKey) {
+                $wheres[] = $where;
+            }
+        }
+
+        if ($wheres !== []) {
+            $shape['wheres'] = $wheres;
+        }
+
+        foreach (['orders', 'limit', 'offset', 'groups', 'havings'] as $property) {
+            if ($base->{$property} !== null && $base->{$property} !== []) {
+                $shape[$property] = $base->{$property};
+            }
+        }
+
+        if (empty($shape)) {
             return 'nc';
         }
 
-        return QueryHasher::hash(json_encode($userWheres));
+        return QueryHasher::hash(json_encode($shape));
     }
 
     private function shouldUsePivotCache(): bool

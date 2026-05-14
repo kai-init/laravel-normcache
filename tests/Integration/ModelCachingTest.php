@@ -201,6 +201,31 @@ class ModelCachingTest extends TestCase
         $this->assertNull(NormCache::get($modelKey));
     }
 
+    public function test_soft_deleted_model_is_not_returned_from_model_cache_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $post->delete();
+
+        $this->assertSame([], NormCache::getModels([$post->id], Post::class));
+    }
+
+    public function test_with_trashed_query_can_return_soft_deleted_model_after_model_cache_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::all();
+        $post->delete();
+
+        $posts = Post::withTrashed()->whereKey($post->id)->get();
+
+        $this->assertCount(1, $posts);
+        $this->assertTrue($posts->first()->trashed());
+    }
+
     public function test_soft_deleted_model_excluded_from_subsequent_cache_reads(): void
     {
         $author = Author::create(['name' => 'Alice']);

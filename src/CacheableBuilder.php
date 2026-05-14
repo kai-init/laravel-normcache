@@ -99,7 +99,7 @@ class CacheableBuilder extends Builder
 
         if (($ids = $this->extractPrimaryKeyValues($base)) !== null) {
             try {
-                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols));
+                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
             } catch (\Exception $e) {
                 return $this->fallback($e, $columns);
             }
@@ -115,10 +115,10 @@ class CacheableBuilder extends Builder
                 if (NormCache::isEventsEnabled()) {
                     event(new QueryCacheHit($model, $key));
                 }
-                $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models']);
+                $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this);
             } else {
                 $ids = $this->resolveIds($key, $base, $cacheData['lock']);
-                $models = NormCache::getModels($ids, $model, $selectedCols);
+                $models = NormCache::getModels($ids, $model, $selectedCols, null, $this);
             }
 
             return $this->finalizeResult($models);
@@ -342,7 +342,9 @@ class CacheableBuilder extends Builder
 
     private function buildIds(QueryBuilder $base): array
     {
-        return (clone $base)
+        return $base
+            ->cloneWithout(['columns'])
+            ->cloneWithoutBindings(['select'])
             ->select($this->model->getQualifiedKeyName())
             ->pluck($this->model->getKeyName())
             ->all();

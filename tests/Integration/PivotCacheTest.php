@@ -253,4 +253,24 @@ class PivotCacheTest extends TestCase
         $this->assertCount(1, $tagsB);
         $this->assertSame('Drama', $tagsB->first()->name);
     }
+
+    public function test_pivot_cache_ordered_eager_loads_do_not_collide(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $fiction = Tag::create(['name' => 'Fiction']);
+        $drama = Tag::create(['name' => 'Drama']);
+        $author->tags()->attach([$fiction->id, $drama->id]);
+
+        Author::with(['tags' => fn($q) => $q->orderBy('tags.name')])->get();
+
+        $tags = Author::with(['tags' => fn($q) => $q->orderByDesc('tags.name')])
+            ->get()
+            ->first()
+            ->tags
+            ->pluck('name')
+            ->values()
+            ->all();
+
+        $this->assertSame(['Fiction', 'Drama'], $tags);
+    }
 }
