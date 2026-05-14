@@ -202,11 +202,80 @@ class CacheableBuilderTest extends TestCase
         $this->assertCount(1, $found->posts);
     }
 
+    public function test_belongs_to_eager_loads_from_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::with('author')->get();
+        $post = Post::with('author')->first();
+
+        $this->assertTrue($post->relationLoaded('author'));
+        $this->assertSame('Alice', $post->author->name);
+    }
+
+    public function test_belongs_to_eager_load_with_selected_columns_uses_normal_relation_path(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Post::with('author:id')->get();
+        $post = Post::with('author:id')->first();
+
+        $this->assertTrue($post->relationLoaded('author'));
+        $this->assertSame($author->id, $post->author->id);
+        $this->assertArrayNotHasKey('name', $post->author->getAttributes());
+    }
+
+    public function test_nested_belongs_to_eager_load_uses_normal_relation_path(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $post = Post::with('author.posts')->first();
+
+        $this->assertTrue($post->relationLoaded('author'));
+        $this->assertTrue($post->author->relationLoaded('posts'));
+        $this->assertCount(1, $post->author->posts);
+    }
+
     public function test_in_random_order_bypasses_cache(): void
     {
         Author::create(['name' => 'Alice']);
         Author::inRandomOrder()->get();
 
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_primary_key_query_with_limit_uses_model_cache_without_query_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $authors = Author::whereKey($author->id)->limit(1)->get();
+
+        $this->assertCount(1, $authors);
+        $this->assertSame('Alice', $authors->first()->name);
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_single_primary_key_query_with_order_uses_model_cache_without_query_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $authors = Author::whereKey($author->id)->orderBy('name')->get();
+
+        $this->assertCount(1, $authors);
+        $this->assertSame('Alice', $authors->first()->name);
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_primary_key_query_with_zero_limit_returns_empty_without_query_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $authors = Author::whereKey($author->id)->limit(0)->get();
+
+        $this->assertCount(0, $authors);
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 

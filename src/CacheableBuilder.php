@@ -97,7 +97,7 @@ class CacheableBuilder extends Builder
             return parent::get($columns);
         }
 
-        if ($ids = $this->extractPrimaryKeyValues($base)) {
+        if (($ids = $this->extractPrimaryKeyValues($base)) !== null) {
             try {
                 return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols));
             } catch (\Exception $e) {
@@ -153,8 +153,12 @@ class CacheableBuilder extends Builder
 
     protected function extractPrimaryKeyValues(QueryBuilder $base): ?array
     {
-        if (!empty($base->orders) || $base->offset > 0 || $base->limit > 0) {
+        if ($base->offset > 0) {
             return null;
+        }
+
+        if ($base->limit === 0) {
+            return [];
         }
 
         if (count($base->wheres) !== 1) {
@@ -173,7 +177,11 @@ class CacheableBuilder extends Builder
             return [$where['value']];
         }
 
-        if ($where['type'] === 'In') {
+        if (!empty($base->orders) || $base->limit > 0) {
+            return null;
+        }
+
+        if ($where['type'] === 'In' || $where['type'] === 'InRaw') {
             return $where['values'];
         }
 

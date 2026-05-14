@@ -3,8 +3,10 @@
 namespace NormCache\Traits;
 
 use Illuminate\Contracts\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use NormCache\Facades\NormCache;
+use NormCache\Relations\CacheableBelongsTo;
 use NormCache\Relations\CacheableBelongsToMany;
 use NormCache\Relations\CacheableHasManyThrough;
 use NormCache\Relations\CacheableHasOneThrough;
@@ -12,6 +14,15 @@ use NormCache\Relations\CacheableMorphToMany;
 
 trait CachesRelationships
 {
+    protected function newBelongsTo(Builder $query, Model $child, $foreignKey, $ownerKey, $relation)
+    {
+        if (!NormCache::isEnabled()) {
+            return parent::newBelongsTo($query, $child, $foreignKey, $ownerKey, $relation);
+        }
+
+        return new CacheableBelongsTo($query, $child, $foreignKey, $ownerKey, $relation);
+    }
+
     protected function newMorphToMany(
         EloquentBuilder $query,
         Model $parent,

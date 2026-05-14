@@ -222,7 +222,7 @@ return [
 
 **`cooldown`** — Consecutive writes within the cooldown window only bump the version once. Useful for write-heavy models to avoid thrashing the version counter.
 
-**`events`** — Set to `false` to disable all `QueryCacheHit`, `QueryCacheMiss`, `ModelCacheHit`, and `ModelCacheMiss` event dispatches. Useful in high-throughput scenarios where the event overhead is not needed.
+**`events`** — Set to `false` to disable all `QueryCacheHit`, `QueryCacheMiss`, `ModelCacheHit`, and `ModelCacheMiss` event dispatches. For production hot paths, prefer `NORMCACHE_EVENTS=false` unless you actively consume these events for observability.
 
 **`fallback`** — When `true`, any Redis exception during a read is caught, reported via `report()`, the cache is disabled for the remainder of the request, and the query falls back to the database. When `false` (the default), Redis errors propagate normally. Enable this if you want your application to stay available during Redis outages.
 

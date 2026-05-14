@@ -71,16 +71,28 @@ class OptimizationsTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
-    public function test_fast_path_skips_on_order_by()
+    public function test_fast_path_is_used_for_single_primary_key_lookup_with_order_by()
     {
-        Author::create(['name' => 'Order Author']);
+        $author = Author::create(['name' => 'Order Author']);
         
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class]);
 
-        // Simple PK lookup but with ORDER BY
-        Author::where('id', 1)->orderBy('id')->get();
+        $found = Author::where('id', $author->id)->orderBy('id')->get();
         
-        // Should NOT use fast path, thus SHOULD fire query cache events
+        $this->assertCount(1, $found);
+        Event::assertNotDispatched(QueryCacheHit::class);
+        Event::assertNotDispatched(QueryCacheMiss::class);
+    }
+
+    public function test_fast_path_skips_where_in_with_order_by()
+    {
+        Author::create(['name' => 'Order A']);
+        Author::create(['name' => 'Order B']);
+
+        Event::fake([QueryCacheHit::class, QueryCacheMiss::class]);
+
+        Author::whereIn('id', [1, 2])->orderBy('id')->get();
+
         Event::assertDispatched(QueryCacheMiss::class);
     }
 }
