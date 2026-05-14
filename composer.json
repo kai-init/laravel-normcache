@@ -26,7 +26,8 @@
     "require-dev": {
         "laravel/pint": "^1.18",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
-        "phpunit/phpunit": "^10.5|^11.0|^12.0"
+        "phpunit/phpunit": "^10.5|^11.0|^12.0",
+        "larastan/larastan": "^3.0"
     },
     "autoload": {
         "psr-4": {
@@ -42,7 +43,8 @@
         "test": "vendor/bin/phpunit",
         "bench": "vendor/bin/phpunit tests/Benchmark",
         "lint": "vendor/bin/pint --test",
-        "format": "vendor/bin/pint"
+        "format": "vendor/bin/pint",
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M"
     },
     "extra": {
         "laravel": {

@@ -1,6 +1,7 @@
 # Laravel Normcache
 
 [![Tests](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml/badge.svg)](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml)
+[![PHPStan](https://img.shields.io/badge/PHPStan-level%205-brightgreen.svg)](phpstan.neon)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
@@ -32,6 +33,7 @@ When post 7 is updated, Normcache deletes `post:7` and increments a version coun
 ---
 
 **Requirements:**
+
 - PHP 8.2+
 - Laravel 11, 12, or 13
 - Redis 4.0+
@@ -167,15 +169,15 @@ Enable cluster mode in the config:
 
 The following query types always hit the database directly:
 
-| Query feature | Reason |
-|---|---|
-| `JOIN` | Result depends on joined table, not just this model |
-| `GROUP BY` / `HAVING` | Aggregated results can't be mapped to individual model keys |
-| `UNION` | Multi-model result set |
-| Raw `ORDER BY` | Can't be applied to cached key list |
-| `SELECT` with expressions | Computed columns aren't in the model cache |
-| Pessimistic locking (`lockForUpdate` / `sharedLock`) | Must always read from DB |
-| Inside a database transaction | Reads inside a transaction must see uncommitted data |
+| Query feature                                        | Reason                                                      |
+| ---------------------------------------------------- | ----------------------------------------------------------- |
+| `JOIN`                                               | Result depends on joined table, not just this model         |
+| `GROUP BY` / `HAVING`                                | Aggregated results can't be mapped to individual model keys |
+| `UNION`                                              | Multi-model result set                                      |
+| Raw `ORDER BY`                                       | Can't be applied to cached key list                         |
+| `SELECT` with expressions                            | Computed columns aren't in the model cache                  |
+| Pessimistic locking (`lockForUpdate` / `sharedLock`) | Must always read from DB                                    |
+| Inside a database transaction                        | Reads inside a transaction must see uncommitted data        |
 
 ---
 
@@ -194,11 +196,11 @@ Event::listen(QueryCacheMiss::class, fn($e) => Pulse::record('query_miss', $e->m
 Event::listen(ModelCacheMiss::class, fn($e) => Pulse::record('model_miss', $e->modelClass, count($e->ids)));
 ```
 
-| Event | Fired when | Properties |
-|---|---|---|
-| `QueryCacheHit` | ID list served from Redis | `modelClass`, `key` |
-| `QueryCacheMiss` | ID list not cached — DB queried | `modelClass`, `key` |
-| `ModelCacheHit` | Model attributes served from Redis | `modelClass`, `ids[]` |
+| Event            | Fired when                         | Properties            |
+| ---------------- | ---------------------------------- | --------------------- |
+| `QueryCacheHit`  | ID list served from Redis          | `modelClass`, `key`   |
+| `QueryCacheMiss` | ID list not cached — DB queried    | `modelClass`, `key`   |
+| `ModelCacheHit`  | Model attributes served from Redis | `modelClass`, `ids[]` |
 | `ModelCacheMiss` | Attributes not cached — DB queried | `modelClass`, `ids[]` |
 
 ---

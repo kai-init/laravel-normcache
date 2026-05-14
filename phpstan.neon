@@ -1,0 +1,17 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 5
+    paths:
+        - src
+    ignoreErrors:
+        -
+            identifier: arguments.count
+            path: src/CacheManager.php
+        -
+            identifier: argument.type
+            path: src/CacheManager.php
+        -
+            identifier: trait.unused
+            path: src/Traits/*

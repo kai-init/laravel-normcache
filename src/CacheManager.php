@@ -595,7 +595,7 @@ class CacheManager
         return $loaded->all();
     }
 
-    private function prepareMissedQuery(string $modelClass, ?EloquentBuilder $missedQuery): EloquentBuilder
+    private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery): EloquentBuilder
     {
         if ($missedQuery === null) {
             return $modelClass::query()->withoutCache();

@@ -42,7 +42,7 @@ class CacheableBelongsTo extends BelongsTo
 
         $base = $this->query->toBase();
 
-        if (count($base->wheres ?? []) !== 1
+        if (count($base->wheres) !== 1
             || !empty($base->orders)
             || $base->columns !== null
             || $base->offset > 0
