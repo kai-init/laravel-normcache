@@ -662,10 +662,6 @@ class CacheManager
     {
         $classKey = $this->classKey($modelClass);
 
-        if (array_key_exists($classKey, $this->versionLocal)) {
-            return $this->versionLocal[$classKey];
-        }
-
         if ($this->cooldown > 0) {
             $script = <<<'LUA'
                 if redis.call('GET', KEYS[2]) and not redis.call('GET', KEYS[3]) then

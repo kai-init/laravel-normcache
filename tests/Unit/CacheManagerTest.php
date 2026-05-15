@@ -110,16 +110,16 @@ class CacheManagerTest extends TestCase
         $this->assertSame(1, $manager->currentVersion(Author::class));
     }
 
-    public function test_current_version_is_served_from_local_after_first_read(): void
+    public function test_current_version_observes_cross_process_writes(): void
     {
         $this->manager->currentVersion(Post::class);
 
         Redis::connection('model-cache-test')->set('test:ver:{posts}:', 99);
 
-        $this->assertSame(0, $this->manager->currentVersion(Post::class));
+        $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
 
-    public function test_flush_version_local_forces_redis_read_on_next_call(): void
+    public function test_flush_version_local_does_not_block_redis_reads(): void
     {
         $this->manager->currentVersion(Post::class);
 
@@ -130,13 +130,13 @@ class CacheManagerTest extends TestCase
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
 
-    public function test_invalidate_version_updates_local_with_new_value(): void
+    public function test_invalidate_version_then_external_write_is_observed(): void
     {
         $this->manager->invalidateVersion(new Author);
 
         Redis::connection('model-cache-test')->set('test:ver:{authors}:', 99);
 
-        $this->assertSame(1, $this->manager->currentVersion(Author::class));
+        $this->assertSame(99, $this->manager->currentVersion(Author::class));
     }
 
     public function test_class_key_uses_table_name(): void

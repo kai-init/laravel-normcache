@@ -9,6 +9,7 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
+use ReflectionProperty;
 
 class CacheableBuilderTest extends TestCase
 {
@@ -76,6 +77,23 @@ class CacheableBuilderTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
+    public function test_subquery_where_has_reflects_related_model_writes(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
+
+        $warm = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
+        $this->assertCount(1, $warm);
+
+        $post->update(['published' => false]);
+
+        $live = UncachedAuthor::whereHas('posts', fn($q) => $q->where('published', true))->get();
+        $this->assertCount(0, $live);
+
+        $cached = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
+        $this->assertCount(0, $cached);
+    }
+
     public function test_select_specific_columns_filters_returned_attributes(): void
     {
         Author::create(['name' => 'Alice', 'country_id' => null]);
@@ -121,6 +139,34 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(2, $first->posts_count);
         $this->assertSame(2, $second->posts_count);
+    }
+
+    public function test_cache_aggregates_with_count_respects_runtime_global_scope_state(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'A', 'author_id' => $author->id, 'views' => 10]);
+        Post::create(['title' => 'B', 'author_id' => $author->id, 'views' => 20]);
+
+        $threshold = 0;
+        $enabled = true;
+        Post::addGlobalScope('viewsScope', function ($query) use (&$threshold, &$enabled) {
+            if ($enabled) {
+                $query->where('views', '>=', $threshold);
+            }
+        });
+
+        try {
+            $threshold = 0;
+            $first = Author::withCount('posts')->get()->firstWhere('id', $author->id);
+            $this->assertSame(2, (int) $first->posts_count);
+
+            $threshold = 15;
+            $second = Author::withCount('posts')->get()->firstWhere('id', $author->id);
+            $this->assertSame(1, (int) $second->posts_count);
+        } finally {
+            $enabled = false;
+            $this->clearGlobalScope(Post::class, 'viewsScope');
+        }
     }
 
     public function test_cache_aggregates_with_sum_returns_correct_value(): void
@@ -314,6 +360,19 @@ class CacheableBuilderTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
+    public function test_refresh_issues_a_db_query_not_a_cache_read(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+
+        DB::enableQueryLog();
+        $author->refresh();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertNotEmpty($queries);
+    }
+
     public function test_truncate_flushes_model_cache_and_increments_version(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -419,5 +478,13 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(0, $affected);
         $this->assertSame($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
+    private function clearGlobalScope(string $modelClass, string $name): void
+    {
+        $prop = new ReflectionProperty(\Illuminate\Database\Eloquent\Model::class, 'globalScopes');
+        $scopes = $prop->getValue();
+        unset($scopes[$modelClass][$name]);
+        $prop->setValue(null, $scopes);
     }
 }

@@ -258,6 +258,10 @@ class CacheableBuilder extends Builder
             }
         }
 
+        if ($this->hasSubqueryWheres((array) $base->wheres)) {
+            return false;
+        }
+
         return empty($base->joins)
             && empty($base->groups)
             && empty($base->havings)
@@ -265,6 +269,27 @@ class CacheableBuilder extends Builder
             && empty($base->aggregate)
             && empty($base->distinct)
             && is_null($base->lock);
+    }
+
+    private function hasSubqueryWheres(array $wheres): bool
+    {
+        static $subqueryTypes = ['Exists', 'NotExists', 'Sub', 'InSub', 'NotInSub'];
+
+        foreach ($wheres as $where) {
+            $type = $where['type'] ?? '';
+
+            if (in_array($type, $subqueryTypes, true)) {
+                return true;
+            }
+
+            if ($type === 'Nested' && isset($where['query'])) {
+                if ($this->hasSubqueryWheres((array) $where['query']->wheres)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function insideTransaction(): bool
@@ -335,8 +360,8 @@ class CacheableBuilder extends Builder
     private function isColumnIdentifier(string $column, bool $allowQualifier = true): bool
     {
         $pattern = $allowQualifier
-            ? "/^" . self::COLUMN_IDENTIFIER . "(?:\\." . self::COLUMN_IDENTIFIER . ")?$/"
-            : "/^" . self::COLUMN_IDENTIFIER . "$/";
+            ? '/^' . self::COLUMN_IDENTIFIER . '(?:\\.' . self::COLUMN_IDENTIFIER . ')?$/'
+            : '/^' . self::COLUMN_IDENTIFIER . '$/';
 
         return (bool) preg_match($pattern, trim($column));
     }

@@ -123,12 +123,11 @@ class AggregateLoader
 
     private function constraintKey(string $relatedClass, ?callable $constraint): string
     {
-        if ($constraint === null) {
-            return 'nc';
-        }
+        $builder = (new $relatedClass)->newQuery()->withoutCache();
 
-        $builder = (new $relatedClass)->newQueryWithoutScopes()->withoutCache();
-        $constraint($builder);
+        if ($constraint !== null) {
+            $constraint($builder);
+        }
 
         return QueryHasher::fromQuery($builder->toBase());
     }
