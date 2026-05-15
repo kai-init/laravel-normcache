@@ -88,12 +88,12 @@ trait HandlesCacheInvalidation
         return $this->coordinateInvalidation(true, fn() => parent::decrement($column, $amount, $extra));
     }
 
-    public function incrementEach(array $columns, array $extra = []): int
+    public function incrementEach(array $columns, array $extra = [])
     {
         return $this->coordinateInvalidation(true, fn() => parent::incrementEach($columns, $extra));
     }
 
-    public function decrementEach(array $columns, array $extra = []): int
+    public function decrementEach(array $columns, array $extra = [])
     {
         return $this->coordinateInvalidation(true, fn() => parent::decrementEach($columns, $extra));
     }
