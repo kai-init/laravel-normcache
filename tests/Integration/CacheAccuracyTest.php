@@ -7,6 +7,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use NormCache\CacheManager;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
@@ -18,6 +19,7 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
+use ReflectionProperty;
 
 class CacheAccuracyTest extends TestCase
 {
@@ -231,6 +233,29 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame($live, $cached);
     }
 
+    public function test_primary_key_where_in_matches_eloquent_ordering(): void
+    {
+        Author::create(['id' => 1, 'name' => 'A']);
+        Author::create(['id' => 2, 'name' => 'B']);
+        Author::create(['id' => 3, 'name' => 'C']);
+
+        $live = UncachedAuthor::whereIn('id', [3, 1, 2])->get()->pluck('id')->all();
+        $cached = Author::whereIn('id', [3, 1, 2])->get()->pluck('id')->all();
+
+        $this->assertSame($live, $cached);
+    }
+
+    public function test_subclass_hydrates_with_own_class_not_parent_data(): void
+    {
+        Author::create(['id' => 1, 'name' => 'Alice']);
+        Author::find(1);
+
+        $admin = AdminAuthor::find(1);
+
+        $this->assertInstanceOf(AdminAuthor::class, $admin);
+        $this->assertSame('ALICE', $admin->display_name);
+    }
+
     public function test_pivot_relation_with_join_does_not_poison_unconstrained_warm_hit(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -262,6 +287,22 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame($post->id, $warmAttributes['id']);
         $this->assertArrayHasKey('laravel_through_key', $warmAttributes);
         $this->assertSame($coldAttributes['laravel_through_key'], $warmAttributes['laravel_through_key']);
+    }
+
+    public function test_subclass_get_deleted_at_column_override_is_respected(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        app('normcache')->getModels([$post->id], Post::class);
+
+        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+        $this->assertSame('deleted_at', $resolved[Post::class] ?? null);
+
+        AltDeletedAtPost::resolveSoftDelete();
+        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+
+        $this->assertSame('archived_at', $resolved[AltDeletedAtPost::class] ?? null);
     }
 
     public function test_same_table_models_on_different_connections_do_not_share_cached_data(): void
@@ -300,4 +341,34 @@ class SecondaryConnectionAuthor extends Model
     protected $table = 'authors';
 
     protected $guarded = [];
+}
+
+class AdminAuthor extends Author
+{
+    protected $table = 'authors';
+
+    public function getDisplayNameAttribute(): string
+    {
+        return strtoupper($this->name);
+    }
+}
+
+class AltDeletedAtPost extends Post
+{
+    protected $table = 'posts';
+
+    public function getDeletedAtColumn()
+    {
+        return 'archived_at';
+    }
+
+    public static function resolveSoftDelete(): void
+    {
+        $prototype = new self;
+        $col = $prototype->getDeletedAtColumn();
+        $prop = new ReflectionProperty(CacheManager::class, 'deletedAtColumns');
+        $current = $prop->getValue();
+        $current[self::class] = $col;
+        $prop->setValue(null, $current);
+    }
 }

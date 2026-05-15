@@ -37,6 +37,14 @@ class QueryHasherTest extends TestCase
         $this->assertNotSame(QueryHasher::fromQuery($a), QueryHasher::fromQuery($b));
     }
 
+    public function test_use_write_pdo_produces_different_hash(): void
+    {
+        $read = $this->makeBuilder()->from('authors')->where('id', 1);
+        $write = $this->makeBuilder()->from('authors')->where('id', 1)->useWritePdo();
+
+        $this->assertNotSame(QueryHasher::fromQuery($read), QueryHasher::fromQuery($write));
+    }
+
     public function test_it_hashes_raw_string(): void
     {
         $hash = QueryHasher::hash('some data');

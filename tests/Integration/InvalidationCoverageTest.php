@@ -190,6 +190,24 @@ class InvalidationCoverageTest extends TestCase
         $this->assertGreaterThan($versionBeforeIncrement, NormCache::currentVersion(Author::class));
     }
 
+    public function test_where_between_primary_key_update_flushes_only_affected_models(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        $carol = Author::create(['name' => 'Carol']);
+        Author::all();
+
+        $aliceKey = NormCache::modelKey(Author::class, $alice->id);
+        $bobKey = NormCache::modelKey(Author::class, $bob->id);
+        $carolKey = NormCache::modelKey(Author::class, $carol->id);
+
+        Author::whereBetween('id', [$bob->id, $bob->id])->update(['name' => 'Bobby']);
+
+        $this->assertNotNull(NormCache::get($aliceKey));
+        $this->assertNull(NormCache::get($bobKey));
+        $this->assertNotNull(NormCache::get($carolKey));
+    }
+
     public function test_bulk_restore_and_force_delete_invalidate_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);

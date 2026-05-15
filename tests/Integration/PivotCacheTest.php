@@ -8,6 +8,7 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
+use ReflectionMethod;
 
 class PivotCacheTest extends TestCase
 {
@@ -186,6 +187,29 @@ class PivotCacheTest extends TestCase
         $this->assertSame($tag->id, $pivot->tag_id);
     }
 
+    public function test_pivot_warm_hit_runs_after_query_callbacks(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        $count = 0;
+
+        Author::with(['tags' => function ($query) use (&$count) {
+            $query->afterQuery(function () use (&$count) {
+                $count++;
+            });
+        }])->get();
+
+        Author::with(['tags' => function ($query) use (&$count) {
+            $query->afterQuery(function () use (&$count) {
+                $count++;
+            });
+        }])->get();
+
+        $this->assertSame(2, $count);
+    }
+
     public function test_attach_after_warm_hit_returns_updated_tags(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -272,5 +296,51 @@ class PivotCacheTest extends TestCase
             ->all();
 
         $this->assertSame(['Fiction', 'Drama'], $tags);
+    }
+
+    public function test_constraint_hash_changes_when_join_distinct_or_lock_added(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $base = $this->callConstraintHash($author->tags());
+
+        $distinct = $author->tags();
+        $distinct->getQuery()->distinct();
+        $this->assertNotSame($base, $this->callConstraintHash($distinct));
+
+        $lock = $author->tags();
+        $lock->getQuery()->lockForUpdate();
+        $this->assertNotSame($base, $this->callConstraintHash($lock));
+
+        $join = $author->tags();
+        $join->getQuery()->join('author_tag as at2', 'at2.tag_id', '=', 'tags.id');
+        $this->assertNotSame($base, $this->callConstraintHash($join));
+    }
+
+    public function test_constraint_hash_distinguishes_nested_closure_wheres(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $fiction = $author->tags();
+        $fiction->getQuery()->where(function ($query) {
+            $query->where('tags.name', 'Fiction');
+        });
+
+        $drama = $author->tags();
+        $drama->getQuery()->where(function ($query) {
+            $query->where('tags.name', 'Drama');
+        });
+
+        $this->assertNotSame(
+            $this->callConstraintHash($fiction),
+            $this->callConstraintHash($drama)
+        );
+    }
+
+    private function callConstraintHash(object $relation): string
+    {
+        $method = new ReflectionMethod($relation, 'currentConstraintHash');
+
+        return $method->invoke($relation, ['*']);
     }
 }

@@ -191,7 +191,10 @@ class CacheableBuilder extends Builder
         }
 
         if ($where['type'] === 'In' || $where['type'] === 'InRaw') {
-            return $where['values'];
+            $values = $where['values'];
+            sort($values);
+
+            return $values;
         }
 
         return null;
@@ -226,7 +229,7 @@ class CacheableBuilder extends Builder
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
-        $hash = QueryHasher::fromQuery($base);
+        $hash = $this->queryCacheKey($base);
 
         try {
             $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);

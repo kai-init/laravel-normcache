@@ -147,9 +147,41 @@ trait HandlesCacheInvalidation
                 $ids[] = $where['value'];
             } elseif ($where['type'] === 'In' || $where['type'] === 'InRaw') {
                 $ids = array_merge($ids, $where['values']);
+            } elseif ($where['type'] === 'Between' || $where['type'] === 'between') {
+                $betweenIds = $this->idsFromBetweenWhere($where);
+
+                if ($betweenIds === []) {
+                    return [];
+                }
+
+                $ids = array_merge($ids, $betweenIds);
             }
         }
 
         return array_unique($ids);
+    }
+
+    protected function idsFromBetweenWhere(array $where): array
+    {
+        $values = $where['values'] ?? null;
+
+        if (!is_array($values) || count($values) !== 2) {
+            return [];
+        }
+
+        [$start, $end] = array_values($values);
+
+        if (!is_numeric($start) || !is_numeric($end)) {
+            return [];
+        }
+
+        $start = (int) $start;
+        $end = (int) $end;
+
+        if ($end < $start || ($end - $start) > 1000) {
+            return [];
+        }
+
+        return range($start, $end);
     }
 }

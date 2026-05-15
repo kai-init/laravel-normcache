@@ -69,6 +69,15 @@ class CacheableBuilderTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
+    public function test_query_from_subquery_bypasses_cache(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::fromSub(Author::query()->select('id', 'name'), 'authors')->get();
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
     public function test_query_with_raw_select_expression_bypasses_cache(): void
     {
         Author::create(['name' => 'Alice']);
@@ -260,6 +269,30 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('Alice', $post->author->name);
     }
 
+    public function test_belongs_to_eager_load_respects_join_only_global_scope_on_warm_hit(): void
+    {
+        Author::create(['name' => 'Alice', 'country_id' => null]);
+        Post::create(['title' => 'Hello', 'author_id' => 1]);
+
+        Post::with('author')->get();
+
+        $enabled = true;
+        Author::addGlobalScope('joinCountry', function ($query) use (&$enabled) {
+            if ($enabled) {
+                $query->join('countries', 'authors.country_id', '=', 'countries.id');
+            }
+        });
+
+        try {
+            $post = Post::with('author')->find(1);
+
+            $this->assertNull($post->author);
+        } finally {
+            $enabled = false;
+            $this->clearGlobalScope(Author::class, 'joinCountry');
+        }
+    }
+
     public function test_belongs_to_eager_load_with_selected_columns_uses_normal_relation_path(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -406,6 +439,17 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(3, $second->total());
         $this->assertCount(1, $second->items());
+    }
+
+    public function test_paginate_count_cache_is_select_independent(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        Author::query()->paginate(10);
+        Author::query()->select('name')->paginate(10);
+
+        $this->assertCount(1, $this->redisKeys('test:count:*'));
     }
 
     public function test_raw_builder_insert_invalidates_version(): void
