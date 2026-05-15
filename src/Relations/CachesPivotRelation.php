@@ -204,6 +204,8 @@ trait CachesPivotRelation
             }
         }
 
-        return $this->related->newCollection($result);
+        return $this->query->applyAfterQueryCallbacks(
+            $this->related->newCollection($result)
+        );
     }
 }

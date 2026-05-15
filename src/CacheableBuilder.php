@@ -262,6 +262,10 @@ class CacheableBuilder extends Builder
             return false;
         }
 
+        if ($base->from !== $this->model->getTable()) {
+            return false;
+        }
+
         return empty($base->joins)
             && empty($base->groups)
             && empty($base->havings)

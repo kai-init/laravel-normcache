@@ -8,7 +8,10 @@ final class QueryHasher
 {
     public static function fromQuery(QueryBuilder $query): string
     {
-        return self::hash($query->toSql() . json_encode($query->getBindings()));
+        return self::hash($query->toSql() . json_encode([
+            'bindings' => $query->getBindings(),
+            'useWritePdo' => $query->useWritePdo,
+        ]));
     }
 
     public static function hash(string $data): string
