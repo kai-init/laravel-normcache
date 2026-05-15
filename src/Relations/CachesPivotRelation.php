@@ -94,7 +94,20 @@ trait CachesPivotRelation
             $shape['wheres'] = $wheres;
         }
 
-        foreach (['orders', 'limit', 'offset', 'groups', 'havings'] as $property) {
+        foreach ([
+            'orders',
+            'limit',
+            'offset',
+            'groups',
+            'havings',
+            'joins',
+            'distinct',
+            'unions',
+            'unionOrders',
+            'unionLimit',
+            'unionOffset',
+            'lock',
+        ] as $property) {
             if ($base->{$property} !== null && $base->{$property} !== []) {
                 $shape[$property] = $base->{$property};
             }

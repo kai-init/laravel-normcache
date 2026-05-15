@@ -34,25 +34,37 @@ trait CachesOneOrManyThrough
         $lockKey = $cacheData['lock'];
 
         if ($cacheData['data'] !== null) {
-            return $this->hydrateFromIds($cacheData['data'], $relatedClass, $builder, $shouldCacheModels ? null : $builder->getQuery()->columns);
+            return $this->hydrateFromIds(
+                $cacheData['data']['ids'],
+                $relatedClass,
+                $builder,
+                $shouldCacheModels ? null : $builder->getQuery()->columns,
+                $cacheData['data']['throughKeys']
+            );
         }
 
         if ($lockKey === null) {
-            $ids = $this->pollForThroughCache($key);
-            if ($ids !== null) {
-                return $this->hydrateFromIds($ids, $relatedClass, $builder, $shouldCacheModels ? null : $builder->getQuery()->columns);
+            $payload = $this->pollForThroughCache($key);
+            if ($payload !== null) {
+                return $this->hydrateFromIds(
+                    $payload['ids'],
+                    $relatedClass,
+                    $builder,
+                    $shouldCacheModels ? null : $builder->getQuery()->columns,
+                    $payload['throughKeys']
+                );
             }
         }
 
         try {
             $result = parent::get($columns);
-            $ids = $result->modelKeys();
+            $payload = $this->cachePayloadFromResult($result);
 
             if ($lockKey !== null) {
-                NormCache::setAndReleaseLock($key, $ids, NormCache::queryTtl(), $lockKey);
+                NormCache::setAndReleaseLock($key, $payload, NormCache::queryTtl(), $lockKey);
                 $lockKey = null;
             } else {
-                NormCache::set($key, $ids, NormCache::queryTtl());
+                NormCache::set($key, $payload, NormCache::queryTtl());
             }
         } finally {
             if ($lockKey !== null) {
@@ -74,9 +86,27 @@ trait CachesOneOrManyThrough
         return $result;
     }
 
-    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns): Collection
+    private function cachePayloadFromResult(Collection $result): array
+    {
+        return [
+            'ids' => $result->modelKeys(),
+            'throughKeys' => $result->mapWithKeys(fn($model) => [
+                $model->getKey() => $model->getAttribute('laravel_through_key'),
+            ])->all(),
+        ];
+    }
+
+    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection
     {
         $models = NormCache::getModels($ids, $relatedClass, $selectedColumns);
+
+        if ($throughKeys !== []) {
+            foreach ($models as $model) {
+                if (array_key_exists($model->getKey(), $throughKeys)) {
+                    $model->setAttribute('laravel_through_key', $throughKeys[$model->getKey()]);
+                }
+            }
+        }
 
         if ($models && $builder->getEagerLoads()) {
             $models = $builder->eagerLoadRelations($models);

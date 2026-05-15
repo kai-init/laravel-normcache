@@ -263,6 +263,7 @@ class CacheableBuilder extends Builder
             && empty($base->havings)
             && empty($base->unions)
             && empty($base->aggregate)
+            && empty($base->distinct)
             && is_null($base->lock);
     }
 

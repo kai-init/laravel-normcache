@@ -15,6 +15,7 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
+use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
 
@@ -203,6 +204,64 @@ class CacheAccuracyTest extends TestCase
         $cachedPost = $post::find($post->id);
 
         $this->assertSame('Hello', $cachedPost->title);
+    }
+
+    public function test_distinct_selected_column_query_matches_eloquent_results(): void
+    {
+        $australia = Country::create(['name' => 'Australia']);
+        $canada = Country::create(['name' => 'Canada']);
+        Author::create(['name' => 'Alice', 'country_id' => $australia->id]);
+        Author::create(['name' => 'Bob', 'country_id' => $australia->id]);
+        Author::create(['name' => 'Charlie', 'country_id' => $canada->id]);
+
+        $cached = Author::select('country_id')
+            ->distinct()
+            ->get()
+            ->pluck('country_id')
+            ->values()
+            ->all();
+
+        $live = UncachedAuthor::select('country_id')
+            ->distinct()
+            ->get()
+            ->pluck('country_id')
+            ->values()
+            ->all();
+
+        $this->assertSame($live, $cached);
+    }
+
+    public function test_pivot_relation_with_join_does_not_poison_unconstrained_warm_hit(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Post::create(['title' => 'First', 'author_id' => $author->id]);
+        Post::create(['title' => 'Second', 'author_id' => $author->id]);
+
+        Author::with([
+            'tags' => fn($query) => $query->join('posts', 'posts.author_id', '=', 'author_tag.author_id'),
+        ])->get();
+
+        $warm = Author::with('tags')->get()->first()->tags;
+
+        $this->assertSame([$tag->id], $warm->modelKeys());
+    }
+
+    public function test_through_relation_selected_column_warm_hit_preserves_laravel_through_key_attribute(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = $author->posts()->create(['title' => 'Hello']);
+
+        $coldAttributes = $country->posts()->select('posts.id')->get()->first()->getAttributes();
+        $warmAttributes = $country->posts()->select('posts.id')->get()->first()->getAttributes();
+
+        $this->assertArrayHasKey('laravel_through_key', $coldAttributes);
+        $this->assertSame($post->id, $warmAttributes['id']);
+        $this->assertArrayHasKey('laravel_through_key', $warmAttributes);
+        $this->assertSame($coldAttributes['laravel_through_key'], $warmAttributes['laravel_through_key']);
     }
 
     public function test_same_table_models_on_different_connections_do_not_share_cached_data(): void
