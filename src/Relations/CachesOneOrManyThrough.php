@@ -24,6 +24,7 @@ trait CachesOneOrManyThrough
             return parent::get($columns);
         }
 
+        $shouldCacheModels = $columns === ['*'] && $this->query->toBase()->columns === null;
         $builder = $this->prepareQueryBuilder($columns);
         $hash = QueryHasher::fromQuery($builder->toBase());
         $relatedClass = $this->related::class;
@@ -33,13 +34,13 @@ trait CachesOneOrManyThrough
         $lockKey = $cacheData['lock'];
 
         if ($cacheData['data'] !== null) {
-            return $this->hydrateFromIds($cacheData['data'], $relatedClass, $builder);
+            return $this->hydrateFromIds($cacheData['data'], $relatedClass, $builder, $shouldCacheModels ? null : $builder->getQuery()->columns);
         }
 
         if ($lockKey === null) {
             $ids = $this->pollForThroughCache($key);
             if ($ids !== null) {
-                return $this->hydrateFromIds($ids, $relatedClass, $builder);
+                return $this->hydrateFromIds($ids, $relatedClass, $builder, $shouldCacheModels ? null : $builder->getQuery()->columns);
             }
         }
 
@@ -60,7 +61,7 @@ trait CachesOneOrManyThrough
         }
 
         // Populate model cache while we have full model
-        if ($columns === ['*']) {
+        if ($shouldCacheModels) {
             $attrsByKey = [];
             foreach ($result as $model) {
                 $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
@@ -73,9 +74,9 @@ trait CachesOneOrManyThrough
         return $result;
     }
 
-    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder): Collection
+    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns): Collection
     {
-        $models = NormCache::getModels($ids, $relatedClass);
+        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns);
 
         if ($models && $builder->getEagerLoads()) {
             $models = $builder->eagerLoadRelations($models);

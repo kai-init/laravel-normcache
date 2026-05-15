@@ -19,6 +19,8 @@ class CacheableBuilder extends Builder
 {
     use HandlesCacheInvalidation;
 
+    private const COLUMN_IDENTIFIER = '[`"]?[A-Za-z_][A-Za-z0-9_]*[`"]?';
+
     protected bool $skipCache = false;
 
     protected ?int $queryTtl = null;
@@ -174,7 +176,9 @@ class CacheableBuilder extends Builder
         $pk = $this->model->getKeyName();
         $qualifiedPk = $this->model->getQualifiedKeyName();
 
-        if ($where['column'] !== $pk && $where['column'] !== $qualifiedPk) {
+        $column = $where['column'] ?? null;
+
+        if (!in_array($column, [$pk, $qualifiedPk], true)) {
             return null;
         }
 
@@ -294,9 +298,51 @@ class CacheableBuilder extends Builder
             if ($col instanceof Expression) {
                 return true;
             }
+
+            if (!$this->isCacheableSelectedColumn((string) $col)) {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private function isCacheableSelectedColumn(string $column): bool
+    {
+        $column = trim($column);
+
+        if ($this->isWildcardColumn($column)) {
+            return false;
+        }
+
+        if (stripos($column, ' as ') !== false) {
+            return $this->isCacheableAliasedColumn($column);
+        }
+
+        return $this->isColumnIdentifier($column);
+    }
+
+    private function isCacheableAliasedColumn(string $column): bool
+    {
+        $segments = preg_split('/\s+as\s+/i', trim($column));
+
+        return count($segments) === 2
+            && $this->isColumnIdentifier($segments[0])
+            && $this->isColumnIdentifier($segments[1], false);
+    }
+
+    private function isColumnIdentifier(string $column, bool $allowQualifier = true): bool
+    {
+        $pattern = $allowQualifier
+            ? "/^" . self::COLUMN_IDENTIFIER . "(?:\\." . self::COLUMN_IDENTIFIER . ")?$/"
+            : "/^" . self::COLUMN_IDENTIFIER . "$/";
+
+        return (bool) preg_match($pattern, trim($column));
+    }
+
+    private function isWildcardColumn(string $column): bool
+    {
+        return $column === '*' || str_ends_with($column, '.*');
     }
 
     private function queryCacheKey(QueryBuilder $base): string

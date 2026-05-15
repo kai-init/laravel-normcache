@@ -463,7 +463,7 @@ class CacheManager
         }
 
         $prototype = self::$modelPrototypes[$modelClass] ??= new $modelClass;
-        $normalizedCols = $this->normalizeColumns($columns);
+        $projection = $this->normalizeColumns($columns);
 
         $result = [];
         $missed = [];
@@ -499,8 +499,8 @@ class CacheManager
                 continue;
             }
 
-            if ($normalizedCols !== null) {
-                $attrs = array_intersect_key($attrs, $normalizedCols);
+            if ($projection !== null) {
+                $attrs = $this->projectAttributes($attrs, $projection);
             }
 
             $instance = clone $prototype;
@@ -524,7 +524,7 @@ class CacheManager
             event(new ModelCacheMiss($modelClass, $missed));
         }
 
-        $fetched = $this->fetchAndCacheFromDatabase($missed, $modelClass, $classKey, $normalizedCols, $missedQuery);
+        $fetched = $this->fetchAndCacheFromDatabase($missed, $modelClass, $classKey, $projection, $missedQuery);
 
         $ordered = [];
         foreach ($ids as $id) {
@@ -536,6 +536,9 @@ class CacheManager
         return $ordered;
     }
 
+    /**
+     * @return array<string, string>|null output attribute => source attribute
+     */
     private function normalizeColumns(?array $columns): ?array
     {
         if ($columns === null) {
@@ -545,14 +548,56 @@ class CacheManager
         $normalized = [];
         foreach ($columns as $col) {
             $col = (string) $col;
-            $dotPos = strrpos($col, '.');
-            $normalized[$dotPos === false ? $col : substr($col, $dotPos + 1)] = true;
+            [$source, $output] = $this->normalizeColumnProjection($col);
+            $normalized[$output] = $source;
         }
 
         return $normalized;
     }
 
-    private function fetchAndCacheFromDatabase(array $missed, string $modelClass, string $classKey, ?array $normalizedCols, ?EloquentBuilder $missedQuery = null): array
+    private function normalizeColumnProjection(string $column): array
+    {
+        $column = trim($column);
+        $segments = preg_split('/\s+as\s+/i', $column);
+
+        if (count($segments) === 2) {
+            return [
+                $this->unqualifyColumn($segments[0]),
+                $this->unqualifyColumn($segments[1]),
+            ];
+        }
+
+        $name = $this->unqualifyColumn($column);
+
+        return [$name, $name];
+    }
+
+    private function unqualifyColumn(string $column): string
+    {
+        $column = trim($column);
+        $dotPos = strrpos($column, '.');
+
+        if ($dotPos !== false) {
+            $column = substr($column, $dotPos + 1);
+        }
+
+        return trim($column, " \t\n\r\0\x0B`\"[]");
+    }
+
+    private function projectAttributes(array $attributes, array $projection): array
+    {
+        $projected = [];
+
+        foreach ($projection as $output => $source) {
+            if (array_key_exists($source, $attributes)) {
+                $projected[$output] = $attributes[$source];
+            }
+        }
+
+        return $projected;
+    }
+
+    private function fetchAndCacheFromDatabase(array $missed, string $modelClass, string $classKey, ?array $projection, ?EloquentBuilder $missedQuery = null): array
     {
         $prototype = self::$modelPrototypes[$modelClass];
         $pk = $prototype->getKeyName();
@@ -574,8 +619,8 @@ class CacheManager
                 $inserts["model:{{$classKey}}:$id"] = $this->serialize($attrs);
             }
 
-            if ($normalizedCols !== null) {
-                $model->setRawAttributes(array_intersect_key($attrs, $normalizedCols), true);
+            if ($projection !== null) {
+                $model->setRawAttributes($this->projectAttributes($attrs, $projection), true);
             }
         }
 
@@ -766,7 +811,17 @@ class CacheManager
 
     public function classKey(string $class): string
     {
-        return self::$classKeyCache[$class] ??= (self::$modelPrototypes[$class] ??= new $class)->getTable();
+        return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
+    }
+
+    private function resolveClassKey(string $class): string
+    {
+        $model = self::$modelPrototypes[$class] ??= new $class;
+        $connection = $model->getConnectionName();
+
+        return $connection === null
+            ? $model->getTable()
+            : "{$connection}:{$model->getTable()}";
     }
 
     public function modelKey(string $modelClass, string $id): string

@@ -13,18 +13,18 @@
 Most caching packages cache query results as a single blob — the entire collection, serialized and stored together. Normcache takes a different approach: it stores the list of matching IDs separately from the model data, and keeps each model's attributes in its own key. Every model is stored exactly once, no matter how many queries return it.
 
 ```
-Query cache  →  "posts where active=1, page 2"  →  [4, 7, 12]
-Model cache  →  post:4  →  { id:4, title:..., body:... }
-             →  post:7  →  { id:7, title:..., body:... }
-             →  post:12 →  { id:12, title:..., body:... }
+Query cache  →  query:{posts}:v3:...  →  [4, 7, 12]
+Model cache  →  model:{posts}:4      →  { id:4, title:..., body:... }
+             →  model:{posts}:7      →  { id:7, title:..., body:... }
+             →  model:{posts}:12     →  { id:12, title:..., body:... }
 ```
 
-When post 7 is updated, Normcache deletes `post:7` and increments a version counter. The version is embedded in every query cache key, so all cached queries that returned post 7 — filtered, paginated, or sorted however they were — automatically miss on the next read. No index of which queries to invalidate is needed.
+When post 7 is updated, Normcache deletes `model:{posts}:7` and increments a version counter. The version is embedded in every query cache key, so all cached queries that returned post 7 — filtered, paginated, or sorted however they were — automatically miss on the next read. No index of which queries to invalidate is needed.
 
 ### Why this matters
 
 - **You never store the same record twice.**
-  - A popular model appearing in 50 cached query results is stored once, not 50 times. This massively reduces your redis memory usage.
+  - A popular model appearing in 50 cached query results is stored once, not 50 times. This massively reduces your Redis memory usage.
 - **Warming one query warms every query.**
   - When a model is fetched by ID, its attributes land in the model cache. Every other query that later includes that model — a search, a paginated list, a relationship — gets a model cache hit on that record for free.
 - **Invalidation is O(1).**
@@ -111,7 +111,7 @@ Post::withoutAggregateCache()->withCount('comments')->get();
 
 ### Relationship caching
 
-`BelongsToMany`, `MorphToMany`, `HasManyThrough`, and `HasOneThrough` relationships are cached when eager-loaded. On a warm hit no SQL is executed.
+`BelongsTo`, `BelongsToMany`, `MorphToMany`, `HasManyThrough`, and `HasOneThrough` relationships are cached for eligible eager-loads. On a warm hit no SQL is executed.
 
 ```php
 // First load: runs SQL, caches pivot map + related models
@@ -137,11 +137,19 @@ NormCache::flushModel(Post::class);
 NormCache::flushAll();
 ```
 
+If you mutate cacheable model tables outside Eloquent, flush the affected model cache manually after the committed write. Normcache only observes writes that go through cacheable Eloquent models/builders; raw SQL and `DB::table(...)` calls bypass automatic invalidation.
+
+```php
+DB::table('posts')->where('published', false)->update(['published' => true]);
+
+NormCache::flushModel(Post::class);
+```
+
 ---
 
 ## Redis Cluster
 
-Normcache is optimised for Redis Cluster. Every key uses a hash tag derived from the model class name — `{post}`, `{user}`, etc. — so all keys for a given model land on the same cluster slot. This means:
+Normcache is optimised for Redis Cluster. Every key uses a hash tag derived from the model table name — `{posts}`, `{users}`, etc. If a model declares a connection name, that connection is included too, for example `{analytics:posts}`. This keeps fixed model classes on different database connections isolated while still placing all keys for a given model on the same cluster slot. This means:
 
 - `MGET` batches across an entire result set are always single-slot and never cross node boundaries.
 - Lua scripts (`EVAL`) that combine a version read + data fetch in one round trip are always operating on co-located keys.
@@ -178,6 +186,7 @@ The following query types always hit the database directly:
 | `SELECT` with expressions                            | Computed columns aren't in the model cache                  |
 | Pessimistic locking (`lockForUpdate` / `sharedLock`) | Must always read from DB                                    |
 | Inside a database transaction                        | Reads inside a transaction must see uncommitted data        |
+| Raw SQL / `DB::table(...)`                           | Bypasses cacheable Eloquent models and builders             |
 
 ---
 
@@ -210,15 +219,16 @@ Event::listen(ModelCacheMiss::class, fn($e) => Pulse::record('model_miss', $e->m
 ```php
 // config/normcache.php
 return [
-    'connection'  => env('NORMCACHE_CONNECTION', 'cache'),
-    'enabled'     => env('NORMCACHE_ENABLED', true),
-    'ttl'         => env('NORMCACHE_TTL', 604800),      // model keys: 7 days
-    'query_ttl'   => env('NORMCACHE_QUERY_TTL', 3600),  // query/pivot/through keys: 1 hour
-    'key_prefix'  => env('NORMCACHE_PREFIX', ''),
-    'cooldown'    => env('NORMCACHE_COOLDOWN', 0),      // version bump debounce in seconds
-    'cluster'     => env('NORMCACHE_CLUSTER', false),
-    'events'      => env('NORMCACHE_EVENTS', true),     // fire cache hit/miss events
-    'fallback'    => env('NORMCACHE_FALLBACK', false),  // fall back to DB on Redis error
+    'connection'     => env('NORMCACHE_CONNECTION', 'cache'),
+    'enabled'        => env('NORMCACHE_ENABLED', true),
+    'ttl'            => env('NORMCACHE_TTL', 604800),      // model keys: 7 days
+    'query_ttl'      => env('NORMCACHE_QUERY_TTL', 3600),  // query/pivot/through keys: 1 hour
+    'key_prefix'     => env('NORMCACHE_PREFIX', ''),
+    'cooldown'       => env('NORMCACHE_COOLDOWN', 0),      // version bump debounce in seconds
+    'cluster'        => env('NORMCACHE_CLUSTER', false),
+    'events'         => env('NORMCACHE_EVENTS', true),     // fire cache hit/miss events
+    'fallback'       => env('NORMCACHE_FALLBACK', false),  // fall back to DB on Redis error
+    'fire_retrieved' => env('NORMCACHE_FIRE_RETRIEVED', false),
 ];
 ```
 
@@ -227,6 +237,8 @@ return [
 **`events`** — Set to `false` to disable all `QueryCacheHit`, `QueryCacheMiss`, `ModelCacheHit`, and `ModelCacheMiss` event dispatches. For production hot paths, prefer `NORMCACHE_EVENTS=false` unless you actively consume these events for observability.
 
 **`fallback`** — When `true`, any Redis exception during a read is caught, reported via `report()`, the cache is disabled for the remainder of the request, and the query falls back to the database. When `false` (the default), Redis errors propagate normally. Enable this if you want your application to stay available during Redis outages.
+
+**`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event. It is disabled by default to avoid event overhead on cache hits.
 
 ---
 

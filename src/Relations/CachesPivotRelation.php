@@ -34,6 +34,8 @@ trait CachesPivotRelation
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
         $constraintHash = $this->currentConstraintHash($columns);
+        $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
+        $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
 
         $cache = NormCache::getPivotCache(
             $parentClass,
@@ -60,14 +62,14 @@ trait CachesPivotRelation
                 $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
             }
 
-            $this->populatePivotCache($results, $keyMap, $relatedClass);
+            $this->populatePivotCache($results, $keyMap, $relatedClass, $shouldCacheRelatedModels);
 
             return $results;
         }
 
         event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
 
-        return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass);
+        return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
     }
 
     private function currentConstraintHash(array $columns): string
@@ -115,7 +117,23 @@ trait CachesPivotRelation
             && $this->parent->getConnection()->transactionLevel() === 0;
     }
 
-    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass): void
+    private function shouldCacheRelatedModels(array $columns): bool
+    {
+        return $columns === ['*'] && $this->query->toBase()->columns === null;
+    }
+
+    private function selectedRelatedColumns(array $columns): ?array
+    {
+        $queryColumns = $this->query->toBase()->columns;
+
+        if ($queryColumns !== null) {
+            return $queryColumns;
+        }
+
+        return $columns === ['*'] ? null : $columns;
+    }
+
+    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels): void
     {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
         $toModelCache = [];
@@ -131,7 +149,9 @@ trait CachesPivotRelation
                 ];
             }
 
-            $toModelCache[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
+            if ($cacheRelatedModels) {
+                $toModelCache[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
+            }
         }
 
         $toPivotCache = [];
@@ -145,7 +165,7 @@ trait CachesPivotRelation
         }
     }
 
-    private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass): Collection
+    private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass, ?array $selectedRelatedColumns): Collection
     {
         $allRelatedIds = [];
         foreach ($cachedByParentId as $entries) {
@@ -155,7 +175,7 @@ trait CachesPivotRelation
         }
 
         $modelsById = [];
-        foreach (NormCache::getModels(array_unique($allRelatedIds), $relatedClass) as $model) {
+        foreach (NormCache::getModels(array_unique($allRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
             $modelsById[$model->getKey()] = $model;
         }
 
