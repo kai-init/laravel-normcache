@@ -265,7 +265,7 @@ class CacheableBuilder extends Builder
             return false;
         }
 
-        if ($base->from !== $this->model->getTable()) {
+        if (!$this->isCanonicalFrom($base)) {
             return false;
         }
 
@@ -276,6 +276,19 @@ class CacheableBuilder extends Builder
             && empty($base->aggregate)
             && empty($base->distinct)
             && is_null($base->lock);
+    }
+
+    private function isCanonicalFrom(QueryBuilder $base): bool
+    {
+        $from  = $base->from;
+        $table = $this->model->getTable();
+
+        if (!is_string($from)) {
+            return false;
+        }
+
+        return $from === $table
+            || (bool) preg_match('/^' . preg_quote($table, '/') . '\s+as\s+\w+$/i', $from);
     }
 
     private function hasSubqueryWheres(array $wheres): bool
@@ -430,7 +443,7 @@ class CacheableBuilder extends Builder
         return $base
             ->cloneWithout(['columns'])
             ->cloneWithoutBindings(['select'])
-            ->select($this->model->getQualifiedKeyName())
+            ->select($this->model->getKeyName())
             ->pluck($this->model->getKeyName())
             ->all();
     }

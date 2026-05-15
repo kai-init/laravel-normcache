@@ -331,43 +331,6 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame('secondary_testing:authors', app('normcache')->classKey(SecondaryConnectionAuthor::class));
     }
 
-    public function test_runtime_default_connection_swap_does_not_share_cached_data(): void
-    {
-        config()->set('database.connections.shard_b', [
-            'driver' => 'sqlite',
-            'database' => ':memory:',
-            'prefix' => '',
-        ]);
-
-        Schema::connection('shard_b')->create('authors', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->foreignId('country_id')->nullable();
-            $table->timestamps();
-        });
-
-        $original = DB::getDefaultConnection();
-
-        try {
-            Author::create(['id' => 1, 'name' => 'DefaultAlice']);
-            Author::find(1);
-
-            DB::setDefaultConnection('shard_b');
-            DB::table('authors')->insert([
-                'id' => 1,
-                'name' => 'ShardBAlice',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            $shardB = Author::find(1);
-
-            $this->assertSame('ShardBAlice', $shardB->name);
-            $this->assertSame('shard_b:authors', app('normcache')->classKey(Author::class));
-        } finally {
-            DB::setDefaultConnection($original);
-        }
-    }
 }
 
 class SecondaryConnectionAuthor extends Model

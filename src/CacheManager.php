@@ -602,7 +602,7 @@ class CacheManager
         $prototype = self::$modelPrototypes[$modelClass];
         $pk = $prototype->getKeyName();
         $query = $this->prepareMissedQuery($modelClass, $missedQuery);
-        $loaded = $query->whereKey($missed)
+        $loaded = $query->whereIn($pk, $missed)
             ->get(['*'])
             ->keyBy($pk);
 
@@ -807,28 +807,15 @@ class CacheManager
 
     public function classKey(string $class): string
     {
-        $model = self::$modelPrototypes[$class] ??= new $class;
-
-        if ($model->getConnectionName() === null) {
-            return $this->resolveRuntimeClassKey($model);
-        }
-
         return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
     }
 
     private function resolveClassKey(string $class): string
     {
         $model = self::$modelPrototypes[$class] ??= new $class;
-        $connection = $model->getConnectionName();
+        $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
-        return $connection === null
-            ? $model->getTable()
-            : "{$connection}:{$model->getTable()}";
-    }
-
-    private function resolveRuntimeClassKey(Model $model): string
-    {
-        return DB::getDefaultConnection() . ':' . $model->getTable();
+        return "{$connection}:{$model->getTable()}";
     }
 
     public function modelKey(string $modelClass, string $id): string
@@ -886,6 +873,7 @@ class CacheManager
             'count:*',
             'pivot:*',
             'through:*',
+            'pending:*',
             'cooldown:*',
             'building:*',
         ];

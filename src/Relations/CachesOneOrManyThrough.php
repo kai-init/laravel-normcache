@@ -119,13 +119,12 @@ trait CachesOneOrManyThrough
 
     private function pollForThroughCache(string $key): ?array
     {
-        // Exponential backoff: 20ms → 40ms → 80ms → 160ms → 200ms (500ms total).
         $delay = 20_000;
         for ($i = 0; $i < 5; $i++) {
             usleep($delay);
-            $ids = NormCache::get($key);
-            if ($ids !== null) {
-                return $ids;
+            $payload = NormCache::get($key);
+            if ($payload !== null) {
+                return $payload;
             }
             $delay = min($delay * 2, 200_000);
         }
