@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -114,7 +115,7 @@ class CacheManagerTest extends TestCase
     {
         $this->manager->currentVersion(Post::class);
 
-        Redis::connection('model-cache-test')->set('test:ver:{posts}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
 
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
@@ -123,7 +124,7 @@ class CacheManagerTest extends TestCase
     {
         $this->manager->currentVersion(Post::class);
 
-        Redis::connection('model-cache-test')->set('test:ver:{posts}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
 
         $this->manager->flushVersionLocal();
 
@@ -134,64 +135,70 @@ class CacheManagerTest extends TestCase
     {
         $this->manager->invalidateVersion(new Author);
 
-        Redis::connection('model-cache-test')->set('test:ver:{authors}:', 99);
+        Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':authors}:', 99);
 
         $this->assertSame(99, $this->manager->currentVersion(Author::class));
     }
 
     public function test_class_key_uses_table_name(): void
     {
-        $this->assertSame('posts', $this->manager->classKey(Post::class));
-        $this->assertSame('authors', $this->manager->classKey(Author::class));
+        $default = DB::getDefaultConnection();
+
+        $this->assertSame("{$default}:posts", $this->manager->classKey(Post::class));
+        $this->assertSame("{$default}:authors", $this->manager->classKey(Author::class));
     }
 
     public function test_model_key_returns_expected_format(): void
     {
         $key = $this->manager->modelKey(Post::class, 42);
 
-        $this->assertSame('model:{posts}:42', $key);
+        $this->assertSame('model:{' . DB::getDefaultConnection() . ':posts}:42', $key);
     }
 
     public function test_flush_model_bumps_version_and_clears_related_keys(): void
     {
         $redis = Redis::connection('model-cache-test');
+        $postsKey = DB::getDefaultConnection() . ':posts';
+        $authorsKey = DB::getDefaultConnection() . ':authors';
 
-        $redis->sadd('test:members:model:{posts}', 'test:model:{posts}:1', 'test:model:{posts}:2');
-        $this->manager->set('model:{posts}:1', ['id' => 1]);
-        $this->manager->set('model:{posts}:2', ['id' => 2]);
+        $redis->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1", "test:model:{{$postsKey}}:2");
+        $this->manager->set("model:{{$postsKey}}:1", ['id' => 1]);
+        $this->manager->set("model:{{$postsKey}}:2", ['id' => 2]);
 
-        $this->manager->set('query:{posts}:v1:abc', [1, 2]);
-        $this->manager->set('agg:{posts}:1:count:*:comments:nc:v1', ['v' => 3]);
+        $this->manager->set("query:{{$postsKey}}:v1:abc", [1, 2]);
+        $this->manager->set("agg:{{$postsKey}}:1:count:*:comments:nc:v1", ['v' => 3]);
 
-        $this->manager->set('model:{authors}:1', ['id' => 1]);
+        $this->manager->set("model:{{$authorsKey}}:1", ['id' => 1]);
 
         $versionBefore = $this->manager->currentVersion(Post::class);
 
         $this->manager->flushModel(Post::class);
 
-        $this->assertNull($this->manager->get('model:{posts}:1'));
-        $this->assertNull($this->manager->get('model:{posts}:2'));
+        $this->assertNull($this->manager->get("model:{{$postsKey}}:1"));
+        $this->assertNull($this->manager->get("model:{{$postsKey}}:2"));
 
-        $this->assertSame(0, $redis->exists('test:members:model:{posts}'));
+        $this->assertSame(0, $redis->exists("test:members:model:{{$postsKey}}"));
 
-        $this->assertNotNull($this->manager->get('query:{posts}:v1:abc'));
-        $this->assertNotNull($this->manager->get('agg:{posts}:1:count:*:comments:nc:v1'));
+        $this->assertNotNull($this->manager->get("query:{{$postsKey}}:v1:abc"));
+        $this->assertNotNull($this->manager->get("agg:{{$postsKey}}:1:count:*:comments:nc:v1"));
 
-        $this->assertNotNull($this->manager->get('model:{authors}:1'));
+        $this->assertNotNull($this->manager->get("model:{{$authorsKey}}:1"));
 
         $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Post::class));
     }
 
     public function test_flush_all_removes_all_package_keys_and_returns_count(): void
     {
-        $this->manager->set('query:{posts}:v1:abc', [1, 2]);
-        $this->manager->set('model:{posts}:1', ['id' => 1]);
-        $this->manager->set('ver:{posts}:', 3);
-        $this->manager->set('agg:{posts}:1:count:*:posts:nc:v1', ['v' => 5]);
-        $this->manager->set('through:{posts}:author:v1:v1:abc', [1]);
-        $this->manager->set('cooldown:{posts}:', 1);
-        $this->manager->set('building:query:{posts}:v1:abc', 1);
-        Redis::connection('model-cache-test')->sadd('test:members:model:{posts}', 'test:model:{posts}:1');
+        $postsKey = DB::getDefaultConnection() . ':posts';
+
+        $this->manager->set("query:{{$postsKey}}:v1:abc", [1, 2]);
+        $this->manager->set("model:{{$postsKey}}:1", ['id' => 1]);
+        $this->manager->set("ver:{{$postsKey}}:", 3);
+        $this->manager->set("agg:{{$postsKey}}:1:count:*:posts:nc:v1", ['v' => 5]);
+        $this->manager->set("through:{{$postsKey}}:author:v1:v1:abc", [1]);
+        $this->manager->set("cooldown:{{$postsKey}}:", 1);
+        $this->manager->set("building:query:{{$postsKey}}:v1:abc", 1);
+        Redis::connection('model-cache-test')->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1");
 
         $deleted = $this->manager->flushAll();
 

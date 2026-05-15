@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration;
 
+use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -167,8 +168,10 @@ class ModelCachingTest extends TestCase
 
         $this->artisan('normcache:flush', ['--model' => Author::class])->assertSuccessful();
 
-        $this->assertEmpty($this->redisKeys('test:model:{authors}:*'));
-        $this->assertNotEmpty($this->redisKeys('test:model:{posts}:*'));
+        $default = DB::getDefaultConnection();
+
+        $this->assertEmpty($this->redisKeys('test:model:{' . $default . ':authors}:*'));
+        $this->assertNotEmpty($this->redisKeys('test:model:{' . $default . ':posts}:*'));
     }
 
     public function test_flush_command_rejects_nonexistent_class(): void

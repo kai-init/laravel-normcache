@@ -807,6 +807,12 @@ class CacheManager
 
     public function classKey(string $class): string
     {
+        $model = self::$modelPrototypes[$class] ??= new $class;
+
+        if ($model->getConnectionName() === null) {
+            return $this->resolveRuntimeClassKey($model);
+        }
+
         return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
     }
 
@@ -818,6 +824,11 @@ class CacheManager
         return $connection === null
             ? $model->getTable()
             : "{$connection}:{$model->getTable()}";
+    }
+
+    private function resolveRuntimeClassKey(Model $model): string
+    {
+        return DB::getDefaultConnection() . ':' . $model->getTable();
     }
 
     public function modelKey(string $modelClass, string $id): string
