@@ -76,7 +76,9 @@ trait CachesOneOrManyThrough
         if ($shouldCacheModels) {
             $attrsByKey = [];
             foreach ($result as $model) {
-                $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $model->getRawOriginal();
+                $attrs = $model->getRawOriginal();
+                unset($attrs['laravel_through_key']);
+                $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $attrs;
             }
             if (!empty($attrsByKey)) {
                 NormCache::setManyModels($relatedClass, $attrsByKey, NormCache::ttl());

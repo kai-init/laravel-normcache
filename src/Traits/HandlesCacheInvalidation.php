@@ -119,7 +119,7 @@ trait HandlesCacheInvalidation
                 NormCache::deferFlushModel($this->model);
             } else {
                 $class = $this->model::class;
-                $conn = $this->model->getConnectionName();
+                $conn = $this->model->getConnection()->getName();
                 foreach ($ids as $id) {
                     NormCache::deferDelete(NormCache::modelKey($class, $id), $conn);
                 }
@@ -134,11 +134,29 @@ trait HandlesCacheInvalidation
 
     protected function getIdsFromWheres(): array
     {
+        return $this->extractIdsFromWhereList((array) $this->query->wheres);
+    }
+
+    private function extractIdsFromWhereList(array $wheres): array
+    {
         $column = $this->model->getKeyName();
         $tableColumn = $this->model->getTable() . '.' . $column;
         $ids = [];
 
-        foreach ((array) $this->query->wheres as $where) {
+        foreach ($wheres as $where) {
+            if ($where['type'] === 'Nested' && isset($where['query'])) {
+                $nestedWheres = (array) $where['query']->wheres;
+
+                // Only extract from nested groups that are exclusively PK conditions.
+                // A group mixing in non-PK wheres (especially via OR) can match rows
+                // we cannot enumerate from PK values alone, risking under-invalidation.
+                if ($this->whereListIsPkOnly($nestedWheres, $column, $tableColumn)) {
+                    $ids = array_merge($ids, $this->extractIdsFromWhereList($nestedWheres));
+                }
+
+                continue;
+            }
+
             if (!isset($where['column']) || !in_array($where['column'], [$column, $tableColumn], true)) {
                 continue;
             }
@@ -159,6 +177,24 @@ trait HandlesCacheInvalidation
         }
 
         return array_unique($ids);
+    }
+
+    private function whereListIsPkOnly(array $wheres, string $column, string $tableColumn): bool
+    {
+        foreach ($wheres as $where) {
+            if ($where['type'] === 'Nested' && isset($where['query'])) {
+                if (!$this->whereListIsPkOnly((array) $where['query']->wheres, $column, $tableColumn)) {
+                    return false;
+                }
+                continue;
+            }
+
+            if (isset($where['column']) && !in_array($where['column'], [$column, $tableColumn], true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     protected function idsFromBetweenWhere(array $where): array

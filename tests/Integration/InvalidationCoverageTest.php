@@ -228,4 +228,33 @@ class InvalidationCoverageTest extends TestCase
         $this->assertGreaterThan($versionBeforeForceDelete, NormCache::currentVersion(Post::class));
         $this->assertCount(0, Post::withTrashed()->get());
     }
+
+    public function test_grouped_where_update_only_evicts_targeted_model_keys(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $key2 = NormCache::modelKey(Author::class, $a2->id);
+        $this->assertNotNull(NormCache::get($key2));
+
+        Author::where(fn ($q) => $q->whereIn('id', [$a1->id]))->update(['name' => 'Alicia']);
+
+        $this->assertNull(NormCache::get(NormCache::modelKey(Author::class, $a1->id)));
+        $this->assertNotNull(NormCache::get($key2), 'grouped-where update must not evict unrelated model keys');
+    }
+
+    public function test_direct_where_in_update_only_evicts_targeted_model_keys(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $key2 = NormCache::modelKey(Author::class, $a2->id);
+        $this->assertNotNull(NormCache::get($key2));
+
+        Author::whereIn('id', [$a1->id])->update(['name' => 'Alicia']);
+
+        $this->assertNotNull(NormCache::get($key2), 'direct whereIn update must not evict unrelated model keys');
+    }
 }

@@ -96,6 +96,64 @@ class TransactionInvalidationTest extends TestCase
         $this->assertSame($versionBefore + 1, NormCache::currentVersion(Author::class));
     }
 
+    public function test_bulk_update_version_is_deferred_inside_transaction(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $versionBefore = NormCache::currentVersion(Author::class);
+        $versionDuringTx = null;
+
+        DB::transaction(function () use (&$versionDuringTx) {
+            Author::where('name', 'Alice')->update(['name' => 'Alicia']);
+            $versionDuringTx = NormCache::currentVersion(Author::class);
+        });
+
+        $this->assertSame($versionBefore, $versionDuringTx);
+    }
+
+    public function test_bulk_update_rollback_does_not_leave_stale_version(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        try {
+            DB::transaction(function () {
+                Author::where('name', 'Alice')->update(['name' => 'Alicia']);
+                throw new \RuntimeException('force rollback');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertSame($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
+    public function test_bulk_delete_model_key_not_removed_mid_transaction(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $modelKey = NormCache::modelKey(Author::class, $author->id);
+        $this->assertNotNull(NormCache::get($modelKey));
+
+        $keyExistedMidTx = null;
+
+        try {
+            DB::transaction(function () use ($author, $modelKey, &$keyExistedMidTx) {
+                Author::where('id', $author->id)->delete();
+                $keyExistedMidTx = NormCache::get($modelKey) !== null;
+                throw new \RuntimeException('force rollback');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertTrue($keyExistedMidTx, 'model key must not be deleted before the transaction commits');
+        $this->assertNotNull(NormCache::get($modelKey), 'model key must survive a rolled-back bulk delete');
+    }
+
     public function test_committed_transaction_invalidates_stale_query_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);

@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -10,6 +11,34 @@ use NormCache\Tests\TestCase;
 
 class ThroughRelationTest extends TestCase
 {
+    public function test_through_load_does_not_store_join_artifact_in_model_cache(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author  = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post    = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->get();
+
+        $cached = NormCache::get(NormCache::modelKey(Post::class, $post->id));
+
+        $this->assertIsArray($cached);
+        $this->assertArrayNotHasKey('laravel_through_key', $cached);
+    }
+
+    public function test_post_found_after_through_load_has_no_spurious_through_key(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author  = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post    = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->get();
+
+        $fetched = Post::find($post->id);
+
+        $this->assertArrayNotHasKey('laravel_through_key', $fetched->getRawOriginal());
+        $this->assertArrayNotHasKey('laravel_through_key', $fetched->toArray());
+    }
+
     public function test_has_many_through_caches_results(): void
     {
         $country = Country::create(['name' => 'Australia']);

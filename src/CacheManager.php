@@ -209,6 +209,7 @@ class CacheManager
                     $pipe->setex($p, $ttl, $this->serialize($attrsByKey[$key]));
                 }
                 $pipe->sadd($memberKey, ...$prefixedKeys);
+                $pipe->expire($memberKey, $ttl);
             });
         }
     }
@@ -634,6 +635,7 @@ class CacheManager
                     $pipe->setex($p, $this->ttl, $value);
                 }
                 $pipe->sadd($memberKey, ...$prefixedKeys);
+                $pipe->expire($memberKey, $this->ttl);
             });
         }
 
@@ -691,9 +693,9 @@ class CacheManager
 
     public function invalidateVersion(Model $model): void
     {
-        $conn = $model->getConnectionName();
+        $conn = $model->getConnection()->getName();
 
-        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+        if (DB::connection($conn)->transactionLevel() > 0) {
             $this->invalidationQueue[$conn][$model::class] = true;
 
             return;
@@ -715,9 +717,9 @@ class CacheManager
 
     public function deferFlushModel(Model $model): void
     {
-        $conn = $model->getConnectionName();
+        $conn = $model->getConnection()->getName();
 
-        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+        if (DB::connection($conn)->transactionLevel() > 0) {
             $this->flushQueue[$conn][$model::class] = true;
 
             return;
@@ -825,11 +827,11 @@ class CacheManager
 
     public function flushInstance(Model $model): void
     {
-        $conn = $model->getConnectionName();
+        $conn = $model->getConnection()->getName();
         $class = $model::class;
         $key = $this->modelKey($class, $model->getKey());
 
-        if ($conn !== null && DB::connection($conn)->transactionLevel() > 0) {
+        if (DB::connection($conn)->transactionLevel() > 0) {
             $this->deleteQueue[$conn][$key] = true;
             $this->invalidationQueue[$conn][$class] = true;
 

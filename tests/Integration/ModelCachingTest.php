@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -272,5 +273,36 @@ class ModelCachingTest extends TestCase
 
         $fromCache = Post::all()->pluck('id');
         $this->assertNotContains($post->id, $fromCache);
+    }
+
+    public function test_members_set_has_ttl_matching_model_ttl(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $classKey  = NormCache::classKey(Author::class);
+        $memberKey = 'test:members:model:{' . $classKey . '}';
+        $redis     = Redis::connection('model-cache-test');
+
+        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members:model: set must have a TTL');
+    }
+
+    public function test_members_set_dead_keys_are_bounded_by_ttl(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $classKey  = NormCache::classKey(Author::class);
+        $memberKey = 'test:members:model:{' . $classKey . '}';
+        $modelKey  = 'test:' . NormCache::modelKey(Author::class, $author->id);
+        $redis     = Redis::connection('model-cache-test');
+
+        // Simulate model key expiry by deleting it directly.
+        $redis->del($modelKey);
+        $this->assertFalse((bool) $redis->exists($modelKey));
+
+        // The members set still references the dead key within its TTL window —
+        // this is acceptable: the set itself will expire, bounding the growth.
+        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members set must expire, bounding dead-key accumulation');
     }
 }
