@@ -3,6 +3,8 @@
 namespace NormCache;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Str;
 use NormCache\Facades\NormCache;
@@ -34,11 +36,11 @@ class AggregateLoader
         foreach ($pendingAggregates as $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
-            $relatedClass = $this->resolveRelatedClass($parentClass, $name);
+            $relation = $this->resolveRelation($name);
+            $relatedClass = $relation->getRelated()::class;
             $alias = $this->resolveAlias($name, $function, $column);
             $constraintHash = $this->constraintKey($relatedClass, $constraint);
-            $version = NormCache::currentVersion($relatedClass);
-            $suffix = ":{$column}:{$function}:{$name}:{$constraintHash}:v{$version}";
+            $suffix = ":{$column}:{$function}:{$name}:{$constraintHash}" . $this->versionSuffix($relation);
 
             foreach ($ids as $id) {
                 $keys[] = "{$prefix}{$id}{$suffix}";
@@ -95,9 +97,20 @@ class AggregateLoader
         return $models;
     }
 
-    private function resolveRelatedClass(string $parentClass, string $name): string
+    private function resolveRelation(string $name): Relation
     {
-        return self::$cache["rc:{$parentClass}:{$name}"] ??= $this->model->{$name}()->getRelated()::class;
+        return $this->model->{$name}();
+    }
+
+    private function versionSuffix(Relation $relation): string
+    {
+        $suffix = ':v' . NormCache::currentVersion($relation->getRelated()::class);
+
+        if ($relation instanceof HasOneOrManyThrough) {
+            $suffix .= ':t' . NormCache::currentVersion($relation->getParent()::class);
+        }
+
+        return $suffix;
     }
 
     private function fetchMissed(

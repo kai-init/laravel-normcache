@@ -602,8 +602,9 @@ class CacheManager
     {
         $prototype = self::$modelPrototypes[$modelClass];
         $pk = $prototype->getKeyName();
+        $qualifiedPk = $prototype->getQualifiedKeyName();
         $query = $this->prepareMissedQuery($modelClass, $missedQuery);
-        $loaded = $query->whereIn($pk, $missed)
+        $loaded = $query->whereIn($qualifiedPk, $missed)
             ->get(['*'])
             ->keyBy($pk);
 
@@ -712,7 +713,19 @@ class CacheManager
             return;
         }
 
-        $this->connection()->del($this->prefix($key));
+        $memberKey = $this->memberKeyForModelCacheKey($key);
+
+        if ($memberKey === null) {
+            $this->connection()->del($this->prefix($key));
+
+            return;
+        }
+
+        $prefixedKey = $this->prefix($key);
+        $this->connection()->pipeline(function ($pipe) use ($prefixedKey, $memberKey) {
+            $pipe->del($prefixedKey);
+            $pipe->srem($memberKey, $prefixedKey);
+        });
     }
 
     public function deferFlushModel(Model $model): void
@@ -790,10 +803,11 @@ class CacheManager
                     redis.call('DEL', KEYS[3])
                     return redis.call('INCR', KEYS[2])
                 end
-                redis.call('SET', KEYS[3], 1)
+                redis.call('SET', KEYS[3], 1, 'EX', ARGV[2])
                 return nil
             LUA;
-            $newVer = $this->connection()->eval($script, 3, $cooldownKey, $verKey, $pendingKey, $this->cooldown);
+            $pendingTtl = max($this->cooldown + 1, $this->queryTtl);
+            $newVer = $this->connection()->eval($script, 3, $cooldownKey, $verKey, $pendingKey, $this->cooldown, $pendingTtl);
 
             if (is_numeric($newVer)) {
                 $this->versionLocal[$classKey] = (int) $newVer;
@@ -941,6 +955,15 @@ class CacheManager
     protected function prefix(string $key): string
     {
         return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
+    }
+
+    private function memberKeyForModelCacheKey(string $key): ?string
+    {
+        if (!preg_match('/^model:\{([^}]+)\}:/', $key, $matches)) {
+            return null;
+        }
+
+        return $this->prefix('members:model:{' . $matches[1] . '}');
     }
 
     protected function serialize(mixed $value): mixed

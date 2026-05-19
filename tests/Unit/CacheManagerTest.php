@@ -220,4 +220,43 @@ class CacheManagerTest extends TestCase
         $this->assertStringNotContainsString('i:', $raw);
         $this->assertEquals(99, $this->manager->get('num'));
     }
+
+    public function test_targeted_delete_outside_transaction_removes_membership_reference(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $classKey = $this->manager->classKey(Author::class);
+        $memberKey = "test:members:model:{{$classKey}}";
+        $modelKey = 'test:' . $this->manager->modelKey(Author::class, $author->id);
+        $redis = Redis::connection('model-cache-test');
+
+        $this->assertTrue((bool) $redis->sismember($memberKey, $modelKey));
+
+        Author::whereKey($author->id)->update(['name' => 'Alicia']);
+
+        $this->assertFalse((bool) $redis->sismember($memberKey, $modelKey));
+    }
+
+    public function test_pending_key_is_ttl_bounded_without_a_read(): void
+    {
+        $manager = new CacheManager(
+            'model-cache-test',
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            config('normcache.key_prefix'),
+            1,
+        );
+
+        $model = new Author;
+        $classKey = $manager->classKey(Author::class);
+        $pendingKey = "test:pending:{{$classKey}}:";
+        $redis = Redis::connection('model-cache-test');
+
+        $manager->invalidateVersion($model);
+        $manager->invalidateVersion($model);
+
+        $this->assertSame(1, $redis->exists($pendingKey));
+        $this->assertLessThanOrEqual(config('normcache.query_ttl'), $redis->ttl($pendingKey));
+    }
 }

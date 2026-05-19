@@ -134,6 +134,13 @@ trait HandlesCacheInvalidation
 
     protected function getIdsFromWheres(): array
     {
+        $column = $this->model->getKeyName();
+        $tableColumn = $this->model->getTable() . '.' . $column;
+
+        if ($this->whereListHasMixedOrConditions((array) $this->query->wheres, $column, $tableColumn)) {
+            return [];
+        }
+
         return $this->extractIdsFromWhereList((array) $this->query->wheres);
     }
 
@@ -195,6 +202,34 @@ trait HandlesCacheInvalidation
         }
 
         return true;
+    }
+
+    private function whereListHasMixedOrConditions(array $wheres, string $column, string $tableColumn): bool
+    {
+        foreach ($wheres as $where) {
+            if (($where['boolean'] ?? 'and') === 'or' && !$this->whereIsPkOnly($where, $column, $tableColumn)) {
+                return true;
+            }
+
+            if (($where['type'] ?? null) === 'Nested' && isset($where['query'])) {
+                $nestedWheres = (array) $where['query']->wheres;
+
+                if ($this->whereListHasMixedOrConditions($nestedWheres, $column, $tableColumn)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function whereIsPkOnly(array $where, string $column, string $tableColumn): bool
+    {
+        if (($where['type'] ?? null) === 'Nested' && isset($where['query'])) {
+            return $this->whereListIsPkOnly((array) $where['query']->wheres, $column, $tableColumn);
+        }
+
+        return isset($where['column']) && in_array($where['column'], [$column, $tableColumn], true);
     }
 
     protected function idsFromBetweenWhere(array $where): array

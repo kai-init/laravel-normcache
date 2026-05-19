@@ -12,6 +12,7 @@ use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
+use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -272,6 +273,60 @@ class CacheAccuracyTest extends TestCase
         $warm = Author::with('tags')->get()->first()->tags;
 
         $this->assertSame([$tag->id], $warm->modelKeys());
+    }
+
+    public function test_mixed_pk_and_non_pk_bulk_update_does_not_leave_stale_model_cache_entries(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+
+        Author::all();
+
+        Author::where('id', $a1->id)
+            ->orWhere('name', 'Bob')
+            ->update(['name' => 'Updated']);
+
+        $this->assertSame('Updated', Author::find($a1->id)->name);
+        $this->assertSame('Updated', Author::find($a2->id)->name);
+    }
+
+    public function test_through_relation_with_trashed_scope_survives_related_model_cache_miss(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $post->delete();
+
+        $warm = $country->posts()->withTrashed()->get();
+        $this->assertCount(1, $warm);
+        $this->assertTrue($warm->first()->trashed());
+
+        NormCache::delete(NormCache::modelKey(Post::class, $post->id));
+
+        $cached = $country->posts()->withTrashed()->get();
+
+        $this->assertCount(1, $cached);
+        $this->assertTrue($cached->first()->trashed());
+    }
+
+    public function test_through_aggregate_cache_invalidates_when_intermediate_membership_changes(): void
+    {
+        $source = Country::create(['name' => 'Australia']);
+        $target = Country::create(['name' => 'Canada']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $source->id]);
+        $author->posts()->create(['title' => 'Hello']);
+
+        $warm = Country::orderBy('id')->withCount('posts')->get()->keyBy('id');
+
+        $this->assertSame(1, $warm[$source->id]->posts_count);
+        $this->assertSame(0, $warm[$target->id]->posts_count);
+
+        $author->update(['country_id' => $target->id]);
+
+        $cached = Country::orderBy('id')->withCount('posts')->get()->keyBy('id');
+
+        $this->assertSame(0, $cached[$source->id]->posts_count);
+        $this->assertSame(1, $cached[$target->id]->posts_count);
     }
 
     public function test_through_relation_selected_column_warm_hit_preserves_laravel_through_key_attribute(): void

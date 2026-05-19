@@ -100,7 +100,7 @@ trait CachesOneOrManyThrough
 
     private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection
     {
-        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns);
+        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, null, $builder);
 
         if ($throughKeys !== []) {
             foreach ($models as $model) {
