@@ -3,6 +3,7 @@
 namespace NormCache;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
@@ -102,6 +103,10 @@ class AggregateLoader
     private function versionSuffix(Relation $relation): string
     {
         $suffix = ':v' . NormCache::currentVersion($relation->getRelated()::class);
+
+        if ($relation instanceof BelongsTo) {
+            $suffix .= ':p' . NormCache::currentVersion($relation->getParent()::class);
+        }
 
         if ($relation instanceof HasOneOrManyThrough) {
             $suffix .= ':t' . NormCache::currentVersion($relation->getParent()::class);

@@ -302,4 +302,30 @@ class InvalidationCoverageTest extends TestCase
         $this->assertNull(NormCache::get($key1));
         $this->assertNotNull(NormCache::get($key2));
     }
+
+    public function test_save_invalidates_when_saving_listener_makes_a_clean_model_dirty(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+
+        $modelKey = NormCache::modelKey(Author::class, $author->id);
+        $this->assertNotNull(NormCache::get($modelKey));
+
+        Author::saving(function (Author $model) {
+            if ($model->name === 'Alice') {
+                $model->name = 'Alicia';
+            }
+        });
+
+        try {
+            $clean = Author::find($author->id);
+
+            $this->assertTrue($clean->save());
+            $this->assertSame('Alicia', Author::withoutCache()->find($author->id)->name);
+            $this->assertNull(NormCache::get($modelKey));
+            $this->assertSame('Alicia', Author::find($author->id)->name);
+        } finally {
+            Author::flushEventListeners();
+        }
+    }
 }

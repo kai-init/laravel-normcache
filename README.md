@@ -96,7 +96,7 @@ Post::query()->remember(600)->get(); // cache this result for 10 minutes
 
 ### Aggregates
 
-`withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached automatically. Aggregate values are stored per model ID and invalidated when the related model changes.
+`withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached automatically. Aggregate values are stored per model ID and invalidated when related rows change or when the relationship membership changes on the parent model.
 
 ```php
 Post::withCount('comments')->get();
@@ -144,6 +144,8 @@ DB::table('posts')->where('published', false)->update(['published' => true]);
 
 NormCache::flushModel(Post::class);
 ```
+
+Runtime connection switching on the same cacheable model class, such as `Post::on('replica')`, is not supported. Cache namespaces are derived from the model class and its declared/default connection, so use distinct model classes with fixed `$connection` values if you need isolated caches per database connection.
 
 ---
 

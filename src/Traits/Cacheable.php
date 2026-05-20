@@ -50,12 +50,10 @@ trait Cacheable
     public function save(array $options = []): bool
     {
         $existsBefore = $this->exists;
-        $wasDirty = $this->isDirty();
-        $isRestoreSave = $this->isRestoreSave($existsBefore, $wasDirty);
         $result = parent::save($options);
 
         if ($result) {
-            $this->invalidateAfterSave($existsBefore, $wasDirty, $isRestoreSave);
+            $this->invalidateAfterSave($existsBefore);
         }
 
         return $result;
@@ -64,12 +62,10 @@ trait Cacheable
     public function saveQuietly(array $options = []): bool
     {
         $existsBefore = $this->exists;
-        $wasDirty = $this->isDirty();
-        $isRestoreSave = $this->isRestoreSave($existsBefore, $wasDirty);
         $result = parent::saveQuietly($options);
 
         if ($result) {
-            $this->invalidateAfterSave($existsBefore, $wasDirty, $isRestoreSave);
+            $this->invalidateAfterSave($existsBefore);
         }
 
         return $result;
@@ -133,13 +129,13 @@ trait Cacheable
         );
     }
 
-    private function invalidateAfterSave(bool $existsBefore, bool $wasDirty, bool $isRestoreSave): void
+    private function invalidateAfterSave(bool $existsBefore): void
     {
         if (!$existsBefore && $this->wasRecentlyCreated) {
             NormCache::invalidateVersion($this);
-        } elseif ($isRestoreSave) {
+        } elseif ($this->isRestoreSave($existsBefore)) {
             NormCache::invalidateVersion($this);
-        } elseif ($existsBefore && $wasDirty) {
+        } elseif ($existsBefore && $this->wasChanged()) {
             NormCache::flushInstance($this);
         }
     }
@@ -162,15 +158,15 @@ trait Cacheable
         return (int) $result;
     }
 
-    private function isRestoreSave(bool $existsBefore, bool $wasDirty): bool
+    private function isRestoreSave(bool $existsBefore): bool
     {
-        if (!$existsBefore || !$wasDirty || !method_exists($this, 'getDeletedAtColumn')) {
+        if (!$existsBefore || !method_exists($this, 'getDeletedAtColumn')) {
             return false;
         }
 
         $deletedAtColumn = $this->getDeletedAtColumn();
 
-        return array_key_exists($deletedAtColumn, $this->getDirty()) && $this->{$deletedAtColumn} === null;
+        return $this->wasChanged($deletedAtColumn) && $this->{$deletedAtColumn} === null;
     }
 
     private function runWithoutCache(callable $callback)

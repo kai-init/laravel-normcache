@@ -71,6 +71,62 @@ class OptimizationsTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
+    public function test_query_hit_fast_path_returns_model_payload_arrays(): void
+    {
+        $author = Author::create(['name' => 'Payload Author']);
+
+        Author::where('name', 'Payload Author')->get();
+
+        $query = Author::where('name', 'Payload Author');
+        $base = $query->toBase();
+        $base->columns = null;
+        $hash = \NormCache\Support\QueryHasher::fromQuery($base);
+        $cacheData = app('normcache')->getModelsFromQuery(Author::class, $hash);
+
+        $this->assertSame([$author->id], $cacheData['ids']);
+        $this->assertIsArray($cacheData['models']);
+        $this->assertIsArray($cacheData['models'][0]);
+        $this->assertSame('Payload Author', $cacheData['models'][0]['name']);
+    }
+
+    public function test_corrupt_query_cache_payload_degrades_to_miss_and_repairs(): void
+    {
+        Author::create(['name' => 'Corruptible Author']);
+
+        $query = Author::where('name', 'Corruptible Author');
+        $query->get();
+
+        $base = $query->toBase();
+        $base->columns = null;
+        $hash = \NormCache\Support\QueryHasher::fromQuery($base);
+        $classKey = app('normcache')->classKey(Author::class);
+        $version = app('normcache')->currentVersion(Author::class);
+
+        Redis::connection(config('normcache.connection'))->set(
+            config('normcache.key_prefix') . "query:{{$classKey}}:v{$version}:{$hash}",
+            '{not-json'
+        );
+
+        Event::fake([QueryCacheMiss::class]);
+
+        $found = Author::where('name', 'Corruptible Author')->get();
+
+        $this->assertCount(1, $found);
+        Event::assertDispatched(QueryCacheMiss::class);
+
+        $repaired = app('normcache')->getQueryIds("query:{{$classKey}}:v{$version}:{$hash}");
+        $this->assertSame([$found->first()->id], $repaired);
+    }
+
+    public function test_empty_query_result_warm_hit_stays_empty(): void
+    {
+        $first = Author::where('name', 'Missing Author')->get();
+        $second = Author::where('name', 'Missing Author')->get();
+
+        $this->assertCount(0, $first);
+        $this->assertCount(0, $second);
+    }
+
     public function test_fast_path_is_used_for_single_primary_key_lookup_with_order_by()
     {
         $author = Author::create(['name' => 'Order Author']);

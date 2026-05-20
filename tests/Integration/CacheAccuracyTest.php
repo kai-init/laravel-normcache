@@ -329,6 +329,22 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame(1, $cached[$target->id]->posts_count);
     }
 
+    public function test_belongs_to_aggregate_cache_invalidates_when_parent_foreign_key_changes(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice']);
+
+        $warm = Author::orderBy('id')->withCount('country')->get()->first();
+
+        $this->assertSame(0, $warm->country_count);
+
+        $author->update(['country_id' => $country->id]);
+
+        $cached = Author::orderBy('id')->withCount('country')->get()->first();
+
+        $this->assertSame(1, $cached->country_count);
+    }
+
     public function test_through_relation_selected_column_warm_hit_preserves_laravel_through_key_attribute(): void
     {
         $country = Country::create(['name' => 'Australia']);

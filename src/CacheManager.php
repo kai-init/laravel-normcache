@@ -247,23 +247,113 @@ class CacheManager
     public function getModelsFromQuery(string $modelClass, string $hash): array
     {
         $classKey = $this->classKey($modelClass);
-        $version = $this->currentVersion($modelClass);
-        $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
-        $ids = $this->getQueryIds($queryKey);
+        $script = <<<'LUA'
+            local now = tonumber(ARGV[2])
 
-        if ($ids === null) {
-            $lock = $this->setIfAbsent("building:{$queryKey}", 1, 5) ? "building:{$queryKey}" : null;
+            local due_at = redis.call('GET', KEYS[2])
+            local ver = redis.call('GET', KEYS[1])
+            if not ver then ver = '0' end
+
+            local due_at_num = due_at and tonumber(due_at) or nil
+            if due_at_num and due_at_num <= now then
+                redis.call('DEL', KEYS[2])
+                ver = tostring(redis.call('INCR', KEYS[1]))
+            end
+
+            local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
+            local ids_raw = redis.call('GET', query_key)
+
+            if not ids_raw then
+                local lock_key = KEYS[4] .. ver .. ':' .. ARGV[1]
+                local acquired = redis.call('SET', lock_key, 1, 'EX', 5, 'NX')
+                return {'miss', ver, acquired and 1 or 0}
+            end
+
+            local ok, ids = pcall(cjson.decode, ids_raw)
+            if not ok or type(ids) ~= 'table' then
+                redis.call('DEL', query_key)
+                local lock_key = KEYS[4] .. ver .. ':' .. ARGV[1]
+                local acquired = redis.call('SET', lock_key, 1, 'EX', 5, 'NX')
+                return {'corrupt', ver, acquired and 1 or 0}
+            end
+
+            if #ids == 0 then
+                return {'empty', ver}
+            end
+
+            local model_keys = {}
+            for i, id in ipairs(ids) do
+                model_keys[i] = KEYS[5] .. id
+            end
+
+            local models = {}
+            local chunk_size = 500
+
+            for start = 1, #model_keys, chunk_size do
+                local stop = math.min(start + chunk_size - 1, #model_keys)
+                local chunk = {}
+
+                for i = start, stop do
+                    chunk[#chunk + 1] = model_keys[i]
+                end
+
+                local values = redis.call('MGET', unpack(chunk))
+
+                for i = 1, #values do
+                    models[#models + 1] = values[i]
+                end
+            end
+
+            return {'hit', ver, ids, models}
+        LUA;
+
+        $result = $this->connection()->eval(
+            $script,
+            5,
+            $this->prefix("ver:{{$classKey}}:"),
+            $this->prefix("scheduled:{{$classKey}}:"),
+            $this->prefix("query:{{$classKey}}:v"),
+            $this->prefix("building:query:{{$classKey}}:v"),
+            $this->prefix("model:{{$classKey}}:"),
+            $hash,
+            (int) floor(microtime(true) * 1000)
+        );
+
+        if (!is_array($result)) {
+            $version = $this->currentVersion($modelClass);
+
+            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null, 'lock' => null];
+        }
+
+        $status = $result[0] ?? null;
+        $version = (int) ($result[1] ?? 0);
+        $this->versionLocal[$classKey] = $version;
+        $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
+
+        if ($status === 'miss') {
+            $lock = (int) ($result[2] ?? 0) === 1 ? "building:{$queryKey}" : null;
 
             return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => $lock];
         }
 
-        if ($ids === []) {
+        if ($status === 'corrupt') {
+            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => "building:{$queryKey}"];
+        }
+
+        if ($status === 'empty') {
             return ['key' => $queryKey, 'ids' => [], 'models' => [], 'lock' => null];
         }
 
-        $modelKeys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
+        if ($status !== 'hit') {
+            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => null];
+        }
 
-        return ['key' => $queryKey, 'ids' => $ids, 'models' => $this->getMany($modelKeys), 'lock' => null];
+        $models = array_map(
+            fn($value) => $value !== null && $value !== false ? $this->unserialize($value) : null,
+            $result[3]
+        );
+
+        return ['key' => $queryKey, 'ids' => $result[2], 'models' => $models, 'lock' => null];
     }
 
     public function getQueryIds(string $key): ?array
@@ -449,12 +539,26 @@ class CacheManager
         $scheduledKey = $this->prefix("scheduled:{{$classKey}}:");
         $nowMs = (int) floor(microtime(true) * 1000);
         $script = <<<'LUA'
+            local now = tonumber(ARGV[1])
+
             local due_at = redis.call('GET', KEYS[2])
-            if due_at and tonumber(due_at) <= tonumber(ARGV[1]) then
-                redis.call('DEL', KEYS[2])
-                return redis.call('INCR', KEYS[1])
+            if due_at then
+                local due = tonumber(due_at)
+
+                if due and due <= now then
+                    redis.call('DEL', KEYS[2])
+
+                    return tostring(redis.call('INCR', KEYS[1]))
+                end
+
+                if not due then
+                    redis.call('DEL', KEYS[2])
+                end
             end
-            return redis.call('GET', KEYS[1])
+
+            local ver = redis.call('GET', KEYS[1])
+
+            return ver or '0'
         LUA;
 
         return $this->connection()->eval($script, 2, $versionKey, $scheduledKey, $nowMs);
