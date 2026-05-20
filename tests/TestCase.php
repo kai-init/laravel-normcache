@@ -5,6 +5,7 @@ namespace NormCache\Tests;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
+use NormCache\Support\ModelHydrator;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use ReflectionProperty;
 
@@ -57,7 +58,7 @@ abstract class TestCase extends OrchestraTestCase
     protected function resetClassKeyCache(): void
     {
         (new ReflectionProperty(CacheManager::class, 'classKeyCache'))->setValue(null, []);
-        (new ReflectionProperty(CacheManager::class, 'modelPrototypes'))->setValue(null, []);
+        (new ReflectionProperty(ModelHydrator::class, 'prototypes'))->setValue(null, []);
     }
 
     protected function redisKeys(string $pattern = '*'): array

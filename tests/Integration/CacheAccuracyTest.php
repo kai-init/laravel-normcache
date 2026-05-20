@@ -7,12 +7,12 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
-use NormCache\CacheManager;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
+use NormCache\Support\ModelHydrator;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -351,11 +351,11 @@ class CacheAccuracyTest extends TestCase
 
         app('normcache')->getModels([$post->id], Post::class);
 
-        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns'))->getValue();
         $this->assertSame('deleted_at', $resolved[Post::class] ?? null);
 
         AltDeletedAtPost::resolveSoftDelete();
-        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns'))->getValue();
 
         $this->assertSame('archived_at', $resolved[AltDeletedAtPost::class] ?? null);
     }
@@ -385,7 +385,6 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame(DB::getDefaultConnection() . ':authors', app('normcache')->classKey(Author::class));
         $this->assertSame('secondary_testing:authors', app('normcache')->classKey(SecondaryConnectionAuthor::class));
     }
-
 }
 
 class SecondaryConnectionAuthor extends Model
@@ -422,7 +421,7 @@ class AltDeletedAtPost extends Post
     {
         $prototype = new self;
         $col = $prototype->getDeletedAtColumn();
-        $prop = new ReflectionProperty(CacheManager::class, 'deletedAtColumns');
+        $prop = new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns');
         $current = $prop->getValue();
         $current[self::class] = $col;
         $prop->setValue(null, $current);

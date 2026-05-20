@@ -6,20 +6,18 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
+use NormCache\Support\QueryInspector;
 use NormCache\Traits\HandlesCacheInvalidation;
 
 class CacheableBuilder extends Builder
 {
     use HandlesCacheInvalidation;
-
-    private const COLUMN_IDENTIFIER = '[`"]?[A-Za-z_][A-Za-z0-9_]*[`"]?';
 
     protected bool $skipCache = false;
 
@@ -80,69 +78,52 @@ class CacheableBuilder extends Builder
 
     public function get($columns = ['*']): Collection
     {
-        if ($this->skipCache || !NormCache::isEnabled() || $this->insideTransaction()) {
-            $this->replayPendingAggregates();
+        $base = $this->toBase();
 
-            return parent::get($columns);
+        if (!$this->shouldCache($base)) {
+            return $this->getWithoutCache($columns);
         }
 
         $model = $this->model::class;
-        $base = $this->toBase();
+        $selectedCols = QueryInspector::resolveSelectedColumns($base, $columns);
 
-        if (!$this->isPureModelQuery($base)) {
-            $this->replayPendingAggregates();
-
-            return parent::get($columns);
+        if (QueryInspector::hasCalculatedColumns($selectedCols)) {
+            return $this->getWithoutCache($columns);
         }
-
-        $selectedCols = $this->resolveSelectedColumns($base, $columns);
-
-        if ($this->hasCalculatedColumns($selectedCols)) {
-            $this->replayPendingAggregates();
-
-            return parent::get($columns);
-        }
-
-        if (($ids = $this->extractPrimaryKeyValues($base)) !== null) {
-            try {
-                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
-            } catch (\Exception $e) {
-                return $this->fallback($e, $columns);
-            }
-        }
-
-        $hash = $this->queryCacheKey($base);
 
         try {
-            $cacheData = NormCache::getModelsFromQuery($model, $hash);
-            $key = $cacheData['key'];
+            $ids = QueryInspector::extractPrimaryKeys($base, $this->model->getKeyName(), $this->model->getQualifiedKeyName());
 
-            if ($cacheData['ids'] !== null) {
-                if (NormCache::isEventsEnabled()) {
-                    event(new QueryCacheHit($model, $key));
-                }
-                $models = NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this);
-            } else {
-                $ids = $this->resolveIds($key, $base, $cacheData['lock']);
-                $models = NormCache::getModels($ids, $model, $selectedCols, null, $this);
+            if ($ids !== null) {
+                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false));
             }
 
-            return $this->finalizeResult($models);
+            return $this->getByQuery($base, $model, $selectedCols);
         } catch (\Exception $e) {
-            return $this->fallback($e, $columns);
+            NormCache::triggerFallback($e);
+
+            return $this->getWithoutCache($columns);
         }
     }
 
-    private function fallback(\Exception $e, $columns): Collection
+    private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
     {
-        if (!NormCache::isFallbackEnabled()) {
-            throw $e;
-        }
-        report($e);
-        NormCache::disable();
-        $this->replayPendingAggregates();
+        $hash = $this->queryCacheKey($base);
+        $cacheData = NormCache::getModelsFromQuery($model, $hash);
+        $key = $cacheData['key'];
 
-        return parent::get($columns);
+        if ($cacheData['ids'] === null) {
+            return $this->finalizeResult(NormCache::getModels(
+                $this->resolveIds($key, $base, $cacheData['lock']),
+                $model, $selectedCols, null, $this
+            ));
+        }
+
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryCacheHit($model, $key));
+        }
+
+        return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
 
     protected function finalizeResult(array $models): Collection
@@ -156,48 +137,6 @@ class CacheableBuilder extends Builder
         }
 
         return $this->model->newCollection($models);
-    }
-
-    protected function extractPrimaryKeyValues(QueryBuilder $base): ?array
-    {
-        if ($base->offset > 0) {
-            return null;
-        }
-
-        if ($base->limit === 0) {
-            return [];
-        }
-
-        if (count($base->wheres) !== 1) {
-            return null;
-        }
-
-        $where = $base->wheres[0];
-        $pk = $this->model->getKeyName();
-        $qualifiedPk = $this->model->getQualifiedKeyName();
-
-        $column = $where['column'] ?? null;
-
-        if (!in_array($column, [$pk, $qualifiedPk], true)) {
-            return null;
-        }
-
-        if ($where['type'] === 'Basic' && $where['operator'] === '=') {
-            return [$where['value']];
-        }
-
-        if (!empty($base->orders) || $base->limit > 0) {
-            return null;
-        }
-
-        if ($where['type'] === 'In' || $where['type'] === 'InRaw') {
-            $values = $where['values'];
-            sort($values);
-
-            return $values;
-        }
-
-        return null;
     }
 
     public function eagerLoadRelations(array $models): array
@@ -219,13 +158,9 @@ class CacheableBuilder extends Builder
 
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
     {
-        if ($this->skipCache || !NormCache::isEnabled() || $this->insideTransaction() || $total !== null) {
-            return parent::paginate($perPage, $columns, $pageName, $page, $total);
-        }
-
         $base = $this->toBase();
 
-        if (!$this->isPureModelQuery($base)) {
+        if ($total !== null || !$this->shouldCache($base)) {
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
@@ -243,73 +178,10 @@ class CacheableBuilder extends Builder
 
             return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
         } catch (\Exception $e) {
-            if (!NormCache::isFallbackEnabled()) {
-                throw $e;
-            }
-            report($e);
-            NormCache::disable();
+            NormCache::triggerFallback($e);
 
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
-    }
-
-    private function isPureModelQuery(QueryBuilder $base): bool
-    {
-        foreach ((array) $base->orders as $order) {
-            if (isset($order['type']) && $order['type'] === 'Raw') {
-                return false;
-            }
-        }
-
-        if ($this->hasSubqueryWheres((array) $base->wheres)) {
-            return false;
-        }
-
-        if (!$this->isCanonicalFrom($base)) {
-            return false;
-        }
-
-        return empty($base->joins)
-            && empty($base->groups)
-            && empty($base->havings)
-            && empty($base->unions)
-            && empty($base->aggregate)
-            && empty($base->distinct)
-            && is_null($base->lock);
-    }
-
-    private function isCanonicalFrom(QueryBuilder $base): bool
-    {
-        $from  = $base->from;
-        $table = $this->model->getTable();
-
-        if (!is_string($from)) {
-            return false;
-        }
-
-        return $from === $table
-            || (bool) preg_match('/^' . preg_quote($table, '/') . '\s+as\s+\w+$/i', $from);
-    }
-
-    private function hasSubqueryWheres(array $wheres): bool
-    {
-        static $subqueryTypes = ['Exists', 'NotExists', 'Sub', 'InSub', 'NotInSub'];
-
-        foreach ($wheres as $where) {
-            $type = $where['type'] ?? '';
-
-            if (in_array($type, $subqueryTypes, true)) {
-                return true;
-            }
-
-            if ($type === 'Nested' && isset($where['query'])) {
-                if ($this->hasSubqueryWheres((array) $where['query']->wheres)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private function insideTransaction(): bool
@@ -317,78 +189,12 @@ class CacheableBuilder extends Builder
         return $this->model->getConnection()->transactionLevel() > 0;
     }
 
-    private function resolveSelectedColumns(QueryBuilder $base, ?array $fallback): ?array
+    private function shouldCache(QueryBuilder $base): bool
     {
-        $cols = $base->columns ?? (($fallback === null || $fallback === ['*']) ? null : $fallback);
-
-        if ($cols === null || $cols === ['*']) {
-            return null;
-        }
-
-        foreach ($cols as $c) {
-            if ($c instanceof Expression || !str_ends_with((string) $c, '*')) {
-                return $cols;
-            }
-        }
-
-        return null;
-    }
-
-    private function hasCalculatedColumns(?array $cols): bool
-    {
-        if ($cols === null) {
-            return false;
-        }
-
-        foreach ($cols as $col) {
-            if ($col instanceof Expression) {
-                return true;
-            }
-
-            if (!$this->isCacheableSelectedColumn((string) $col)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function isCacheableSelectedColumn(string $column): bool
-    {
-        $column = trim($column);
-
-        if ($this->isWildcardColumn($column)) {
-            return false;
-        }
-
-        if (stripos($column, ' as ') !== false) {
-            return $this->isCacheableAliasedColumn($column);
-        }
-
-        return $this->isColumnIdentifier($column);
-    }
-
-    private function isCacheableAliasedColumn(string $column): bool
-    {
-        $segments = preg_split('/\s+as\s+/i', trim($column));
-
-        return count($segments) === 2
-            && $this->isColumnIdentifier($segments[0])
-            && $this->isColumnIdentifier($segments[1], false);
-    }
-
-    private function isColumnIdentifier(string $column, bool $allowQualifier = true): bool
-    {
-        $pattern = $allowQualifier
-            ? '/^' . self::COLUMN_IDENTIFIER . '(?:\\.' . self::COLUMN_IDENTIFIER . ')?$/'
-            : '/^' . self::COLUMN_IDENTIFIER . '$/';
-
-        return (bool) preg_match($pattern, trim($column));
-    }
-
-    private function isWildcardColumn(string $column): bool
-    {
-        return $column === '*' || str_ends_with($column, '.*');
+        return !$this->skipCache
+            && NormCache::isEnabled()
+            && !$this->insideTransaction()
+            && QueryInspector::isPureModelQuery($base, $this->model->getTable());
     }
 
     private function queryCacheKey(QueryBuilder $base): string
@@ -404,20 +210,8 @@ class CacheableBuilder extends Builder
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
     {
-        // Lock is held by another process — poll until it populates the cache.
-        // Exponential backoff: 20ms → 40ms → 80ms → 160ms → 200ms (500ms total).
         if ($lockKey === null) {
-            $delay = 20_000; // 20ms
-            for ($i = 0; $i < 5; $i++) {
-                usleep($delay);
-                $ids = NormCache::getQueryIds($key);
-                if ($ids !== null) {
-                    return $ids;
-                }
-                $delay = min($delay * 2, 200_000); // cap at 200ms
-            }
-
-            return $this->buildIds($base);
+            return NormCache::poll(fn() => NormCache::getQueryIds($key)) ?? $this->buildIds($base);
         }
 
         // We own the lock (acquired in Lua eval).
@@ -446,6 +240,13 @@ class CacheableBuilder extends Builder
             ->select($this->model->getKeyName())
             ->pluck($this->model->getKeyName())
             ->all();
+    }
+
+    private function getWithoutCache($columns): Collection
+    {
+        $this->replayPendingAggregates();
+
+        return parent::get($columns);
     }
 
     private function replayPendingAggregates(): void

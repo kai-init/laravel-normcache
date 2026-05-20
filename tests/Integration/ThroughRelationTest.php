@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -95,6 +96,68 @@ class ThroughRelationTest extends TestCase
         $title = $country->posts()->get()->first()->title;
 
         $this->assertSame('Updated', $title);
+    }
+
+    public function test_through_relation_join_columns_do_not_contaminate_model_cache(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        Author::create(['name' => 'Dummy']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->get();
+
+        Redis::connection('model-cache-test')
+            ->del('test:' . NormCache::modelKey(Post::class, $post->id));
+
+        $country->posts()->get();
+
+        $cached = NormCache::get(NormCache::modelKey(Post::class, $post->id));
+
+        $this->assertIsArray($cached);
+        $this->assertArrayNotHasKey('name', $cached);
+        $this->assertArrayNotHasKey('country_id', $cached);
+    }
+
+    public function test_through_relation_model_cache_miss_does_not_corrupt_post_id(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        Author::create(['name' => 'Dummy']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertNotSame($post->id, $author->id);
+
+        $country->posts()->get();
+
+        Redis::connection('model-cache-test')
+            ->del('test:' . NormCache::modelKey(Post::class, $post->id));
+
+        $results = $country->posts()->get();
+
+        $this->assertCount(1, $results);
+        $this->assertSame($post->id, $results->first()->getKey());
+    }
+
+    public function test_stale_through_cache_entry_can_remain_after_through_model_version_bump(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->get();
+
+        $stalePostVersion = NormCache::currentVersion(Post::class);
+        $staleAuthorVersion = NormCache::currentVersion(Author::class);
+
+        $author->update(['name' => 'Alice Updated']);
+
+        $this->assertGreaterThan($staleAuthorVersion, NormCache::currentVersion(Author::class));
+
+        $staleKeys = $this->redisKeys("test:through:*:v{$stalePostVersion}:v{$staleAuthorVersion}:*");
+
+        $this->assertNotEmpty($staleKeys);
+        $this->assertSame(['Hello'], $country->posts()->get()->pluck('title')->all());
     }
 
     public function test_without_cache_bypasses_has_many_through_cache(): void

@@ -64,6 +64,26 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNull(NormCache::get($modelKey));
     }
 
+    public function test_transaction_commit_flushes_other_model_keys_for_the_same_class(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $aliceKey = NormCache::modelKey(Author::class, $alice->id);
+        $bobKey = NormCache::modelKey(Author::class, $bob->id);
+
+        $this->assertNotNull(NormCache::get($aliceKey));
+        $this->assertNotNull(NormCache::get($bobKey));
+
+        DB::transaction(function () use ($alice) {
+            $alice->update(['name' => 'Alicia']);
+        });
+
+        $this->assertNull(NormCache::get($aliceKey));
+        $this->assertNull(NormCache::get($bobKey));
+    }
+
     public function test_model_key_preserved_after_transaction_rollback(): void
     {
         $author = Author::create(['name' => 'Alice']);

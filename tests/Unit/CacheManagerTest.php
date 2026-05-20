@@ -95,7 +95,31 @@ class CacheManagerTest extends TestCase
         $this->assertSame(2, $this->manager->currentVersion(Author::class));
     }
 
-    public function test_invalidate_version_respects_cooldown(): void
+    public function test_invalidate_version_schedules_once_with_cooldown(): void
+    {
+        $manager = new CacheManager(
+            'model-cache-test',
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            config('normcache.key_prefix'),
+            60,
+        );
+        $redis = Redis::connection('model-cache-test');
+        $classKey = $manager->classKey(Author::class);
+        $scheduledKey = "test:scheduled:{{$classKey}}:";
+
+        $manager->invalidateVersion(new Author);
+        $firstDueAt = $redis->get($scheduledKey);
+
+        $manager->invalidateVersion(new Author);
+        $secondDueAt = $redis->get($scheduledKey);
+
+        $this->assertNotFalse($firstDueAt);
+        $this->assertSame($firstDueAt, $secondDueAt);
+        $this->assertSame(0, $manager->currentVersion(Author::class));
+    }
+
+    public function test_current_version_applies_due_scheduled_invalidation(): void
     {
         $manager = new CacheManager(
             'model-cache-test',
@@ -105,19 +129,22 @@ class CacheManagerTest extends TestCase
             60,
         );
 
-        $manager->invalidateVersion(new Author);
-        $manager->invalidateVersion(new Author);
+        $classKey = $manager->classKey(Author::class);
+        Redis::connection('model-cache-test')->set(
+            "test:scheduled:{{$classKey}}:",
+            (string) ((int) floor(microtime(true) * 1000) - 1000)
+        );
 
         $this->assertSame(1, $manager->currentVersion(Author::class));
     }
 
-    public function test_current_version_observes_cross_process_writes(): void
+    public function test_version_local_isolates_cross_process_writes_within_request(): void
     {
-        $this->manager->currentVersion(Post::class);
+        $this->manager->currentVersion(Post::class); // primes L1 cache at 0
 
         Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
 
-        $this->assertSame(99, $this->manager->currentVersion(Post::class));
+        $this->assertSame(0, $this->manager->currentVersion(Post::class)); // L1 still returns 0
     }
 
     public function test_flush_version_local_does_not_block_redis_reads(): void
@@ -131,13 +158,13 @@ class CacheManagerTest extends TestCase
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
 
-    public function test_invalidate_version_then_external_write_is_observed(): void
+    public function test_version_local_holds_post_invalidation_ignoring_external_writes(): void
     {
-        $this->manager->invalidateVersion(new Author);
+        $this->manager->invalidateVersion(new Author); // bumps to 1, L1 caches 1
 
         Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':authors}:', 99);
 
-        $this->assertSame(99, $this->manager->currentVersion(Author::class));
+        $this->assertSame(1, $this->manager->currentVersion(Author::class)); // L1 returns 1, not 99
     }
 
     public function test_class_key_uses_table_name(): void
@@ -196,7 +223,7 @@ class CacheManagerTest extends TestCase
         $this->manager->set("ver:{{$postsKey}}:", 3);
         $this->manager->set("agg:{{$postsKey}}:1:count:*:posts:nc:v1", ['v' => 5]);
         $this->manager->set("through:{{$postsKey}}:author:v1:v1:abc", [1]);
-        $this->manager->set("cooldown:{{$postsKey}}:", 1);
+        $this->manager->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000));
         $this->manager->set("building:query:{{$postsKey}}:v1:abc", 1);
         Redis::connection('model-cache-test')->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1");
 
@@ -238,7 +265,7 @@ class CacheManagerTest extends TestCase
         $this->assertFalse((bool) $redis->sismember($memberKey, $modelKey));
     }
 
-    public function test_pending_key_is_ttl_bounded_without_a_read(): void
+    public function test_scheduled_invalidation_key_persists_until_processed(): void
     {
         $manager = new CacheManager(
             'model-cache-test',
@@ -250,13 +277,14 @@ class CacheManagerTest extends TestCase
 
         $model = new Author;
         $classKey = $manager->classKey(Author::class);
-        $pendingKey = "test:pending:{{$classKey}}:";
+        $scheduledKey = "test:scheduled:{{$classKey}}:";
         $redis = Redis::connection('model-cache-test');
 
         $manager->invalidateVersion($model);
+        $firstDueAt = $redis->get($scheduledKey);
         $manager->invalidateVersion($model);
 
-        $this->assertSame(1, $redis->exists($pendingKey));
-        $this->assertLessThanOrEqual(config('normcache.query_ttl'), $redis->ttl($pendingKey));
+        $this->assertSame(1, $redis->exists($scheduledKey));
+        $this->assertSame($firstDueAt, $redis->get($scheduledKey));
     }
 }

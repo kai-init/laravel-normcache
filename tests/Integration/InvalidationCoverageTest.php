@@ -164,7 +164,7 @@ class InvalidationCoverageTest extends TestCase
         $this->assertCount(2, Author::all());
     }
 
-    public function test_touch_and_increment_each_invalidate_cache(): void
+    public function test_touch_and_increment_each_flush_model_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Author::all();
@@ -190,7 +190,7 @@ class InvalidationCoverageTest extends TestCase
         $this->assertGreaterThan($versionBeforeIncrement, NormCache::currentVersion(Author::class));
     }
 
-    public function test_where_between_primary_key_update_flushes_only_affected_models(): void
+    public function test_bulk_update_flushes_all_model_keys(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         $bob = Author::create(['name' => 'Bob']);
@@ -203,9 +203,9 @@ class InvalidationCoverageTest extends TestCase
 
         Author::whereBetween('id', [$bob->id, $bob->id])->update(['name' => 'Bobby']);
 
-        $this->assertNotNull(NormCache::get($aliceKey));
+        $this->assertNull(NormCache::get($aliceKey));
         $this->assertNull(NormCache::get($bobKey));
-        $this->assertNotNull(NormCache::get($carolKey));
+        $this->assertNull(NormCache::get($carolKey));
     }
 
     public function test_bulk_restore_and_force_delete_invalidate_cache(): void
@@ -229,7 +229,7 @@ class InvalidationCoverageTest extends TestCase
         $this->assertCount(0, Post::withTrashed()->get());
     }
 
-    public function test_grouped_where_update_only_evicts_targeted_model_keys(): void
+    public function test_grouped_where_update_flushes_model_cache(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);
@@ -241,10 +241,10 @@ class InvalidationCoverageTest extends TestCase
         Author::where(fn ($q) => $q->whereIn('id', [$a1->id]))->update(['name' => 'Alicia']);
 
         $this->assertNull(NormCache::get(NormCache::modelKey(Author::class, $a1->id)));
-        $this->assertNotNull(NormCache::get($key2), 'grouped-where update must not evict unrelated model keys');
+        $this->assertNull(NormCache::get($key2));
     }
 
-    public function test_direct_where_in_update_only_evicts_targeted_model_keys(): void
+    public function test_direct_where_in_update_flushes_model_cache(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);
@@ -255,6 +255,51 @@ class InvalidationCoverageTest extends TestCase
 
         Author::whereIn('id', [$a1->id])->update(['name' => 'Alicia']);
 
-        $this->assertNotNull(NormCache::get($key2), 'direct whereIn update must not evict unrelated model keys');
+        $this->assertNull(NormCache::get($key2));
+    }
+
+    public function test_instance_update_only_evicts_that_model_key(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $key1 = NormCache::modelKey(Author::class, $a1->id);
+        $key2 = NormCache::modelKey(Author::class, $a2->id);
+
+        $a1->update(['name' => 'Alicia']);
+
+        $this->assertNull(NormCache::get($key1));
+        $this->assertNotNull(NormCache::get($key2));
+    }
+
+    public function test_instance_increment_only_evicts_that_model_key(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $key1 = NormCache::modelKey(Author::class, $a1->id);
+        $key2 = NormCache::modelKey(Author::class, $a2->id);
+
+        $a1->increment('id', 0);
+
+        $this->assertNull(NormCache::get($key1));
+        $this->assertNotNull(NormCache::get($key2));
+    }
+
+    public function test_instance_decrement_only_evicts_that_model_key(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $key1 = NormCache::modelKey(Author::class, $a1->id);
+        $key2 = NormCache::modelKey(Author::class, $a2->id);
+
+        $a1->decrement('id', 0);
+
+        $this->assertNull(NormCache::get($key1));
+        $this->assertNotNull(NormCache::get($key2));
     }
 }

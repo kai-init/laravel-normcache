@@ -40,6 +40,16 @@ class CacheableBuilderTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
+    public function test_uncached_get_accepts_string_columns(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        $authors = Author::withoutCache()->get('id');
+
+        $this->assertCount(1, $authors);
+        $this->assertSame(['id'], array_keys($authors->first()->getAttributes()));
+    }
+
     public function test_remember_uses_custom_ttl(): void
     {
         Author::create(['name' => 'Alice']);
@@ -243,6 +253,41 @@ class CacheableBuilderTest extends TestCase
         $this->assertFalse((bool) $first->firstWhere('id', $authorWithout->id)->posts_exists);
         $this->assertTrue((bool) $second->firstWhere('id', $authorWith->id)->posts_exists);
         $this->assertFalse((bool) $second->firstWhere('id', $authorWithout->id)->posts_exists);
+    }
+
+    public function test_aggregate_cache_keys_can_accumulate_after_version_bumps(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
+
+        Author::withCount('posts')->get();
+
+        $aggKeysAfterFirstLoad = $this->redisKeys('test:agg:*');
+        $this->assertCount(1, $aggKeysAfterFirstLoad);
+
+        Post::create(['title' => 'Post 2', 'author_id' => $author->id]);
+
+        Author::withCount('posts')->get();
+
+        $aggKeysAfterSecondLoad = $this->redisKeys('test:agg:*');
+
+        $this->assertCount(2, $aggKeysAfterSecondLoad);
+    }
+
+    public function test_flush_model_can_reuse_existing_aggregate_keys(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
+
+        Author::withCount('posts')->get();
+
+        $keysBeforeFlush = $this->redisKeys('test:agg:*');
+        $this->assertCount(1, $keysBeforeFlush);
+
+        NormCache::flushModel(Author::class);
+
+        $this->assertSame(1, Author::withCount('posts')->first()->posts_count);
+        $this->assertCount(1, $this->redisKeys('test:agg:*'));
     }
 
     public function test_eager_loaded_relations_are_returned(): void

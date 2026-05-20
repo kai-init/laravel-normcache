@@ -36,7 +36,7 @@ class AggregateLoader
         foreach ($pendingAggregates as $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
-            $relation = $this->resolveRelation($name);
+            $relation = $this->model->{$name}();
             $relatedClass = $relation->getRelated()::class;
             $alias = $this->resolveAlias($name, $function, $column);
             $constraintHash = $this->constraintKey($relatedClass, $constraint);
@@ -65,13 +65,15 @@ class AggregateLoader
             $missed = [];
             $cachedValues = [];
 
-            foreach ($ids as $j => $id) {
-                $v = $data[$offset + $j];
-                if (is_array($v)) {
-                    $cachedValues[$id] = $v['v'];
-                } else {
+            foreach ($ids as $index => $id) {
+                $cached = $data[$offset + $index];
+                if (!is_array($cached)) {
                     $missed[] = $id;
+
+                    continue;
                 }
+
+                $cachedValues[$id] = $cached['v'];
             }
 
             $fetched = [];
@@ -95,11 +97,6 @@ class AggregateLoader
         }
 
         return $models;
-    }
-
-    private function resolveRelation(string $name): Relation
-    {
-        return $this->model->{$name}();
     }
 
     private function versionSuffix(Relation $relation): string

@@ -41,7 +41,7 @@ trait HandlesCacheInvalidation
         return $id;
     }
 
-    // --- updates try to target specific IDs, fall back to full flush) ---
+    // --- updates flush the model cache and bump the version ---
 
     public function update(array $values): int
     {
@@ -101,7 +101,7 @@ trait HandlesCacheInvalidation
     public function truncate(): void
     {
         parent::truncate();
-        NormCache::deferFlushModel($this->model);
+        NormCache::flushClass($this->model);
     }
 
     protected function coordinateInvalidation(bool $isUpdate, callable $callback): mixed
@@ -112,147 +112,16 @@ trait HandlesCacheInvalidation
             return $result;
         }
 
-        if ($isUpdate) {
-            $ids = $this->getIdsFromWheres();
-
-            if (empty($ids)) {
-                NormCache::deferFlushModel($this->model);
-            } else {
-                $class = $this->model::class;
-                $conn = $this->model->getConnection()->getName();
-                foreach ($ids as $id) {
-                    NormCache::deferDelete(NormCache::modelKey($class, $id), $conn);
-                }
-                NormCache::invalidateVersion($this->model);
-            }
-        } else {
+        if (!$isUpdate) {
             NormCache::invalidateVersion($this->model);
+
+            return $result;
+        }
+
+        if (!$this->model->exists) {
+            NormCache::flushClass($this->model);
         }
 
         return $result;
-    }
-
-    protected function getIdsFromWheres(): array
-    {
-        $column = $this->model->getKeyName();
-        $tableColumn = $this->model->getTable() . '.' . $column;
-
-        if ($this->whereListHasMixedOrConditions((array) $this->query->wheres, $column, $tableColumn)) {
-            return [];
-        }
-
-        return $this->extractIdsFromWhereList((array) $this->query->wheres);
-    }
-
-    private function extractIdsFromWhereList(array $wheres): array
-    {
-        $column = $this->model->getKeyName();
-        $tableColumn = $this->model->getTable() . '.' . $column;
-        $ids = [];
-
-        foreach ($wheres as $where) {
-            if ($where['type'] === 'Nested' && isset($where['query'])) {
-                $nestedWheres = (array) $where['query']->wheres;
-
-                // Only extract from nested groups that are exclusively PK conditions.
-                // A group mixing in non-PK wheres (especially via OR) can match rows
-                // we cannot enumerate from PK values alone, risking under-invalidation.
-                if ($this->whereListIsPkOnly($nestedWheres, $column, $tableColumn)) {
-                    $ids = array_merge($ids, $this->extractIdsFromWhereList($nestedWheres));
-                }
-
-                continue;
-            }
-
-            if (!isset($where['column']) || !in_array($where['column'], [$column, $tableColumn], true)) {
-                continue;
-            }
-
-            if ($where['type'] === 'Basic' && in_array($where['operator'], ['=', '=='], true)) {
-                $ids[] = $where['value'];
-            } elseif ($where['type'] === 'In' || $where['type'] === 'InRaw') {
-                $ids = array_merge($ids, $where['values']);
-            } elseif ($where['type'] === 'Between' || $where['type'] === 'between') {
-                $betweenIds = $this->idsFromBetweenWhere($where);
-
-                if ($betweenIds === []) {
-                    return [];
-                }
-
-                $ids = array_merge($ids, $betweenIds);
-            }
-        }
-
-        return array_unique($ids);
-    }
-
-    private function whereListIsPkOnly(array $wheres, string $column, string $tableColumn): bool
-    {
-        foreach ($wheres as $where) {
-            if ($where['type'] === 'Nested' && isset($where['query'])) {
-                if (!$this->whereListIsPkOnly((array) $where['query']->wheres, $column, $tableColumn)) {
-                    return false;
-                }
-                continue;
-            }
-
-            if (isset($where['column']) && !in_array($where['column'], [$column, $tableColumn], true)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private function whereListHasMixedOrConditions(array $wheres, string $column, string $tableColumn): bool
-    {
-        foreach ($wheres as $where) {
-            if (($where['boolean'] ?? 'and') === 'or' && !$this->whereIsPkOnly($where, $column, $tableColumn)) {
-                return true;
-            }
-
-            if (($where['type'] ?? null) === 'Nested' && isset($where['query'])) {
-                $nestedWheres = (array) $where['query']->wheres;
-
-                if ($this->whereListHasMixedOrConditions($nestedWheres, $column, $tableColumn)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private function whereIsPkOnly(array $where, string $column, string $tableColumn): bool
-    {
-        if (($where['type'] ?? null) === 'Nested' && isset($where['query'])) {
-            return $this->whereListIsPkOnly((array) $where['query']->wheres, $column, $tableColumn);
-        }
-
-        return isset($where['column']) && in_array($where['column'], [$column, $tableColumn], true);
-    }
-
-    protected function idsFromBetweenWhere(array $where): array
-    {
-        $values = $where['values'] ?? null;
-
-        if (!is_array($values) || count($values) !== 2) {
-            return [];
-        }
-
-        [$start, $end] = array_values($values);
-
-        if (!is_numeric($start) || !is_numeric($end)) {
-            return [];
-        }
-
-        $start = (int) $start;
-        $end = (int) $end;
-
-        if ($end < $start || ($end - $start) > 1000) {
-            return [];
-        }
-
-        return range($start, $end);
     }
 }

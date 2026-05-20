@@ -187,6 +187,71 @@ class PivotCacheTest extends TestCase
         $this->assertSame($tag->id, $pivot->tag_id);
     }
 
+    public function test_pivot_fk_columns_are_not_stored_in_related_model_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags')->get();
+
+        $cached = NormCache::get(NormCache::modelKey(Tag::class, $tag->id));
+
+        $this->assertIsArray($cached);
+        $this->assertArrayNotHasKey('pivot_author_id', $cached);
+        $this->assertArrayNotHasKey('pivot_tag_id', $cached);
+    }
+
+    public function test_pivot_extra_columns_are_not_stored_in_related_model_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id, ['notes' => 'important']);
+
+        Author::with(['tags' => fn ($q) => $q->withPivot('notes')])->get();
+
+        $cached = NormCache::get(NormCache::modelKey(Tag::class, $tag->id));
+
+        $this->assertIsArray($cached);
+        $this->assertArrayNotHasKey('pivot_notes', $cached);
+    }
+
+    public function test_tag_served_from_model_cache_has_no_pivot_attributes(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags')->get();
+
+        $fetched = Tag::find($tag->id);
+
+        $this->assertNotNull($fetched);
+        $this->assertArrayNotHasKey('pivot_author_id', $fetched->getRawOriginal());
+        $this->assertArrayNotHasKey('pivot_tag_id', $fetched->getRawOriginal());
+    }
+
+    public function test_stale_pivot_cache_entry_can_remain_after_parent_version_bump(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags')->get();
+
+        $staleAuthorVersion = NormCache::currentVersion(Author::class);
+        $staleTagVersion = NormCache::currentVersion(Tag::class);
+
+        $author->update(['name' => 'Alice Updated']);
+
+        $this->assertGreaterThan($staleAuthorVersion, NormCache::currentVersion(Author::class));
+
+        $staleKeys = $this->redisKeys("test:pivot:*:v{$staleAuthorVersion}:v{$staleTagVersion}:*");
+
+        $this->assertNotEmpty($staleKeys);
+        $this->assertSame(['Fiction'], Author::with('tags')->first()->tags->pluck('name')->all());
+    }
+
     public function test_pivot_warm_hit_runs_after_query_callbacks(): void
     {
         $author = Author::create(['name' => 'Alice']);
