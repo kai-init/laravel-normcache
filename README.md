@@ -175,6 +175,21 @@ Enable cluster mode in the config:
 
 ---
 
+## What gets cached
+
+Normcache caches Eloquent reads that can be reduced to:
+
+- a versioned list of model IDs
+- per-model attribute payloads keyed by model ID
+
+That includes:
+
+- Normal cacheable-model queries such as `all()`, `where(...)`, `first()`, `find()`, and `paginate()`
+- Primary-key lookups such as `whereKey($id)`, `where('id', $id)`, and eligible `whereIn('id', [...])` queries
+- Aggregates via `withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists`
+- Eager-loaded relationships other than `MorphTo` and `MorphedByMany`
+- Simple column projections and aliases when the result can still be rebuilt from cached model attributes
+
 ## What bypasses the cache
 
 The following query types always hit the database directly:
@@ -184,11 +199,18 @@ The following query types always hit the database directly:
 | `JOIN`                                               | Result depends on joined table, not just this model         |
 | `GROUP BY` / `HAVING`                                | Aggregated results can't be mapped to individual model keys |
 | `UNION`                                              | Multi-model result set                                      |
+| `DISTINCT`                                           | Result shape is not treated as a normalized model query     |
 | Raw `ORDER BY`                                       | Can't be applied to cached key list                         |
-| `SELECT` with expressions                            | Computed columns aren't in the model cache                  |
+| `SELECT` with expressions or computed columns        | Computed values are not stored in the model cache           |
+| Subquery where clauses (`EXISTS`, `IN (subquery)`)   | Query shape is not treated as a pure model query            |
 | Pessimistic locking (`lockForUpdate` / `sharedLock`) | Must always read from DB                                    |
 | Inside a database transaction                        | Reads inside a transaction must see uncommitted data        |
 | Raw SQL / `DB::table(...)`                           | Bypasses cacheable Eloquent models and builders             |
+
+Two important nuances:
+
+- A query cache hit means the cached ID list was reused. Some model keys may still be missing and get repaired from the database on demand.
+- Normcache caches model-backed result sets, not arbitrary SQL shapes. If the result cannot be rebuilt from normalized model attributes, it bypasses the cache.
 
 ---
 
