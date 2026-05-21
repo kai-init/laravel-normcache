@@ -126,7 +126,9 @@ trait HandlesCacheInvalidation
             return $result;
         }
 
-        if (!$this->model->exists) {
+        if ($this->model->exists) {
+            NormCache::flushInstance($this->model);
+        } else {
             NormCache::flushModel($this->model);
         }
 

@@ -282,6 +282,21 @@ class InvalidationCoverageTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
+    public function test_new_query_from_existing_instance_update_invalidates_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        // Builder created via newQuery() on a live instance — $this->model->exists is true
+        $author->newQuery()->where('id', $author->id)->update(['name' => 'Alicia']);
+
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
     public function test_save_invalidates_when_saving_listener_makes_a_clean_model_dirty(): void
     {
         $author = Author::create(['name' => 'Alice']);
