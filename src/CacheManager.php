@@ -374,9 +374,15 @@ class CacheManager
         $this->handle(fn() => $this->doInvalidateVersion($model::class));
     }
 
-    public function flushModel(Model $model): void
+    public function flushModel(Model|string $model): void
     {
         if (!$this->enabled) {
+            return;
+        }
+
+        if (is_string($model)) {
+            $this->handle(fn() => $this->forceFlushModel($model));
+
             return;
         }
 
