@@ -49,13 +49,12 @@ class ModelCachingTest extends TestCase
         Author::all();
 
         $versionBefore = NormCache::currentVersion(Author::class);
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
 
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $author->update(['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
@@ -65,13 +64,12 @@ class ModelCachingTest extends TestCase
         Author::all();
 
         $versionBefore = NormCache::currentVersion(Author::class);
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
 
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $author->delete();
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
@@ -110,13 +108,12 @@ class ModelCachingTest extends TestCase
         Post::all();
 
         $versionBefore = NormCache::currentVersion(Post::class);
-        $modelKey = NormCache::modelKey(Post::class, $post->id);
 
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
 
         $post->forceDelete();
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Post::class));
     }
 
@@ -193,16 +190,15 @@ class ModelCachingTest extends TestCase
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         Post::all();
-        $modelKey = NormCache::modelKey(Post::class, $post->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
 
         $post->delete();
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
 
         // Force a model cache miss. Trashed model should not be re-cached.
         NormCache::getModels([$post->id], Post::class);
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
     }
 
     public function test_soft_deleted_model_is_not_returned_from_model_cache_miss(): void
@@ -251,12 +247,11 @@ class ModelCachingTest extends TestCase
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         Post::all();
-        $modelKey = NormCache::modelKey(Post::class, $post->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
 
         $post->delete();
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
     }
 
     public function test_version_bumped_after_soft_delete_not_before(): void
@@ -294,7 +289,7 @@ class ModelCachingTest extends TestCase
 
         $classKey  = NormCache::classKey(Author::class);
         $memberKey = 'test:members:model:{' . $classKey . '}';
-        $modelKey  = 'test:' . NormCache::modelKey(Author::class, $author->id);
+        $modelKey  = $this->prefixedModelKey(Author::class, $author->id);
         $redis     = Redis::connection('model-cache-test');
 
         // Simulate model key expiry by deleting it directly.

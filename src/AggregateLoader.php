@@ -13,7 +13,7 @@ use NormCache\Support\QueryHasher;
 
 class AggregateLoader
 {
-    protected static array $cache = [];
+    private static array $cache = [];
 
     public function __construct(private Model $model) {}
 
@@ -51,7 +51,7 @@ class AggregateLoader
             $offset += $idCount;
         }
 
-        $data = NormCache::getMany($keys);
+        $data = NormCache::getAggregates($keys);
         $toCache = [];
 
         $hydrator = self::$cache['hydrator'] ??= \Closure::bind(static function ($model, $key, $value) {
@@ -94,11 +94,15 @@ class AggregateLoader
         }
 
         if (!empty($toCache)) {
-            NormCache::setMany($toCache, NormCache::queryTtl());
+            NormCache::setAggregates($toCache);
         }
 
         return $models;
     }
+
+    // -------------------------------------------------------------------------
+    // Private
+    // -------------------------------------------------------------------------
 
     private function versionSuffix(Relation $relation): string
     {

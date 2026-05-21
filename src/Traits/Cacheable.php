@@ -13,12 +13,16 @@ trait Cacheable
 {
     use CachesRelationships;
 
-    protected bool $withoutCacheNext = false;
+    private bool $withoutCacheNext = false;
 
     public function flush(): void
     {
         NormCache::flushInstance($this);
     }
+
+    // -------------------------------------------------------------------------
+    // Public overrides
+    // -------------------------------------------------------------------------
 
     public function newEloquentBuilder($query)
     {
@@ -129,6 +133,10 @@ trait Cacheable
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Private
+    // -------------------------------------------------------------------------
+
     private function invalidateAfterSave(bool $existsBefore): void
     {
         if (!$existsBefore && $this->wasRecentlyCreated) {
@@ -152,7 +160,7 @@ trait Cacheable
         if ($result) {
             $this->exists
                 ? NormCache::flushInstance($this)
-                : NormCache::flushClass($this);
+                : NormCache::flushModel($this);
         }
 
         return (int) $result;

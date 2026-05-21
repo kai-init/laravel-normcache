@@ -23,14 +23,13 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
         Author::query()->updateOrCreate(['id' => $author->id], ['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
@@ -39,14 +38,13 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
         $author->updateQuietly(['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
@@ -66,14 +64,13 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
         $author->deleteQuietly();
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
@@ -97,8 +94,7 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
@@ -108,7 +104,7 @@ class InvalidationCoverageTest extends TestCase
             ['name', 'updated_at']
         );
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertSame('Alicia', Author::first()->name);
     }
@@ -118,8 +114,7 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
@@ -128,7 +123,7 @@ class InvalidationCoverageTest extends TestCase
             ['name' => 'Alicia', 'updated_at' => now()]
         );
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertSame('Alicia', Author::first()->name);
     }
@@ -169,24 +164,23 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBeforeTouch = NormCache::currentVersion(Author::class);
 
         Author::whereKey($author->id)->touch();
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeTouch, NormCache::currentVersion(Author::class));
 
         Author::find($author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBeforeIncrement = NormCache::currentVersion(Author::class);
 
         Author::whereKey($author->id)->incrementEach(['id' => 0]);
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeIncrement, NormCache::currentVersion(Author::class));
     }
 
@@ -197,15 +191,11 @@ class InvalidationCoverageTest extends TestCase
         $carol = Author::create(['name' => 'Carol']);
         Author::all();
 
-        $aliceKey = NormCache::modelKey(Author::class, $alice->id);
-        $bobKey = NormCache::modelKey(Author::class, $bob->id);
-        $carolKey = NormCache::modelKey(Author::class, $carol->id);
-
         Author::whereBetween('id', [$bob->id, $bob->id])->update(['name' => 'Bobby']);
 
-        $this->assertNull(NormCache::get($aliceKey));
-        $this->assertNull(NormCache::get($bobKey));
-        $this->assertNull(NormCache::get($carolKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $bob->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $carol->id));
     }
 
     public function test_bulk_restore_and_force_delete_invalidate_cache(): void
@@ -235,13 +225,12 @@ class InvalidationCoverageTest extends TestCase
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $key2 = NormCache::modelKey(Author::class, $a2->id);
-        $this->assertNotNull(NormCache::get($key2));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
 
         Author::where(fn ($q) => $q->whereIn('id', [$a1->id]))->update(['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get(NormCache::modelKey(Author::class, $a1->id)));
-        $this->assertNull(NormCache::get($key2));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_direct_where_in_update_flushes_model_cache(): void
@@ -250,12 +239,11 @@ class InvalidationCoverageTest extends TestCase
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $key2 = NormCache::modelKey(Author::class, $a2->id);
-        $this->assertNotNull(NormCache::get($key2));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
 
         Author::whereIn('id', [$a1->id])->update(['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get($key2));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_instance_update_only_evicts_that_model_key(): void
@@ -264,13 +252,10 @@ class InvalidationCoverageTest extends TestCase
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $key1 = NormCache::modelKey(Author::class, $a1->id);
-        $key2 = NormCache::modelKey(Author::class, $a2->id);
-
         $a1->update(['name' => 'Alicia']);
 
-        $this->assertNull(NormCache::get($key1));
-        $this->assertNotNull(NormCache::get($key2));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_instance_increment_only_evicts_that_model_key(): void
@@ -279,13 +264,10 @@ class InvalidationCoverageTest extends TestCase
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $key1 = NormCache::modelKey(Author::class, $a1->id);
-        $key2 = NormCache::modelKey(Author::class, $a2->id);
-
         $a1->increment('id', 0);
 
-        $this->assertNull(NormCache::get($key1));
-        $this->assertNotNull(NormCache::get($key2));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_instance_decrement_only_evicts_that_model_key(): void
@@ -294,13 +276,10 @@ class InvalidationCoverageTest extends TestCase
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $key1 = NormCache::modelKey(Author::class, $a1->id);
-        $key2 = NormCache::modelKey(Author::class, $a2->id);
-
         $a1->decrement('id', 0);
 
-        $this->assertNull(NormCache::get($key1));
-        $this->assertNotNull(NormCache::get($key2));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_save_invalidates_when_saving_listener_makes_a_clean_model_dirty(): void
@@ -308,8 +287,7 @@ class InvalidationCoverageTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::find($author->id);
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         Author::saving(function (Author $model) {
             if ($model->name === 'Alice') {
@@ -322,7 +300,7 @@ class InvalidationCoverageTest extends TestCase
 
             $this->assertTrue($clean->save());
             $this->assertSame('Alicia', Author::withoutCache()->find($author->id)->name);
-            $this->assertNull(NormCache::get($modelKey));
+            $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
             $this->assertSame('Alicia', Author::find($author->id)->name);
         } finally {
             Author::flushEventListeners();

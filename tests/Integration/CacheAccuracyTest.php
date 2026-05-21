@@ -12,7 +12,7 @@ use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
-use NormCache\Support\ModelHydrator;
+use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -301,7 +301,7 @@ class CacheAccuracyTest extends TestCase
         $this->assertCount(1, $warm);
         $this->assertTrue($warm->first()->trashed());
 
-        NormCache::delete(NormCache::modelKey(Post::class, $post->id));
+        $this->evictModelCache(Post::class, $post->id);
 
         $cached = $country->posts()->withTrashed()->get();
 
@@ -367,11 +367,11 @@ class CacheAccuracyTest extends TestCase
 
         app('normcache')->getModels([$post->id], Post::class);
 
-        $resolved = (new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
         $this->assertSame('deleted_at', $resolved[Post::class] ?? null);
 
         AltDeletedAtPost::resolveSoftDelete();
-        $resolved = (new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
 
         $this->assertSame('archived_at', $resolved[AltDeletedAtPost::class] ?? null);
     }
@@ -437,7 +437,7 @@ class AltDeletedAtPost extends Post
     {
         $prototype = new self;
         $col = $prototype->getDeletedAtColumn();
-        $prop = new ReflectionProperty(ModelHydrator::class, 'deletedAtColumns');
+        $prop = new ReflectionProperty(CacheManager::class, 'deletedAtColumns');
         $current = $prop->getValue();
         $current[self::class] = $col;
         $prop->setValue(null, $current);

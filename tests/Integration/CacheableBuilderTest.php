@@ -284,7 +284,7 @@ class CacheableBuilderTest extends TestCase
         $keysBeforeFlush = $this->redisKeys('test:agg:*');
         $this->assertCount(1, $keysBeforeFlush);
 
-        NormCache::flushModel(Author::class);
+        NormCache::forceFlushModel(Author::class);
 
         $this->assertSame(1, Author::withCount('posts')->first()->posts_count);
         $this->assertCount(1, $this->redisKeys('test:agg:*'));
@@ -456,14 +456,13 @@ class CacheableBuilderTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $versionBefore = NormCache::currentVersion(Author::class);
 
         Author::query()->truncate(); // returns void
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 

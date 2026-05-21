@@ -5,7 +5,6 @@ namespace NormCache\Tests;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
-use NormCache\Support\ModelHydrator;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use ReflectionProperty;
 
@@ -58,7 +57,27 @@ abstract class TestCase extends OrchestraTestCase
     protected function resetClassKeyCache(): void
     {
         (new ReflectionProperty(CacheManager::class, 'classKeyCache'))->setValue(null, []);
-        (new ReflectionProperty(ModelHydrator::class, 'prototypes'))->setValue(null, []);
+        (new ReflectionProperty(CacheManager::class, 'prototypes'))->setValue(null, []);
+    }
+
+    protected function modelCacheEntry(string $class, mixed $id): mixed
+    {
+        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+
+        return $this->cacheManager()->getStore()->get($key);
+    }
+
+    protected function evictModelCache(string $class, mixed $id): void
+    {
+        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $this->cacheManager()->getStore()->delete($key);
+    }
+
+    protected function prefixedModelKey(string $class, mixed $id): string
+    {
+        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+
+        return $this->cacheManager()->getStore()->prefix($key);
     }
 
     protected function redisKeys(string $pattern = '*'): array

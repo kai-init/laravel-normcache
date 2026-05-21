@@ -19,13 +19,17 @@ class CacheableBuilder extends Builder
 {
     use HandlesCacheInvalidation;
 
-    protected bool $skipCache = false;
+    private bool $skipCache = false;
 
-    protected ?int $queryTtl = null;
+    private ?int $queryTtl = null;
 
-    protected bool $cacheAggregates = true;
+    private bool $cacheAggregates = true;
 
-    protected array $pendingAggregates = [];
+    private array $pendingAggregates = [];
+
+    // -------------------------------------------------------------------------
+    // Fluent configuration
+    // -------------------------------------------------------------------------
 
     public function withoutCache(): static
     {
@@ -52,6 +56,10 @@ class CacheableBuilder extends Builder
 
         return $this;
     }
+
+    // -------------------------------------------------------------------------
+    // Public overrides
+    // -------------------------------------------------------------------------
 
     public function withAggregate($relations, $function, $column = '*'): static
     {
@@ -100,11 +108,60 @@ class CacheableBuilder extends Builder
 
             return $this->getByQuery($base, $model, $selectedCols);
         } catch (\Exception $e) {
-            NormCache::triggerFallback($e);
+            NormCache::fallback($e);
 
             return $this->getWithoutCache($columns);
         }
     }
+
+    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
+    {
+        $base = $this->toBase();
+
+        if ($total !== null || !$this->shouldCache($base)) {
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        }
+
+        $hash = $this->queryCacheKey($base);
+
+        try {
+            $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
+            $countKey = $cacheData['key'];
+            $cachedTotal = $cacheData['data'];
+
+            if ($cachedTotal === null) {
+                $cachedTotal = $base->getCountForPagination();
+                NormCache::storeCount($countKey, $cachedTotal, $this->queryTtl);
+            }
+
+            return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
+        } catch (\Exception $e) {
+            NormCache::fallback($e);
+
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        }
+    }
+
+    public function eagerLoadRelations(array $models): array
+    {
+        if ($this->skipCache) {
+            foreach ($this->eagerLoad as $name => $constraint) {
+                $this->eagerLoad[$name] = function ($query) use ($constraint) {
+                    $constraint($query);
+                    $builder = $query instanceof EloquentRelation ? $query->getQuery() : $query;
+                    if ($builder instanceof self) {
+                        $builder->withoutCache();
+                    }
+                };
+            }
+        }
+
+        return parent::eagerLoadRelations($models);
+    }
+
+    // -------------------------------------------------------------------------
+    // Private — query execution
+    // -------------------------------------------------------------------------
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
     {
@@ -126,92 +183,10 @@ class CacheableBuilder extends Builder
         return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
 
-    protected function finalizeResult(array $models): Collection
-    {
-        if (!empty($this->pendingAggregates)) {
-            $models = (new AggregateLoader($this->model))->load($models, $this->pendingAggregates);
-        }
-
-        if ($models && $this->eagerLoad) {
-            $models = $this->eagerLoadRelations($models);
-        }
-
-        return $this->model->newCollection($models);
-    }
-
-    public function eagerLoadRelations(array $models): array
-    {
-        if ($this->skipCache) {
-            foreach ($this->eagerLoad as $name => $constraint) {
-                $this->eagerLoad[$name] = function ($query) use ($constraint) {
-                    $constraint($query);
-                    $builder = $query instanceof EloquentRelation ? $query->getQuery() : $query;
-                    if ($builder instanceof self) {
-                        $builder->withoutCache();
-                    }
-                };
-            }
-        }
-
-        return parent::eagerLoadRelations($models);
-    }
-
-    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
-    {
-        $base = $this->toBase();
-
-        if ($total !== null || !$this->shouldCache($base)) {
-            return parent::paginate($perPage, $columns, $pageName, $page, $total);
-        }
-
-        $hash = $this->queryCacheKey($base);
-
-        try {
-            $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
-            $countKey = $cacheData['key'];
-            $cachedTotal = $cacheData['data'];
-
-            if ($cachedTotal === null) {
-                $cachedTotal = $base->getCountForPagination();
-                NormCache::set($countKey, $cachedTotal, $this->queryTtl ?? NormCache::queryTtl());
-            }
-
-            return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
-        } catch (\Exception $e) {
-            NormCache::triggerFallback($e);
-
-            return parent::paginate($perPage, $columns, $pageName, $page, $total);
-        }
-    }
-
-    private function insideTransaction(): bool
-    {
-        return $this->model->getConnection()->transactionLevel() > 0;
-    }
-
-    private function shouldCache(QueryBuilder $base): bool
-    {
-        return !$this->skipCache
-            && NormCache::isEnabled()
-            && !$this->insideTransaction()
-            && QueryInspector::isPureModelQuery($base, $this->model->getTable());
-    }
-
-    private function queryCacheKey(QueryBuilder $base): string
-    {
-        $cols = $base->columns;
-        $base->columns = null;
-        try {
-            return QueryHasher::fromQuery($base);
-        } finally {
-            $base->columns = $cols;
-        }
-    }
-
     private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
     {
         if ($lockKey === null) {
-            return NormCache::poll(fn() => NormCache::getQueryIds($key)) ?? $this->buildIds($base);
+            return NormCache::pollQueryIds($key) ?? $this->buildIds($base);
         }
 
         // We own the lock (acquired in Lua eval).
@@ -221,11 +196,11 @@ class CacheableBuilder extends Builder
 
         try {
             $ids = $this->buildIds($base);
-            NormCache::setQueryResultsAndReleaseLock($key, $ids, $this->queryTtl ?? NormCache::queryTtl(), $lockKey);
+            NormCache::storeQueryIds($key, $ids, $lockKey, $this->queryTtl);
             $lockKey = null;
         } finally {
             if ($lockKey) {
-                NormCache::delete($lockKey);
+                NormCache::releaseLock($lockKey);
             }
         }
 
@@ -242,6 +217,23 @@ class CacheableBuilder extends Builder
             ->all();
     }
 
+    private function finalizeResult(array $models): Collection
+    {
+        if (!empty($this->pendingAggregates)) {
+            $models = (new AggregateLoader($this->model))->load($models, $this->pendingAggregates);
+        }
+
+        if ($models && $this->eagerLoad) {
+            $models = $this->eagerLoadRelations($models);
+        }
+
+        return $this->model->newCollection($models);
+    }
+
+    // -------------------------------------------------------------------------
+    // Private — fallback path
+    // -------------------------------------------------------------------------
+
     private function getWithoutCache($columns): Collection
     {
         $this->replayPendingAggregates();
@@ -257,6 +249,34 @@ class CacheableBuilder extends Builder
                 : $agg['name'];
 
             parent::withAggregate($relations, $agg['function'], $agg['column']);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Private — guards and key helpers
+    // -------------------------------------------------------------------------
+
+    private function shouldCache(QueryBuilder $base): bool
+    {
+        return !$this->skipCache
+            && NormCache::isEnabled()
+            && !$this->insideTransaction()
+            && QueryInspector::isPureModelQuery($base, $this->model->getTable());
+    }
+
+    private function insideTransaction(): bool
+    {
+        return $this->model->getConnection()->transactionLevel() > 0;
+    }
+
+    private function queryCacheKey(QueryBuilder $base): string
+    {
+        $cols = $base->columns;
+        $base->columns = null;
+        try {
+            return QueryHasher::fromQuery($base);
+        } finally {
+            $base->columns = $cols;
         }
     }
 }

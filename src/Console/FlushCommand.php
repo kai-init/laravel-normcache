@@ -43,7 +43,7 @@ class FlushCommand extends Command
             return Command::FAILURE;
         }
 
-        NormCache::flushModel($model);
+        NormCache::forceFlushModel($model);
 
         $this->info("Cache flushed for [{$model}].");
 

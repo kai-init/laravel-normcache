@@ -19,61 +19,79 @@ class CacheManagerTest extends TestCase
         $this->manager = $this->cacheManager();
     }
 
-    public function test_set_and_get_round_trip(): void
-    {
-        $this->manager->set('foo', 'bar');
+    // -------------------------------------------------------------------------
+    // RedisStore pass-through (basic I/O tests live in RedisStoreTest)
+    // -------------------------------------------------------------------------
 
-        $this->assertSame('bar', $this->manager->get('foo'));
+    public function test_store_set_and_get_round_trip(): void
+    {
+        $this->manager->getStore()->set('foo', 'bar', 60);
+
+        $this->assertSame('bar', $this->manager->getStore()->get('foo'));
     }
 
-    public function test_get_returns_null_for_missing_key(): void
+    public function test_store_get_returns_null_for_missing_key(): void
     {
-        $this->assertNull($this->manager->get('does-not-exist'));
+        $this->assertNull($this->manager->getStore()->get('does-not-exist'));
     }
 
-    public function test_delete_removes_value(): void
+    public function test_store_delete_removes_value(): void
     {
-        $this->manager->set('foo', 'bar');
-        $this->manager->delete('foo');
+        $this->manager->getStore()->set('foo', 'bar', 60);
+        $this->manager->getStore()->delete('foo');
 
-        $this->assertNull($this->manager->get('foo'));
+        $this->assertNull($this->manager->getStore()->get('foo'));
     }
 
-    public function test_set_if_absent_succeeds_when_key_missing(): void
+    public function test_store_set_if_absent_succeeds_when_key_missing(): void
     {
-        $result = $this->manager->setIfAbsent('lock', 1, 10);
+        $result = $this->manager->getStore()->setIfAbsent('lock', 1, 10);
 
         $this->assertTrue($result);
-        $this->assertEquals(1, $this->manager->get('lock'));
+        $this->assertEquals(1, $this->manager->getStore()->get('lock'));
     }
 
-    public function test_set_if_absent_fails_when_key_present(): void
+    public function test_store_set_if_absent_fails_when_key_present(): void
     {
-        $this->manager->set('lock', 1);
+        $this->manager->getStore()->set('lock', 1, 60);
 
-        $result = $this->manager->setIfAbsent('lock', 2, 10);
+        $result = $this->manager->getStore()->setIfAbsent('lock', 2, 10);
 
         $this->assertFalse($result);
-        $this->assertEquals(1, $this->manager->get('lock'));
+        $this->assertEquals(1, $this->manager->getStore()->get('lock'));
     }
 
-    public function test_get_many_returns_values_in_key_order(): void
+    public function test_store_get_many_returns_values_in_key_order(): void
     {
-        $this->manager->set('a', 'alpha');
-        $this->manager->set('c', 'gamma');
+        $this->manager->getStore()->set('a', 'alpha', 60);
+        $this->manager->getStore()->set('c', 'gamma', 60);
 
-        $result = $this->manager->getMany(['a', 'b', 'c']);
+        $result = $this->manager->getStore()->getMany(['a', 'b', 'c']);
 
         $this->assertSame(['alpha', null, 'gamma'], $result);
     }
 
-    public function test_set_many_stores_multiple_values(): void
+    public function test_store_set_many_stores_multiple_values(): void
     {
-        $this->manager->setMany(['x' => 10, 'y' => 20], 60);
+        $this->manager->getStore()->setMany(['x' => 10, 'y' => 20], 60);
 
-        $this->assertEquals(10, $this->manager->get('x'));
-        $this->assertEquals(20, $this->manager->get('y'));
+        $this->assertEquals(10, $this->manager->getStore()->get('x'));
+        $this->assertEquals(20, $this->manager->getStore()->get('y'));
     }
+
+    public function test_store_set_stores_scalar_without_php_serialization(): void
+    {
+        $this->manager->getStore()->set('num', 99, 60);
+
+        $raw = Redis::connection('model-cache-test')->get('test:num');
+
+        $this->assertStringNotContainsString('i:', $raw);
+        $this->assertEquals(99, $this->manager->getStore()->get('num'));
+    }
+
+    // -------------------------------------------------------------------------
+    // Version tracking
+    // -------------------------------------------------------------------------
 
     public function test_current_version_returns_zero_before_any_invalidation(): void
     {
@@ -140,11 +158,11 @@ class CacheManagerTest extends TestCase
 
     public function test_version_local_isolates_cross_process_writes_within_request(): void
     {
-        $this->manager->currentVersion(Post::class); // primes L1 cache at 0
+        $this->manager->currentVersion(Post::class);
 
         Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
 
-        $this->assertSame(0, $this->manager->currentVersion(Post::class)); // L1 still returns 0
+        $this->assertSame(0, $this->manager->currentVersion(Post::class));
     }
 
     public function test_flush_version_local_does_not_block_redis_reads(): void
@@ -160,12 +178,16 @@ class CacheManagerTest extends TestCase
 
     public function test_version_local_holds_post_invalidation_ignoring_external_writes(): void
     {
-        $this->manager->invalidateVersion(new Author); // bumps to 1, L1 caches 1
+        $this->manager->invalidateVersion(new Author);
 
         Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':authors}:', 99);
 
-        $this->assertSame(1, $this->manager->currentVersion(Author::class)); // L1 returns 1, not 99
+        $this->assertSame(1, $this->manager->currentVersion(Author::class));
     }
+
+    // -------------------------------------------------------------------------
+    // Key helpers
+    // -------------------------------------------------------------------------
 
     public function test_class_key_uses_table_name(): void
     {
@@ -175,56 +197,49 @@ class CacheManagerTest extends TestCase
         $this->assertSame("{$default}:authors", $this->manager->classKey(Author::class));
     }
 
-    public function test_model_key_returns_expected_format(): void
-    {
-        $key = $this->manager->modelKey(Post::class, 42);
-
-        $this->assertSame('model:{' . DB::getDefaultConnection() . ':posts}:42', $key);
-    }
+    // -------------------------------------------------------------------------
+    // Flush operations
+    // -------------------------------------------------------------------------
 
     public function test_flush_model_bumps_version_and_clears_related_keys(): void
     {
         $redis = Redis::connection('model-cache-test');
+        $store = $this->manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
         $authorsKey = DB::getDefaultConnection() . ':authors';
 
         $redis->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1", "test:model:{{$postsKey}}:2");
-        $this->manager->set("model:{{$postsKey}}:1", ['id' => 1]);
-        $this->manager->set("model:{{$postsKey}}:2", ['id' => 2]);
-
-        $this->manager->set("query:{{$postsKey}}:v1:abc", [1, 2]);
-        $this->manager->set("agg:{{$postsKey}}:1:count:*:comments:nc:v1", ['v' => 3]);
-
-        $this->manager->set("model:{{$authorsKey}}:1", ['id' => 1]);
+        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("model:{{$postsKey}}:2", ['id' => 2], 3600);
+        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("agg:{{$postsKey}}:1:count:*:comments:nc:v1", ['v' => 3], 3600);
+        $store->set("model:{{$authorsKey}}:1", ['id' => 1], 3600);
 
         $versionBefore = $this->manager->currentVersion(Post::class);
 
-        $this->manager->flushModel(Post::class);
+        $this->manager->forceFlushModel(Post::class);
 
-        $this->assertNull($this->manager->get("model:{{$postsKey}}:1"));
-        $this->assertNull($this->manager->get("model:{{$postsKey}}:2"));
-
+        $this->assertNull($store->get("model:{{$postsKey}}:1"));
+        $this->assertNull($store->get("model:{{$postsKey}}:2"));
         $this->assertSame(0, $redis->exists("test:members:model:{{$postsKey}}"));
-
-        $this->assertNotNull($this->manager->get("query:{{$postsKey}}:v1:abc"));
-        $this->assertNotNull($this->manager->get("agg:{{$postsKey}}:1:count:*:comments:nc:v1"));
-
-        $this->assertNotNull($this->manager->get("model:{{$authorsKey}}:1"));
-
+        $this->assertNotNull($store->get("query:{{$postsKey}}:v1:abc"));
+        $this->assertNotNull($store->get("agg:{{$postsKey}}:1:count:*:comments:nc:v1"));
+        $this->assertNotNull($store->get("model:{{$authorsKey}}:1"));
         $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Post::class));
     }
 
     public function test_flush_all_removes_all_package_keys_and_returns_count(): void
     {
+        $store = $this->manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
 
-        $this->manager->set("query:{{$postsKey}}:v1:abc", [1, 2]);
-        $this->manager->set("model:{{$postsKey}}:1", ['id' => 1]);
-        $this->manager->set("ver:{{$postsKey}}:", 3);
-        $this->manager->set("agg:{{$postsKey}}:1:count:*:posts:nc:v1", ['v' => 5]);
-        $this->manager->set("through:{{$postsKey}}:author:v1:v1:abc", [1]);
-        $this->manager->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000));
-        $this->manager->set("building:query:{{$postsKey}}:v1:abc", 1);
+        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("ver:{{$postsKey}}:", 3, 3600);
+        $store->set("agg:{{$postsKey}}:1:count:*:posts:nc:v1", ['v' => 5], 3600);
+        $store->set("through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
+        $store->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
+        $store->set("building:query:{{$postsKey}}:v1:abc", 1, 3600);
         Redis::connection('model-cache-test')->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1");
 
         $deleted = $this->manager->flushAll();
@@ -238,16 +253,6 @@ class CacheManagerTest extends TestCase
         $this->assertSame(0, $this->manager->flushAll());
     }
 
-    public function test_set_stores_scalar_without_php_serialization(): void
-    {
-        $this->manager->set('num', 99);
-
-        $raw = Redis::connection('model-cache-test')->get('test:num');
-
-        $this->assertStringNotContainsString('i:', $raw);
-        $this->assertEquals(99, $this->manager->get('num'));
-    }
-
     public function test_targeted_delete_outside_transaction_removes_membership_reference(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -255,7 +260,7 @@ class CacheManagerTest extends TestCase
 
         $classKey = $this->manager->classKey(Author::class);
         $memberKey = "test:members:model:{{$classKey}}";
-        $modelKey = 'test:' . $this->manager->modelKey(Author::class, $author->id);
+        $modelKey = "test:model:{{$classKey}}:{$author->id}";
         $redis = Redis::connection('model-cache-test');
 
         $this->assertTrue((bool) $redis->sismember($memberKey, $modelKey));

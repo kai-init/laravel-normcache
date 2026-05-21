@@ -38,7 +38,7 @@ trait CachesOneOrManyThrough
             }
 
             if ($lockKey === null) {
-                $payload = NormCache::poll(fn() => NormCache::get($key));
+                $payload = NormCache::pollCacheEntry($key);
                 if ($payload !== null) {
                     return $this->hydrateFromIds(
                         $payload['ids'],
@@ -53,34 +53,26 @@ trait CachesOneOrManyThrough
             $result = parent::get($columns);
             $payload = $this->cachePayloadFromResult($result);
 
-            if ($lockKey === null) {
-                NormCache::set($key, $payload, NormCache::queryTtl());
-            } else {
-                NormCache::setAndReleaseLock($key, $payload, NormCache::queryTtl(), $lockKey);
-            }
-
-            $lockKey = null;
-
+            $modelAttrs = [];
             if ($shouldCacheModels) {
-                $attrsByKey = [];
                 foreach ($result as $model) {
                     $attrs = $model->getRawOriginal();
                     unset($attrs['laravel_through_key']);
-                    $attrsByKey[NormCache::modelKey($relatedClass, $model->getKey())] = $attrs;
-                }
-                if (!empty($attrsByKey)) {
-                    NormCache::setManyModels($relatedClass, $attrsByKey, NormCache::ttl());
+                    $modelAttrs[$model->getKey()] = $attrs;
                 }
             }
 
+            NormCache::storeThroughResult($key, $lockKey, $payload, $relatedClass, $modelAttrs);
+            $lockKey = null;
+
             return $result;
         } catch (\Exception $e) {
-            NormCache::triggerFallback($e);
+            NormCache::fallback($e);
 
             return parent::get($columns);
         } finally {
             if ($lockKey !== null) {
-                try { NormCache::delete($lockKey); } catch (\Exception) {}
+                try { NormCache::releaseLock($lockKey); } catch (\Exception) {}
             }
         }
     }

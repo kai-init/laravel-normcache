@@ -4,51 +4,48 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Redis;
-use NormCache\Support\ModelCacheLoader;
-use NormCache\Support\ModelHydrator;
+use NormCache\Events\ModelCacheHit;
+use NormCache\Events\ModelCacheMiss;
+use NormCache\Support\QueryInspector;
+use NormCache\Support\RedisStore;
 
 class CacheManager
 {
-    protected static array $classKeyCache = [];
+    private static array $classKeyCache = [];
 
-    protected Connection $connection;
+    private static array $prototypes = [];
+
+    private static array $hydratorClosures = [];
+
+    private static array $deletedAtColumns = [];
 
     /** @var array<string, array<string, true>> */
-    protected array $flushQueue = [];
-
-    protected bool $igbinary;
+    private array $flushQueue = [];
 
     /** @var array<string, int> */
-    protected array $versionLocal = [];
+    private array $versionLocal = [];
 
-    protected ModelCacheLoader $modelCacheLoader;
+    private RedisStore $store;
 
     public function __construct(
-        protected string $redisConnection,
-        protected int $ttl,
-        protected int $queryTtl,
-        protected string $keyPrefix,
-        protected int $cooldown,
-        protected bool $cluster = false,
-        protected bool $enabled = true,
-        protected bool $dispatchEvents = true,
-        protected bool $fallback = false,
-        protected bool $fireRetrieved = false,
+        string $redisConnection,
+        private int $ttl,
+        private int $queryTtl,
+        string $keyPrefix,
+        private int $cooldown,
+        bool $cluster = false,
+        private bool $enabled = true,
+        private bool $dispatchEvents = true,
+        private bool $fallbackEnabled = false,
+        private bool $fireRetrieved = false,
     ) {
-        $this->igbinary = extension_loaded('igbinary');
-        $this->connection = Redis::connection($this->redisConnection);
-        $this->modelCacheLoader = new ModelCacheLoader(
-            getMany: fn(array $keys) => $this->getMany($keys),
-            setManyModels: fn(string $modelClass, array $attrsByKey, int $ttl) => $this->setManyModels($modelClass, $attrsByKey, $ttl),
-            classKey: fn(string $modelClass) => $this->classKey($modelClass),
-            fireRetrieved: $this->fireRetrieved,
-            dispatchEvents: $this->dispatchEvents,
-            ttl: $this->ttl,
-        );
+        $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
     }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle / configuration
+    // -------------------------------------------------------------------------
 
     public function isEnabled(): bool
     {
@@ -62,12 +59,7 @@ class CacheManager
 
     public function isFallbackEnabled(): bool
     {
-        return $this->fallback;
-    }
-
-    public function disable(): void
-    {
-        $this->enabled = false;
+        return $this->fallbackEnabled;
     }
 
     public function enable(): void
@@ -75,174 +67,19 @@ class CacheManager
         $this->enabled = true;
     }
 
-    protected function groupByTag(array $keys): array
+    public function disable(): void
     {
-        if (!$this->cluster) {
-            return [$keys];
-        }
-
-        $groups = [];
-        foreach ($keys as $key) {
-            $tag = $key;
-            if (preg_match('/\{([^}]+)\}/', $key, $matches)) {
-                $tag = $matches[1];
-            }
-            $groups[$tag][] = $key;
-        }
-
-        return $groups;
+        $this->enabled = false;
     }
 
-    public function ttl(): int
+    public function getStore(): RedisStore
     {
-        return $this->ttl;
+        return $this->store;
     }
 
-    public function queryTtl(): int
-    {
-        return $this->queryTtl;
-    }
-
-    public function get(string $key): mixed
-    {
-        $value = $this->connection()->get($this->prefix($key));
-
-        return $value !== null ? $this->unserialize($value) : null;
-    }
-
-    public function set(string $key, mixed $value, ?int $ttl = null): mixed
-    {
-        $ttl = $ttl ?? $this->ttl;
-
-        $this->connection()->setex(
-            $this->prefix($key),
-            $ttl,
-            $this->serialize($value)
-        );
-
-        return $value;
-    }
-
-    public function setIfAbsent(string $key, mixed $value, int $ttl = 0): bool
-    {
-        $ttl = $ttl ?: $this->ttl;
-
-        return (bool) $this->connection()->set(
-            $this->prefix($key),
-            $this->serialize($value),
-            'EX',
-            $ttl,
-            'NX'
-        );
-    }
-
-    public function delete(string $key): void
-    {
-        $this->connection()->del($this->prefix($key));
-    }
-
-    public function getMany(array $keys): array
-    {
-        if (empty($keys)) {
-            return [];
-        }
-
-        if (!$this->cluster) {
-            $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
-
-            return array_map(fn($v) => $v !== null ? $this->unserialize($v) : null, $this->connection()->mget($prefixed));
-        }
-
-        $groups = $this->groupByTag($keys);
-        $results = [];
-
-        foreach ($groups as $groupKeys) {
-            $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
-            $raw = $this->connection()->mget($prefixed);
-
-            $idx = 0;
-            foreach ($groupKeys as $key) {
-                $value = $raw[$idx++];
-                $results[$key] = $value !== null ? $this->unserialize($value) : null;
-            }
-        }
-
-        return array_map(fn($k) => $results[$k], $keys);
-    }
-
-    public function setMany(array $pairs, int $ttl): void
-    {
-        if (empty($pairs)) {
-            return;
-        }
-
-        $groups = $this->groupByTag(array_keys($pairs));
-        $connection = $this->connection();
-
-        foreach ($groups as $keys) {
-            $connection->pipeline(function ($pipe) use ($keys, $pairs, $ttl) {
-                foreach ($keys as $key) {
-                    $pipe->setex($this->prefix($key), $ttl, $this->serialize($pairs[$key]));
-                }
-            });
-        }
-    }
-
-    public function setManyModels(string $modelClass, array $attrsByKey, int $ttl): void
-    {
-        if (empty($attrsByKey)) {
-            return;
-        }
-
-        $classKey = $this->classKey($modelClass);
-        $memberKey = $this->prefix("members:model:{{$classKey}}");
-        $groups = $this->groupByTag(array_keys($attrsByKey));
-        $connection = $this->connection();
-
-        foreach ($groups as $keys) {
-            $connection->pipeline(function ($pipe) use ($keys, $attrsByKey, $ttl, $memberKey) {
-                $prefixedKeys = [];
-                foreach ($keys as $key) {
-                    $p = $this->prefix($key);
-                    $prefixedKeys[] = $p;
-                    $pipe->setex($p, $ttl, $this->serialize($attrsByKey[$key]));
-                }
-                $pipe->sadd($memberKey, ...$prefixedKeys);
-                $pipe->expire($memberKey, $ttl);
-            });
-        }
-    }
-
-    public function setAndReleaseLock(string $key, mixed $value, int $ttl, string $lockKey): void
-    {
-        $keys = [$key, $lockKey];
-        $groups = $this->groupByTag($keys);
-
-        if (count($groups) !== 1) {
-            $this->set($key, $value, $ttl);
-            $this->delete($lockKey);
-
-            return;
-        }
-
-        $this->connection()->pipeline(function ($pipe) use ($key, $value, $ttl, $lockKey) {
-            $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
-            $pipe->del($this->prefix($lockKey));
-        });
-    }
-
-    public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
-    {
-        $classKey = $this->classKey($modelClass);
-        $version = $this->currentVersion($modelClass);
-        $key = "{$namespace}:{{$classKey}}:v{$version}:{$hash}";
-
-        return [
-            'key' => $key,
-            'data' => $this->get($key),
-            'version' => $version,
-        ];
-    }
+    // -------------------------------------------------------------------------
+    // High-level cache reads
+    // -------------------------------------------------------------------------
 
     public function getModelsFromQuery(string $modelClass, string $hash): array
     {
@@ -307,16 +144,16 @@ class CacheManager
             return {'hit', ver, ids, models}
         LUA;
 
-        $result = $this->connection()->eval(
+        $result = $this->store->eval(
             $script,
-            5,
-            $this->prefix("ver:{{$classKey}}:"),
-            $this->prefix("scheduled:{{$classKey}}:"),
-            $this->prefix("query:{{$classKey}}:v"),
-            $this->prefix("building:query:{{$classKey}}:v"),
-            $this->prefix("model:{{$classKey}}:"),
-            $hash,
-            (int) floor(microtime(true) * 1000)
+            [
+                "ver:{{$classKey}}:",
+                "scheduled:{{$classKey}}:",
+                "query:{{$classKey}}:v",
+                "building:query:{{$classKey}}:v",
+                "model:{{$classKey}}:",
+            ],
+            [$hash, (int) floor(microtime(true) * 1000)]
         );
 
         if (!is_array($result)) {
@@ -348,117 +185,259 @@ class CacheManager
             return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => null];
         }
 
-        $models = array_map(
-            fn($value) => $value !== null && $value !== false ? $this->unserialize($value) : null,
-            $result[3]
-        );
+        $models = $this->store->deserializeMany($result[3]);
 
         return ['key' => $queryKey, 'ids' => $result[2], 'models' => $models, 'lock' => null];
     }
 
-    public function getQueryIds(string $key): ?array
+    public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
     {
-        $value = $this->connection()->get($this->prefix($key));
-        if ($value === null) {
-            return null;
-        }
-        $decoded = json_decode($value, true);
+        $classKey = $this->classKey($modelClass);
+        $version = $this->currentVersion($modelClass);
+        $key = "{$namespace}:{{$classKey}}:v{$version}:{$hash}";
 
-        return is_array($decoded) ? $decoded : null;
-    }
-
-    public function poll(callable $getter): mixed
-    {
-        $delay = 20_000;
-        for ($i = 0; $i < 5; $i++) {
-            usleep($delay);
-            $result = $getter();
-            if ($result !== null) {
-                return $result;
-            }
-            $delay = min($delay * 2, 200_000);
-        }
-
-        return null;
-    }
-
-    /**
-     * Runs a write-side cache operation. No-ops when disabled. On error applies the
-     * fallback policy (re-throw or report+disable). Read paths use triggerFallback()
-     * directly inside their own catch blocks so they can run their own recovery action.
-     */
-    public function handle(callable $operation): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        try {
-            $operation();
-        } catch (\Exception $e) {
-            $this->triggerFallback($e);
-        }
-    }
-
-    /**
-     * Applies the fallback policy for read-path catch blocks. Re-throws when fallback
-     * is disabled so callers see Redis errors directly; otherwise reports and disables
-     * the cache so the caller can proceed with its DB recovery action.
-     */
-    public function triggerFallback(\Exception $e): void
-    {
-        if (!$this->fallback) {
-            throw $e;
-        }
-
-        report($e);
-        $this->disable();
-    }
-
-    public function setQueryResults(string $key, array $ids, int $ttl): void
-    {
-        $this->connection()->setex(
-            $this->prefix($key),
-            $ttl,
-            json_encode($ids)
-        );
-    }
-
-    public function setQueryResultsAndReleaseLock(string $key, array $ids, int $ttl, string $lockKey): void
-    {
-        $keys = [$key, $lockKey];
-        $groups = $this->groupByTag($keys);
-        $json = json_encode($ids);
-
-        if (count($groups) !== 1) {
-            $this->setQueryResults($key, $ids, $ttl);
-            $this->delete($lockKey);
-
-            return;
-        }
-
-        $this->connection()->pipeline(function ($pipe) use ($key, $json, $ttl, $lockKey) {
-            $pipe->setex($this->prefix($key), $ttl, $json);
-            $pipe->del($this->prefix($lockKey));
-        });
+        return [
+            'key' => $key,
+            'data' => $this->store->get($key),
+            'version' => $version,
+        ];
     }
 
     public function getThroughCache(string $relatedClass, string $throughClass, string $hash): array
     {
         $relatedKey = $this->classKey($relatedClass);
         $throughKey = $this->classKey($throughClass);
-        $throughVersion = $this->currentVersion($throughClass);
-        $relatedVersion = $this->currentVersion($relatedClass);
-        $key = "through:{{$relatedKey}}:{$throughKey}:v{$relatedVersion}:v{$throughVersion}:{$hash}";
-        $data = $this->get($key);
+        $key = "through:{{$relatedKey}}:{$throughKey}:v{$this->currentVersion($relatedClass)}:v{$this->currentVersion($throughClass)}:{$hash}";
+        $data = $this->store->get($key);
 
         if ($data !== null) {
             return ['key' => $key, 'data' => $data, 'lock' => null];
         }
 
-        $lockKey = $this->setIfAbsent("building:{$key}", 1, 5) ? "building:{$key}" : null;
+        $lockKey = $this->store->setIfAbsent("building:{$key}", 1, 5) ? "building:{$key}" : null;
 
         return ['key' => $key, 'data' => null, 'lock' => $lockKey];
+    }
+
+    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
+    {
+        $parentKey = $this->classKey($parentClass);
+        $relatedKey = $this->classKey($relatedClass);
+        $parentVersion = $this->currentVersion($parentClass);
+        $relatedVersion = $this->currentVersion($relatedClass);
+        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:";
+        $keys = array_map(fn($id) => $prefix . $id, $parentIds);
+
+        return [
+            'parentVersion' => $parentVersion,
+            'relatedVersion' => $relatedVersion,
+            'data' => array_combine($parentIds, $this->store->getMany($keys)),
+        ];
+    }
+
+    public function pollCacheEntry(string $key): mixed
+    {
+        return $this->poll(fn() => $this->store->get($key));
+    }
+
+    public function pollQueryIds(string $key): ?array
+    {
+        return $this->poll(fn() => $this->getQueryIds($key));
+    }
+
+    public function getAggregates(array $keys): array
+    {
+        return $this->store->getMany($keys);
+    }
+
+    // -------------------------------------------------------------------------
+    // High-level cache writes
+    // -------------------------------------------------------------------------
+
+    public function storeThroughResult(string $key, ?string $lockKey, array $payload, string $relatedClass, array $modelAttrs): void
+    {
+        if ($lockKey === null) {
+            $this->store->set($key, $payload, $this->queryTtl);
+        } else {
+            $this->store->setAndRelease($key, $payload, $this->queryTtl, $lockKey);
+        }
+
+        if (!empty($modelAttrs)) {
+            $this->cacheModelAttrs($relatedClass, $modelAttrs);
+        }
+    }
+
+    public function storePivotResult(array $pivotEntriesByKey, string $relatedClass, array $modelAttrs): void
+    {
+        $this->store->setMany($pivotEntriesByKey, $this->queryTtl);
+
+        if (!empty($modelAttrs)) {
+            $this->cacheModelAttrs($relatedClass, $modelAttrs);
+        }
+    }
+
+    public function setAggregates(array $entries): void
+    {
+        $this->store->setMany($entries, $this->queryTtl);
+    }
+
+    public function storeCount(string $key, int $count, ?int $ttl = null): void
+    {
+        $this->store->set($key, $count, $ttl ?? $this->queryTtl);
+    }
+
+    public function storeQueryIds(string $key, array $ids, string $lockKey, ?int $ttl = null): void
+    {
+        $this->store->setJsonAndRelease($key, $ids, $ttl ?? $this->queryTtl, $lockKey);
+    }
+
+    public function releaseLock(string $lock): void
+    {
+        $this->store->delete($lock);
+    }
+
+    // -------------------------------------------------------------------------
+    // Model loading (cache → hydrate → DB fallback)
+    // -------------------------------------------------------------------------
+
+    public function getModels(
+        array $ids,
+        string $modelClass,
+        ?array $columns = null,
+        ?array $raw = null,
+        ?EloquentBuilder $missedQuery = null,
+        bool $preserveQueryShape = true,
+    ): array {
+        if ($ids === []) {
+            return [];
+        }
+
+        $classKey = $this->classKey($modelClass);
+
+        if ($raw === null) {
+            $keys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
+            $raw = $this->store->getMany($keys);
+        }
+
+        $projection = $columns !== null ? QueryInspector::normalizeProjection($columns) : null;
+        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection);
+
+        if ($this->dispatchEvents && $hits !== []) {
+            event(new ModelCacheHit($modelClass, array_keys($hits)));
+        }
+
+        if ($missed === []) {
+            return array_values($hits);
+        }
+
+        if ($this->dispatchEvents) {
+            event(new ModelCacheMiss($modelClass, $missed));
+        }
+
+        $fetched = $this->fetchFromDatabaseAndCache(
+            $missed,
+            $modelClass,
+            $classKey,
+            $projection,
+            $missedQuery,
+            $preserveQueryShape,
+        );
+
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($hits[$id]) || isset($fetched[$id])) {
+                $ordered[] = $hits[$id] ?? $fetched[$id];
+            }
+        }
+
+        return $ordered;
+    }
+
+    // -------------------------------------------------------------------------
+    // Invalidation
+    // -------------------------------------------------------------------------
+
+    public function invalidateVersion(Model $model): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $conn = $model->getConnection()->getName();
+
+        if (DB::connection($conn)->transactionLevel() > 0) {
+            $this->queueModelFlush($conn, $model::class);
+
+            return;
+        }
+
+        $this->handle(fn() => $this->doInvalidateVersion($model::class));
+    }
+
+    public function flushModel(Model $model): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $conn = $model->getConnection()->getName();
+
+        if (DB::connection($conn)->transactionLevel() > 0) {
+            $this->queueModelFlush($conn, $model::class);
+
+            return;
+        }
+
+        $this->handle(fn() => $this->forceFlushModel($model::class));
+    }
+
+
+    public function flushInstance(Model $model): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $conn = $model->getConnection()->getName();
+        $class = $model::class;
+        $key = $this->modelKey($class, $model->getKey());
+
+        if (DB::connection($conn)->transactionLevel() > 0) {
+            $this->queueModelFlush($conn, $class);
+
+            return;
+        }
+
+        $this->handle(function () use ($class, $key) {
+            $classKey = $this->classKey($class);
+            $this->store->deleteFromSet(
+                $this->store->prefix($key),
+                $this->store->prefix("members:model:{{$classKey}}")
+            );
+            $this->doInvalidateVersion($class);
+        });
+    }
+
+    public function forceFlushModel(string $modelClass): void
+    {
+        $classKey = $this->classKey($modelClass);
+        $memberKey = $this->store->prefix("members:model:{{$classKey}}");
+        $keys = $this->store->smembers($memberKey);
+
+        if (!empty($keys)) {
+            $this->store->asyncDel($keys);
+        }
+
+        $this->store->delete("members:model:{{$classKey}}");
+        $this->doInvalidateVersion($modelClass);
+    }
+
+    public function flushAll(): int
+    {
+        return $this->store->flushByPatterns([
+            'query:*', 'model:*', 'members:model:*', 'ver:*',
+            'agg:*', 'count:*', 'pivot:*', 'through:*', 'scheduled:*', 'building:*',
+        ]);
     }
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
@@ -476,35 +455,26 @@ class CacheManager
         }
     }
 
-    public function getModels(
-        array $ids,
-        string $modelClass,
-        ?array $columns = null,
-        ?array $raw = null,
-        ?EloquentBuilder $missedQuery = null,
-        bool $preserveQueryShape = true,
-    ): array {
-        return $this->modelCacheLoader->getModels(
-            $ids,
-            $modelClass,
-            $columns,
-            $raw,
-            $missedQuery,
-            $preserveQueryShape,
-        );
-    }
-
-    public function currentVersion(string $modelClass): int
+    public function commitPending(string $connectionName): void
     {
-        $classKey = $this->classKey($modelClass);
+        $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
 
-        if (isset($this->versionLocal[$classKey])) {
-            return $this->versionLocal[$classKey];
+        unset($this->flushQueue[$connectionName]);
+
+        if (empty($flushes) || !$this->enabled) {
+            return;
         }
 
-        $value = $this->resolveCurrentVersion($classKey);
+        $this->handle(function () use ($flushes) {
+            foreach ($flushes as $modelClass) {
+                $this->forceFlushModel($modelClass);
+            }
+        });
+    }
 
-        return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
+    public function discardPending(string $connectionName): void
+    {
+        unset($this->flushQueue[$connectionName]);
     }
 
     public function flushVersionLocal(): void
@@ -512,14 +482,16 @@ class CacheManager
         $this->versionLocal = [];
     }
 
+    // -------------------------------------------------------------------------
+    // Private — invalidation internals
+    // -------------------------------------------------------------------------
+
     private function doInvalidateVersion(string $modelClass): void
     {
         $classKey = $this->classKey($modelClass);
 
         if ($this->cooldown <= 0) {
-            $this->versionLocal[$classKey] = (int) $this->connection()->incr(
-                $this->prefix("ver:{{$classKey}}:")
-            );
+            $this->versionLocal[$classKey] = $this->store->increment("ver:{{$classKey}}:");
 
             return;
         }
@@ -530,13 +502,10 @@ class CacheManager
 
     private function resolveCurrentVersion(string $classKey): string|int|null
     {
-        $versionKey = $this->prefix("ver:{{$classKey}}:");
-
         if ($this->cooldown <= 0) {
-            return $this->connection()->get($versionKey);
+            return $this->store->getRaw("ver:{{$classKey}}:");
         }
 
-        $scheduledKey = $this->prefix("scheduled:{{$classKey}}:");
         $nowMs = (int) floor(microtime(true) * 1000);
         $script = <<<'LUA'
             local now = tonumber(ARGV[1])
@@ -561,211 +530,14 @@ class CacheManager
             return ver or '0'
         LUA;
 
-        return $this->connection()->eval($script, 2, $versionKey, $scheduledKey, $nowMs);
+        return $this->store->eval($script, ["ver:{{$classKey}}:", "scheduled:{{$classKey}}:"], [$nowMs]);
     }
 
     private function scheduleInvalidation(string $classKey): void
     {
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->cooldown * 1000);
 
-        $this->connection()->setnx(
-            $this->prefix("scheduled:{{$classKey}}:"),
-            (string) $dueAtMs
-        );
-    }
-
-    public function invalidateVersion(Model $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
-
-            return;
-        }
-
-        $this->handle(fn() => $this->doInvalidateVersion($model::class));
-    }
-
-    public function flushClass(Model $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
-
-            return;
-        }
-
-        $this->handle(fn() => $this->flushModel($model::class));
-    }
-
-    public function commitPending(string $connectionName): void
-    {
-        $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
-
-        unset($this->flushQueue[$connectionName]);
-
-        if (empty($flushes) || !$this->enabled) {
-            return;
-        }
-
-        $this->handle(function () use ($flushes) {
-            foreach ($flushes as $modelClass) {
-                $this->flushModel($modelClass);
-            }
-        });
-    }
-
-    public function discardPending(string $connectionName): void
-    {
-        unset($this->flushQueue[$connectionName]);
-    }
-
-    public function classKey(string $class): string
-    {
-        return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
-    }
-
-    private function resolveClassKey(string $class): string
-    {
-        $model = ModelHydrator::prototype($class);
-        $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
-
-        return "{$connection}:{$model->getTable()}";
-    }
-
-    public function modelKey(string $modelClass, string $id): string
-    {
-        return 'model:{' . $this->classKey($modelClass) . '}:' . $id;
-    }
-
-    public function flushInstance(Model $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-        $class = $model::class;
-        $key = $this->modelKey($class, $model->getKey());
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $class);
-
-            return;
-        }
-
-        $this->handle(function () use ($class, $key) {
-            $classKey = $this->classKey($class);
-            $prefixedKey = $this->prefix($key);
-            $memberKey = $this->prefix("members:model:{{$classKey}}");
-            $this->connection()->pipeline(function ($pipe) use ($prefixedKey, $memberKey) {
-                $pipe->del($prefixedKey);
-                $pipe->srem($memberKey, $prefixedKey);
-            });
-            $this->doInvalidateVersion($class);
-        });
-    }
-
-    public function flushModel(string $modelClass): void
-    {
-        $classKey = $this->classKey($modelClass);
-        $memberKey = $this->prefix("members:model:{{$classKey}}");
-        $keys = $this->connection()->smembers($memberKey);
-
-        if (!empty($keys)) {
-            $this->asyncDel($keys);
-        }
-
-        $this->connection()->del($memberKey);
-        $this->doInvalidateVersion($modelClass);
-    }
-
-    public function getFlushPatterns(): array
-    {
-        return [
-            'query:*',
-            'model:*',
-            'members:model:*',
-            'ver:*',
-            'agg:*',
-            'count:*',
-            'pivot:*',
-            'through:*',
-            'scheduled:*',
-            'building:*',
-        ];
-    }
-
-    public function flushAll(): int
-    {
-        $total = 0;
-        $connection = $this->connection();
-
-        foreach ($this->getFlushPatterns() as $pattern) {
-            $keys = $connection->keys($this->prefix($pattern));
-            if (!empty($keys)) {
-                $total += count($keys);
-                $this->asyncDel($keys);
-            }
-        }
-
-        return $total;
-    }
-
-    protected function connection(): Connection
-    {
-        return $this->connection;
-    }
-
-    protected function asyncDel(array $prefixedKeys): void
-    {
-        if (empty($prefixedKeys)) {
-            return;
-        }
-
-        $groups = $this->groupByTag($prefixedKeys);
-        $connection = $this->connection();
-
-        foreach ($groups as $keys) {
-            foreach (array_chunk($keys, 1000) as $chunk) {
-                $connection->unlink(...$chunk);
-            }
-        }
-    }
-
-    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
-    {
-        $parentKey = $this->classKey($parentClass);
-        $relatedKey = $this->classKey($relatedClass);
-
-        $parentVersion = $this->currentVersion($parentClass);
-        $relatedVersion = $this->currentVersion($relatedClass);
-
-        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:";
-
-        $keys = array_map(fn($id) => $prefix . $id, $parentIds);
-        $data = $this->getMany($keys);
-
-        return [
-            'parentVersion' => $parentVersion,
-            'relatedVersion' => $relatedVersion,
-            'data' => array_combine($parentIds, $data),
-        ];
-    }
-
-    protected function prefix(string $key): string
-    {
-        return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
+        $this->store->setNx("scheduled:{{$classKey}}:", (string) $dueAtMs);
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void
@@ -773,21 +545,238 @@ class CacheManager
         $this->flushQueue[$connectionName][$modelClass] = true;
     }
 
-    protected function serialize(mixed $value): mixed
+    // -------------------------------------------------------------------------
+    // Private — model hydration / DB fallback
+    // -------------------------------------------------------------------------
+
+    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection): array
     {
-        if (is_numeric($value) && is_finite($value)) {
-            return $value;
+        $prototype = self::prototype($modelClass);
+
+        $closure = self::$hydratorClosures[$modelClass] ??= \Closure::bind(
+            static function ($model, $attributes, $fire) {
+                $model->attributes = $attributes;
+                $model->original = $attributes;
+                $model->exists = true;
+                $model->classCastCache = [];
+                $model->attributeCastCache = [];
+
+                if ($fire) {
+                    $model->fireModelEvent('retrieved', false);
+                }
+            },
+            null,
+            $modelClass
+        );
+
+        $fireRetrieved = $this->fireRetrieved;
+        $hits = [];
+        $missed = [];
+
+        foreach ($ids as $i => $id) {
+            $attrs = $raw[$i];
+
+            if ($attrs === null || $attrs === false || !is_array($attrs)) {
+                $missed[] = $id;
+
+                continue;
+            }
+
+            if ($projection !== null) {
+                $attrs = QueryInspector::projectAttributes($attrs, $projection);
+            }
+
+            $instance = clone $prototype;
+            $closure($instance, $attrs, $fireRetrieved);
+            $hits[$id] = $instance;
         }
 
-        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
+        return ['hits' => $hits, 'missed' => $missed];
     }
 
-    protected function unserialize(mixed $value): mixed
-    {
-        if (is_numeric($value)) {
-            return $value;
+    private function fetchFromDatabaseAndCache(
+        array $missed,
+        string $modelClass,
+        string $classKey,
+        ?array $projection,
+        ?EloquentBuilder $missedQuery,
+        bool $preserveQueryShape,
+    ): array {
+        $prototype = self::prototype($modelClass);
+        $pk = $prototype->getKeyName();
+        $qualifiedPk = $prototype->getQualifiedKeyName();
+        $query = $this->prepareMissedQuery($modelClass, $missedQuery, $preserveQueryShape);
+        $loaded = $query->whereIn($qualifiedPk, $missed)
+            ->get(['*'])
+            ->keyBy($pk);
+
+        $attrsByKey = [];
+        $deletedAtCol = self::deletedAtColumn($modelClass);
+
+        foreach ($loaded as $id => $model) {
+            $attrs = $model->getRawOriginal();
+
+            $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
+            if (!$isTrashed) {
+                $attrsByKey["model:{{$classKey}}:$id"] = $attrs;
+            }
+
+            if ($projection !== null) {
+                $model->setRawAttributes(QueryInspector::projectAttributes($attrs, $projection), true);
+            }
         }
 
-        return $this->igbinary ? igbinary_unserialize($value) : unserialize($value);
+        if ($attrsByKey !== []) {
+            $memberKey = $this->store->prefix("members:model:{{$classKey}}");
+            $this->store->setManyTracked($attrsByKey, $this->ttl, $memberKey);
+        }
+
+        return $loaded->all();
+    }
+
+    private function prepareMissedQuery(string $modelClass, ?EloquentBuilder $missedQuery, bool $preserveQueryShape): CacheableBuilder
+    {
+        if ($missedQuery === null) {
+            return $modelClass::query()->withoutCache();
+        }
+
+        $query = clone $missedQuery;
+        $query->withoutCache();
+        $query->setEagerLoads([]);
+        $base = $query->getQuery()
+            ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
+            ->cloneWithoutBindings(['select', 'order']);
+
+        if (!$preserveQueryShape) {
+            $base = $base
+                ->cloneWithout(['joins', 'wheres'])
+                ->cloneWithoutBindings(['join', 'where']);
+        }
+
+        $query->setQuery($base);
+
+        return $query;
+    }
+
+    // -------------------------------------------------------------------------
+    // Private — key building
+    // -------------------------------------------------------------------------
+
+    public function classKey(string $class): string
+    {
+        return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
+    }
+
+    private function modelKey(string $modelClass, string $id): string
+    {
+        return 'model:{' . $this->classKey($modelClass) . '}:' . $id;
+    }
+
+    private function resolveClassKey(string $class): string
+    {
+        $model = self::prototype($class);
+        $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
+
+        return "{$connection}:{$model->getTable()}";
+    }
+
+    // -------------------------------------------------------------------------
+    // Private — model metadata
+    // -------------------------------------------------------------------------
+
+    private static function prototype(string $modelClass): Model
+    {
+        return self::$prototypes[$modelClass] ??= new $modelClass;
+    }
+
+    private static function deletedAtColumn(string $modelClass): ?string
+    {
+        return self::$deletedAtColumns[$modelClass] ??= method_exists(self::prototype($modelClass), 'getDeletedAtColumn')
+            ? self::prototype($modelClass)->getDeletedAtColumn()
+            : null;
+    }
+
+    // -------------------------------------------------------------------------
+    // Infrastructure
+    // -------------------------------------------------------------------------
+
+    public function currentVersion(string $modelClass): int
+    {
+        $classKey = $this->classKey($modelClass);
+
+        if (isset($this->versionLocal[$classKey])) {
+            return $this->versionLocal[$classKey];
+        }
+
+        $value = $this->resolveCurrentVersion($classKey);
+
+        return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
+    }
+
+    public function fallback(\Exception $e): void
+    {
+        if (!$this->fallbackEnabled) {
+            throw $e;
+        }
+
+        report($e);
+        $this->disable();
+    }
+
+    private function handle(callable $operation): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        try {
+            $operation();
+        } catch (\Exception $e) {
+            $this->fallback($e);
+        }
+    }
+
+    private function poll(callable $getter): mixed
+    {
+        $delay = 20_000;
+        for ($i = 0; $i < 5; $i++) {
+            usleep($delay);
+            $result = $getter();
+            if ($result !== null) {
+                return $result;
+            }
+            $delay = min($delay * 2, 200_000);
+        }
+
+        return null;
+    }
+
+    private function getQueryIds(string $key): ?array
+    {
+        $value = $this->store->getRaw($key);
+
+        if ($value === null) {
+            return null;
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function cacheModelAttrs(string $modelClass, array $modelAttrs): void
+    {
+        if (empty($modelAttrs)) {
+            return;
+        }
+
+        $classKey = $this->classKey($modelClass);
+        $attrsByKey = [];
+        foreach ($modelAttrs as $id => $attrs) {
+            $attrsByKey["model:{{$classKey}}:{$id}"] = $attrs;
+        }
+
+        $memberKey = $this->store->prefix("members:model:{{$classKey}}");
+        $this->store->setManyTracked($attrsByKey, $this->ttl, $memberKey);
     }
 }

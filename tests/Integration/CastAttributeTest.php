@@ -42,7 +42,7 @@ class CastAttributeTest extends TestCase
         $post = Post::create(['title' => 'A', 'author_id' => $author->id, 'metadata' => $this->metadata]);
 
         Post::all();
-        NormCache::delete(NormCache::modelKey(Post::class, $post->id));
+        $this->evictModelCache(Post::class, $post->id);
 
         $fromFallback = Post::all()->first();
 

@@ -36,6 +36,7 @@ trait CachesPivotRelation
         $constraintHash = $this->currentConstraintHash($columns);
         $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
         $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
+
         try {
             $cache = NormCache::getPivotCache(
                 $parentClass,
@@ -70,7 +71,7 @@ trait CachesPivotRelation
 
             return $results;
         } catch (\Exception $e) {
-            NormCache::triggerFallback($e);
+            NormCache::fallback($e);
 
             return parent::get($columns);
         }
@@ -153,7 +154,7 @@ trait CachesPivotRelation
     private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels): void
     {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
-        $toModelCache = [];
+        $modelAttrs = [];
         $pivotPrefix = $this->accessor . '_';
 
         foreach ($results as $model) {
@@ -168,24 +169,20 @@ trait CachesPivotRelation
             }
 
             if ($cacheRelatedModels) {
-                $raw = array_filter(
+                $modelAttrs[$model->getKey()] = array_filter(
                     $model->getRawOriginal(),
                     fn($k) => !str_starts_with($k, $pivotPrefix),
                     ARRAY_FILTER_USE_KEY
                 );
-                $toModelCache[NormCache::modelKey($relatedClass, $model->getKey())] = $raw;
             }
         }
 
-        $toPivotCache = [];
+        $pivotEntriesByKey = [];
         foreach ($pivotMap as $parentId => $entries) {
-            $toPivotCache[$keyMap[$parentId]] = $entries;
+            $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
-        NormCache::setMany($toPivotCache, NormCache::queryTtl());
 
-        if (!empty($toModelCache)) {
-            NormCache::setManyModels($relatedClass, $toModelCache, NormCache::ttl());
-        }
+        NormCache::storePivotResult($pivotEntriesByKey, $relatedClass, $modelAttrs);
     }
 
     private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass, ?array $selectedRelatedColumns): Collection

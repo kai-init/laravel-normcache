@@ -195,7 +195,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get();
 
-        $cached = NormCache::get(NormCache::modelKey(Tag::class, $tag->id));
+        $cached = $this->modelCacheEntry(Tag::class, $tag->id);
 
         $this->assertIsArray($cached);
         $this->assertArrayNotHasKey('pivot_author_id', $cached);
@@ -210,7 +210,7 @@ class PivotCacheTest extends TestCase
 
         Author::with(['tags' => fn ($q) => $q->withPivot('notes')])->get();
 
-        $cached = NormCache::get(NormCache::modelKey(Tag::class, $tag->id));
+        $cached = $this->modelCacheEntry(Tag::class, $tag->id);
 
         $this->assertIsArray($cached);
         $this->assertArrayNotHasKey('pivot_notes', $cached);

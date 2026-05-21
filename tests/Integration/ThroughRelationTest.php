@@ -20,7 +20,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        $cached = NormCache::get(NormCache::modelKey(Post::class, $post->id));
+        $cached = $this->modelCacheEntry(Post::class, $post->id);
 
         $this->assertIsArray($cached);
         $this->assertArrayNotHasKey('laravel_through_key', $cached);
@@ -108,11 +108,11 @@ class ThroughRelationTest extends TestCase
         $country->posts()->get();
 
         Redis::connection('model-cache-test')
-            ->del('test:' . NormCache::modelKey(Post::class, $post->id));
+            ->del($this->prefixedModelKey(Post::class, $post->id));
 
         $country->posts()->get();
 
-        $cached = NormCache::get(NormCache::modelKey(Post::class, $post->id));
+        $cached = $this->modelCacheEntry(Post::class, $post->id);
 
         $this->assertIsArray($cached);
         $this->assertArrayNotHasKey('name', $cached);
@@ -131,7 +131,7 @@ class ThroughRelationTest extends TestCase
         $country->posts()->get();
 
         Redis::connection('model-cache-test')
-            ->del('test:' . NormCache::modelKey(Post::class, $post->id));
+            ->del($this->prefixedModelKey(Post::class, $post->id));
 
         $results = $country->posts()->get();
 

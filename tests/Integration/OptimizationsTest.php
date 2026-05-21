@@ -114,7 +114,8 @@ class OptimizationsTest extends TestCase
         $this->assertCount(1, $found);
         Event::assertDispatched(QueryCacheMiss::class);
 
-        $repaired = app('normcache')->getQueryIds("query:{{$classKey}}:v{$version}:{$hash}");
+        $raw = app('normcache')->getStore()->getRaw("query:{{$classKey}}:v{$version}:{$hash}");
+        $repaired = $raw !== null ? json_decode($raw, true) : null;
         $this->assertSame([$found->first()->id], $repaired);
     }
 

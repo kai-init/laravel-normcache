@@ -6,7 +6,9 @@ use NormCache\Facades\NormCache;
 
 trait HandlesCacheInvalidation
 {
-    // --- inserts (version bump only, individual model caches unaffected) ---
+    // -------------------------------------------------------------------------
+    // Inserts — version bump only, model cache unaffected
+    // -------------------------------------------------------------------------
 
     public function insert(array $values): bool
     {
@@ -41,7 +43,9 @@ trait HandlesCacheInvalidation
         return $id;
     }
 
-    // --- updates flush the model cache and bump the version ---
+    // -------------------------------------------------------------------------
+    // Updates / deletes — flush model cache and bump version
+    // -------------------------------------------------------------------------
 
     public function update(array $values): int
     {
@@ -101,10 +105,14 @@ trait HandlesCacheInvalidation
     public function truncate(): void
     {
         parent::truncate();
-        NormCache::flushClass($this->model);
+        NormCache::flushModel($this->model);
     }
 
-    protected function coordinateInvalidation(bool $isUpdate, callable $callback): mixed
+    // -------------------------------------------------------------------------
+    // Private
+    // -------------------------------------------------------------------------
+
+    private function coordinateInvalidation(bool $isUpdate, callable $callback): mixed
     {
         $result = $callback();
 
@@ -119,7 +127,7 @@ trait HandlesCacheInvalidation
         }
 
         if (!$this->model->exists) {
-            NormCache::flushClass($this->model);
+            NormCache::flushModel($this->model);
         }
 
         return $result;

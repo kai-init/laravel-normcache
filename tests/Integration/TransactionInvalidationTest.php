@@ -54,14 +54,13 @@ class TransactionInvalidationTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         DB::transaction(function () use ($author) {
             $author->update(['name' => 'Alicia']);
         });
 
-        $this->assertNull(NormCache::get($modelKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
     public function test_transaction_commit_flushes_other_model_keys_for_the_same_class(): void
@@ -70,18 +69,15 @@ class TransactionInvalidationTest extends TestCase
         $bob = Author::create(['name' => 'Bob']);
         Author::all();
 
-        $aliceKey = NormCache::modelKey(Author::class, $alice->id);
-        $bobKey = NormCache::modelKey(Author::class, $bob->id);
-
-        $this->assertNotNull(NormCache::get($aliceKey));
-        $this->assertNotNull(NormCache::get($bobKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
 
         DB::transaction(function () use ($alice) {
             $alice->update(['name' => 'Alicia']);
         });
 
-        $this->assertNull(NormCache::get($aliceKey));
-        $this->assertNull(NormCache::get($bobKey));
+        $this->assertNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $bob->id));
     }
 
     public function test_model_key_preserved_after_transaction_rollback(): void
@@ -89,8 +85,7 @@ class TransactionInvalidationTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         try {
             DB::transaction(function () use ($author) {
@@ -100,7 +95,7 @@ class TransactionInvalidationTest extends TestCase
         } catch (\RuntimeException) {
         }
 
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
     public function test_multiple_writes_to_same_model_in_transaction_produce_one_version_bump(): void
@@ -156,22 +151,22 @@ class TransactionInvalidationTest extends TestCase
         Author::create(['name' => 'Bob']);
         Author::all();
 
-        $modelKey = NormCache::modelKey(Author::class, $author->id);
-        $this->assertNotNull(NormCache::get($modelKey));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
         $keyExistedMidTx = null;
+        $authorId = $author->id;
 
         try {
-            DB::transaction(function () use ($author, $modelKey, &$keyExistedMidTx) {
+            DB::transaction(function () use ($author, $authorId, &$keyExistedMidTx) {
                 Author::where('id', $author->id)->delete();
-                $keyExistedMidTx = NormCache::get($modelKey) !== null;
+                $keyExistedMidTx = $this->modelCacheEntry(Author::class, $authorId) !== null;
                 throw new \RuntimeException('force rollback');
             });
         } catch (\RuntimeException) {
         }
 
         $this->assertTrue($keyExistedMidTx, 'model key must not be deleted before the transaction commits');
-        $this->assertNotNull(NormCache::get($modelKey), 'model key must survive a rolled-back bulk delete');
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id), 'model key must survive a rolled-back bulk delete');
     }
 
     public function test_committed_transaction_invalidates_stale_query_cache(): void
