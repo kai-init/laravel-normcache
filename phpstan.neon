@@ -8,10 +8,10 @@ parameters:
     ignoreErrors:
         -
             identifier: arguments.count
-            path: src/CacheManager.php
+            path: src/Support/RedisStore.php
         -
             identifier: argument.type
-            path: src/CacheManager.php
+            path: src/Support/RedisStore.php
         -
             identifier: trait.unused
             path: src/Traits/*

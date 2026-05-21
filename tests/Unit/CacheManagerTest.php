@@ -43,24 +43,6 @@ class CacheManagerTest extends TestCase
         $this->assertNull($this->manager->getStore()->get('foo'));
     }
 
-    public function test_store_set_if_absent_succeeds_when_key_missing(): void
-    {
-        $result = $this->manager->getStore()->setIfAbsent('lock', 1, 10);
-
-        $this->assertTrue($result);
-        $this->assertEquals(1, $this->manager->getStore()->get('lock'));
-    }
-
-    public function test_store_set_if_absent_fails_when_key_present(): void
-    {
-        $this->manager->getStore()->set('lock', 1, 60);
-
-        $result = $this->manager->getStore()->setIfAbsent('lock', 2, 10);
-
-        $this->assertFalse($result);
-        $this->assertEquals(1, $this->manager->getStore()->get('lock'));
-    }
-
     public function test_store_get_many_returns_values_in_key_order(): void
     {
         $this->manager->getStore()->set('a', 'alpha', 60);
@@ -87,6 +69,15 @@ class CacheManagerTest extends TestCase
 
         $this->assertStringNotContainsString('i:', $raw);
         $this->assertEquals(99, $this->manager->getStore()->get('num'));
+    }
+
+    public function test_store_set_json_writes_plain_json_payload(): void
+    {
+        $this->manager->getStore()->setJson('ids', [1, 2, 3], 60);
+
+        $raw = Redis::connection('model-cache-test')->get('test:ids');
+
+        $this->assertSame('[1,2,3]', $raw);
     }
 
     // -------------------------------------------------------------------------

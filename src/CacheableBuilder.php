@@ -171,7 +171,7 @@ class CacheableBuilder extends Builder
 
         if ($cacheData['ids'] === null) {
             return $this->finalizeResult(NormCache::getModels(
-                $this->resolveIds($key, $base, $cacheData['lock']),
+                $this->resolveIds($key, $base),
                 $model, $selectedCols, null, $this
             ));
         }
@@ -183,26 +183,14 @@ class CacheableBuilder extends Builder
         return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
 
-    private function resolveIds(string $key, QueryBuilder $base, ?string $lockKey = null): array
+    private function resolveIds(string $key, QueryBuilder $base): array
     {
-        if ($lockKey === null) {
-            return NormCache::pollQueryIds($key) ?? $this->buildIds($base);
-        }
-
-        // We own the lock (acquired in Lua eval).
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheMiss($this->model::class, $key));
         }
 
-        try {
-            $ids = $this->buildIds($base);
-            NormCache::storeQueryIds($key, $ids, $lockKey, $this->queryTtl);
-            $lockKey = null;
-        } finally {
-            if ($lockKey) {
-                NormCache::releaseLock($lockKey);
-            }
-        }
+        $ids = $this->buildIds($base);
+        NormCache::storeQueryIds($key, $ids, $this->queryTtl);
 
         return $ids;
     }

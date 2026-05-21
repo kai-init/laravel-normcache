@@ -42,15 +42,9 @@ final class RedisStore
         $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
     }
 
-    public function setIfAbsent(string $key, mixed $value, int $ttl): bool
+    public function setJson(string $key, array $value, int $ttl): void
     {
-        return (bool) $this->connection->set(
-            $this->prefix($key),
-            $this->serialize($value),
-            'EX',
-            $ttl,
-            'NX'
-        );
+        $this->connection->setex($this->prefix($key), $ttl, json_encode($value));
     }
 
     public function setNx(string $key, string $value): void
@@ -165,42 +159,6 @@ final class RedisStore
                 $pipe->expire($memberKey, $ttl);
             });
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Atomic set + lock release
-    // -------------------------------------------------------------------------
-
-    public function setAndRelease(string $key, mixed $value, int $ttl, string $lockKey): void
-    {
-        if (count($this->groupByTag([$key, $lockKey])) !== 1) {
-            $this->set($key, $value, $ttl);
-            $this->delete($lockKey);
-
-            return;
-        }
-
-        $this->connection->pipeline(function ($pipe) use ($key, $value, $ttl, $lockKey) {
-            $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
-            $pipe->del($this->prefix($lockKey));
-        });
-    }
-
-    public function setJsonAndRelease(string $key, array $ids, int $ttl, string $lockKey): void
-    {
-        $json = json_encode($ids);
-
-        if (count($this->groupByTag([$key, $lockKey])) !== 1) {
-            $this->connection->setex($this->prefix($key), $ttl, $json);
-            $this->delete($lockKey);
-
-            return;
-        }
-
-        $this->connection->pipeline(function ($pipe) use ($key, $json, $ttl, $lockKey) {
-            $pipe->setex($this->prefix($key), $ttl, $json);
-            $pipe->del($this->prefix($lockKey));
-        });
     }
 
     // -------------------------------------------------------------------------

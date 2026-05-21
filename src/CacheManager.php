@@ -101,17 +101,13 @@ class CacheManager
             local ids_raw = redis.call('GET', query_key)
 
             if not ids_raw then
-                local lock_key = KEYS[4] .. ver .. ':' .. ARGV[1]
-                local acquired = redis.call('SET', lock_key, 1, 'EX', 5, 'NX')
-                return {'miss', ver, acquired and 1 or 0}
+                return {'miss', ver}
             end
 
             local ok, ids = pcall(cjson.decode, ids_raw)
             if not ok or type(ids) ~= 'table' then
                 redis.call('DEL', query_key)
-                local lock_key = KEYS[4] .. ver .. ':' .. ARGV[1]
-                local acquired = redis.call('SET', lock_key, 1, 'EX', 5, 'NX')
-                return {'corrupt', ver, acquired and 1 or 0}
+                return {'corrupt', ver}
             end
 
             if #ids == 0 then
@@ -120,7 +116,7 @@ class CacheManager
 
             local model_keys = {}
             for i, id in ipairs(ids) do
-                model_keys[i] = KEYS[5] .. id
+                model_keys[i] = KEYS[4] .. id
             end
 
             local models = {}
@@ -150,7 +146,6 @@ class CacheManager
                 "ver:{{$classKey}}:",
                 "scheduled:{{$classKey}}:",
                 "query:{{$classKey}}:v",
-                "building:query:{{$classKey}}:v",
                 "model:{{$classKey}}:",
             ],
             [$hash, (int) floor(microtime(true) * 1000)]
@@ -159,7 +154,7 @@ class CacheManager
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
 
-            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null, 'lock' => null];
+            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null];
         }
 
         $status = $result[0] ?? null;
@@ -168,26 +163,24 @@ class CacheManager
         $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
 
         if ($status === 'miss') {
-            $lock = (int) ($result[2] ?? 0) === 1 ? "building:{$queryKey}" : null;
-
-            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => $lock];
+            return ['key' => $queryKey, 'ids' => null, 'models' => null];
         }
 
         if ($status === 'corrupt') {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => "building:{$queryKey}"];
+            return ['key' => $queryKey, 'ids' => null, 'models' => null];
         }
 
         if ($status === 'empty') {
-            return ['key' => $queryKey, 'ids' => [], 'models' => [], 'lock' => null];
+            return ['key' => $queryKey, 'ids' => [], 'models' => []];
         }
 
         if ($status !== 'hit') {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null, 'lock' => null];
+            return ['key' => $queryKey, 'ids' => null, 'models' => null];
         }
 
         $models = $this->store->deserializeMany($result[3]);
 
-        return ['key' => $queryKey, 'ids' => $result[2], 'models' => $models, 'lock' => null];
+        return ['key' => $queryKey, 'ids' => $result[2], 'models' => $models];
     }
 
     public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
@@ -211,12 +204,10 @@ class CacheManager
         $data = $this->store->get($key);
 
         if ($data !== null) {
-            return ['key' => $key, 'data' => $data, 'lock' => null];
+            return ['key' => $key, 'data' => $data];
         }
 
-        $lockKey = $this->store->setIfAbsent("building:{$key}", 1, 5) ? "building:{$key}" : null;
-
-        return ['key' => $key, 'data' => null, 'lock' => $lockKey];
+        return ['key' => $key, 'data' => null];
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
@@ -235,16 +226,6 @@ class CacheManager
         ];
     }
 
-    public function pollCacheEntry(string $key): mixed
-    {
-        return $this->poll(fn() => $this->store->get($key));
-    }
-
-    public function pollQueryIds(string $key): ?array
-    {
-        return $this->poll(fn() => $this->getQueryIds($key));
-    }
-
     public function getAggregates(array $keys): array
     {
         return $this->store->getMany($keys);
@@ -254,13 +235,9 @@ class CacheManager
     // High-level cache writes
     // -------------------------------------------------------------------------
 
-    public function storeThroughResult(string $key, ?string $lockKey, array $payload, string $relatedClass, array $modelAttrs): void
+    public function storeThroughResult(string $key, array $payload, string $relatedClass, array $modelAttrs): void
     {
-        if ($lockKey === null) {
-            $this->store->set($key, $payload, $this->queryTtl);
-        } else {
-            $this->store->setAndRelease($key, $payload, $this->queryTtl, $lockKey);
-        }
+        $this->store->set($key, $payload, $this->queryTtl);
 
         if (!empty($modelAttrs)) {
             $this->cacheModelAttrs($relatedClass, $modelAttrs);
@@ -286,14 +263,9 @@ class CacheManager
         $this->store->set($key, $count, $ttl ?? $this->queryTtl);
     }
 
-    public function storeQueryIds(string $key, array $ids, string $lockKey, ?int $ttl = null): void
+    public function storeQueryIds(string $key, array $ids, ?int $ttl = null): void
     {
-        $this->store->setJsonAndRelease($key, $ids, $ttl ?? $this->queryTtl, $lockKey);
-    }
-
-    public function releaseLock(string $lock): void
-    {
-        $this->store->delete($lock);
+        $this->store->setJson($key, $ids, $ttl ?? $this->queryTtl);
     }
 
     // -------------------------------------------------------------------------
@@ -611,7 +583,11 @@ class CacheManager
         $prototype = self::prototype($modelClass);
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
-        $query = $this->prepareMissedQuery($modelClass, $missedQuery, $preserveQueryShape);
+        $query = $this->prepareMissedQuery(
+            $modelClass,
+            $missedQuery instanceof CacheableBuilder ? $missedQuery : null,
+            $preserveQueryShape
+        );
         $loaded = $query->whereIn($qualifiedPk, $missed)
             ->get(['*'])
             ->keyBy($pk);
@@ -640,10 +616,15 @@ class CacheManager
         return $loaded->all();
     }
 
-    private function prepareMissedQuery(string $modelClass, ?EloquentBuilder $missedQuery, bool $preserveQueryShape): CacheableBuilder
+    private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery, bool $preserveQueryShape): EloquentBuilder
     {
         if ($missedQuery === null) {
-            return $modelClass::query()->withoutCache();
+            $builder = $modelClass::query();
+            if ($builder instanceof CacheableBuilder) {
+                return $builder->withoutCache();
+            }
+
+            return $builder;
         }
 
         $query = clone $missedQuery;
@@ -740,34 +721,6 @@ class CacheManager
         } catch (\Exception $e) {
             $this->fallback($e);
         }
-    }
-
-    private function poll(callable $getter): mixed
-    {
-        $delay = 20_000;
-        for ($i = 0; $i < 5; $i++) {
-            usleep($delay);
-            $result = $getter();
-            if ($result !== null) {
-                return $result;
-            }
-            $delay = min($delay * 2, 200_000);
-        }
-
-        return null;
-    }
-
-    private function getQueryIds(string $key): ?array
-    {
-        $value = $this->store->getRaw($key);
-
-        if ($value === null) {
-            return null;
-        }
-
-        $decoded = json_decode($value, true);
-
-        return is_array($decoded) ? $decoded : null;
     }
 
     private function cacheModelAttrs(string $modelClass, array $modelAttrs): void

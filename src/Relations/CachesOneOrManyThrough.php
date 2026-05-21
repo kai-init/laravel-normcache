@@ -20,12 +20,10 @@ trait CachesOneOrManyThrough
         $builder = $this->prepareQueryBuilder($columns);
         $hash = QueryHasher::fromQuery($builder->toBase());
         $relatedClass = $this->related::class;
-        $lockKey = null;
 
         try {
             $cacheData = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
             $key = $cacheData['key'];
-            $lockKey = $cacheData['lock'];
 
             if ($cacheData['data'] !== null) {
                 return $this->hydrateFromIds(
@@ -35,19 +33,6 @@ trait CachesOneOrManyThrough
                     $shouldCacheModels ? null : $builder->getQuery()->columns,
                     $cacheData['data']['throughKeys']
                 );
-            }
-
-            if ($lockKey === null) {
-                $payload = NormCache::pollCacheEntry($key);
-                if ($payload !== null) {
-                    return $this->hydrateFromIds(
-                        $payload['ids'],
-                        $relatedClass,
-                        $builder,
-                        $shouldCacheModels ? null : $builder->getQuery()->columns,
-                        $payload['throughKeys']
-                    );
-                }
             }
 
             $result = parent::get($columns);
@@ -62,18 +47,13 @@ trait CachesOneOrManyThrough
                 }
             }
 
-            NormCache::storeThroughResult($key, $lockKey, $payload, $relatedClass, $modelAttrs);
-            $lockKey = null;
+            NormCache::storeThroughResult($key, $payload, $relatedClass, $modelAttrs);
 
             return $result;
         } catch (\Exception $e) {
             NormCache::fallback($e);
 
             return parent::get($columns);
-        } finally {
-            if ($lockKey !== null) {
-                try { NormCache::releaseLock($lockKey); } catch (\Exception) {}
-            }
         }
     }
 
