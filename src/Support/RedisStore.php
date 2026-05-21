@@ -69,7 +69,7 @@ final class RedisStore
     }
 
     // -------------------------------------------------------------------------
-    // Bulk opertaions
+    // Bulk operations
     // -------------------------------------------------------------------------
 
     public function getMany(array $keys): array
@@ -87,10 +87,9 @@ final class RedisStore
             );
         }
 
-        $groups = $this->groupByTag($keys);
         $results = [];
 
-        foreach ($groups as $groupKeys) {
+        foreach ($this->groupByTag($keys) as $groupKeys) {
             $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
             $raw = $this->connection->mget($prefixed);
 
@@ -110,6 +109,16 @@ final class RedisStore
             return;
         }
 
+        if (!$this->cluster) {
+            $this->connection->pipeline(function ($pipe) use ($pairs, $ttl) {
+                foreach ($pairs as $key => $value) {
+                    $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
+                }
+            });
+
+            return;
+        }
+
         foreach ($this->groupByTag(array_keys($pairs)) as $keys) {
             $this->connection->pipeline(function ($pipe) use ($keys, $pairs, $ttl) {
                 foreach ($keys as $key) {
@@ -126,6 +135,21 @@ final class RedisStore
     public function setManyTracked(array $attrsByKey, int $ttl, string $memberKey): void
     {
         if (empty($attrsByKey)) {
+            return;
+        }
+
+        if (!$this->cluster) {
+            $this->connection->pipeline(function ($pipe) use ($attrsByKey, $ttl, $memberKey) {
+                $prefixedKeys = [];
+                foreach ($attrsByKey as $key => $attrs) {
+                    $p = $this->prefix($key);
+                    $prefixedKeys[] = $p;
+                    $pipe->setex($p, $ttl, $this->serialize($attrs));
+                }
+                $pipe->sadd($memberKey, ...$prefixedKeys);
+                $pipe->expire($memberKey, $ttl);
+            });
+
             return;
         }
 
@@ -149,9 +173,7 @@ final class RedisStore
 
     public function setAndRelease(string $key, mixed $value, int $ttl, string $lockKey): void
     {
-        $groups = $this->groupByTag([$key, $lockKey]);
-
-        if (count($groups) !== 1) {
+        if (count($this->groupByTag([$key, $lockKey])) !== 1) {
             $this->set($key, $value, $ttl);
             $this->delete($lockKey);
 
@@ -166,10 +188,9 @@ final class RedisStore
 
     public function setJsonAndRelease(string $key, array $ids, int $ttl, string $lockKey): void
     {
-        $groups = $this->groupByTag([$key, $lockKey]);
         $json = json_encode($ids);
 
-        if (count($groups) !== 1) {
+        if (count($this->groupByTag([$key, $lockKey])) !== 1) {
             $this->connection->setex($this->prefix($key), $ttl, $json);
             $this->delete($lockKey);
 
@@ -206,6 +227,14 @@ final class RedisStore
             return;
         }
 
+        if (!$this->cluster) {
+            foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
+                $this->connection->unlink(...$chunk);
+            }
+
+            return;
+        }
+
         foreach ($this->groupByTag($prefixedKeys) as $keys) {
             foreach (array_chunk($keys, 1000) as $chunk) {
                 $this->connection->unlink(...$chunk);
@@ -235,7 +264,7 @@ final class RedisStore
     /** Prefixes $keys before passing them to EVAL; $args are passed as-is. */
     public function eval(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = array_map(fn($k) => $this->prefix($k), $keys);
+        $prefixedKeys = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
 
         return $this->connection->eval($script, count($prefixedKeys), ...$prefixedKeys, ...$args);
     }
@@ -260,16 +289,10 @@ final class RedisStore
 
     private function groupByTag(array $keys): array
     {
-        if (!$this->cluster) {
-            return [$keys];
-        }
-
         $groups = [];
+
         foreach ($keys as $key) {
-            $tag = $key;
-            if (preg_match('/\{([^}]+)\}/', $key, $matches)) {
-                $tag = $matches[1];
-            }
+            $tag = preg_match('/\{([^}]+)\}/', $key, $matches) ? $matches[1] : $key;
             $groups[$tag][] = $key;
         }
 
