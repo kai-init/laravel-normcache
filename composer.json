@@ -25,9 +25,13 @@
     },
     "require-dev": {
         "laravel/pint": "^1.18",
+        "maximebf/php-debugbar": "^1.0",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
         "phpunit/phpunit": "^10.5|^11.0|^12.0",
         "larastan/larastan": "^3.0"
+    },
+    "suggest": {
+        "barryvdh/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^3.0)"
     },
     "autoload": {
         "psr-4": {
