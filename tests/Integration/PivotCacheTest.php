@@ -113,6 +113,24 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_belongs_to_many_warm_hit_handles_sparse_related_id_keys(): void
+    {
+        $authorA = Author::create(['name' => 'Alice']);
+        $authorB = Author::create(['name' => 'Bob']);
+
+        $shared = Tag::create(['name' => 'Shared']);
+        $exclusive = Tag::create(['name' => 'Exclusive']);
+
+        $authorA->tags()->attach([$shared->id, $exclusive->id]);
+        $authorB->tags()->attach([$shared->id]);
+
+        Author::with('tags')->orderBy('id')->get();
+        $authors = Author::with('tags')->orderBy('id')->get();
+
+        $this->assertSame(['Exclusive', 'Shared'], $authors[0]->tags->pluck('name')->sort()->values()->all());
+        $this->assertSame(['Shared'], $authors[1]->tags->pluck('name')->sort()->values()->all());
+    }
+
     public function test_belongs_to_many_warm_hit_zero_sql(): void
     {
         $author = Author::create(['name' => 'Alice']);

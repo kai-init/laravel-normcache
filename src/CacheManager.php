@@ -284,6 +284,9 @@ class CacheManager
             return [];
         }
 
+        // arrays may come with sparse numeric keys, for example after array_unique().
+        $ids = array_values($ids);
+
         $classKey = $this->classKey($modelClass);
 
         if ($raw === null) {
@@ -368,7 +371,6 @@ class CacheManager
 
         $this->handle(fn() => $this->forceFlushModel($model::class));
     }
-
 
     public function flushInstance(Model $model): void
     {
