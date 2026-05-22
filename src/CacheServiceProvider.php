@@ -7,6 +7,12 @@ use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Console\FlushCommand;
+use NormCache\Debug\NormCacheCollector;
+use NormCache\Events\ModelCacheHit;
+use NormCache\Events\ModelCacheMiss;
+use NormCache\Events\QueryBypassed;
+use NormCache\Events\QueryCacheHit;
+use NormCache\Events\QueryCacheMiss;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -55,6 +61,10 @@ class CacheServiceProvider extends ServiceProvider
                     });
                 }
             }
+
+            if (config('normcache.debugbar', false) && $this->app->bound('debugbar')) {
+                $this->registerDebugbarCollector();
+            }
         }
 
         if ($this->app->runningInConsole()) {
@@ -64,5 +74,18 @@ class CacheServiceProvider extends ServiceProvider
 
             $this->commands([FlushCommand::class]);
         }
+    }
+
+    private function registerDebugbarCollector(): void
+    {
+        $collector = new NormCacheCollector();
+        $this->app->instance('normcache.collector', $collector);
+        $this->app->make('debugbar')->addCollector($collector);
+
+        Event::listen(QueryCacheHit::class,  fn($e) => $collector->addQueryHit($e->modelClass, $e->key));
+        Event::listen(QueryCacheMiss::class, fn($e) => $collector->addQueryMiss($e->modelClass, $e->key));
+        Event::listen(QueryBypassed::class,  fn($e) => $collector->addBypassed($e->modelClass, $e->reasons));
+        Event::listen(ModelCacheHit::class,  fn($e) => $collector->addModelHit($e->modelClass, $e->ids));
+        Event::listen(ModelCacheMiss::class, fn($e) => $collector->addModelMiss($e->modelClass, $e->ids));
     }
 }

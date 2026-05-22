@@ -9,29 +9,68 @@ final class QueryInspector
 {
     private const COLUMN_IDENTIFIER = '[`"]?[A-Za-z_][A-Za-z0-9_]*[`"]?';
 
-    public static function isPureModelQuery(QueryBuilder $base, string $table): bool
+    public static function isCacheable(QueryBuilder $base, string $table, ?array $resolvedColumns = null): bool
     {
+        return empty(self::bypassReasons($base, $table, $resolvedColumns));
+    }
+
+    public static function categoryLabels(): array
+    {
+        return [
+            'dependency'    => "can't infer cache dependency",
+            'normalization' => "result can't be normalized into model keys",
+            'safety'        => 'bypassed for query correctness',
+            'opted_out'     => 'explicitly disabled',
+        ];
+    }
+
+    /**
+     * Categories:
+     *   dependency    — cross-table query; cache can't track invalidation automatically
+     *   normalization — result can't be decomposed into model cache keys
+     *   safety        — bypassed for query correctness; no caching workaround
+     *
+     * @param  array<int,mixed>|null $resolvedColumns  null skips the calculated-column check
+     * @return array<string, list<string>>
+     */
+    public static function bypassReasons(QueryBuilder $base, string $table, ?array $resolvedColumns = null): array
+    {
+        $dependency    = [];
+        $normalization = [];
+        $safety        = [];
+
         foreach ((array) $base->orders as $order) {
             if (isset($order['type']) && $order['type'] === 'Raw') {
-                return false;
+                $dependency[] = 'raw ORDER expression';
+                break;
             }
         }
 
         if (self::hasSubqueryWheres((array) $base->wheres)) {
-            return false;
+            $dependency[] = 'subquery WHERE (whereHas/whereExists)';
         }
 
         if (!self::isCanonicalFrom($base, $table)) {
-            return false;
+            $dependency[] = 'non-standard FROM (subquery or raw expression)';
         }
 
-        return empty($base->joins)
-            && empty($base->groups)
-            && empty($base->havings)
-            && empty($base->unions)
-            && empty($base->aggregate)
-            && empty($base->distinct)
-            && is_null($base->lock);
+        if (!empty($base->joins))     { $dependency[]   = 'JOIN clauses'; }
+        if (!empty($base->groups))    { $normalization[] = 'GROUP BY'; }
+        if (!empty($base->havings))   { $normalization[] = 'HAVING'; }
+        if (!empty($base->unions))    { $normalization[] = 'UNION'; }
+        if (!empty($base->aggregate)) { $normalization[] = 'aggregate function (count/sum/etc.)'; }
+        if (!empty($base->distinct))  { $normalization[] = 'DISTINCT'; }
+        if (!is_null($base->lock))    { $safety[]        = 'query lock (SELECT FOR UPDATE)'; }
+
+        if (self::hasCalculatedColumns($resolvedColumns)) {
+            $normalization[] = 'calculated or raw SELECT expressions';
+        }
+
+        return array_filter([
+            'dependency'    => $dependency,
+            'normalization' => $normalization,
+            'safety'        => $safety,
+        ]);
     }
 
     public static function resolveSelectedColumns(QueryBuilder $base, ?array $fallback): ?array

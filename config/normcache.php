@@ -11,4 +11,5 @@ return [
     'events' => (bool) env('NORMCACHE_EVENTS', true),
     'fallback' => (bool) env('NORMCACHE_FALLBACK', false),
     'fire_retrieved' => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
+    'debugbar' => env('NORMCACHE_DEBUGBAR', false),
 ];
