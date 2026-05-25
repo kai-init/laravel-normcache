@@ -2,6 +2,7 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Query\Expression;
 
@@ -82,7 +83,7 @@ final class QueryInspector
         }
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression || !str_ends_with((string) $column, '*')) {
+            if (!is_string($column) || $column instanceof Expression || !str_ends_with($column, '*')) {
                 return $columns;
             }
         }
@@ -97,11 +98,11 @@ final class QueryInspector
         }
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression) {
+            if (!is_string($column) || $column instanceof Expression || $column instanceof ExpressionContract) {
                 return true;
             }
 
-            if (!self::isCacheableSelectedColumn((string) $column)) {
+            if (!self::isCacheableSelectedColumn($column)) {
                 return true;
             }
         }
