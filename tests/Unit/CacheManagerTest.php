@@ -244,6 +244,35 @@ class CacheManagerTest extends TestCase
         $this->assertSame(0, $this->manager->flushAll());
     }
 
+    public function test_flush_all_removes_keys_when_redis_connection_prefix_is_enabled(): void
+    {
+        config()->set('database.redis.options.prefix', 'laravel:');
+        Redis::purge('model-cache-test');
+
+        $manager = new CacheManager(
+            'model-cache-test',
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            config('normcache.key_prefix'),
+            config('normcache.cooldown'),
+        );
+
+        $store = $manager->getStore();
+        $postsKey = DB::getDefaultConnection() . ':posts';
+
+        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("ver:{{$postsKey}}:", 3, 3600);
+
+        $deleted = $manager->flushAll();
+
+        $this->assertSame(3, $deleted);
+        $this->assertSame([], Redis::connection('model-cache-test')->keys('*'));
+
+        Redis::purge('model-cache-test');
+        config()->set('database.redis.options.prefix', '');
+    }
+
     public function test_targeted_delete_outside_transaction_removes_membership_reference(): void
     {
         $author = Author::create(['name' => 'Alice']);

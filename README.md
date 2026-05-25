@@ -164,14 +164,7 @@ Enable cluster mode in the config:
 'cluster' => env('NORMCACHE_CLUSTER', false),
 ```
 
-> **Note:** `flushAll()` is not supported in cluster mode. To perform a full flush on a cluster, use `NormCache::getFlushPatterns()` to get the key patterns and run your own per-node scan and delete:
->
-> ```php
-> $patterns = NormCache::getFlushPatterns();
-> // ['query:*', 'model:*', 'ver:*', ...]
->
-> // Scan and UNLINK each pattern on every master node using your preferred approach.
-> ```
+`flushAll()` is supported in cluster mode.
 
 ---
 

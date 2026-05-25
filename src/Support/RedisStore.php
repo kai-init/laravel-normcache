@@ -3,6 +3,9 @@
 namespace NormCache\Support;
 
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PhpRedisClusterConnection;
+use Illuminate\Redis\Connections\PhpRedisConnection;
+use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
 
 final class RedisStore
@@ -203,9 +206,20 @@ final class RedisStore
     public function flushByPatterns(array $patterns): int
     {
         $total = 0;
+        $connectionPrefix = $this->connectionPrefix();
 
         foreach ($patterns as $pattern) {
-            $keys = $this->connection->keys($this->prefix($pattern));
+            $keys = $this->keysForPattern($pattern);
+
+            if ($connectionPrefix !== '') {
+                $keys = array_map(
+                    fn($key) => str_starts_with($key, $connectionPrefix)
+                        ? substr($key, strlen($connectionPrefix))
+                        : $key,
+                    $keys
+                );
+            }
+
             if (!empty($keys)) {
                 $total += count($keys);
                 $this->asyncDel($keys);
@@ -255,6 +269,53 @@ final class RedisStore
         }
 
         return $groups;
+    }
+
+    private function connectionPrefix(): string
+    {
+        return match (true) {
+            $this->connection instanceof PhpRedisConnection => $this->connection->_prefix(''),
+            $this->connection instanceof PredisConnection => $this->connection->getOptions()->prefix ?: '',
+            default => '',
+        };
+    }
+
+    private function keysForPattern(string $pattern): array
+    {
+        $pattern = $this->prefix($pattern);
+
+        if ($this->connection instanceof PhpRedisClusterConnection) {
+            return $this->scanPhpRedisClusterKeys($pattern);
+        }
+
+        return $this->connection->keys($pattern);
+    }
+
+    private function scanPhpRedisClusterKeys(string $pattern): array
+    {
+        $keys = [];
+        $defaultCursor = version_compare(phpversion('redis'), '6.1.0', '>=') ? null : '0';
+
+        foreach ($this->connection->client()->_masters() as $node) {
+            $cursor = $defaultCursor;
+
+            do {
+                $result = $this->connection->scan($cursor, [
+                    'node' => $node,
+                    'match' => $pattern,
+                    'count' => 1000,
+                ]);
+
+                if ($result === false) {
+                    break;
+                }
+
+                [$cursor, $chunk] = $result;
+                $keys = [...$keys, ...$chunk];
+            } while ($cursor !== 0);
+        }
+
+        return $keys;
     }
 
     private function serialize(mixed $value): mixed
