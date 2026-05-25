@@ -11,7 +11,7 @@ use Illuminate\Support\Str;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
-class AggregateLoader
+class RelationAggregateLoader
 {
     private static array $cache = [];
 
@@ -51,7 +51,7 @@ class AggregateLoader
             $offset += $idCount;
         }
 
-        $data = NormCache::getAggregates($keys);
+        $data = NormCache::getRelationAggregates($keys);
         $toCache = [];
 
         $hydrator = self::$cache['hydrator'] ??= \Closure::bind(static function ($model, $key, $value) {
@@ -94,7 +94,7 @@ class AggregateLoader
         }
 
         if (!empty($toCache)) {
-            NormCache::setAggregates($toCache);
+            NormCache::setRelationAggregates($toCache);
         }
 
         return $models;

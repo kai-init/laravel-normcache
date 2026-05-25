@@ -5,6 +5,7 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\CacheableBuilder;
+use NormCache\Debug\NormCacheCollector;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
@@ -16,6 +17,8 @@ trait CachesOneOrManyThrough
             return parent::get($columns);
         }
 
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
         $shouldCacheModels = $columns === ['*'] && $this->query->toBase()->columns === null;
         $builder = $this->prepareQueryBuilder($columns);
         $hash = QueryHasher::fromQuery($builder->toBase());
@@ -26,6 +29,10 @@ trait CachesOneOrManyThrough
             $key = $cacheData['key'];
 
             if ($cacheData['data'] !== null) {
+                NormCacheCollector::recordQuery('through hit', $relatedClass, $key, $debugbarStart, [
+                    'through' => $this->throughParent::class,
+                ]);
+
                 return $this->hydrateFromIds(
                     $cacheData['data']['ids'],
                     $relatedClass,
@@ -34,6 +41,10 @@ trait CachesOneOrManyThrough
                     $cacheData['data']['throughKeys']
                 );
             }
+
+            NormCacheCollector::recordQuery('through miss', $relatedClass, $key, $debugbarStart, [
+                'through' => $this->throughParent::class,
+            ]);
 
             $result = parent::get($columns);
             $payload = $this->cachePayloadFromResult($result);

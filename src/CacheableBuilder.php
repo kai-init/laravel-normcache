@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
+use NormCache\Traits\CachesScalarResults;
+use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
@@ -18,7 +20,7 @@ use NormCache\Traits\HandlesCacheInvalidation;
 
 class CacheableBuilder extends Builder
 {
-    use HandlesCacheInvalidation;
+    use CachesScalarResults, HandlesCacheInvalidation;
 
     private bool $skipCache = false;
 
@@ -110,6 +112,8 @@ class CacheableBuilder extends Builder
             return $this->getWithoutCache($columns);
         }
 
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
         $base = $this->toBase();
         $resolvedCols = QueryInspector::resolveSelectedColumns($base, (array) $columns);
         $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
@@ -118,6 +122,8 @@ class CacheableBuilder extends Builder
             if (NormCache::isEventsEnabled()) {
                 event(new QueryBypassed($this->model::class, $bypassReasons));
             }
+
+            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
 
             return $this->getWithoutCache($columns);
         }
@@ -145,6 +151,8 @@ class CacheableBuilder extends Builder
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
         $base = $this->toBase();
         // resolvedColumns omitted — paginate caches the count, not rows; column selection is irrelevant.
         $bypassReasons = $this->computeBypassReasons($base);
@@ -154,28 +162,37 @@ class CacheableBuilder extends Builder
                 event(new QueryBypassed($this->model::class, $bypassReasons));
             }
 
+            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
+
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
         $hash = $this->queryCacheKey($base);
 
-        try {
-            $cacheData = NormCache::getNamespacedCache('count', $this->model::class, $hash);
-            $countKey = $cacheData['key'];
-            $cachedTotal = $cacheData['data'];
+        $queryStart = NormCacheCollector::beginMeasure();
 
-            $countHit = $cachedTotal !== null;
+        try {
+            $countKey = NormCache::getNamespacedCache('count', $this->model::class, $hash)['key'];
+            $cachedTotal = NormCache::getQueryAggregate($countKey);
 
             if (NormCache::isEventsEnabled()) {
-                event($countHit
+                event($cachedTotal !== null
                     ? new QueryCacheHit($this->model::class, $countKey)
                     : new QueryCacheMiss($this->model::class, $countKey)
                 );
             }
 
-            if (!$countHit) {
+            NormCacheCollector::recordQuery(
+                $cachedTotal !== null ? 'query hit' : 'query miss',
+                $this->model::class,
+                $countKey,
+                $queryStart,
+                ['kind' => 'count']
+            );
+
+            if ($cachedTotal === null) {
                 $cachedTotal = $base->getCountForPagination();
-                NormCache::storeCount($countKey, $cachedTotal, $this->queryTtl);
+                NormCache::storeQueryAggregate($countKey, $cachedTotal, $this->queryTtl);
             }
 
             return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
@@ -209,20 +226,29 @@ class CacheableBuilder extends Builder
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
     {
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
         $hash = $this->queryCacheKey($base);
         $cacheData = NormCache::getModelsFromQuery($model, $hash);
         $key = $cacheData['key'];
 
         if ($cacheData['ids'] === null) {
-            return $this->finalizeResult(NormCache::getModels(
-                $this->resolveIds($key, $base),
-                $model, $selectedCols, null, $this
-            ));
+            NormCacheCollector::recordQuery('query miss', $model, $key, $debugbarStart, ['kind' => 'ids']);
+
+            $ids = $this->resolveIds($key, $base);
+
+            return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
         }
 
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheHit($model, $key));
         }
+
+        NormCacheCollector::recordQuery('query hit', $model, $key, $debugbarStart, [
+            'kind' => 'ids + models',
+            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($cacheData['ids']) . ' ids)',
+            'contains_model' => $cacheData['ids'],
+        ]);
 
         return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
@@ -252,7 +278,7 @@ class CacheableBuilder extends Builder
     private function finalizeResult(array $models): Collection
     {
         if (!empty($this->pendingAggregates)) {
-            $models = (new AggregateLoader($this->model))->load($models, $this->pendingAggregates);
+            $models = (new RelationAggregateLoader($this->model))->load($models, $this->pendingAggregates);
         }
 
         if ($models && $this->eagerLoad) {

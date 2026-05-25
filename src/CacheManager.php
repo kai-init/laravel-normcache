@@ -5,6 +5,7 @@ namespace NormCache;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Support\QueryInspector;
@@ -226,9 +227,16 @@ class CacheManager
         ];
     }
 
-    public function getAggregates(array $keys): array
+    public function getRelationAggregates(array $keys): array
     {
         return $this->store->getMany($keys);
+    }
+
+    public function getQueryAggregate(string $key): mixed
+    {
+        $cached = $this->store->get($key);
+
+        return $cached !== null ? $cached[0] : null;
     }
 
     // -------------------------------------------------------------------------
@@ -253,14 +261,14 @@ class CacheManager
         }
     }
 
-    public function setAggregates(array $entries): void
+    public function setRelationAggregates(array $entries): void
     {
         $this->store->setMany($entries, $this->queryTtl);
     }
 
-    public function storeCount(string $key, int $count, ?int $ttl = null): void
+    public function storeQueryAggregate(string $key, mixed $value, ?int $ttl = null): void
     {
-        $this->store->set($key, $count, $ttl ?? $this->queryTtl);
+        $this->store->set($key, [$value], $ttl ?? $this->queryTtl);
     }
 
     public function storeQueryIds(string $key, array $ids, ?int $ttl = null): void
@@ -284,6 +292,9 @@ class CacheManager
             return [];
         }
 
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
+        $containedInQueryHit = $raw !== null;
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
 
@@ -302,6 +313,10 @@ class CacheManager
         }
 
         if ($missed === []) {
+            if (!$containedInQueryHit) {
+                NormCacheCollector::recordModel('model hit', $modelClass, $ids, $debugbarStart);
+            }
+
             return array_values($hits);
         }
 
@@ -324,6 +339,11 @@ class CacheManager
                 $ordered[] = $hits[$id] ?? $fetched[$id];
             }
         }
+
+        NormCacheCollector::recordModel('model miss', $modelClass, $missed, $debugbarStart, [
+            'hits' => array_keys($hits),
+            'partial' => $hits !== [],
+        ]);
 
         return $ordered;
     }
@@ -416,7 +436,7 @@ class CacheManager
     {
         return $this->store->flushByPatterns([
             'query:*', 'model:*', 'members:model:*', 'ver:*',
-            'agg:*', 'count:*', 'pivot:*', 'through:*', 'scheduled:*', 'building:*',
+            'agg:*', 'count:*', 'scalar:*', 'pivot:*', 'through:*', 'scheduled:*', 'building:*',
         ]);
     }
 

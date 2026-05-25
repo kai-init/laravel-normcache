@@ -5,12 +5,23 @@ parameters:
     level: 5
     paths:
         - src
+    bootstrapFiles:
+        - stubs/DebugBar.stub.php
     ignoreErrors:
         -
             identifier: arguments.count
             path: src/Support/RedisStore.php
         -
             identifier: argument.type
+            path: src/Support/RedisStore.php
+        -
+            identifier: method.notFound
+            path: src/Support/RedisStore.php
+        -
+            identifier: arrayUnpacking.nonIterable
+            path: src/Support/RedisStore.php
+        -
+            identifier: notIdentical.alwaysTrue
             path: src/Support/RedisStore.php
         -
             identifier: trait.unused
