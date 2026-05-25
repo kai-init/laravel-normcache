@@ -211,6 +211,10 @@ trait CachesPivotRelation
             }
         }
 
+        if ($result && $this->query->getEagerLoads()) {
+            $result = $this->query->eagerLoadRelations($result);
+        }
+
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection($result)
         );

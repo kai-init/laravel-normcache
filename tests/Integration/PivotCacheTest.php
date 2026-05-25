@@ -293,6 +293,23 @@ class PivotCacheTest extends TestCase
         $this->assertSame(2, $count);
     }
 
+    public function test_pivot_warm_hit_replays_nested_eager_loads(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $tag->posts()->attach($post->id);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags.posts')->get();
+        $authors = Author::with('tags.posts')->get();
+
+        $fetchedTag = $authors->first()->tags->first();
+
+        $this->assertTrue($fetchedTag->relationLoaded('posts'));
+        $this->assertSame([$post->id], $fetchedTag->posts->modelKeys());
+    }
+
     public function test_attach_after_warm_hit_returns_updated_tags(): void
     {
         $author = Author::create(['name' => 'Alice']);
