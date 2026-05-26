@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
+use NormCache\Debug\NormCacheDebugBarCollector;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -73,7 +74,7 @@ class CacheServiceProvider extends ServiceProvider
 
     private function registerDebugbarCollector(): void
     {
-        $collector = new NormCacheCollector();
+        $collector = new NormCacheDebugBarCollector();
         NormCacheCollector::register($collector);
         $this->app->make('debugbar')->addCollector($collector);
     }
