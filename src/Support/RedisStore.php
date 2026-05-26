@@ -24,8 +24,13 @@ final class RedisStore
     }
 
     // -------------------------------------------------------------------------
-    // Scalar operations
+    // Operations — singular
     // -------------------------------------------------------------------------
+
+    public function prefix(string $key): string
+    {
+        return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
+    }
 
     public function get(string $key): mixed
     {
@@ -38,6 +43,17 @@ final class RedisStore
     public function getRaw(string $key): string|false|null
     {
         return $this->connection->get($this->prefix($key));
+    }
+
+    public function getJson(string $key): ?array
+    {
+        $raw = $this->connection->get($this->prefix($key));
+        if ($raw === null) {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     public function set(string $key, mixed $value, int $ttl): void
@@ -65,8 +81,9 @@ final class RedisStore
         return (int) $this->connection->incr($this->prefix($key));
     }
 
+
     // -------------------------------------------------------------------------
-    // Bulk operations
+    // Operations — bulk
     // -------------------------------------------------------------------------
 
     public function getMany(array $keys): array
@@ -164,9 +181,6 @@ final class RedisStore
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Compound / set operations
-    // -------------------------------------------------------------------------
 
     /** Delete a key and remove it from a tracking set in one pipeline. */
     public function deleteFromSet(string $prefixedKey, string $prefixedMemberKey): void
@@ -229,10 +243,6 @@ final class RedisStore
         return $total;
     }
 
-    // -------------------------------------------------------------------------
-    // Lua eval
-    // -------------------------------------------------------------------------
-
     /** Prefixes $keys before passing them to EVAL; $args are passed as-is. */
     public function eval(string $script, array $keys, array $args = []): mixed
     {
@@ -241,18 +251,34 @@ final class RedisStore
         return $this->connection->eval($script, count($prefixedKeys), ...$prefixedKeys, ...$args);
     }
 
-    /** Deserialize an array of raw Redis values (as returned from MGET inside Lua). */
-    public function deserializeMany(array $raw): array
+    // -------------------------------------------------------------------------
+    // Serialization
+    // -------------------------------------------------------------------------
+
+    public function serialize(mixed $value): mixed
+    {
+        if (is_numeric($value) && is_finite((float) $value)) {
+            return $value;
+        }
+
+        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
+    }
+
+    public function unserialize(mixed $value): mixed
+    {
+        if (is_numeric($value)) {
+            return $value;
+        }
+
+        return $this->igbinary ? igbinary_unserialize($value) : unserialize($value);
+    }
+
+    public function unserializeMany(array $raw): array
     {
         return array_map(
             fn($value) => $value !== null && $value !== false ? $this->unserialize($value) : null,
             $raw
         );
-    }
-
-    public function prefix(string $key): string
-    {
-        return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
     }
 
     // -------------------------------------------------------------------------
@@ -318,21 +344,4 @@ final class RedisStore
         return $keys;
     }
 
-    private function serialize(mixed $value): mixed
-    {
-        if (is_numeric($value) && is_finite((float) $value)) {
-            return $value;
-        }
-
-        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
-    }
-
-    private function unserialize(mixed $value): mixed
-    {
-        if (is_numeric($value)) {
-            return $value;
-        }
-
-        return $this->igbinary ? igbinary_unserialize($value) : unserialize($value);
-    }
 }

@@ -85,115 +85,55 @@ class CacheManager
     public function getModelsFromQuery(string $modelClass, string $hash): array
     {
         $classKey = $this->classKey($modelClass);
-        $script = <<<'LUA'
-            local now = tonumber(ARGV[2])
 
-            local due_at = redis.call('GET', KEYS[2])
-            local ver = redis.call('GET', KEYS[1])
-            if not ver then ver = '0' end
-
-            local due_at_num = due_at and tonumber(due_at) or nil
-            if due_at_num and due_at_num <= now then
-                redis.call('DEL', KEYS[2])
-                ver = tostring(redis.call('INCR', KEYS[1]))
-            end
-
-            local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
-            local ids_raw = redis.call('GET', query_key)
-
-            if not ids_raw then
-                return {'miss', ver}
-            end
-
-            local ok, ids = pcall(cjson.decode, ids_raw)
-            if not ok or type(ids) ~= 'table' then
-                redis.call('DEL', query_key)
-                return {'corrupt', ver}
-            end
-
-            if #ids == 0 then
-                return {'empty', ver}
-            end
-
-            local model_keys = {}
-            for i, id in ipairs(ids) do
-                model_keys[i] = KEYS[4] .. id
-            end
-
-            local models = {}
-            local chunk_size = 500
-
-            for start = 1, #model_keys, chunk_size do
-                local stop = math.min(start + chunk_size - 1, #model_keys)
-                local chunk = {}
-
-                for i = start, stop do
-                    chunk[#chunk + 1] = model_keys[i]
-                end
-
-                local values = redis.call('MGET', unpack(chunk))
-
-                for i = 1, #values do
-                    models[#models + 1] = values[i]
-                end
-            end
-
-            return {'hit', ver, ids, models}
-        LUA;
-
-        $result = $this->store->eval(
-            $script,
-            [
-                "ver:{{$classKey}}:",
-                "scheduled:{{$classKey}}:",
-                "query:{{$classKey}}:v",
-                "model:{{$classKey}}:",
-            ],
-            [$hash, (int) floor(microtime(true) * 1000)]
-        );
+        $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000));
 
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
 
-            return ['key' => "query:{{$classKey}}:v{$version}:{$hash}", 'ids' => null, 'models' => null];
+            return $this->queryResult(
+                "query:{{$classKey}}:v{$version}:{$hash}",
+                null,
+                null,
+                "building:{{$classKey}}:{$hash}"
+            );
         }
 
         $status = $result[0] ?? null;
-        $version = (int) ($result[1] ?? 0);
+        $version = $this->normalizeVersion($result[1]);
         $this->versionLocal[$classKey] = $version;
         $queryKey = "query:{{$classKey}}:v{$version}:{$hash}";
 
-        if ($status === 'miss') {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null];
-        }
+        $deserialize = fn($r) => $this->store->unserializeMany($r);
 
-        if ($status === 'corrupt') {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null];
-        }
-
-        if ($status === 'empty') {
-            return ['key' => $queryKey, 'ids' => [], 'models' => []];
-        }
-
-        if ($status !== 'hit') {
-            return ['key' => $queryKey, 'ids' => null, 'models' => null];
-        }
-
-        $models = $this->store->deserializeMany($result[3]);
-
-        return ['key' => $queryKey, 'ids' => $result[2], 'models' => $models];
+        return match ($status) {
+            'hit' => $this->queryResult($queryKey, $result[2], $deserialize($result[3]), null),
+            'stale' => $this->queryResult(null, $result[2], $deserialize($result[3]), null),
+            'empty' => $this->queryResult($queryKey, [], [], null),
+            'miss' => $this->queryResult($queryKey, null, null, "building:{{$classKey}}:{$hash}"),
+            'building' => $this->queryResult(null, null, null, null),
+            default => $this->queryResult($queryKey, null, null, null),
+        };
     }
 
-    public function getNamespacedCache(string $namespace, string $modelClass, string $hash): array
+    public function getNamespacedCache(string $namespace, string $modelClass, string $hash, array $depClasses = []): array
     {
         $classKey = $this->classKey($modelClass);
-        $version = $this->currentVersion($modelClass);
-        $key = "{$namespace}:{{$classKey}}:v{$version}:{$hash}";
+        [$classKeys, $versionKeys] = $this->versionKeyData($classKey, $depClasses);
+
+        [$versions, $rawData] = $this->luaFetchVersionedCache($versionKeys, "{$namespace}:{{$classKey}}:", $hash);
+
+        foreach ($classKeys as $i => $key) {
+            $this->versionLocal[$key] = $this->normalizeVersion($versions[$i]);
+        }
+
+        $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions));
+        $key = "{$namespace}:{{$classKey}}:{$seg}:{$hash}";
 
         return [
             'key' => $key,
-            'data' => $this->store->get($key),
-            'version' => $version,
+            'data' => $rawData !== false ? $this->store->unserialize($rawData) : null,
+            'version' => $this->normalizeVersion($versions[0]),
         ];
     }
 
@@ -201,29 +141,55 @@ class CacheManager
     {
         $relatedKey = $this->classKey($relatedClass);
         $throughKey = $this->classKey($throughClass);
-        $key = "through:{{$relatedKey}}:{$throughKey}:v{$this->currentVersion($relatedClass)}:v{$this->currentVersion($throughClass)}:{$hash}";
-        $data = $this->store->get($key);
 
-        if ($data !== null) {
+        if (isset($this->versionLocal[$relatedKey], $this->versionLocal[$throughKey])) {
+            $key = "through:{{$relatedKey}}:{$throughKey}:v{$this->versionLocal[$relatedKey]}:v{$this->versionLocal[$throughKey]}:{$hash}";
+            $data = $this->store->get($key);
+
             return ['key' => $key, 'data' => $data];
         }
 
-        return ['key' => $key, 'data' => null];
+        [$versions, $rawData] = $this->luaFetchVersionedCache(
+            ["ver:{{$relatedKey}}:", "ver:{{$throughKey}}:"],
+            "through:{{$relatedKey}}:{$throughKey}:",
+            $hash
+        );
+
+        $this->versionLocal[$relatedKey] = $this->normalizeVersion($versions[0]);
+        $this->versionLocal[$throughKey] = $this->normalizeVersion($versions[1]);
+
+        $key = "through:{{$relatedKey}}:{$throughKey}:v{$versions[0]}:v{$versions[1]}:{$hash}";
+
+        return ['key' => $key, 'data' => $rawData !== false ? $this->store->unserialize($rawData) : null];
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
     {
         $parentKey = $this->classKey($parentClass);
         $relatedKey = $this->classKey($relatedClass);
-        $parentVersion = $this->currentVersion($parentClass);
-        $relatedVersion = $this->currentVersion($relatedClass);
-        $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:";
-        $keys = array_map(fn($id) => $prefix . $id, $parentIds);
+
+        if (isset($this->versionLocal[$parentKey], $this->versionLocal[$relatedKey])) {
+            $parentVersion = $this->versionLocal[$parentKey];
+            $relatedVersion = $this->versionLocal[$relatedKey];
+            $prefix = "pivot:{{$parentKey}}:{$relatedKey}:{$relation}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:";
+            $keys = array_map(fn($id) => $prefix . $id, $parentIds);
+
+            return [
+                'parentVersion' => $parentVersion,
+                'relatedVersion' => $relatedVersion,
+                'data' => array_combine($parentIds, $this->store->getMany($keys)),
+            ];
+        }
+
+        [$versions, $rawDataArray] = $this->luaFetchVersionedPivotCache($parentKey, $relatedKey, $relation, $constraintHash, $parentIds);
+
+        $this->versionLocal[$parentKey] = $this->normalizeVersion($versions[0]);
+        $this->versionLocal[$relatedKey] = $this->normalizeVersion($versions[1]);
 
         return [
-            'parentVersion' => $parentVersion,
-            'relatedVersion' => $relatedVersion,
-            'data' => array_combine($parentIds, $this->store->getMany($keys)),
+            'parentVersion' => $this->normalizeVersion($versions[0]),
+            'relatedVersion' => $this->normalizeVersion($versions[1]),
+            'data' => array_combine($parentIds, $this->store->unserializeMany($rawDataArray)),
         ];
     }
 
@@ -237,6 +203,31 @@ class CacheManager
         $cached = $this->store->get($key);
 
         return $cached !== null ? $cached[0] : null;
+    }
+
+    public function getQueryWithDeps(string $modelClass, array $depClasses, string $hash): array
+    {
+        $classKey = $this->classKey($modelClass);
+        [$classKeys, $versionKeys] = $this->versionKeyData($classKey, $depClasses);
+
+        $result = $this->luaFetchQueryWithDeps($classKey, $versionKeys, $hash);
+        [$status, $versions] = $result;
+
+        foreach ($classKeys as $i => $key) {
+            $this->versionLocal[$key] = $this->normalizeVersion($versions[$i]);
+        }
+
+        $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions ?: array_fill(0, count($versionKeys), 0)));
+        $key = "query:{{$classKey}}:{$seg}:{$hash}";
+        $buildingKey = "building:{{$classKey}}:{$seg}:{$hash}";
+
+        return match ($status) {
+            'hit' => $this->queryResult($key, $result[2], $this->store->unserializeMany($result[3]), null),
+            'empty' => $this->queryResult($key, [], null, null),
+            'miss' => $this->queryResult($key, null, null, $buildingKey),
+            'building' => $this->queryResult(null, null, null, null),
+            default => $this->queryResult($key, null, null, null),
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -271,9 +262,13 @@ class CacheManager
         $this->store->set($key, [$value], $ttl ?? $this->queryTtl);
     }
 
-    public function storeQueryIds(string $key, array $ids, ?int $ttl = null): void
+    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null): void
     {
         $this->store->setJson($key, $ids, $ttl ?? $this->queryTtl);
+
+        if ($buildingKey !== null) {
+            $this->store->delete($buildingKey);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -295,6 +290,7 @@ class CacheManager
         $debugbarStart = NormCacheCollector::beginMeasure();
 
         $containedInQueryHit = $raw !== null;
+
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
 
@@ -506,31 +502,7 @@ class CacheManager
             return $this->store->getRaw("ver:{{$classKey}}:");
         }
 
-        $nowMs = (int) floor(microtime(true) * 1000);
-        $script = <<<'LUA'
-            local now = tonumber(ARGV[1])
-
-            local due_at = redis.call('GET', KEYS[2])
-            if due_at then
-                local due = tonumber(due_at)
-
-                if due and due <= now then
-                    redis.call('DEL', KEYS[2])
-
-                    return tostring(redis.call('INCR', KEYS[1]))
-                end
-
-                if not due then
-                    redis.call('DEL', KEYS[2])
-                end
-            end
-
-            local ver = redis.call('GET', KEYS[1])
-
-            return ver or '0'
-        LUA;
-
-        return $this->store->eval($script, ["ver:{{$classKey}}:", "scheduled:{{$classKey}}:"], [$nowMs]);
+        return $this->luaFetchVersionWithCooldown($classKey, (int) floor(microtime(true) * 1000));
     }
 
     private function scheduleInvalidation(string $classKey): void
@@ -668,6 +640,224 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
+    // Private — Lua scripts
+    // -------------------------------------------------------------------------
+
+    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs): mixed
+    {
+        $script = <<<'LUA'
+            local function mget_models(model_prefix, ids)
+                local keys = {}
+                for i, id in ipairs(ids) do keys[i] = model_prefix .. id end
+                local results = {}
+                for start = 1, #keys, 500 do
+                    local stop = math.min(start + 499, #keys)
+                    local chunk = {}
+                    for i = start, stop do chunk[#chunk + 1] = keys[i] end
+                    local values = redis.call('MGET', unpack(chunk))
+                    for i = 1, #values do results[#results + 1] = values[i] end
+                end
+                return results
+            end
+
+            local function serve_stale(ver, hash, query_prefix, model_prefix)
+                local ver_num = tonumber(ver)
+                for i = 1, 3 do
+                    local stale_ver = ver_num - i
+                    if stale_ver < 0 then break end
+                    local stale_raw = redis.call('GET', query_prefix .. tostring(stale_ver) .. ':' .. hash)
+                    if stale_raw then
+                        local ok, ids = pcall(cjson.decode, stale_raw)
+                        if ok and type(ids) == 'table' and #ids > 0 then
+                            return {'stale', ver, ids, mget_models(model_prefix, ids)}
+                        end
+                    end
+                end
+                return nil
+            end
+
+            local now = tonumber(ARGV[2])
+            local due_at = redis.call('GET', KEYS[2])
+            local ver = redis.call('GET', KEYS[1])
+            if not ver then ver = '0' end
+            if due_at then
+                local due_at_num = tonumber(due_at)
+                if due_at_num and due_at_num <= now then
+                    redis.call('DEL', KEYS[2])
+                    ver = tostring(redis.call('INCR', KEYS[1]))
+                elseif not due_at_num then
+                    redis.call('DEL', KEYS[2])
+                end
+            end
+
+            local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
+            local ids_raw = redis.call('GET', query_key)
+            if not ids_raw then
+                local building_key = KEYS[5] .. ARGV[1]
+                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', 30)
+                if claimed then return {'miss', ver} end
+                return serve_stale(ver, ARGV[1], KEYS[3], KEYS[4]) or {'building', ver}
+            end
+
+            local ok, ids = pcall(cjson.decode, ids_raw)
+            if not ok or type(ids) ~= 'table' then
+                redis.call('DEL', query_key)
+                return {'corrupt', ver}
+            end
+
+            if #ids == 0 then return {'empty', ver} end
+
+            return {'hit', ver, ids, mget_models(KEYS[4], ids)}
+        LUA;
+
+        return $this->store->eval($script, [
+            "ver:{{$classKey}}:",
+            "scheduled:{{$classKey}}:",
+            "query:{{$classKey}}:v",
+            "model:{{$classKey}}:",
+            "building:{{$classKey}}:",
+        ], [$hash, $nowMs]);
+    }
+
+    private function luaFetchQueryWithDeps(string $classKey, array $versionKeys, string $hash): mixed
+    {
+        $n = count($versionKeys);
+
+        // KEYS[1..n]   = version keys for primary + sorted deps
+        // KEYS[n+1]    = query key prefix  (query:{classKey}:)
+        // KEYS[n+2]    = building key prefix (building:{classKey}:)
+        // KEYS[n+3]    = model key prefix  (model:{classKey}:)
+        // ARGV[1]      = hash
+        // ARGV[2]      = number of version keys (n)
+        //
+        // Returns: {status, vers, [ids, models]}
+        //   vers is always present so PHP can update versionLocal and rebuild the key.
+        $script = <<<'LUA'
+            local n = tonumber(ARGV[2])
+
+            local ver_keys = {}
+            for i = 1, n do ver_keys[i] = KEYS[i] end
+            local vers = redis.call('MGET', unpack(ver_keys))
+            for i = 1, n do if not vers[i] then vers[i] = '0' end end
+
+            local seg = 'v' .. vers[1]
+            for i = 2, n do seg = seg .. ':v' .. vers[i] end
+
+            local query_key = KEYS[n+1] .. seg .. ':' .. ARGV[1]
+            local building_key = KEYS[n+2] .. seg .. ':' .. ARGV[1]
+
+            local ids_raw = redis.call('GET', query_key)
+            if not ids_raw then
+                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', 30)
+                if not claimed then return {'building', vers} end
+                return {'miss', vers}
+            end
+
+            local ok, ids = pcall(cjson.decode, ids_raw)
+            if not ok or type(ids) ~= 'table' then
+                redis.call('DEL', query_key)
+                return {'corrupt', vers}
+            end
+
+            if #ids == 0 then return {'empty', vers} end
+
+            local models = {}
+            for start = 1, #ids, 500 do
+                local stop = math.min(start + 499, #ids)
+                local chunk = {}
+                for i = start, stop do chunk[#chunk + 1] = KEYS[n+3] .. ids[i] end
+                local values = redis.call('MGET', unpack(chunk))
+                for i = 1, #values do models[#models + 1] = values[i] end
+            end
+
+            return {'hit', vers, ids, models}
+        LUA;
+
+        return $this->store->eval($script, array_merge(
+            $versionKeys,
+            ["query:{{$classKey}}:", "building:{{$classKey}}:", "model:{{$classKey}}:"]
+        ), [$hash, $n]);
+    }
+
+    private function luaFetchVersionedCache(array $versionKeys, string $keyPrefix, string $hash): array
+    {
+        // KEYS[1..n]  = version keys
+        // KEYS[n+1]   = key prefix (everything before the version segment)
+        // ARGV[1]     = hash (suffix after the version segment)
+        //
+        // Returns: {vers, data_or_false}
+        $script = <<<'LUA'
+            local n = #KEYS - 1
+            local ver_keys = {}
+            for i = 1, n do ver_keys[i] = KEYS[i] end
+            local vers = redis.call('MGET', unpack(ver_keys))
+            for i = 1, n do if not vers[i] then vers[i] = '0' end end
+
+            local seg = 'v' .. vers[1]
+            for i = 2, n do seg = seg .. ':v' .. vers[i] end
+
+            local data = redis.call('GET', KEYS[n+1] .. seg .. ':' .. ARGV[1])
+            return {vers, data or false}
+        LUA;
+
+        $result = $this->store->eval($script, array_merge($versionKeys, [$keyPrefix]), [$hash]);
+
+        return [$result[0] ?? [], $result[1] ?? false];
+    }
+
+    private function luaFetchVersionedPivotCache(string $parentKey, string $relatedKey, string $relation, string $constraintHash, array $parentIds): array
+    {
+        // KEYS[1] = ver:{parentKey}:, KEYS[2] = ver:{relatedKey}:, KEYS[3] = pivot:{parentKey}:{relatedKey}:
+        // ARGV[1] = relation, ARGV[2] = constraintHash, ARGV[3..] = parentIds
+        // Returns: {vers, [raw_data...]}
+        $script = <<<'LUA'
+            local n = #KEYS - 1
+            local ver_keys = {}
+            for i = 1, n do ver_keys[i] = KEYS[i] end
+            local vers = redis.call('MGET', unpack(ver_keys))
+            for i = 1, n do if not vers[i] then vers[i] = '0' end end
+
+            local seg = 'v' .. vers[1]
+            for i = 2, n do seg = seg .. ':v' .. vers[i] end
+
+            local prefix = KEYS[n+1] .. ARGV[1] .. ':' .. ARGV[2] .. ':' .. seg .. ':'
+            local pivot_keys = {}
+            for i = 3, #ARGV do pivot_keys[#pivot_keys + 1] = prefix .. ARGV[i] end
+            local data = {}
+            if #pivot_keys > 0 then data = redis.call('MGET', unpack(pivot_keys)) end
+            return {vers, data}
+        LUA;
+
+        $result = $this->store->eval($script, [
+            "ver:{{$parentKey}}:",
+            "ver:{{$relatedKey}}:",
+            "pivot:{{$parentKey}}:{$relatedKey}:",
+        ], array_merge([$relation, $constraintHash], $parentIds));
+
+        return [$result[0] ?? [], $result[1] ?? []];
+    }
+
+    private function luaFetchVersionWithCooldown(string $classKey, int $nowMs): mixed
+    {
+        $script = <<<'LUA'
+            local now = tonumber(ARGV[1])
+            local due_at = redis.call('GET', KEYS[2])
+            if due_at then
+                local due = tonumber(due_at)
+                if due and due <= now then
+                    redis.call('DEL', KEYS[2])
+                    return tostring(redis.call('INCR', KEYS[1]))
+                end
+                if not due then redis.call('DEL', KEYS[2]) end
+            end
+            local ver = redis.call('GET', KEYS[1])
+            return ver or '0'
+        LUA;
+
+        return $this->store->eval($script, ["ver:{{$classKey}}:", "scheduled:{{$classKey}}:"], [$nowMs]);
+    }
+
+    // -------------------------------------------------------------------------
     // Private — key building
     // -------------------------------------------------------------------------
 
@@ -687,6 +877,25 @@ class CacheManager
         $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
         return "{$connection}:{$model->getTable()}";
+    }
+
+    private function sortClassesByKey(array $classes): array
+    {
+        usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
+
+        return $classes;
+    }
+
+    private function versionKeyData(string $classKey, array $depClasses): array
+    {
+        $classKeys = array_merge(
+            [$classKey],
+            array_map($this->classKey(...), $this->sortClassesByKey($depClasses))
+        );
+
+        $versionKeys = array_map(fn($key) => "ver:{{$key}}:", $classKeys);
+
+        return [$classKeys, $versionKeys];
     }
 
     // -------------------------------------------------------------------------
@@ -719,7 +928,7 @@ class CacheManager
 
         $value = $this->resolveCurrentVersion($classKey);
 
-        return $this->versionLocal[$classKey] = $value !== null ? (int) $value : 0;
+        return $this->versionLocal[$classKey] = $this->normalizeVersion($value);
     }
 
     public function fallback(\Exception $e): void
@@ -743,6 +952,21 @@ class CacheManager
         } catch (\Exception $e) {
             $this->fallback($e);
         }
+    }
+
+    private function normalizeVersion(mixed $value = null): int
+    {
+        return $value !== null ? (int) $value : 0;
+    }
+
+    private function queryResult(?string $key, ?array $ids, ?array $models, ?string $buildingKey): array
+    {
+        return [
+            'key' => $key,
+            'ids' => $ids,
+            'models' => $models,
+            'buildingKey' => $buildingKey,
+        ];
     }
 
     private function cacheModelAttrs(string $modelClass, array $modelAttrs): void

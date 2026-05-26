@@ -16,52 +16,9 @@ trait CachesScalarResults
 {
     public function count($columns = '*'): int
     {
-        if ($columns !== '*') {
-            return parent::count($columns);
-        }
+        $kind = $columns === '*' ? 'count' : 'count:' . $columns;
 
-        if ($this->skipCache || !NormCache::isEnabled()) {
-            return parent::count($columns);
-        }
-
-        $debugbarStart = NormCacheCollector::beginMeasure();
-
-        $base = $this->toBase();
-        $bypassReasons = $this->computeBypassReasons($base);
-
-        if (!empty($bypassReasons)) {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryBypassed($this->model::class, $bypassReasons));
-            }
-            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
-
-            return parent::count($columns);
-        }
-
-        $hash = $this->queryCacheKey($base);
-
-        try {
-            $cacheKey = NormCache::getNamespacedCache('count', $this->model::class, $hash)['key'];
-            $cachedCount = NormCache::getQueryAggregate($cacheKey);
-            $hit = $cachedCount !== null;
-
-            if (!$hit) {
-                $cachedCount = parent::count($columns);
-                NormCache::storeQueryAggregate($cacheKey, $cachedCount, $this->queryTtl);
-            }
-
-            if (NormCache::isEventsEnabled()) {
-                event($hit ? new QueryCacheHit($this->model::class, $cacheKey) : new QueryCacheMiss($this->model::class, $cacheKey));
-            }
-
-            NormCacheCollector::recordQuery($hit ? 'query hit' : 'query miss', $this->model::class, $cacheKey, $debugbarStart, ['kind' => 'count']);
-
-            return (int) $cachedCount;
-        } catch (\Exception $e) {
-            NormCache::fallback($e);
-
-            return parent::count($columns);
-        }
+        return (int) $this->cacheScalar($kind, fn() => parent::count($columns));
     }
 
     public function sum($column): mixed
@@ -135,9 +92,14 @@ trait CachesScalarResults
         $hash = $this->queryCacheKey($base) . ":{$kind}";
 
         try {
-            $cacheKey = NormCache::getNamespacedCache('scalar', $this->model::class, $hash)['key'];
-            $result = NormCache::getQueryAggregate($cacheKey);
-            $hit = $result !== null;
+            ['key' => $cacheKey, 'data' => $cacheData] = NormCache::getNamespacedCache(
+                'scalar',
+                $this->model::class,
+                $hash,
+                $this->dependsOn ?? []
+            );
+            $hit = $cacheData !== null;
+            $result = $hit ? $cacheData[0] : null;
 
             if (!$hit) {
                 $result = $fallback();
