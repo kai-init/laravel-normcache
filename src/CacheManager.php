@@ -223,7 +223,7 @@ class CacheManager
 
         return match ($status) {
             'hit' => $this->queryResult($key, $result[2], $this->store->unserializeMany($result[3]), null),
-            'empty' => $this->queryResult($key, [], null, null),
+            'empty' => $this->queryResult($key, [], [], null),
             'miss' => $this->queryResult($key, null, null, $buildingKey),
             'building' => $this->queryResult(null, null, null, null),
             default => $this->queryResult($key, null, null, null),

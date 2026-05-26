@@ -174,7 +174,6 @@ class LuaScriptConsistencyTest extends TestCase
         $hash = $this->authorQueryHash();
 
         Author::get(); // cache populated at current version v
-        $populatedAt = NormCache::currentVersion(Author::class);
         NormCache::flushVersionLocal();
 
         // Advance Redis version by 3 so the cached entry is exactly 3 behind

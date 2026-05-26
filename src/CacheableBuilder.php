@@ -264,11 +264,11 @@ class CacheableBuilder extends Builder
             return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
         }
 
-        if (NormCache::isEventsEnabled() && $key !== null) {
-            event(new QueryCacheHit($model, $key));
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryCacheHit($model, $key ?? "stale:{$hash}"));
         }
 
-        NormCacheCollector::recordQuery('query hit', $model, $key ?? 'stale', $debugbarStart, [
+        NormCacheCollector::recordQuery('query hit', $model, $key ?? "stale:{$hash}", $debugbarStart, [
             'kind' => 'ids + models',
             'contains' => 'model hit: ' . class_basename($model) . ' (' . count($cacheData['ids']) . ' ids)',
             'contains_model' => $cacheData['ids'],
