@@ -27,6 +27,7 @@ class CacheServiceProvider extends ServiceProvider
             config('normcache.events', true),
             config('normcache.fallback', false),
             config('normcache.fire_retrieved', false),
+            config('normcache.building_lock_ttl', 30),
         ));
 
         $this->app->alias(CacheManager::class, 'normcache');
@@ -53,6 +54,7 @@ class CacheServiceProvider extends ServiceProvider
                     Event::listen($octaneEvent, function () {
                         $manager = $this->app->make(CacheManager::class);
                         $manager->flushVersionLocal();
+                        $manager->discardAllPending();
                         $manager->enable();
                     });
                 }
@@ -74,7 +76,7 @@ class CacheServiceProvider extends ServiceProvider
 
     private function registerDebugbarCollector(): void
     {
-        $collector = new NormCacheDebugBarCollector();
+        $collector = new NormCacheDebugBarCollector;
         NormCacheCollector::register($collector);
         $this->app->make('debugbar')->addCollector($collector);
     }

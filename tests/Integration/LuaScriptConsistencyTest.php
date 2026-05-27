@@ -67,7 +67,7 @@ class LuaScriptConsistencyTest extends TestCase
         $ck = NormCache::classKey(Author::class);
 
         $this->setKey("ver:{{$ck}}:", '3');
-        $pastMs = (int)(microtime(true) * 1000) - 5000;
+        $pastMs = (int) (microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
 
         $this->setCooldown(1);
@@ -112,14 +112,16 @@ class LuaScriptConsistencyTest extends TestCase
         Author::query()->dependsOn([Post::class])->get(); // populate cache
 
         $authorVer = NormCache::currentVersion(Author::class);
-        $postVer   = NormCache::currentVersion(Post::class);
-        $queryKey  = "query:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}";
+        $postVer = NormCache::currentVersion(Post::class);
+        $queryKey = "query:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}";
 
         $this->setKey($queryKey, 'not-valid-json');
         NormCache::flushVersionLocal();
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::query()->dependsOn([Post::class])->get();
 
@@ -140,10 +142,10 @@ class LuaScriptConsistencyTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck       = NormCache::classKey(Author::class);
-        $hash     = $this->authorQueryHash();
+        $ck = NormCache::classKey(Author::class);
+        $hash = $this->authorQueryHash();
         $authorVer = NormCache::currentVersion(Author::class);
-        $postVer   = NormCache::currentVersion(Post::class);
+        $postVer = NormCache::currentVersion(Post::class);
 
         NormCache::flushVersionLocal();
 
@@ -151,7 +153,9 @@ class LuaScriptConsistencyTest extends TestCase
         $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::query()->dependsOn([Post::class])->get();
 
@@ -170,7 +174,7 @@ class LuaScriptConsistencyTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck   = NormCache::classKey(Author::class);
+        $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         Author::get(); // cache populated at current version v
@@ -183,7 +187,9 @@ class LuaScriptConsistencyTest extends TestCase
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::get();
 
@@ -196,7 +202,7 @@ class LuaScriptConsistencyTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck   = NormCache::classKey(Author::class);
+        $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         Author::get(); // cache populated at current version v
@@ -208,7 +214,9 @@ class LuaScriptConsistencyTest extends TestCase
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::get();
 

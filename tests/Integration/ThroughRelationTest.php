@@ -15,8 +15,8 @@ class ThroughRelationTest extends TestCase
     public function test_through_load_does_not_store_join_artifact_in_model_cache(): void
     {
         $country = Country::create(['name' => 'Australia']);
-        $author  = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
-        $post    = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         $country->posts()->get();
 
@@ -29,8 +29,8 @@ class ThroughRelationTest extends TestCase
     public function test_post_found_after_through_load_has_no_spurious_through_key(): void
     {
         $country = Country::create(['name' => 'Australia']);
-        $author  = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
-        $post    = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         $country->posts()->get();
 

@@ -2,6 +2,7 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 
 final class QueryInspector
@@ -16,10 +17,10 @@ final class QueryInspector
     public static function categoryLabels(): array
     {
         return [
-            'dependency'    => "can't infer cache dependency",
+            'dependency' => "can't infer cache dependency",
             'normalization' => "result can't be normalized into model keys",
-            'safety'        => 'bypassed for query correctness',
-            'opted_out'     => 'explicitly disabled',
+            'safety' => 'bypassed for query correctness',
+            'opted_out' => 'explicitly disabled',
         ];
     }
 
@@ -29,14 +30,14 @@ final class QueryInspector
      *   normalization — result can't be decomposed into model cache keys
      *   safety        — bypassed for query correctness; no caching workaround
      *
-     * @param  array<int,mixed>|null $resolvedColumns  null skips the calculated-column check
+     * @param  array<int,mixed>|null  $resolvedColumns  null skips the calculated-column check
      * @return array<string, list<string>>
      */
     public static function bypassReasons(QueryBuilder $base, string $table, ?array $resolvedColumns = null): array
     {
-        $dependency    = [];
+        $dependency = [];
         $normalization = [];
-        $safety        = [];
+        $safety = [];
 
         foreach ((array) $base->orders as $order) {
             if (isset($order['type']) && $order['type'] === 'Raw') {
@@ -50,25 +51,45 @@ final class QueryInspector
         }
 
         if (!self::isCanonicalFrom($base, $table)) {
-            $dependency[] = 'non-standard FROM (subquery or raw expression)';
+            $normalization[] = 'non-standard FROM (subquery or raw expression)';
         }
 
-        if (!empty($base->joins))     { $dependency[]   = 'JOIN clauses'; }
-        if (!empty($base->groups))    { $normalization[] = 'GROUP BY'; }
-        if (!empty($base->havings))   { $normalization[] = 'HAVING'; }
-        if (!empty($base->unions))    { $normalization[] = 'UNION'; }
-        if (!empty($base->aggregate)) { $normalization[] = 'aggregate function (count/sum/etc.)'; }
-        if (!empty($base->distinct))  { $normalization[] = 'DISTINCT'; }
-        if (!is_null($base->lock))    { $safety[]        = 'query lock (SELECT FOR UPDATE)'; }
+        if (!empty($base->joins)) {
+            $normalization[] = 'JOIN clauses';
+        }
+
+        if (!empty($base->groups)) {
+            $normalization[] = 'GROUP BY';
+        }
+
+        if (!empty($base->havings)) {
+            $normalization[] = 'HAVING';
+        }
+
+        if (!empty($base->unions)) {
+            $normalization[] = 'UNION';
+        }
+
+        if (!empty($base->aggregate)) {
+            $normalization[] = 'aggregate function (count/sum/etc.)';
+        }
+
+        if (!empty($base->distinct)) {
+            $normalization[] = 'DISTINCT';
+        }
+
+        if (!is_null($base->lock)) {
+            $safety[] = 'query lock (SELECT FOR UPDATE)';
+        }
 
         if (self::hasCalculatedColumns($resolvedColumns)) {
             $normalization[] = 'calculated or raw SELECT expressions';
         }
 
         return array_filter([
-            'dependency'    => $dependency,
+            'dependency' => $dependency,
             'normalization' => $normalization,
-            'safety'        => $safety,
+            'safety' => $safety,
         ]);
     }
 
@@ -139,6 +160,11 @@ final class QueryInspector
 
         if ($where['type'] === 'In' || $where['type'] === 'InRaw') {
             $values = $where['values'];
+
+            if (self::containsExpression((array) $values)) {
+                return null;
+            }
+
             sort($values);
 
             return $values;
@@ -196,10 +222,29 @@ final class QueryInspector
                 return true;
             }
 
+            if (in_array($type, ['In', 'NotIn'], true) && self::containsExpression((array) ($where['values'] ?? []))) {
+                return true;
+            }
+
+            if ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
+                return true;
+            }
+
             if ($type === 'Nested' && isset($where['query'])) {
                 if (self::hasSubqueryWheres((array) $where['query']->wheres)) {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static function containsExpression(array $values): bool
+    {
+        foreach ($values as $value) {
+            if ($value instanceof Expression) {
+                return true;
             }
         }
 

@@ -56,7 +56,9 @@ class LuaScriptBehaviorTest extends TestCase
         NormCache::flushVersionLocal();
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::get();
 
@@ -86,7 +88,9 @@ class LuaScriptBehaviorTest extends TestCase
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $results = Author::get();
 
@@ -109,7 +113,7 @@ class LuaScriptBehaviorTest extends TestCase
         $version = NormCache::currentVersion(Author::class);
 
         // Place a past-due scheduled invalidation directly in Redis
-        $pastMs = (int)(microtime(true) * 1000) - 5000;
+        $pastMs = (int) (microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
         NormCache::flushVersionLocal();
 

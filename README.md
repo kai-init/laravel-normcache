@@ -88,6 +88,28 @@ Post::paginate(20);
 Post::withoutCache()->get();
 ```
 
+### Cross-table queries (`dependsOn`)
+
+Queries that filter across tables are not cached by default because Normcache cannot automatically determine which model invalidations should make the result stale. `dependsOn()` lets you declare the dependency explicitly:
+
+```php
+// Cache a whereHas query whose result depends on Post invalidations:
+Author::whereHas('posts', fn($q) => $q->where('published', true))
+    ->dependsOn([Post::class])
+    ->get();
+```
+
+`dependsOn([...])` tells the cache which additional model classes affect this query's result, so invalidating any of those models invalidates this cached entry. It does **not** assert that the query result can be reconstructed from the model cache — queries with `JOIN`, `DISTINCT`, `GROUP BY`, `HAVING`, `UNION`, aggregate functions, calculated columns, or pessimistic locks will still bypass the cache and hit the database directly, regardless of whether `dependsOn()` is set.
+
+```php
+// These still bypass the cache even with dependsOn():
+Author::join('posts', 'posts.author_id', '=', 'authors.id')->dependsOn([Post::class])->get(); // → DB
+Post::select('author_id')->distinct()->dependsOn([Post::class])->get();      // → DB
+Post::select(DB::raw('COUNT(*)'))->dependsOn([Post::class])->get();           // → DB
+Post::groupBy('author_id')->dependsOn([Post::class])->get();                  // → DB
+Post::lockForUpdate()->dependsOn([Post::class])->get();                       // → DB
+```
+
 ### Per-query TTL
 
 ```php

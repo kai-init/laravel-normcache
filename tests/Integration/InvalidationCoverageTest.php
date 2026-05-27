@@ -227,7 +227,7 @@ class InvalidationCoverageTest extends TestCase
 
         $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
 
-        Author::where(fn ($q) => $q->whereIn('id', [$a1->id]))->update(['name' => 'Alicia']);
+        Author::where(fn($q) => $q->whereIn('id', [$a1->id]))->update(['name' => 'Alicia']);
 
         $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
         $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));

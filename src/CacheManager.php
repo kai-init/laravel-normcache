@@ -40,6 +40,7 @@ class CacheManager
         private bool $dispatchEvents = true,
         private bool $fallbackEnabled = false,
         private bool $fireRetrieved = false,
+        private int $buildingLockTtl = 30,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
     }
@@ -110,7 +111,7 @@ class CacheManager
             'hit' => $this->queryResult($queryKey, $result[2], $deserialize($result[3]), null),
             'stale' => $this->queryResult(null, $result[2], $deserialize($result[3]), null),
             'empty' => $this->queryResult($queryKey, [], [], null),
-            'miss' => $this->queryResult($queryKey, null, null, "building:{{$classKey}}:{$hash}"),
+            'miss' => $this->queryResult($queryKey, null, null, "building:{{$classKey}}:{$hash}", ["ver:{{$classKey}}:"], [(string) $version]),
             'building' => $this->queryResult(null, null, null, null),
             default => $this->queryResult($queryKey, null, null, null),
         };
@@ -221,10 +222,12 @@ class CacheManager
         $key = "query:{{$classKey}}:{$seg}:{$hash}";
         $buildingKey = "building:{{$classKey}}:{$seg}:{$hash}";
 
+        $expectedVersions = array_map(fn($v) => (string) $this->normalizeVersion($v), $versions ?: array_fill(0, count($versionKeys), null));
+
         return match ($status) {
             'hit' => $this->queryResult($key, $result[2], $this->store->unserializeMany($result[3]), null),
             'empty' => $this->queryResult($key, [], [], null),
-            'miss' => $this->queryResult($key, null, null, $buildingKey),
+            'miss' => $this->queryResult($key, null, null, $buildingKey, $versionKeys, $expectedVersions),
             'building' => $this->queryResult(null, null, null, null),
             default => $this->queryResult($key, null, null, null),
         };
@@ -262,13 +265,49 @@ class CacheManager
         $this->store->set($key, [$value], $ttl ?? $this->queryTtl);
     }
 
-    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null): void
+    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): void
     {
+        if (!empty($versionKeys)) {
+            $this->storeQueryIdsCAS($key, $ids, $ttl ?? $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions);
+
+            return;
+        }
+
         $this->store->setJson($key, $ids, $ttl ?? $this->queryTtl);
 
         if ($buildingKey !== null) {
             $this->store->delete($buildingKey);
         }
+    }
+
+    private function storeQueryIdsCAS(string $key, array $ids, int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions): void
+    {
+        // KEYS[1..n]   = version keys to check
+        // KEYS[n+1]    = query key to write
+        // KEYS[n+2]    = building key to always delete ('' to skip)
+        // ARGV[1]      = n (number of version keys)
+        // ARGV[2]      = TTL
+        // ARGV[3..n+2] = expected version strings
+        // ARGV[n+3]    = JSON payload
+        $script = <<<'LUA'
+            local n = tonumber(ARGV[1])
+            for i = 1, n do
+                local current = redis.call('GET', KEYS[i]) or '0'
+                if current ~= ARGV[2 + i] then
+                    if KEYS[n+2] ~= '' then redis.call('DEL', KEYS[n+2]) end
+                    return 0
+                end
+            end
+            redis.call('SETEX', KEYS[n+1], tonumber(ARGV[2]), ARGV[n+3])
+            if KEYS[n+2] ~= '' then redis.call('DEL', KEYS[n+2]) end
+            return 1
+        LUA;
+
+        $this->store->eval(
+            $script,
+            array_merge($versionKeys, [$key, $buildingKey ?? '']),
+            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids)])
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -295,6 +334,7 @@ class CacheManager
         $ids = array_values($ids);
 
         $classKey = $this->classKey($modelClass);
+        $modelVersion = $this->currentVersion($modelClass);
 
         if ($raw === null) {
             $keys = array_map(fn($id) => "model:{{$classKey}}:" . $id, $ids);
@@ -327,6 +367,7 @@ class CacheManager
             $projection,
             $missedQuery,
             $preserveQueryShape,
+            $modelVersion,
         );
 
         $ordered = [];
@@ -406,26 +447,21 @@ class CacheManager
 
         $this->handle(function () use ($class, $key) {
             $classKey = $this->classKey($class);
+            $this->doInvalidateVersion($class);
             $this->store->deleteFromSet(
                 $this->store->prefix($key),
                 $this->store->prefix("members:model:{{$classKey}}")
             );
-            $this->doInvalidateVersion($class);
         });
     }
 
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->classKey($modelClass);
-        $memberKey = $this->store->prefix("members:model:{{$classKey}}");
-        $keys = $this->store->smembers($memberKey);
-
-        if (!empty($keys)) {
-            $this->store->asyncDel($keys);
-        }
-
-        $this->store->delete("members:model:{{$classKey}}");
         $this->doInvalidateVersion($modelClass);
+
+        $memberKey = $this->store->prefix("members:model:{{$classKey}}");
+        $this->store->sscanAndFlushSet($memberKey);
     }
 
     public function flushAll(): int
@@ -471,6 +507,11 @@ class CacheManager
     public function discardPending(string $connectionName): void
     {
         unset($this->flushQueue[$connectionName]);
+    }
+
+    public function discardAllPending(): void
+    {
+        $this->flushQueue = [];
     }
 
     public function flushVersionLocal(): void
@@ -573,6 +614,7 @@ class CacheManager
         ?array $projection,
         ?EloquentBuilder $missedQuery,
         bool $preserveQueryShape,
+        int $modelVersion,
     ): array {
         $prototype = self::prototype($modelClass);
         $pk = $prototype->getKeyName();
@@ -603,8 +645,13 @@ class CacheManager
         }
 
         if ($attrsByKey !== []) {
-            $memberKey = $this->store->prefix("members:model:{{$classKey}}");
-            $this->store->setManyTracked($attrsByKey, $this->ttl, $memberKey);
+            $this->store->setManyTrackedIfVersion(
+                $attrsByKey,
+                $this->ttl,
+                "members:model:{{$classKey}}",
+                "ver:{{$classKey}}:",
+                $modelVersion
+            );
         }
 
         return $loaded->all();
@@ -694,7 +741,7 @@ class CacheManager
             local ids_raw = redis.call('GET', query_key)
             if not ids_raw then
                 local building_key = KEYS[5] .. ARGV[1]
-                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', 30)
+                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[3]))
                 if claimed then return {'miss', ver} end
                 return serve_stale(ver, ARGV[1], KEYS[3], KEYS[4]) or {'building', ver}
             end
@@ -716,7 +763,7 @@ class CacheManager
             "query:{{$classKey}}:v",
             "model:{{$classKey}}:",
             "building:{{$classKey}}:",
-        ], [$hash, $nowMs]);
+        ], [$hash, $nowMs, $this->buildingLockTtl]);
     }
 
     private function luaFetchQueryWithDeps(string $classKey, array $versionKeys, string $hash): mixed
@@ -748,7 +795,7 @@ class CacheManager
 
             local ids_raw = redis.call('GET', query_key)
             if not ids_raw then
-                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', 30)
+                local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[3]))
                 if not claimed then return {'building', vers} end
                 return {'miss', vers}
             end
@@ -776,7 +823,7 @@ class CacheManager
         return $this->store->eval($script, array_merge(
             $versionKeys,
             ["query:{{$classKey}}:", "building:{{$classKey}}:", "model:{{$classKey}}:"]
-        ), [$hash, $n]);
+        ), [$hash, $n, $this->buildingLockTtl]);
     }
 
     private function luaFetchVersionedCache(array $versionKeys, string $keyPrefix, string $hash): array
@@ -959,13 +1006,15 @@ class CacheManager
         return $value !== null ? (int) $value : 0;
     }
 
-    private function queryResult(?string $key, ?array $ids, ?array $models, ?string $buildingKey): array
+    private function queryResult(?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = []): array
     {
         return [
             'key' => $key,
             'ids' => $ids,
             'models' => $models,
             'buildingKey' => $buildingKey,
+            'versionKeys' => $versionKeys,
+            'expectedVersions' => $expectedVersions,
         ];
     }
 
@@ -976,12 +1025,19 @@ class CacheManager
         }
 
         $classKey = $this->classKey($modelClass);
+        $modelVersion = $this->currentVersion($modelClass);
+
         $attrsByKey = [];
         foreach ($modelAttrs as $id => $attrs) {
             $attrsByKey["model:{{$classKey}}:{$id}"] = $attrs;
         }
 
-        $memberKey = $this->store->prefix("members:model:{{$classKey}}");
-        $this->store->setManyTracked($attrsByKey, $this->ttl, $memberKey);
+        $this->store->setManyTrackedIfVersion(
+            $attrsByKey,
+            $this->ttl,
+            "members:model:{{$classKey}}",
+            "ver:{{$classKey}}:",
+            $modelVersion
+        );
     }
 }

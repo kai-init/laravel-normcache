@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
+use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
@@ -80,7 +81,7 @@ class OptimizationsTest extends TestCase
         $query = Author::where('name', 'Payload Author');
         $base = $query->toBase();
         $base->columns = null;
-        $hash = \NormCache\Support\QueryHasher::fromQuery($base);
+        $hash = QueryHasher::fromQuery($base);
         $cacheData = app('normcache')->getModelsFromQuery(Author::class, $hash);
 
         $this->assertSame([$author->id], $cacheData['ids']);
@@ -98,7 +99,7 @@ class OptimizationsTest extends TestCase
 
         $base = $query->toBase();
         $base->columns = null;
-        $hash = \NormCache\Support\QueryHasher::fromQuery($base);
+        $hash = QueryHasher::fromQuery($base);
         $classKey = app('normcache')->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 

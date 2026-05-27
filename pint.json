@@ -1,6 +1,9 @@
 {
     "preset": "laravel",
     "exclude": [
+        "docs",
+        "tests/Benchmark",
+        "tests/Concerns",
         "tests/Fixtures/database"
     ],
     "rules": {

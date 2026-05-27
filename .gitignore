@@ -3,4 +3,5 @@ composer.lock
 .phpunit.result.cache
 .phpunit.cache/
 tests/Benchmark/
-todo.md
+tests/Concerns/
+docs

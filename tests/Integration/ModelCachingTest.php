@@ -275,9 +275,9 @@ class ModelCachingTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all();
 
-        $classKey  = NormCache::classKey(Author::class);
+        $classKey = NormCache::classKey(Author::class);
         $memberKey = 'test:members:model:{' . $classKey . '}';
-        $redis     = Redis::connection('model-cache-test');
+        $redis = Redis::connection('model-cache-test');
 
         $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members:model: set must have a TTL');
     }
@@ -287,10 +287,10 @@ class ModelCachingTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $classKey  = NormCache::classKey(Author::class);
+        $classKey = NormCache::classKey(Author::class);
         $memberKey = 'test:members:model:{' . $classKey . '}';
-        $modelKey  = $this->prefixedModelKey(Author::class, $author->id);
-        $redis     = Redis::connection('model-cache-test');
+        $modelKey = $this->prefixedModelKey(Author::class, $author->id);
+        $redis = Redis::connection('model-cache-test');
 
         // Simulate model key expiry by deleting it directly.
         $redis->del($modelKey);

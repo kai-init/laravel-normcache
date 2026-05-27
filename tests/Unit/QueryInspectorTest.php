@@ -2,10 +2,13 @@
 
 namespace NormCache\Tests\Unit;
 
+use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Grammar;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Support\QueryInspector;
 use PHPUnit\Framework\TestCase;
-use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
-use Illuminate\Database\Grammar;
 
 class QueryInspectorTest extends TestCase
 {
@@ -28,12 +31,12 @@ class QueryInspectorTest extends TestCase
     /**
      * @param  array<int, mixed>|null  $columns
      */
-    private function makeBaseQuery(?array $columns): \Illuminate\Database\Query\Builder
+    private function makeBaseQuery(?array $columns): Builder
     {
-        $query = new \Illuminate\Database\Query\Builder(
-            connection: $this->createStub(\Illuminate\Database\ConnectionInterface::class),
+        $query = new Builder(
+            connection: $this->createStub(ConnectionInterface::class),
             grammar: $this->createStub(\Illuminate\Database\Query\Grammars\Grammar::class),
-            processor: $this->createStub(\Illuminate\Database\Query\Processors\Processor::class),
+            processor: $this->createStub(Processor::class),
         );
 
         $query->columns = $columns;

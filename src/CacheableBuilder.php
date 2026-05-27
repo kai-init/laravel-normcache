@@ -259,7 +259,7 @@ class CacheableBuilder extends Builder
         if ($cacheData['ids'] === null) {
             NormCacheCollector::recordQuery('query miss', $model, $key, $debugbarStart, ['kind' => 'ids']);
 
-            $ids = $this->resolveIds($key, $base, $cacheData['buildingKey']);
+            $ids = $this->resolveIds($key, $base, $cacheData['buildingKey'], $cacheData['versionKeys'], $cacheData['expectedVersions']);
 
             return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
         }
@@ -294,7 +294,7 @@ class CacheableBuilder extends Builder
             NormCacheCollector::recordQuery('query miss', $model, $key, $debugbarStart, ['kind' => 'ids']);
 
             return $this->finalizeResult(NormCache::getModels(
-                $this->resolveIds($key, $base, $cacheData['buildingKey']),
+                $this->resolveIds($key, $base, $cacheData['buildingKey'], $cacheData['versionKeys'], $cacheData['expectedVersions']),
                 $model, $selectedCols, null, $this
             ));
         }
@@ -312,14 +312,14 @@ class CacheableBuilder extends Builder
         return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
 
-    private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null): array
+    private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): array
     {
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheMiss($this->model::class, $key));
         }
 
         $ids = $this->buildIds($base);
-        NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey);
+        NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions);
 
         return $ids;
     }
@@ -379,17 +379,22 @@ class CacheableBuilder extends Builder
         if ($this->skipCache) {
             return ['opted_out' => ['withoutCache() was called explicitly']];
         }
+
         if (!NormCache::isEnabled()) {
             return ['opted_out' => ['cache is globally disabled']];
         }
+
         if ($this->insideTransaction()) {
             return ['safety' => ['inside a database transaction']];
         }
+
+        $reasons = QueryInspector::bypassReasons($base, $this->model->getTable(), $resolvedColumns);
+
         if ($this->dependsOn !== null) {
-            return [];
+            unset($reasons['dependency']);
         }
 
-        return QueryInspector::bypassReasons($base, $this->model->getTable(), $resolvedColumns);
+        return $reasons;
     }
 
     private function insideTransaction(): bool

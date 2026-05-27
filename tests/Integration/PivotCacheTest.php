@@ -226,7 +226,7 @@ class PivotCacheTest extends TestCase
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id, ['notes' => 'important']);
 
-        Author::with(['tags' => fn ($q) => $q->withPivot('notes')])->get();
+        Author::with(['tags' => fn($q) => $q->withPivot('notes')])->get();
 
         $cached = $this->modelCacheEntry(Tag::class, $tag->id);
 

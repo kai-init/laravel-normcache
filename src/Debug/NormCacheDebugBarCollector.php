@@ -32,13 +32,13 @@ class NormCacheDebugBarCollector extends TimeDataCollector
     {
         return [
             'Normcache' => [
-                'icon'    => 'archive',
-                'widget'  => 'PhpDebugBar.Widgets.TimelineWidget',
-                'map'     => 'normcache',
+                'icon' => 'archive',
+                'widget' => 'PhpDebugBar.Widgets.TimelineWidget',
+                'map' => 'normcache',
                 'default' => '{}',
             ],
             'Normcache:badge' => [
-                'map'     => 'normcache.normcache-measures',
+                'map' => 'normcache.normcache-measures',
                 'default' => 0,
             ],
         ];
@@ -109,12 +109,12 @@ class NormCacheDebugBarCollector extends TimeDataCollector
     private function querySummary(string $type, array $meta): string
     {
         return match (true) {
-            ($meta['kind'] ?? null) === 'count'        => 'count',
+            ($meta['kind'] ?? null) === 'count' => 'count',
             ($meta['kind'] ?? null) === 'ids + models' => 'ids + models',
-            ($meta['kind'] ?? null) === 'ids'          => 'ids',
-            str_starts_with($type, 'pivot ')           => 'pivot',
-            str_starts_with($type, 'through ')         => 'through',
-            default                                    => $meta['kind'] ?? $type,
+            ($meta['kind'] ?? null) === 'ids' => 'ids',
+            str_starts_with($type, 'pivot ') => 'pivot',
+            str_starts_with($type, 'through ') => 'through',
+            default => $meta['kind'] ?? $type,
         };
     }
 

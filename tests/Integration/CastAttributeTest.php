@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Integration;
 
-use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
