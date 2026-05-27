@@ -37,19 +37,21 @@ final class RedisStore
     {
         $value = $this->connection->get($this->prefix($key));
 
-        return $value !== null ? $this->unserialize($value) : null;
+        return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
 
     /** Returns the raw string value without deserialization (for JSON-encoded entries). */
-    public function getRaw(string $key): string|false|null
+    public function getRaw(string $key): ?string
     {
-        return $this->connection->get($this->prefix($key));
+        $value = $this->connection->get($this->prefix($key));
+
+        return ($value !== null && $value !== false) ? $value : null;
     }
 
     public function getJson(string $key): ?array
     {
         $raw = $this->connection->get($this->prefix($key));
-        if ($raw === null) {
+        if ($raw === null || $raw === false) {
             return null;
         }
         $decoded = json_decode($raw, true);
@@ -337,7 +339,7 @@ final class RedisStore
     public function unserialize(mixed $value): mixed
     {
         if (is_numeric($value)) {
-            return $value;
+            return str_contains($value, '.') ? (float) $value : (int) $value;
         }
 
         if (isset($value[0]) && $value[0] === "\x00") {
