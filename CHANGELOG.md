@@ -7,75 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.0] — Unreleased
+## [2.0.0]
 
 ### Added
 
-- **`dependsOn(array $modelClasses)`** — declare that a query's result depends on models beyond
-  its own table. The cache invalidates the entry whenever any of the listed model classes are
-  invalidated, making cross-table and `whereHas`/`whereExists` queries safe to cache. Only the
-  *dependency* bypass category is suppressed; normalization and safety checks (e.g. `GROUP BY`,
-  `DISTINCT`, pessimistic locks) still apply and will bypass the cache when triggered.
-- **Scalar result caching.** Simple aggregate queries (`count`, `sum`, `avg`, `min`, `max`) are
-  now cached and invalidated alongside their parent model, including `dependsOn()`-aware keys
-  for cross-table scalars.
-- **`Builder::explain()`.** Returns a human-readable string describing why a query is cached or
-  which bypass category prevented caching — useful for debugging and development.
-- **Debugbar integration.** Cache hits, misses, and bypasses are recorded on the Laravel Debugbar
-  timeline when the package is present. The integration is optional — NormCache degrades gracefully
-  when Debugbar is absent.
+- **`dependsOn(array $modelClasses)`** — cache cross-table queries by declaring which model
+  classes can invalidate them. Normalization and safety checks still apply.
+- **Scalar result caching** — `count`, `sum`, `avg`, `min`, `max` are cached under a versioned
+  key and invalidated with their parent model. Works with `dependsOn()`.
+- **`MorphTo` eager-load caching** — each morph type is served from the model cache. Falls back
+  per-type when constraints, `morphWithCount`, macros (e.g. `withTrashed`), or a non-`Cacheable`
+  related type are present.
+- **`Builder::explain()`** — returns a string describing why a query is cached or bypassed.
+- **Debugbar integration** — hits, misses, and bypasses appear on the Debugbar timeline.
+  Absent when Debugbar is not installed.
 
 ### Fixed
 
-- **`flushAll()` no longer blocks Redis with `KEYS` on non-cluster connections.**
-  `RedisStore::keysForPattern()` now uses a `SCAN` cursor loop for all connection types,
-  matching the behaviour that was already in place for cluster connections. Predis cluster
-  connections additionally gain per-node `SCAN` iteration.
-
-- **`forceFlushModel()` no longer loads the entire member-tracking set into PHP memory.**
-  Replaced the `SMEMBERS` call with an `SSCAN` cursor loop that deletes members in batches
-  of 1 000, keeping memory usage constant regardless of how many model entries are tracked.
-
-- **Model-cache writes no longer reintroduce stale entries after a concurrent invalidation.**
-  `flushInstance()` and `forceFlushModel()` now bump the model version before deleting tracked
-  model keys. Subsequent model-cache writes captured under the old version are rejected via a
-  Lua compare-and-swap check (`setManyTrackedIfVersion`), preventing stale entries from
-  re-entering the cache after a flush.
-
-- **Query-cache writes are skipped when the version has been bumped since the build started.**
-  A Lua CAS script atomically checks all relevant version keys before writing the ID list.
-  The building lock is always released, even when the write is skipped.
-
-- **Octane: per-request flush queue is now discarded between requests.**
-  Previously, deferred invalidations that were not flushed in one request could leak into the
-  next. The Octane lifecycle listener now calls `discardAllPending()` before re-enabling the
-  cache for each new request.
-
-- **igbinary format detection via magic-header byte.**
-  `RedisStore::unserialize()` now inspects the first byte of the stored blob to detect the
-  serialization format rather than relying solely on the runtime `igbinary` flag. Workers
-  without igbinary installed return a cache miss (null) instead of a corrupt result when
-  encountering an igbinary-serialized entry.
-
-- Hit events are now fired correctly on stale-key cache hits.
-- Nested eager loads on pivot cache hits no longer fail to hydrate.
-- Fixed non-sequential array key handling when hydrating relations.
-- Fixed new-model cache flush that left stale entries after `create()`.
-- Fixed broken public `flushModel()` API introduced in v1.1.0.
+- **`flushAll()` blocked Redis** with `KEYS` on non-cluster connections. Now uses `SCAN`.
+- **`forceFlushModel()` loaded the entire member set into memory.** Now uses `SSCAN` in batches
+  of 1 000.
+- **Stale model-cache entries could re-enter after a concurrent flush.** Flush paths bump the
+  version before deleting keys; writes captured under the old version are rejected via a Lua CAS.
+- **Query-cache writes could race a concurrent invalidation.** A Lua CAS verifies all version
+  keys before writing. The building lock is always released.
+- **Octane: deferred invalidations leaked across requests.** The pending queue is now discarded
+  at the start of each request.
+- **igbinary / PHP mismatch on mixed deployments.** Format is now detected by the first byte of
+  the blob; workers without igbinary get a cache miss instead of a corrupt result.
+- Hit events were not fired on stale-key hits.
+- Broken `flushModel()` public API introduced in v1.1.0.
+- Nested eager loads on pivot cache hits failed to hydrate.
+- New-model cache flush left stale entries after `create()`.
 
 ### Changed
 
-- **Building-lock TTL is now configurable** via `NORMCACHE_BUILDING_LOCK_TTL` (default: 30 seconds).
-- **Lua scripts extracted to `src/Lua/`** as individual `.lua` files. `LuaScripts::get(name)`
-  lazy-loads each script once per process via a static cache, replacing inline PHP heredocs.
-- **`RedisStore::eval()` uses EVALSHA** for all Lua invocations, falling back to `EVAL` (with
-  re-registration) only on `NOSCRIPT` — eliminating redundant script bytes on every call.
-  PhpRedis's `false`-return-instead-of-throw quirk is handled via `getLastError()`.
-- **`queryDepsPrefix()` added** to fix a double-`v` key-path bug in `dependsOn()` query keys
-  (`query:{cls}:vv1:v2:hash` → `query:{cls}:v1:v2:hash`).
-- Removed write-lock / polling mechanism; invalidation is now handled without distributed locks.
-- Non-cluster Redis paths optimised to reduce round-trips.
-- `RedisStore` extracted as a standalone class; cache operations are now named and scoped.
+- **Building-lock TTL is configurable** via `NORMCACHE_BUILDING_LOCK_TTL` (default: 30 s).
+- Distributed write-lock removed; invalidation no longer requires a lock.
 
 ---
 
@@ -83,27 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Query hit fast path restored: cached ID lists are returned without a redundant round-trip
-  when all model attributes are already in cache.
+- Query hit fast path: cached ID lists skip a round-trip when all model attributes are in cache.
 
 ### Changed
 
 - Lua scripts overhauled for correctness and cluster compatibility.
-- Cache loading flow refactored to reduce internal complexity; `CacheManager` now accepts
-  model instances rather than class strings in more call sites.
-- Cache keys are now runtime-connection-aware, preventing cross-connection key collisions.
-- Improved accuracy of the query-cache parity check (alias handling, `fromRaw`, `havings`).
+- Cache keys are now connection-aware, preventing cross-connection collisions.
 
 ### Fixed
 
-- Cache invalidation gaps for `through`-relation keys and `members` TTL alignment.
-- Bulk-write transaction deferral: invalidations queued inside a transaction are now flushed
-  atomically on commit.
-- Cache accuracy regressions for aliased `FROM`, pending flushes, and `classKey` consistency.
-- `fresh()` / `refresh()` now correctly bypasses cache, matching Laravel's own semantics.
+- Cache invalidation gaps for `through`-relation keys.
+- Invalidations inside a transaction are flushed atomically on commit.
+- `fresh()` / `refresh()` now bypasses cache, matching Laravel semantics.
 - Laravel 11 / 12 compatibility fixes.
 - Pivot and `through` cache accuracy improvements.
-- Connection-aware cache keys for selected-column variance.
 
 ---
 
@@ -111,17 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `CacheableBelongsTo` relation: warms simple `belongsTo` eager loads directly from the model
-  cache, skipping a query round-trip on cache hits.
-- Primary-key fast paths for `whereInRaw`, `limit(0)`, and single-PK lookups with `limit(1)`
-  or a harmless `orderBy`.
-- `NORMCACHE_FIRE_RETRIEVED` config option: opt-in to firing the Eloquent `retrieved` event
-  during cache hydration.
+- `CacheableBelongsTo`: warms `belongsTo` eager loads from the model cache, skipping a DB
+  round-trip on hits.
+- Primary-key fast paths for `whereInRaw`, `limit(0)`, and single-PK lookups.
+- `NORMCACHE_FIRE_RETRIEVED`: opt-in to firing the Eloquent `retrieved` event on cache hits.
 
 ### Changed
 
-- Model hydration rewritten using bound closures and prototype hydration for lower overhead.
-- Non-cluster `MGET` handling simplified; model member `SADD` is now batched in a pipeline.
+- Model hydration rewritten for lower overhead.
 
 ---
 
@@ -129,13 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Cooldown staleness:** Dropped invalidations during a cooldown window are now lazily
-  re-applied, preventing the cache from getting permanently stuck on stale data.
-- **Pivot cache collisions:** Pivot constraints are now hashed into the cache key, so different
-  filters on the same relationship no longer overwrite each other.
-- Improved transaction safety: cache invalidations are deferred and applied atomically on commit.
-- Prevented accidental mutation of the caller's base query builder.
-- Minor bug fixes and internal cleanups.
+- **Cooldown staleness:** dropped invalidations are now lazily re-applied.
+- **Pivot cache collisions:** pivot constraints are hashed into the key.
+- Cache invalidations inside a transaction are deferred and applied atomically on commit.
 
 ---
 
