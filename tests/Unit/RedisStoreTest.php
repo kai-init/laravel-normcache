@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Support\LuaScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use Predis\Client as PredisClient;
@@ -141,6 +142,59 @@ class RedisStoreTest extends TestCase
 
         $this->assertNull($store->get('model:{authors}:1'));
         $this->assertSame(0, $redis->exists('cas:members:model:{authors}'));
+    }
+
+    public function test_eval_returns_correct_result_on_first_call(): void
+    {
+        // Clear the PHP SHA cache so this test exercises the full first-call path
+        // (EVALSHA → NOSCRIPT fallback → EVAL).
+        (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
+
+        $store = new RedisStore('model-cache-test', '', false);
+        $script = LuaScripts::get('fetch_version_with_cooldown');
+
+        Redis::connection('model-cache-test')->setex('ver:{authors}:', 60, '7');
+
+        $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+
+        $this->assertSame('7', $result);
+    }
+
+    public function test_eval_recovers_after_redis_script_flush(): void
+    {
+        $store = new RedisStore('model-cache-test', '', false);
+        $redis = Redis::connection('model-cache-test');
+        $script = LuaScripts::get('fetch_version_with_cooldown');
+
+        $redis->setex('ver:{authors}:', 60, '5');
+
+        // First call — registers the script in Redis via the NOSCRIPT → EVAL fallback.
+        $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+
+        // Simulate a Redis restart by flushing all cached scripts.
+        $redis->rawCommand('SCRIPT', 'FLUSH');
+
+        // Second call — EVALSHA now hits NOSCRIPT again; must fall back and still return correctly.
+        $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+
+        $this->assertSame('5', $result);
+    }
+
+    public function test_php_sha_cache_is_populated_after_first_eval(): void
+    {
+        (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
+
+        $store = new RedisStore('model-cache-test', '', false);
+        $script = LuaScripts::get('fetch_version_with_cooldown');
+
+        $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
+
+        Redis::connection('model-cache-test')->setex('ver:{authors}:', 60, '2');
+        $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+
+        $shas = (new ReflectionProperty(RedisStore::class, 'shas'))->getValue();
+        $this->assertArrayHasKey($script, $shas);
+        $this->assertSame(sha1($script), $shas[$script]);
     }
 
     public function test_igbinary_blob_returns_null_when_extension_absent(): void

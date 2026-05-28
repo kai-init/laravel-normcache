@@ -15,6 +15,9 @@ final class RedisStore
 
     private bool $igbinary;
 
+    /** @var array<string, string> SHA1 cache — populated on first use of each script */
+    private static array $shas = [];
+
     public function __construct(
         string $redisConnection,
         private string $keyPrefix,
@@ -189,25 +192,7 @@ final class RedisStore
             return;
         }
 
-        $script = <<<'LUA'
-            local current = redis.call('GET', KEYS[1]) or '0'
-            if current ~= ARGV[1] then return 0 end
-
-            local ttl = tonumber(ARGV[2])
-            local n = tonumber(ARGV[3])
-            local members = {}
-
-            for i = 1, n do
-                local key = KEYS[2 + i]
-                redis.call('SETEX', key, ttl, ARGV[3 + i])
-                members[i] = key
-            end
-
-            redis.call('SADD', KEYS[2], unpack(members))
-            redis.call('EXPIRE', KEYS[2], ttl)
-
-            return n
-        LUA;
+        $script = LuaScripts::get('set_many_tracked_if_version');
 
         foreach (array_chunk($attrsByKey, 500, true) as $chunk) {
             $this->eval(
@@ -315,12 +300,40 @@ final class RedisStore
         return $total;
     }
 
-    /** Prefixes $keys before passing them to EVAL; $args are passed as-is. */
+    /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
     public function eval(string $script, array $keys, array $args = []): mixed
     {
         $prefixedKeys = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
+        $n = count($prefixedKeys);
+        $allArgs = array_merge($prefixedKeys, $args);
 
-        return $this->connection->eval($script, count($prefixedKeys), ...$prefixedKeys, ...$args);
+        $sha = self::$shas[$script] ??= sha1($script);
+
+        try {
+            $shaArgs = $this->connection instanceof PredisConnection
+                ? [$sha, $n, ...$allArgs]
+                : [$sha, $allArgs, $n];
+
+            $result = $this->connection->command('evalsha', $shaArgs);
+        } catch (\Throwable $e) {
+            if (!str_contains(strtolower($e->getMessage()), 'noscript')) {
+                throw $e;
+            }
+
+            return $this->connection->eval($script, $n, ...$allArgs);
+        }
+
+        // PhpRedis may return false with a NOSCRIPT last-error instead of throwing.
+        if ($result === false && method_exists($this->connection, 'client')) {
+            $lastError = strtolower((string) ($this->connection->client()->getLastError() ?? ''));
+            if (str_contains($lastError, 'noscript')) {
+                $this->connection->client()->clearLastError();
+
+                return $this->connection->eval($script, $n, ...$allArgs);
+            }
+        }
+
+        return $result;
     }
 
     // -------------------------------------------------------------------------

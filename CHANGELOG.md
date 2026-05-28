@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Building-lock TTL is now configurable** via `NORMCACHE_BUILDING_LOCK_TTL` (default: 30 seconds).
+- **Lua scripts extracted to `src/Lua/`** as individual `.lua` files. `LuaScripts::get(name)`
+  lazy-loads each script once per process via a static cache, replacing inline PHP heredocs.
+- **`RedisStore::eval()` uses EVALSHA** for all Lua invocations, falling back to `EVAL` (with
+  re-registration) only on `NOSCRIPT` — eliminating redundant script bytes on every call.
+  PhpRedis's `false`-return-instead-of-throw quirk is handled via `getLastError()`.
+- **`queryDepsPrefix()` added** to fix a double-`v` key-path bug in `dependsOn()` query keys
+  (`query:{cls}:vv1:v2:hash` → `query:{cls}:v1:v2:hash`).
 - Removed write-lock / polling mechanism; invalidation is now handled without distributed locks.
 - Non-cluster Redis paths optimised to reduce round-trips.
 - `RedisStore` extracted as a standalone class; cache operations are now named and scoped.

@@ -4,7 +4,8 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration {
+return new class extends Migration
+{
     public function up(): void
     {
         Schema::create('countries', function (Blueprint $table) {
@@ -49,10 +50,18 @@ return new class extends Migration {
             $table->morphs('taggable');
             $table->unique(['tag_id', 'taggable_type', 'taggable_id']);
         });
+
+        Schema::create('comments', function (Blueprint $table) {
+            $table->id();
+            $table->string('body');
+            $table->morphs('commentable');
+            $table->timestamps();
+        });
     }
 
     public function down(): void
     {
+        Schema::dropIfExists('comments');
         Schema::dropIfExists('taggables');
         Schema::dropIfExists('author_tag');
         Schema::dropIfExists('tags');

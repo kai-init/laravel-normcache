@@ -151,9 +151,14 @@ final class QueryInspector
         }
 
         if ($where['type'] === 'Basic' && $where['operator'] === '=') {
+            // ORDER BY and LIMIT are intentionally not checked here: a PK equality
+            // lookup always returns at most one row, so neither affects the result.
             return [$where['value']];
         }
 
+        // For multi-ID lookups: ORDER BY cannot be satisfied by the model-attribute
+        // cache (which returns results in $ids order), and LIMIT means we don't get
+        // all IDs. Both require falling through to the query-cache path.
         if (!empty($base->orders) || $base->limit > 0) {
             return null;
         }

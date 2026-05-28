@@ -133,7 +133,7 @@ Post::withoutAggregateCache()->withCount('comments')->get();
 
 ### Relationship caching
 
-`BelongsTo`, `BelongsToMany`, `MorphToMany`, `HasManyThrough`, and `HasOneThrough` relationships are cached for eligible eager-loads. On a warm hit no SQL is executed.
+`BelongsTo`, `BelongsToMany`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` relationships are cached for eligible eager-loads. On a warm hit no SQL is executed. `HasOne`, `HasMany`, `MorphOne`, and `MorphMany` are cached via the query cache when the related model uses `Cacheable`.
 
 ```php
 // First load: runs SQL, caches pivot map + related models
@@ -202,7 +202,7 @@ That includes:
 - Normal cacheable-model queries such as `all()`, `where(...)`, `first()`, `find()`, and `paginate()`
 - Primary-key lookups such as `whereKey($id)`, `where('id', $id)`, and eligible `whereIn('id', [...])` queries
 - Aggregates via `withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists`
-- Eager-loaded relationships other than `MorphTo` and `MorphedByMany`
+- Eager-loaded relationships. `MorphTo` uses the model cache per morph type (falls back to DB for non-`Cacheable` related types, soft-delete scopes, or per-type constraints). `MorphedByMany` is fully supported via `CacheableMorphToMany`.
 - Simple column projections and aliases when the result can still be rebuilt from cached model attributes
 
 ## What bypasses the cache
