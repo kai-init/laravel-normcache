@@ -60,7 +60,7 @@ class CacheServiceProvider extends ServiceProvider
                 }
             }
 
-            if (config('normcache.debugbar', false) && $this->app->bound('debugbar')) {
+            if (config('normcache.debugbar', false) && $this->debugbarIsEnabled()) {
                 $this->registerDebugbarCollector();
             }
         }
@@ -79,5 +79,16 @@ class CacheServiceProvider extends ServiceProvider
         $collector = new NormCacheDebugBarCollector;
         NormCacheCollector::register($collector);
         $this->app->make('debugbar')->addCollector($collector);
+    }
+
+    private function debugbarIsEnabled(): bool
+    {
+        if (!$this->app->bound('debugbar')) {
+            return false;
+        }
+
+        $debugbar = $this->app->make('debugbar');
+
+        return !method_exists($debugbar, 'isEnabled') || $debugbar->isEnabled();
     }
 }

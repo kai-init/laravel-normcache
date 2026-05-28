@@ -98,4 +98,61 @@ class MorphToCacheTest extends TestCase
 
         $this->assertInstanceOf(Author::class, $comments->first()->commentable->author);
     }
+
+    public function test_morph_to_falls_back_when_per_type_constraint_set(): void
+    {
+        $post = Post::create(['title' => 'Hello', 'published' => true, 'author_id' => Author::create(['name' => 'Alice'])->id]);
+        Comment::create(['body' => 'Hi', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+
+        DB::enableQueryLog();
+        $comments = Comment::with(['commentable' => fn($q) => $q->constrain([
+            Post::class => fn($q) => $q->where('published', true),
+        ])])->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $hitDb = count(array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'))) > 0;
+        $this->assertTrue($hitDb, 'constrain() should force DB fallback for that type');
+        $this->assertInstanceOf(Post::class, $comments->first()->commentable);
+    }
+
+    public function test_morph_to_falls_back_when_morph_with_count_set(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        Comment::create(['body' => 'A', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+        Comment::create(['body' => 'B', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+
+        $comments = Comment::where('commentable_type', Post::class)
+            ->with(['commentable' => fn($q) => $q->morphWithCount([Post::class => ['comments']])])
+            ->get();
+
+        $this->assertNotNull($comments->first()->commentable);
+        $this->assertSame(2, $comments->first()->commentable->comments_count);
+    }
+
+    public function test_morph_to_deduplicates_ids_when_multiple_comments_share_morphable(): void
+    {
+        $post = Post::create(['title' => 'Shared', 'author_id' => Author::create(['name' => 'Alice'])->id]);
+        Comment::create(['body' => 'A', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+        Comment::create(['body' => 'B', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+        Comment::create(['body' => 'C', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+
+        // Warm
+        Comment::with('commentable')->get();
+
+        DB::enableQueryLog();
+        $comments = Comment::with('commentable')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        // All three comments should resolve to the same post
+        foreach ($comments as $comment) {
+            $this->assertSame($post->id, $comment->commentable->id);
+        }
+
+        // No DB hit for posts (all from model cache)
+        $postQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'));
+        $this->assertCount(0, $postQueries, 'Three comments pointing to same post should not trigger a DB query');
+    }
 }
