@@ -11,7 +11,20 @@ final class QueryInspector
 
     public static function isCacheable(QueryBuilder $base, string $table, ?array $resolvedColumns = null): bool
     {
-        return empty(self::bypassReasons($base, $table, $resolvedColumns));
+        return self::isStructurallyCacheable($base, $table, $resolvedColumns)
+            && !self::hasDependencyBypass($base);
+    }
+
+    public static function isStructurallyCacheable(QueryBuilder $base, string $table, ?array $resolvedColumns = null): bool
+    {
+        return !self::hasNormalizationBypass($base, $table, $resolvedColumns)
+            && !self::hasSafetyBypass($base);
+    }
+
+    public static function hasDependencyBypass(QueryBuilder $base): bool
+    {
+        return self::hasRawOrderBypass($base)
+            || self::hasSubqueryWheres((array) $base->wheres);
     }
 
     public static function categoryLabels(): array
@@ -39,11 +52,8 @@ final class QueryInspector
         $normalization = [];
         $safety = [];
 
-        foreach ((array) $base->orders as $order) {
-            if (isset($order['type']) && $order['type'] === 'Raw') {
-                $dependency[] = 'raw ORDER expression';
-                break;
-            }
+        if (self::hasRawOrderBypass($base)) {
+            $dependency[] = 'raw ORDER expression';
         }
 
         if (self::hasSubqueryWheres((array) $base->wheres)) {
@@ -214,6 +224,34 @@ final class QueryInspector
 
         return $from === $table
             || (bool) preg_match('/^' . preg_quote($table, '/') . '\s+as\s+\w+$/i', $from);
+    }
+
+    private static function hasNormalizationBypass(QueryBuilder $base, string $table, ?array $resolvedColumns): bool
+    {
+        return !self::isCanonicalFrom($base, $table)
+            || !empty($base->joins)
+            || !empty($base->groups)
+            || !empty($base->havings)
+            || !empty($base->unions)
+            || !empty($base->aggregate)
+            || !empty($base->distinct)
+            || self::hasCalculatedColumns($resolvedColumns);
+    }
+
+    private static function hasSafetyBypass(QueryBuilder $base): bool
+    {
+        return !is_null($base->lock);
+    }
+
+    private static function hasRawOrderBypass(QueryBuilder $base): bool
+    {
+        foreach ((array) $base->orders as $order) {
+            if (isset($order['type']) && $order['type'] === 'Raw') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function hasSubqueryWheres(array $wheres): bool

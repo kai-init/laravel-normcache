@@ -28,10 +28,41 @@ class QueryInspectorTest extends TestCase
         $this->assertTrue(QueryInspector::hasCalculatedColumns($resolvedColumns));
     }
 
+    public function test_is_cacheable_uses_fast_boolean_path_for_simple_queries(): void
+    {
+        $this->assertTrue(QueryInspector::isCacheable($this->makeBaseQuery(null), 'authors'));
+    }
+
+    public function test_dependency_bypasses_are_separate_from_structural_cacheability(): void
+    {
+        $query = $this->makeBaseQuery(null);
+        $query->orders = [['type' => 'Raw', 'sql' => 'CASE WHEN active THEN 0 ELSE 1 END']];
+
+        $this->assertFalse(QueryInspector::isCacheable($query, 'authors'));
+        $this->assertTrue(QueryInspector::isStructurallyCacheable($query, 'authors'));
+        $this->assertTrue(QueryInspector::hasDependencyBypass($query));
+    }
+
+    public function test_structural_cacheability_rejects_normalization_reasons(): void
+    {
+        $query = $this->makeBaseQuery(null);
+        $query->groups = ['name'];
+
+        $this->assertFalse(QueryInspector::isCacheable($query, 'authors'));
+        $this->assertFalse(QueryInspector::isStructurallyCacheable($query, 'authors'));
+    }
+
+    public function test_is_cacheable_rejects_calculated_columns(): void
+    {
+        $query = $this->makeBaseQuery(['id', '1 + 1 as computed']);
+
+        $this->assertFalse(QueryInspector::isCacheable($query, 'authors', $query->columns));
+    }
+
     /**
      * @param  array<int, mixed>|null  $columns
      */
-    private function makeBaseQuery(?array $columns): Builder
+    private function makeBaseQuery(?array $columns, string $from = 'authors'): Builder
     {
         $query = new Builder(
             connection: $this->createStub(ConnectionInterface::class),
@@ -40,6 +71,7 @@ class QueryInspectorTest extends TestCase
         );
 
         $query->columns = $columns;
+        $query->from = $from;
 
         return $query;
     }

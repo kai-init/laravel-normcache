@@ -129,28 +129,23 @@ class CacheableBuilder extends Builder
 
         $base = $this->toBase();
         $resolvedCols = QueryInspector::resolveSelectedColumns($base, (array) $columns);
-        $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
-
-        if (!empty($bypassReasons)) {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryBypassed($this->model::class, $bypassReasons));
-            }
-
-            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
-
-            return $this->getWithoutCache($columns);
-        }
-
         $model = $this->model::class;
 
         try {
-            $ids = QueryInspector::extractPrimaryKeys($base, $this->model->getKeyName(), $this->model->getQualifiedKeyName());
-
-            if ($ids !== null) {
-                return $this->finalizeResult(NormCache::getModels($ids, $model, $resolvedCols, null, $this, false));
+            if ($this->shouldUseCache($base, $resolvedCols)) {
+                return $this->getFromCacheableQuery($base, $model, $resolvedCols);
             }
 
-            return $this->getByQuery($base, $model, $resolvedCols);
+            $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
+            $result = $this->getDependencyOnlyBypassResult($base, $model, $resolvedCols, $bypassReasons);
+
+            if ($result !== null) {
+                return $result;
+            }
+
+            $this->recordBypass($model, $bypassReasons, $debugbarStart);
+
+            return $this->getWithoutCache($columns);
         } catch (\Exception $e) {
             NormCache::fallback($e);
 
@@ -168,14 +163,11 @@ class CacheableBuilder extends Builder
 
         $base = $this->toBase();
         // resolvedColumns omitted — paginate caches the count, not rows; column selection is irrelevant.
-        $bypassReasons = $this->computeBypassReasons($base);
 
-        if (!empty($bypassReasons)) {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryBypassed($this->model::class, $bypassReasons));
-            }
+        if (!$this->shouldUseCache($base)) {
+            $bypassReasons = $this->computeBypassReasons($base);
 
-            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
+            $this->recordBypass($this->model::class, $bypassReasons, $debugbarStart);
 
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
@@ -312,6 +304,35 @@ class CacheableBuilder extends Builder
         return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
     }
 
+    private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
+    {
+        $ids = $this->extractPrimaryKeys($base);
+
+        if ($ids !== null) {
+            return $this->getModelsByIds($ids, $model, $selectedCols);
+        }
+
+        return $this->getByQuery($base, $model, $selectedCols);
+    }
+
+    /** @param array<string, list<string>> $bypassReasons */
+    private function getDependencyOnlyBypassResult(QueryBuilder $base, string $model, ?array $selectedCols, array $bypassReasons): ?Collection
+    {
+        if (!$this->hasOnlyDependencyBypass($bypassReasons)) {
+            return null;
+        }
+
+        $ids = $this->extractPrimaryKeys($base);
+
+        return $ids === null ? null : $this->getModelsByIds($ids, $model, $selectedCols);
+    }
+
+    /** @param array<int, mixed> $ids */
+    private function getModelsByIds(array $ids, string $model, ?array $selectedCols): Collection
+    {
+        return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false));
+    }
+
     private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): array
     {
         if (NormCache::isEventsEnabled()) {
@@ -395,6 +416,33 @@ class CacheableBuilder extends Builder
         }
 
         return $reasons;
+    }
+
+    private function shouldUseCache(QueryBuilder $base, ?array $resolvedColumns = null): bool
+    {
+        return !$this->insideTransaction()
+            && QueryInspector::isStructurallyCacheable($base, $this->model->getTable(), $resolvedColumns)
+            && ($this->dependsOn !== null || !QueryInspector::hasDependencyBypass($base));
+    }
+
+    /** @param array<string, list<string>> $bypassReasons */
+    private function hasOnlyDependencyBypass(array $bypassReasons): bool
+    {
+        return count($bypassReasons) === 1 && isset($bypassReasons['dependency']);
+    }
+
+    private function extractPrimaryKeys(QueryBuilder $base): ?array
+    {
+        return QueryInspector::extractPrimaryKeys($base, $this->model->getKeyName(), $this->model->getQualifiedKeyName());
+    }
+
+    private function recordBypass(string $modelClass, array $bypassReasons, ?float $debugbarStart): void
+    {
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryBypassed($modelClass, $bypassReasons));
+        }
+
+        NormCacheCollector::recordBypass($modelClass, $bypassReasons, $debugbarStart);
     }
 
     private function insideTransaction(): bool

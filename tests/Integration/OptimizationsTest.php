@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Support\QueryHasher;
@@ -138,6 +139,22 @@ class OptimizationsTest extends TestCase
         $found = Author::where('id', $author->id)->orderBy('id')->get();
 
         $this->assertCount(1, $found);
+        Event::assertNotDispatched(QueryCacheHit::class);
+        Event::assertNotDispatched(QueryCacheMiss::class);
+    }
+
+    public function test_fast_path_is_used_for_single_primary_key_lookup_with_raw_order_by(): void
+    {
+        $author = Author::create(['name' => 'Raw Order Author']);
+
+        Event::fake([QueryBypassed::class, QueryCacheHit::class, QueryCacheMiss::class]);
+
+        $found = Author::where('id', $author->id)
+            ->orderByRaw('CASE WHEN id = ? THEN 0 ELSE 1 END', [$author->id])
+            ->get();
+
+        $this->assertCount(1, $found);
+        Event::assertNotDispatched(QueryBypassed::class);
         Event::assertNotDispatched(QueryCacheHit::class);
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
