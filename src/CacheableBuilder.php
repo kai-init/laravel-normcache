@@ -162,7 +162,7 @@ class CacheableBuilder extends Builder
         $debugbarStart = NormCacheCollector::beginMeasure();
 
         $base = $this->toBase();
-        // resolvedColumns omitted — paginate caches the count, not rows; column selection is irrelevant.
+        // Count caching does not depend on selected row columns.
 
         if (!$this->shouldUseCache($base)) {
             $bypassReasons = $this->computeBypassReasons($base);
@@ -239,57 +239,27 @@ class CacheableBuilder extends Builder
             return $this->getByQueryWithDeps($base, $model, $selectedCols, $hash);
         }
 
-        $cacheData = NormCache::getModelsFromQuery($model, $hash);
-        $key = $cacheData['key'];
+        $result = NormCache::getModelsFromQuery($model, $hash);
 
-        if ($cacheData['ids'] === null && $key === null) {
-            NormCacheCollector::recordQuery('query miss', $model, 'building:stale-miss', $debugbarStart, ['kind' => 'ids']);
+        if ($result['status'] === 'building') {
+            $result = NormCache::waitForBuild($model, $hash);
 
-            return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+            if ($result === null) {
+                NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
+
+                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+            }
         }
 
-        if ($cacheData['ids'] === null) {
-            NormCacheCollector::recordQuery('query miss', $model, $key, $debugbarStart, ['kind' => 'ids']);
+        if ($result['status'] === 'miss') {
+            NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'ids']);
 
-            $ids = $this->resolveIds($key, $base, $cacheData['buildingKey'], $cacheData['versionKeys'], $cacheData['expectedVersions']);
+            $ids = $this->resolveIds($result['key'], $base, $result['buildingKey'], $result['versionKeys'], $result['expectedVersions']);
 
             return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
         }
 
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryCacheHit($model, $key ?? "stale:{$hash}"));
-        }
-
-        NormCacheCollector::recordQuery('query hit', $model, $key ?? "stale:{$hash}", $debugbarStart, [
-            'kind' => 'ids + models',
-            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($cacheData['ids']) . ' ids)',
-            'contains_model' => $cacheData['ids'],
-        ]);
-
-        return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
-    }
-
-    private function getByQueryWithDeps(QueryBuilder $base, string $model, ?array $selectedCols, string $hash): Collection
-    {
-        $debugbarStart = NormCacheCollector::beginMeasure();
-
-        $cacheData = NormCache::getQueryWithDeps($model, $this->dependsOn, $hash);
-        $key = $cacheData['key'];
-
-        if ($cacheData['ids'] === null && $key === null) {
-            NormCacheCollector::recordQuery('query miss', $model, 'building:concurrent-miss', $debugbarStart, ['kind' => 'ids']);
-
-            return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
-        }
-
-        if ($cacheData['ids'] === null) {
-            NormCacheCollector::recordQuery('query miss', $model, $key, $debugbarStart, ['kind' => 'ids']);
-
-            return $this->finalizeResult(NormCache::getModels(
-                $this->resolveIds($key, $base, $cacheData['buildingKey'], $cacheData['versionKeys'], $cacheData['expectedVersions']),
-                $model, $selectedCols, null, $this
-            ));
-        }
+        $key = $result['status'] === 'stale' ? "stale:{$hash}" : $result['key'];
 
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheHit($model, $key));
@@ -297,11 +267,48 @@ class CacheableBuilder extends Builder
 
         NormCacheCollector::recordQuery('query hit', $model, $key, $debugbarStart, [
             'kind' => 'ids + models',
-            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($cacheData['ids']) . ' ids)',
-            'contains_model' => $cacheData['ids'],
+            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result['ids']) . ' ids)',
+            'contains_model' => $result['ids'],
         ]);
 
-        return $this->finalizeResult(NormCache::getModels($cacheData['ids'], $model, $selectedCols, $cacheData['models'], $this));
+        return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this));
+    }
+
+    private function getByQueryWithDeps(QueryBuilder $base, string $model, ?array $selectedCols, string $hash): Collection
+    {
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
+        $result = NormCache::getQueryWithDeps($model, $this->dependsOn, $hash);
+
+        if ($result['status'] === 'building') {
+            $result = NormCache::waitForBuild($model, $hash, returnOnMiss: false, depClasses: $this->dependsOn);
+
+            if ($result === null) {
+                NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'deps']);
+
+                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+            }
+        }
+
+        if ($result['status'] === 'miss') {
+            NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
+
+            $blob = array_map(fn($r) => (array) $r, $base->get()->all());
+            NormCache::storeDepsResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
+
+            return $this->finalizeResult(NormCache::hydrateBlob($blob, $model));
+        }
+
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryCacheHit($model, $result['key']));
+        }
+
+        NormCacheCollector::recordQuery('query hit', $model, $result['key'], $debugbarStart, [
+            'kind' => 'deps blob',
+            'contains' => class_basename($model) . ' (' . count($result['blob']) . ' models)',
+        ]);
+
+        return $this->finalizeResult(NormCache::hydrateBlob($result['blob'], $model));
     }
 
     private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection

@@ -40,6 +40,10 @@ class CacheManager
 
     public const K_THROUGH = 'through';
 
+    public const K_WAKE = 'wake';
+
+    public const K_COMPUTED = 'computed';
+
     private static array $classKeyCache = [];
 
     private static array $prototypes = [];
@@ -68,6 +72,7 @@ class CacheManager
         private bool $fallbackEnabled = false,
         private bool $fireRetrieved = false,
         private int $buildingLockTtl = 30,
+        private int $stampedeWaitS = 1,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
     }
@@ -120,6 +125,7 @@ class CacheManager
             $version = $this->currentVersion($modelClass);
 
             return $this->queryResult(
+                'miss',
                 $this->queryPrefix($classKey) . $version . ':' . $hash,
                 null,
                 null,
@@ -127,20 +133,20 @@ class CacheManager
             );
         }
 
-        $status = $result[0] ?? null;
+        $luaStatus = $result[0] ?? null;
         $version = $this->normalizeVersion($result[1]);
         $this->versionLocal[$classKey] = $version;
         $queryKey = $this->queryPrefix($classKey) . $version . ':' . $hash;
 
         $deserialize = fn($r) => $this->store->unserializeMany($r);
 
-        return match ($status) {
-            'hit' => $this->queryResult($queryKey, $result[2], $deserialize($result[3]), null),
-            'stale' => $this->queryResult(null, $result[2], $deserialize($result[3]), null),
-            'empty' => $this->queryResult($queryKey, [], [], null),
-            'miss' => $this->queryResult($queryKey, null, null, $this->buildingPrefix($classKey) . $hash, [$this->verKey($classKey)], [(string) $version]),
-            'building' => $this->queryResult(null, null, null, null),
-            default => $this->queryResult($queryKey, null, null, null),
+        return match ($luaStatus) {
+            'hit' => $this->queryResult('hit', $queryKey, $result[2], $deserialize($result[3]), null),
+            'stale' => $this->queryResult('stale', null, $result[2], $deserialize($result[3]), null),
+            'empty' => $this->queryResult('empty', $queryKey, [], [], null),
+            'miss' => $this->queryResult('miss', $queryKey, null, null, $this->buildingPrefix($classKey) . $hash, [$this->verKey($classKey)], [(string) $version]),
+            'building' => $this->queryResult('building', null, null, null, null),
+            default => $this->queryResult('miss', $queryKey, null, null, null),
         };
     }
 
@@ -236,28 +242,47 @@ class CacheManager
     public function getQueryWithDeps(string $modelClass, array $depClasses, string $hash): array
     {
         $classKey = $this->classKey($modelClass);
-        [$classKeys, $versionKeys] = $this->versionKeyData($classKey, $depClasses);
+        [$classKeys] = $this->versionKeyData($classKey, $depClasses);
 
-        $result = $this->luaFetchQueryWithDeps($classKey, $versionKeys, $hash);
-        [$status, $versions] = $result;
+        $versions = $this->fetchVersionsByClassKeys($classKeys);
 
-        foreach ($classKeys as $i => $key) {
-            $this->versionLocal[$key] = $this->normalizeVersion($versions[$i]);
+        $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions));
+        $key = $this->computedPrefix($classKey) . $seg . ':' . $hash;
+
+        $blob = $this->store->get($key);
+
+        if ($blob !== null) {
+            return ['status' => 'hit', 'key' => $key, 'blob' => $blob, 'buildingKey' => null];
         }
 
-        $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions ?: array_fill(0, count($versionKeys), 0)));
-        $key = $this->queryDepsPrefix($classKey) . $seg . ':' . $hash;
-        $buildingKey = $this->buildingPrefix($classKey) . $seg . ':' . $hash;
+        $buildingKey = $this->buildingPrefix($classKey) . $hash;
 
-        $expectedVersions = array_map(fn($v) => (string) $this->normalizeVersion($v), $versions ?: array_fill(0, count($versionKeys), null));
+        if (!$this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
+            return ['status' => 'building', 'key' => null, 'blob' => null, 'buildingKey' => null];
+        }
 
-        return match ($status) {
-            'hit' => $this->queryResult($key, $result[2], $this->store->unserializeMany($result[3]), null),
-            'empty' => $this->queryResult($key, [], [], null),
-            'miss' => $this->queryResult($key, null, null, $buildingKey, $versionKeys, $expectedVersions),
-            'building' => $this->queryResult(null, null, null, null),
-            default => $this->queryResult($key, null, null, null),
-        };
+        return ['status' => 'miss', 'key' => $key, 'blob' => null, 'buildingKey' => $buildingKey];
+    }
+
+    public function storeDepsResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
+    {
+        $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
+
+        if ($buildingKey !== null) {
+            $this->store->releaseBuilding($buildingKey, $this->buildingToWakeKey($buildingKey));
+        }
+    }
+
+    public function hydrateBlob(array $blob, string $modelClass): array
+    {
+        $prototype = self::prototype($modelClass);
+        $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
+
+        if ($this->dispatchEvents && $models !== []) {
+            event(new ModelCacheHit($modelClass, array_map(fn($m) => $m->getKey(), $models)));
+        }
+
+        return $models;
     }
 
     // -------------------------------------------------------------------------
@@ -307,13 +332,46 @@ class CacheManager
         }
     }
 
+    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = []): ?array
+    {
+        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitS);
+
+        $result = $depClasses !== []
+            ? $this->getQueryWithDeps($modelClass, $depClasses, $hash)
+            : $this->getModelsFromQuery($modelClass, $hash);
+
+        return match ($result['status']) {
+            'building' => null,
+            'miss' => $returnOnMiss ? $result : $this->discardBuildAndReturnNull($result),
+            default => $result,
+        };
+    }
+
+    private function discardBuildAndReturnNull(array $result): null
+    {
+        if ($result['buildingKey'] !== null) {
+            $this->store->delete($result['buildingKey']);
+        }
+
+        return null;
+    }
+
     private function storeQueryIdsCAS(string $key, array $ids, int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions): void
     {
         $this->store->eval(
             LuaScripts::get('store_query_cas'),
-            array_merge($versionKeys, [$key, $buildingKey ?? '']),
+            array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->buildingToWakeKey($buildingKey) : '']),
             array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids)])
         );
+    }
+
+    private function buildingToWakeKey(string $buildingKey): string
+    {
+        $classKeyEnd = strpos($buildingKey, '}:') + 2;
+
+        return self::K_WAKE
+            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
+            . substr(strrchr($buildingKey, ':'), 1);
     }
 
     // -------------------------------------------------------------------------
@@ -483,6 +541,8 @@ class CacheManager
             self::K_THROUGH . ':*',
             self::K_SCHEDULED . ':*',
             self::K_BUILDING . ':*',
+            self::K_WAKE . ':*',
+            self::K_COMPUTED . ':*',
         ]);
     }
 
@@ -715,12 +775,21 @@ class CacheManager
         ], [$hash, $nowMs, $this->buildingLockTtl]);
     }
 
-    private function luaFetchQueryWithDeps(string $classKey, array $versionKeys, string $hash): mixed
+    private function fetchVersionsByClassKeys(array $classKeys): array
     {
-        return $this->store->eval(LuaScripts::get('fetch_query_with_deps'), array_merge(
-            $versionKeys,
-            [$this->queryDepsPrefix($classKey), $this->buildingPrefix($classKey), $this->modelPrefix($classKey)]
-        ), [$hash, count($versionKeys), $this->buildingLockTtl]);
+        $versions = [];
+
+        foreach ($classKeys as $classKey) {
+            if (isset($this->versionLocal[$classKey])) {
+                $versions[] = $this->versionLocal[$classKey];
+            } else {
+                $version = $this->normalizeVersion($this->resolveCurrentVersion($classKey));
+                $this->versionLocal[$classKey] = $version;
+                $versions[] = $version;
+            }
+        }
+
+        return $versions;
     }
 
     private function luaFetchVersionedCache(array $versionKeys, string $keyPrefix, string $hash): array
@@ -784,15 +853,19 @@ class CacheManager
         return self::K_QUERY . ':{' . $classKey . '}:v';
     }
 
-    /** Prefix for multi-version (dependsOn) query keys: appended with "{seg}:{hash}" where seg = "v1:v2:...". */
-    private function queryDepsPrefix(string $classKey): string
+    private function computedPrefix(string $classKey): string
     {
-        return self::K_QUERY . ':{' . $classKey . '}:';
+        return self::K_COMPUTED . ':{' . $classKey . '}:';
     }
 
     private function buildingPrefix(string $classKey): string
     {
         return self::K_BUILDING . ':{' . $classKey . '}:';
+    }
+
+    private function wakePrefix(string $classKey): string
+    {
+        return self::K_WAKE . ':{' . $classKey . '}:';
     }
 
     private function membersKey(string $classKey): string
@@ -893,9 +966,10 @@ class CacheManager
         return $value !== null ? (int) $value : 0;
     }
 
-    private function queryResult(?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = []): array
+    private function queryResult(string $status, ?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = []): array
     {
         return [
+            'status' => $status,
             'key' => $key,
             'ids' => $ids,
             'models' => $models,

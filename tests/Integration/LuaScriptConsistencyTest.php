@@ -96,42 +96,7 @@ class LuaScriptConsistencyTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // luaFetchQueryWithDeps — corrupt entry (dependsOn path)
-    //
-    // luaFetchVersionedQuery handles corrupt entries in the standard path.
-    // luaFetchQueryWithDeps must do the same for dependsOn() queries.
-    // -------------------------------------------------------------------------
-
-    public function test_corrupt_deps_query_entry_is_deleted_and_treated_as_miss(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $hash = $this->authorQueryHash();
-
-        Author::query()->dependsOn([Post::class])->get(); // populate cache
-
-        $authorVer = NormCache::currentVersion(Author::class);
-        $postVer = NormCache::currentVersion(Post::class);
-        $queryKey = "query:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}";
-
-        $this->setKey($queryKey, 'not-valid-json');
-        NormCache::flushVersionLocal();
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::query()->dependsOn([Post::class])->get();
-
-        $this->assertGreaterThan(0, $queryCount);
-        $this->assertCount(1, $results);
-        $this->assertIsArray(json_decode($this->getKey($queryKey), true)); // replaced with valid JSON
-    }
-
-    // -------------------------------------------------------------------------
-    // luaFetchQueryWithDeps — building key causes DB fallthrough (dependsOn path)
+    // dependsOn blob — building key causes DB fallthrough (dependsOn path)
     //
     // In luaFetchVersionedQuery, a claimed building key triggers stale serving.
     // In luaFetchQueryWithDeps there is no stale serving, so a claimed building

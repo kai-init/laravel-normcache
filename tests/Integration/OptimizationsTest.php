@@ -17,16 +17,13 @@ class OptimizationsTest extends TestCase
     {
         $author = Author::create(['name' => 'Fast Path Author']);
 
-        // Clear all events
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class]);
 
-        // This should trigger the fast path
         $found = Author::where('id', $author->id)->get();
 
         $this->assertCount(1, $found);
         $this->assertEquals('Fast Path Author', $found->first()->name);
 
-        // Verify NO QueryCache events were fired
         Event::assertNotDispatched(QueryCacheHit::class);
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
@@ -49,23 +46,19 @@ class OptimizationsTest extends TestCase
     {
         Author::create(['name' => 'Lua Author']);
 
-        // First query to populate cache
         Author::where('name', 'Lua Author')->get();
 
-        // Check Redis for the query key format
         $redis = Redis::connection(config('normcache.connection'));
         $prefix = config('normcache.key_prefix');
 
-        // Find the query key
+        // Query cache entries are stored as JSON ID arrays.
         $keys = $redis->keys($prefix . 'query:*');
         $this->assertNotEmpty($keys);
 
         $value = $redis->get($keys[0]);
-        // It should be JSON array
         $this->assertStringStartsWith('[', $value);
         $this->assertStringEndsWith(']', $value);
 
-        // Second query should hit via Lua
         Event::fake([QueryCacheHit::class]);
         $found = Author::where('name', 'Lua Author')->get();
 
@@ -83,12 +76,13 @@ class OptimizationsTest extends TestCase
         $base = $query->toBase();
         $base->columns = null;
         $hash = QueryHasher::fromQuery($base);
-        $cacheData = app('normcache')->getModelsFromQuery(Author::class, $hash);
+        $result = app('normcache')->getModelsFromQuery(Author::class, $hash);
 
-        $this->assertSame([$author->id], $cacheData['ids']);
-        $this->assertIsArray($cacheData['models']);
-        $this->assertIsArray($cacheData['models'][0]);
-        $this->assertSame('Payload Author', $cacheData['models'][0]['name']);
+        $this->assertSame('hit', $result['status']);
+        $this->assertSame([$author->id], $result['ids']);
+        $this->assertIsArray($result['models']);
+        $this->assertIsArray($result['models'][0]);
+        $this->assertSame('Payload Author', $result['models'][0]['name']);
     }
 
     public function test_corrupt_query_cache_payload_degrades_to_miss_and_repairs(): void

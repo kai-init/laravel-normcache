@@ -27,6 +27,8 @@ trait CachesPivotRelation
 
     public function get($columns = ['*']): Collection
     {
+        $columns = is_array($columns) ? $columns : [$columns];
+
         if (!$this->shouldUsePivotCache()) {
             return parent::get($columns);
         }
@@ -56,7 +58,9 @@ trait CachesPivotRelation
             $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
 
             if (empty($missedIds)) {
-                event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+                }
                 NormCacheCollector::recordQuery(
                     'pivot hit',
                     $parentClass,
@@ -68,7 +72,9 @@ trait CachesPivotRelation
                 return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
             }
 
-            event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+            }
             NormCacheCollector::recordQuery(
                 'pivot miss',
                 $parentClass,

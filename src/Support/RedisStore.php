@@ -77,14 +77,44 @@ final class RedisStore
         $this->connection->setnx($this->prefix($key), $value);
     }
 
+    /** SET NX EX — returns true if the lock was claimed. */
+    public function setNxEx(string $key, string $value, int $ttl): bool
+    {
+        $result = $this->eval(
+            "return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2]))",
+            [$key],
+            [$value, (string) $ttl]
+        );
+
+        return $result !== null && $result !== false;
+    }
+
     public function delete(string $key): void
     {
         $this->connection->del($this->prefix($key));
     }
 
+    /** DEL building key + LPUSH/EXPIRE wake key in one pipeline. */
+    public function releaseBuilding(string $buildingKey, string $wakeKey): void
+    {
+        $this->connection->pipeline(function ($pipe) use ($buildingKey, $wakeKey) {
+            $pipe->del($this->prefix($buildingKey));
+            $pipe->lpush($this->prefix($wakeKey), '1');
+            $pipe->expire($this->prefix($wakeKey), 10);
+        });
+    }
+
     public function increment(string $key): int
     {
         return (int) $this->connection->incr($this->prefix($key));
+    }
+
+    /** Blocks until an item appears on the list key or the timeout expires. Returns true if woken. */
+    public function brpop(string $key, int $timeoutSeconds): bool
+    {
+        $result = $this->connection->brpop($this->prefix($key), $timeoutSeconds);
+
+        return $result !== null && $result !== false;
     }
 
     // -------------------------------------------------------------------------

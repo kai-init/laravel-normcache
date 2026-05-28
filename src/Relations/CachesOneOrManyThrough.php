@@ -25,20 +25,20 @@ trait CachesOneOrManyThrough
         $relatedClass = $this->related::class;
 
         try {
-            $cacheData = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
-            $key = $cacheData['key'];
+            $result = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
+            $key = $result['key'];
 
-            if ($cacheData['data'] !== null) {
+            if ($result['data'] !== null) {
                 NormCacheCollector::recordQuery('through hit', $relatedClass, $key, $debugbarStart, [
                     'through' => $this->throughParent::class,
                 ]);
 
                 return $this->hydrateFromIds(
-                    $cacheData['data']['ids'],
+                    $result['data']['ids'],
                     $relatedClass,
                     $builder,
                     $shouldCacheModels ? null : $builder->getQuery()->columns,
-                    $cacheData['data']['throughKeys']
+                    $result['data']['throughKeys']
                 );
             }
 

@@ -92,14 +92,14 @@ trait CachesScalarResults
         $hash = $this->queryCacheKey($base) . ":{$kind}";
 
         try {
-            ['key' => $cacheKey, 'data' => $cacheData] = NormCache::getNamespacedCache(
+            ['key' => $cacheKey, 'data' => $result] = NormCache::getNamespacedCache(
                 'scalar',
                 $this->model::class,
                 $hash,
                 $this->dependsOn ?? []
             );
-            $hit = $cacheData !== null;
-            $result = $hit ? $cacheData[0] : null;
+            $hit = $result !== null;
+            $result = $hit ? $result[0] : null;
 
             if (!$hit) {
                 $result = $fallback();

@@ -16,7 +16,7 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
     }
 
     public function test_depends_on_returns_correct_results(): void
@@ -222,7 +222,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
     }
 
     public function test_where_in_subquery_requires_depends_on(): void
@@ -247,7 +247,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
     }
 
     public function test_behaviora_l_distinct_with_depends_on_preserves_distinct_semantics(): void

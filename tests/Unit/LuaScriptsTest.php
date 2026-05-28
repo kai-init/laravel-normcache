@@ -11,7 +11,6 @@ class LuaScriptsTest extends TestCase
     private static array $knownScripts = [
         'store_query_cas',
         'fetch_versioned_query',
-        'fetch_query_with_deps',
         'fetch_versioned_cache',
         'fetch_versioned_pivot',
         'fetch_version_with_cooldown',
