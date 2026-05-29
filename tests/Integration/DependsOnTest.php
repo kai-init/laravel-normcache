@@ -138,6 +138,77 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty(array_diff($secondKeys, $firstKeys));
     }
 
+    public function test_join_with_depends_on_paginate_caches_count(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        Post::create(['title' => 'Hello', 'author_id' => $alice->id]);
+        Post::create(['title' => 'World', 'author_id' => $bob->id]);
+
+        $pageOne = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->orderBy('authors.id')
+            ->dependsOn([Post::class])
+            ->paginate(1, ['authors.*'], 'page', 1);
+
+        $this->assertSame(2, $pageOne->total());
+        $this->assertCount(1, $pageOne->items());
+        $this->assertSame('Alice', $pageOne->first()->name);
+        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+
+        $pageTwo = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->orderBy('authors.id')
+            ->dependsOn([Post::class])
+            ->paginate(1, ['authors.*'], 'page', 2);
+
+        $this->assertSame(2, $pageTwo->total());
+        $this->assertCount(1, $pageTwo->items());
+        $this->assertSame('Bob', $pageTwo->first()->name);
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+
+        $cachedPageTwo = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->orderBy('authors.id')
+            ->dependsOn([Post::class])
+            ->paginate(1, ['authors.*'], 'page', 2);
+
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame(2, $cachedPageTwo->total());
+        $this->assertCount(1, $cachedPageTwo->items());
+        $this->assertSame('Bob', $cachedPageTwo->first()->name);
+        $this->assertEmpty($queries, 'The JOIN count and paginated rows should both hit cache.');
+    }
+
+    public function test_join_with_depends_on_paginate_count_invalidates_on_dep_model_version_bump(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->paginate(10);
+
+        $firstKeys = $this->redisKeys('test:count:*');
+
+        Post::create(['title' => 'World', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->paginate(10);
+
+        $secondKeys = $this->redisKeys('test:count:*');
+
+        $this->assertCount(2, $secondKeys);
+        $this->assertNotEmpty(array_diff($secondKeys, $firstKeys));
+    }
+
     public function test_depends_on_count_invalidates_on_dep_model_version_bump(): void
     {
         $author = Author::create(['name' => 'Alice']);

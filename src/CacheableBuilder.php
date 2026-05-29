@@ -168,7 +168,7 @@ class CacheableBuilder extends Builder
                 return $this->getFromCacheableQuery($base, $model, $resolvedCols);
             }
 
-            if ($this->dependsOn !== null && !$this->insideTransaction() && !QueryInspector::hasSafetyBypass($base)) {
+            if ($this->shouldUseRawCache($base)) {
                 return $this->getFromRawCache($base, $model, $this->queryCacheKey($base), $this->cacheTag);
             }
 
@@ -200,48 +200,19 @@ class CacheableBuilder extends Builder
         $base = $this->toBase();
         // Count caching does not depend on selected row columns.
 
-        if (!$this->shouldUseCache($base)) {
-            $bypassReasons = $this->computeBypassReasons($base);
-
-            $this->recordBypass($this->model::class, $bypassReasons, $debugbarStart);
-
-            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        if ($this->shouldUseCache($base)) {
+            return $this->paginateWithCountCache($base, 'count', $perPage, $columns, $pageName, $page, $total);
         }
 
-        $hash = $this->queryCacheKey($base);
-
-        $queryStart = NormCacheCollector::beginMeasure();
-
-        try {
-            ['key' => $countKey, 'data' => $countData] = NormCache::getNamespacedCache('count', $this->model::class, $hash, $this->dependsOn ?? [], $this->cacheTag);
-            $cachedTotal = $countData[0] ?? null;
-
-            if (NormCache::isEventsEnabled()) {
-                event($cachedTotal !== null
-                    ? new QueryCacheHit($this->model::class, $countKey)
-                    : new QueryCacheMiss($this->model::class, $countKey)
-                );
-            }
-
-            NormCacheCollector::recordQuery(
-                $cachedTotal !== null ? 'query hit' : 'query miss',
-                $this->model::class,
-                $countKey,
-                $queryStart,
-                ['kind' => 'count']
-            );
-
-            if ($cachedTotal === null) {
-                $cachedTotal = $base->getCountForPagination();
-                NormCache::storeQueryAggregate($countKey, $cachedTotal, $this->queryTtl);
-            }
-
-            return parent::paginate($perPage, $columns, $pageName, $page, (int) $cachedTotal);
-        } catch (\Exception $e) {
-            NormCache::fallback($e);
-
-            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        if ($this->shouldUseRawCache($base)) {
+            return $this->paginateWithCountCache($base, 'raw count', $perPage, $columns, $pageName, $page, $total);
         }
+
+        $bypassReasons = $this->computeBypassReasons($base);
+
+        $this->recordBypass($this->model::class, $bypassReasons, $debugbarStart);
+
+        return parent::paginate($perPage, $columns, $pageName, $page, $total);
     }
 
     public function eagerLoadRelations(array $models): array
@@ -264,6 +235,54 @@ class CacheableBuilder extends Builder
     // -------------------------------------------------------------------------
     // Private — query execution
     // -------------------------------------------------------------------------
+
+    private function paginateWithCountCache(QueryBuilder $base, string $kind, $perPage, $columns, string $pageName, $page, $fallbackTotal): LengthAwarePaginator
+    {
+        try {
+            return parent::paginate($perPage, $columns, $pageName, $page, $this->resolvePaginationTotal($base, $kind));
+        } catch (\Exception $e) {
+            NormCache::fallback($e);
+
+            return parent::paginate($perPage, $columns, $pageName, $page, $fallbackTotal);
+        }
+    }
+
+    private function resolvePaginationTotal(QueryBuilder $base, string $kind): int
+    {
+        $queryStart = NormCacheCollector::beginMeasure();
+
+        ['key' => $countKey, 'data' => $data] = NormCache::getNamespacedCache(
+            'count',
+            $this->model::class,
+            $this->queryCacheKey($base),
+            $this->dependsOn ?? [],
+            $this->cacheTag
+        );
+
+        $cachedTotal = $data[0] ?? null;
+
+        if (NormCache::isEventsEnabled()) {
+            event($cachedTotal !== null
+                ? new QueryCacheHit($this->model::class, $countKey)
+                : new QueryCacheMiss($this->model::class, $countKey)
+            );
+        }
+
+        NormCacheCollector::recordQuery(
+            $cachedTotal !== null ? 'query hit' : 'query miss',
+            $this->model::class,
+            $countKey,
+            $queryStart,
+            ['kind' => $kind]
+        );
+
+        if ($cachedTotal === null) {
+            $cachedTotal = $base->getCountForPagination();
+            NormCache::storeQueryAggregate($countKey, $cachedTotal, $this->queryTtl);
+        }
+
+        return (int) $cachedTotal;
+    }
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
     {
@@ -468,6 +487,13 @@ class CacheableBuilder extends Builder
         return !$this->insideTransaction()
             && QueryInspector::isStructurallyCacheable($base, $this->model->getTable(), $resolvedColumns)
             && ($this->dependsOn !== null || !QueryInspector::hasDependencyBypass($base));
+    }
+
+    private function shouldUseRawCache(QueryBuilder $base): bool
+    {
+        return $this->dependsOn !== null
+            && !$this->insideTransaction()
+            && !QueryInspector::hasSafetyBypass($base);
     }
 
     /** @param array<string, list<string>> $bypassReasons */

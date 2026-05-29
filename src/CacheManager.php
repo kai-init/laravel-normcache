@@ -1029,5 +1029,4 @@ class CacheManager
             'expectedVersions' => $expectedVersions,
         ];
     }
-
 }
