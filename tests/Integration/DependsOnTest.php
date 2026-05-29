@@ -369,6 +369,41 @@ class DependsOnTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:raw:*:deploy:*'));
     }
 
+    public function test_flush_tag_removes_tagged_paginate_count_key(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->paginate(10);
+
+        $this->assertNotEmpty($this->redisKeys('test:count:*:homepage:*'));
+
+        $removed = NormCache::flushTag(Author::class, 'homepage');
+
+        $this->assertGreaterThan(0, $removed);
+        $this->assertEmpty($this->redisKeys('test:count:*:homepage:*'));
+    }
+
+    public function test_tagged_raw_cache_invalidates_on_dep_version_bump(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
+
+        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
+            ->dependsOn([Post::class])
+            ->tag('homepage')
+            ->get();
+        $this->assertCount(1, $first);
+
+        $post->update(['published' => false]);
+
+        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
+            ->dependsOn([Post::class])
+            ->tag('homepage')
+            ->get();
+        $this->assertCount(0, $second);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
