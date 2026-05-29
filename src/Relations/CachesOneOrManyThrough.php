@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\CacheableBuilder;
 use NormCache\Debug\NormCacheCollector;
+use NormCache\Events\QueryCacheHit;
+use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
@@ -29,6 +31,10 @@ trait CachesOneOrManyThrough
             $key = $result['key'];
 
             if ($result['data'] !== null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheHit($relatedClass, $key));
+                }
+
                 NormCacheCollector::recordQuery('through hit', $relatedClass, $key, $debugbarStart, [
                     'through' => $this->throughParent::class,
                 ]);
@@ -40,6 +46,10 @@ trait CachesOneOrManyThrough
                     $shouldCacheModels ? null : $builder->getQuery()->columns,
                     $result['data']['throughKeys']
                 );
+            }
+
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($relatedClass, $key));
             }
 
             NormCacheCollector::recordQuery('through miss', $relatedClass, $key, $debugbarStart, [

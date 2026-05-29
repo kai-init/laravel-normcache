@@ -8,6 +8,8 @@ use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Country;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 class CacheEventsTest extends TestCase
@@ -126,5 +128,81 @@ class CacheEventsTest extends TestCase
 
         Event::assertNotDispatched(QueryCacheHit::class);
         Event::assertNotDispatched(QueryCacheMiss::class);
+    }
+
+    public function test_raw_depends_on_miss_fires_query_cache_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Event::fake([QueryCacheMiss::class]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->get();
+
+        Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
+            return $e->modelClass === Author::class
+                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
+        });
+    }
+
+    public function test_raw_depends_on_miss_does_not_fire_model_cache_hit(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Event::fake([ModelCacheHit::class]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->get();
+
+        Event::assertNotDispatched(ModelCacheHit::class);
+    }
+
+    public function test_through_relation_cache_fires_query_events(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Event::fake([QueryCacheMiss::class]);
+
+        $country->posts()->get();
+
+        Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
+            return $e->modelClass === Post::class
+                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+        });
+
+        Event::fake([QueryCacheHit::class]);
+
+        $country->posts()->get();
+
+        Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
+            return $e->modelClass === Post::class
+                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+        });
+    }
+
+    public function test_relation_aggregate_cache_fires_query_events(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Event::fake([QueryCacheMiss::class]);
+
+        Author::withCount('posts')->get();
+
+        Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
+            return $e->modelClass === Author::class
+                && str_starts_with($e->key, 'agg:{' . app('normcache')->classKey(Author::class) . '}:');
+        });
+
+        Event::fake([QueryCacheHit::class]);
+
+        Author::withCount('posts')->get();
+
+        Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
+            return $e->modelClass === Author::class
+                && str_starts_with($e->key, 'agg:{' . app('normcache')->classKey(Author::class) . '}:');
+        });
     }
 }

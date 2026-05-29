@@ -339,21 +339,29 @@ class CacheableBuilder extends Builder
             $result = NormCache::waitForBuild($model, $hash, returnOnMiss: false, depClasses: $this->dependsOn, tag: $tag);
 
             if ($result === null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheMiss($model, 'building:budget-exhausted'));
+                }
+
                 NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'deps']);
 
                 $blob = array_map(fn($r) => (array) $r, $base->get()->all());
 
-                return $this->finalizeResult(NormCache::hydrateRaw($blob, $model));
+                return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
             }
         }
 
         if ($result['status'] === 'miss') {
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($model, $result['key']));
+            }
+
             NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
 
             $blob = array_map(fn($r) => (array) $r, $base->get()->all());
             NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
 
-            return $this->finalizeResult(NormCache::hydrateRaw($blob, $model));
+            return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
         }
 
         if (NormCache::isEventsEnabled()) {

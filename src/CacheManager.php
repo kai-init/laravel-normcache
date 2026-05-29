@@ -444,12 +444,12 @@ class CacheManager
         return $ordered;
     }
 
-    public function hydrateRaw(array $blob, string $modelClass): array
+    public function hydrateRaw(array $blob, string $modelClass, bool $cached = true): array
     {
         $prototype = self::prototype($modelClass);
         $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
 
-        if ($this->dispatchEvents && $models !== []) {
+        if ($cached && $this->dispatchEvents && $models !== []) {
             $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
             if ($keys !== []) {
                 event(new ModelCacheHit($modelClass, $keys));
