@@ -139,8 +139,6 @@ NormCache::flushTag(Author::class, 'homepage');   // single model — single-slo
 NormCache::flushTagAcrossModels('homepage');       // all models — cluster-wide scan
 ```
 
-> `Post::on('replica')` is not supported. Use distinct model classes with a fixed `$connection` for per-connection cache isolation.
-
 ---
 
 ## Cache Bypasses
