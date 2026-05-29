@@ -440,7 +440,14 @@ class CacheManager
     public function hydrateRaw(array $blob, string $modelClass, bool $cached = true): array
     {
         $prototype = self::prototype($modelClass);
-        $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
+        $closure = self::hydratorClosure($modelClass);
+        $fire = $this->fireRetrieved;
+        $models = array_map(function ($attrs) use ($prototype, $closure, $fire) {
+            $instance = clone $prototype;
+            $closure($instance, $attrs, $fire);
+
+            return $instance;
+        }, $blob);
 
         if ($cached && $this->dispatchEvents && $models !== []) {
             $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
@@ -661,12 +668,13 @@ class CacheManager
     // Private — model hydration / DB fallback
     // -------------------------------------------------------------------------
 
-    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection): array
+    /** Returns (and lazily creates) the bound hydrator closure for $modelClass. */
+    private static function hydratorClosure(string $modelClass): \Closure
     {
-        $prototype = self::prototype($modelClass);
-
-        $closure = self::$hydratorClosures[$modelClass] ??= \Closure::bind(
+        return self::$hydratorClosures[$modelClass] ??= \Closure::bind(
             static function ($model, $attributes, $fire) {
+                // Mirrors setRawAttributes($attributes, true): sets attributes,
+                // syncs original, and clears both cast caches.
                 $model->attributes = $attributes;
                 $model->original = $attributes;
                 $model->exists = true;
@@ -680,6 +688,13 @@ class CacheManager
             null,
             $modelClass
         );
+    }
+
+    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection): array
+    {
+        $prototype = self::prototype($modelClass);
+
+        $closure = self::hydratorClosure($modelClass);
 
         $fireRetrieved = $this->fireRetrieved;
         $hits = [];
