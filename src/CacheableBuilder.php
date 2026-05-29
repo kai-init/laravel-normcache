@@ -4,6 +4,7 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -22,6 +23,8 @@ use NormCache\Traits\HandlesCacheInvalidation;
 class CacheableBuilder extends Builder
 {
     use CachesScalarResults, HandlesCacheInvalidation;
+
+    private static array $validatedModelClasses = [];
 
     private bool $skipCache = false;
 
@@ -76,6 +79,13 @@ class CacheableBuilder extends Builder
     {
         if (empty($modelClasses)) {
             throw new \InvalidArgumentException('dependsOn() requires at least one model class.');
+        }
+
+        foreach ($modelClasses as $class) {
+            if (!is_string($class) || (!isset(self::$validatedModelClasses[$class]) && !is_a($class, Model::class, true))) {
+                throw new \InvalidArgumentException("dependsOn() class '{$class}' is not an Eloquent model.");
+            }
+            self::$validatedModelClasses[$class] = true;
         }
 
         $this->dependsOn = $modelClasses;

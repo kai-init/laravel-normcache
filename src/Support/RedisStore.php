@@ -318,7 +318,7 @@ final class RedisStore
 
     public function serialize(mixed $value): mixed
     {
-        if (is_numeric($value) && is_finite((float) $value)) {
+        if ((is_int($value) || is_float($value)) && is_finite((float) $value)) {
             return $value;
         }
 
@@ -410,7 +410,7 @@ final class RedisStore
             }
 
             $cursor = $this->appendScannedKeys($keys, $result);
-        } while ((int) $cursor !== 0); // cast for competibility
+        } while ((int) $cursor !== 0); // cast for compatibility
 
         return $keys;
     }
