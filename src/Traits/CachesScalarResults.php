@@ -96,7 +96,8 @@ trait CachesScalarResults
                 'scalar',
                 $this->model::class,
                 $hash,
-                $this->dependsOn ?? []
+                $this->dependsOn ?? [],
+                $this->cacheTag
             );
             $hit = $result !== null;
             $result = $hit ? $result[0] : null;

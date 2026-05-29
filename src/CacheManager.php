@@ -557,6 +557,7 @@ class CacheManager
             self::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
             self::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
             self::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
+            self::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
         ]);
     }
 
@@ -566,6 +567,7 @@ class CacheManager
             self::K_RAW . ':*:' . $tag . ':*',
             self::K_QUERY . ':*:' . $tag . ':*',
             self::K_COUNT . ':*:' . $tag . ':*',
+            self::K_SCALAR . ':*:' . $tag . ':*',
         ]);
     }
 
