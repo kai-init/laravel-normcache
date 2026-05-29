@@ -4,6 +4,8 @@ namespace NormCache;
 
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Console\FlushCommand;
@@ -49,15 +51,22 @@ class CacheServiceProvider extends ServiceProvider
                 }
             });
 
+            // Re-enable optimistically between queue jobs. If Redis is still down, fallback() will
+            // disable again on the first failed call — worst case is one extra Redis attempt per job.
+            $resetManager = function () {
+                $manager = $this->app->make(CacheManager::class);
+                $manager->flushVersionLocal();
+                $manager->discardAllPending();
+                $manager->enable();
+            };
+
+            Event::listen(JobProcessed::class, $resetManager);
+            Event::listen(Looping::class, $resetManager);
+
             // Reset L1 version cache and re-enable (in case fallback disabled it) between Octane requests.
             foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
                 if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, function () {
-                        $manager = $this->app->make(CacheManager::class);
-                        $manager->flushVersionLocal();
-                        $manager->discardAllPending();
-                        $manager->enable();
-                    });
+                    Event::listen($octaneEvent, $resetManager);
                 }
             }
 

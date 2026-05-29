@@ -22,7 +22,6 @@ model:{posts}:12      →  { id:12, title:..., body:... }
 
 ```bash
 composer require kai-init/laravel-normcache
-php artisan vendor:publish --tag=normcache-config
 ```
 
 Add the `Cacheable` trait to any model you want cached:
