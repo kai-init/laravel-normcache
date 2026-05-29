@@ -8,10 +8,13 @@ use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Str;
+use NormCache\Debug\NormCacheCollector;
+use NormCache\Events\QueryCacheHit;
+use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
-class AggregateLoader
+class RelationAggregateLoader
 {
     private static array $cache = [];
 
@@ -51,7 +54,8 @@ class AggregateLoader
             $offset += $idCount;
         }
 
-        $data = NormCache::getAggregates($keys);
+        $debugbarStart = NormCacheCollector::beginMeasure();
+        $data = NormCache::getRelationAggregates($keys);
         $toCache = [];
 
         $hydrator = self::$cache['hydrator'] ??= \Closure::bind(static function ($model, $key, $value) {
@@ -86,6 +90,32 @@ class AggregateLoader
                 }
             }
 
+            $cacheKey = "{$prefix}*{$suffix}";
+            $hit = $missed === [];
+
+            if (NormCache::isEventsEnabled()) {
+                event($hit
+                    ? new QueryCacheHit($parentClass, $cacheKey)
+                    : new QueryCacheMiss($parentClass, $cacheKey)
+                );
+            }
+
+            NormCacheCollector::recordQuery(
+                $hit ? 'query hit' : 'query miss',
+                $parentClass,
+                $cacheKey,
+                $debugbarStart,
+                [
+                    'kind' => 'aggregate',
+                    'relation' => $name,
+                    'function' => $function,
+                    'column' => $column,
+                    'parents' => $idCount,
+                    'hits' => count($cachedValues),
+                    'misses' => count($missed),
+                ]
+            );
+
             foreach ($models as $model) {
                 $id = $model->getKey();
                 $value = $cachedValues[$id] ?? $fetched[$id] ?? null;
@@ -94,7 +124,7 @@ class AggregateLoader
         }
 
         if (!empty($toCache)) {
-            NormCache::setAggregates($toCache);
+            NormCache::setRelationAggregates($toCache);
         }
 
         return $models;

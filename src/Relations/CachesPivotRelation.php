@@ -5,6 +5,7 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use NormCache\CacheableBuilder;
+use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
@@ -26,9 +27,13 @@ trait CachesPivotRelation
 
     public function get($columns = ['*']): Collection
     {
+        $columns = $this->normalizeColumns($columns);
+
         if (!$this->shouldUsePivotCache()) {
             return parent::get($columns);
         }
+
+        $debugbarStart = NormCacheCollector::beginMeasure();
 
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
@@ -36,13 +41,14 @@ trait CachesPivotRelation
         $constraintHash = $this->currentConstraintHash($columns);
         $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
         $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
+        $cacheParentIds = $this->getCacheParentIds();
 
         try {
             $cache = NormCache::getPivotCache(
                 $parentClass,
                 $relatedClass,
                 $this->relationName,
-                $this->eagerParentIds,
+                $cacheParentIds,
                 $constraintHash
             );
 
@@ -52,18 +58,36 @@ trait CachesPivotRelation
             $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
 
             if (empty($missedIds)) {
-                event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+                }
+                NormCacheCollector::recordQuery(
+                    'pivot hit',
+                    $parentClass,
+                    "pivot:{$parentClassKey}:{$this->relationName}",
+                    $debugbarStart,
+                    ['parents' => $cacheParentIds, 'related' => $relatedClass]
+                );
 
                 return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
             }
 
-            event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
+            }
+            NormCacheCollector::recordQuery(
+                'pivot miss',
+                $parentClass,
+                "pivot:{$parentClassKey}:{$this->relationName}",
+                $debugbarStart,
+                ['parents' => $cacheParentIds, 'related' => $relatedClass]
+            );
 
             $results = parent::get($columns);
 
             $relatedKey = NormCache::classKey($relatedClass);
             $keyMap = [];
-            foreach ($this->eagerParentIds as $parentId) {
+            foreach ($cacheParentIds as $parentId) {
                 $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
             }
 
@@ -127,12 +151,24 @@ trait CachesPivotRelation
 
     private function shouldUsePivotCache(): bool
     {
-        return $this->inEagerLoad
-            && NormCache::isEnabled()
-            && !empty($this->eagerParentIds)
+        return NormCache::isEnabled()
+            && !empty($this->getCacheParentIds())
             && $this->query instanceof CacheableBuilder
             && !$this->query->isCacheSkipped()
             && $this->parent->getConnection()->transactionLevel() === 0;
+    }
+
+    private function getCacheParentIds(): array
+    {
+        if ($this->inEagerLoad) {
+            return $this->eagerParentIds;
+        }
+
+        if ($this->parent->exists && $this->parent->getKey() !== null) {
+            return [$this->parent->getKey()];
+        }
+
+        return [];
     }
 
     private function shouldCacheRelatedModels(array $columns): bool
@@ -218,5 +254,10 @@ trait CachesPivotRelation
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection($result)
         );
+    }
+
+    private function normalizeColumns(mixed $columns): array
+    {
+        return is_array($columns) ? $columns : [$columns];
     }
 }

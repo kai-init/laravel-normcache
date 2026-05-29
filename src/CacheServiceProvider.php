@@ -4,9 +4,13 @@ namespace NormCache;
 
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Console\FlushCommand;
+use NormCache\Debug\NormCacheCollector;
+use NormCache\Debug\NormCacheDebugBarCollector;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -25,6 +29,8 @@ class CacheServiceProvider extends ServiceProvider
             config('normcache.events', true),
             config('normcache.fallback', false),
             config('normcache.fire_retrieved', false),
+            config('normcache.building_lock_ttl', 5),
+            config('normcache.stampede_wait_ms', 200),
         ));
 
         $this->app->alias(CacheManager::class, 'normcache');
@@ -45,15 +51,27 @@ class CacheServiceProvider extends ServiceProvider
                 }
             });
 
+            // Re-enable optimistically between queue jobs. If Redis is still down, fallback() will
+            // disable again on the first failed call — worst case is one extra Redis attempt per job.
+            $resetManager = function () {
+                $manager = $this->app->make(CacheManager::class);
+                $manager->flushVersionLocal();
+                $manager->discardAllPending();
+                $manager->enable();
+            };
+
+            Event::listen(JobProcessed::class, $resetManager);
+            Event::listen(Looping::class, $resetManager);
+
             // Reset L1 version cache and re-enable (in case fallback disabled it) between Octane requests.
             foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
                 if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, function () {
-                        $manager = $this->app->make(CacheManager::class);
-                        $manager->flushVersionLocal();
-                        $manager->enable();
-                    });
+                    Event::listen($octaneEvent, $resetManager);
                 }
+            }
+
+            if (config('normcache.debugbar', false) && $this->debugbarIsEnabled()) {
+                $this->registerDebugbarCollector();
             }
         }
 
@@ -64,5 +82,23 @@ class CacheServiceProvider extends ServiceProvider
 
             $this->commands([FlushCommand::class]);
         }
+    }
+
+    private function registerDebugbarCollector(): void
+    {
+        $collector = new NormCacheDebugBarCollector;
+        NormCacheCollector::register($collector);
+        $this->app->make('debugbar')->addCollector($collector);
+    }
+
+    private function debugbarIsEnabled(): bool
+    {
+        if (!$this->app->bound('debugbar')) {
+            return false;
+        }
+
+        $debugbar = $this->app->make('debugbar');
+
+        return !method_exists($debugbar, 'isEnabled') || $debugbar->isEnabled();
     }
 }

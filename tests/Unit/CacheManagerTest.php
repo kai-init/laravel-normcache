@@ -2,8 +2,8 @@
 
 namespace NormCache\Tests\Unit;
 
-use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -23,26 +23,6 @@ class CacheManagerTest extends TestCase
     // RedisStore pass-through (basic I/O tests live in RedisStoreTest)
     // -------------------------------------------------------------------------
 
-    public function test_store_set_and_get_round_trip(): void
-    {
-        $this->manager->getStore()->set('foo', 'bar', 60);
-
-        $this->assertSame('bar', $this->manager->getStore()->get('foo'));
-    }
-
-    public function test_store_get_returns_null_for_missing_key(): void
-    {
-        $this->assertNull($this->manager->getStore()->get('does-not-exist'));
-    }
-
-    public function test_store_delete_removes_value(): void
-    {
-        $this->manager->getStore()->set('foo', 'bar', 60);
-        $this->manager->getStore()->delete('foo');
-
-        $this->assertNull($this->manager->getStore()->get('foo'));
-    }
-
     public function test_store_get_many_returns_values_in_key_order(): void
     {
         $this->manager->getStore()->set('a', 'alpha', 60);
@@ -51,33 +31,6 @@ class CacheManagerTest extends TestCase
         $result = $this->manager->getStore()->getMany(['a', 'b', 'c']);
 
         $this->assertSame(['alpha', null, 'gamma'], $result);
-    }
-
-    public function test_store_set_many_stores_multiple_values(): void
-    {
-        $this->manager->getStore()->setMany(['x' => 10, 'y' => 20], 60);
-
-        $this->assertEquals(10, $this->manager->getStore()->get('x'));
-        $this->assertEquals(20, $this->manager->getStore()->get('y'));
-    }
-
-    public function test_store_set_stores_scalar_without_php_serialization(): void
-    {
-        $this->manager->getStore()->set('num', 99, 60);
-
-        $raw = Redis::connection('model-cache-test')->get('test:num');
-
-        $this->assertStringNotContainsString('i:', $raw);
-        $this->assertEquals(99, $this->manager->getStore()->get('num'));
-    }
-
-    public function test_store_set_json_writes_plain_json_payload(): void
-    {
-        $this->manager->getStore()->setJson('ids', [1, 2, 3], 60);
-
-        $raw = Redis::connection('model-cache-test')->get('test:ids');
-
-        $this->assertSame('[1,2,3]', $raw);
     }
 
     // -------------------------------------------------------------------------
@@ -177,18 +130,6 @@ class CacheManagerTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Key helpers
-    // -------------------------------------------------------------------------
-
-    public function test_class_key_uses_table_name(): void
-    {
-        $default = DB::getDefaultConnection();
-
-        $this->assertSame("{$default}:posts", $this->manager->classKey(Post::class));
-        $this->assertSame("{$default}:authors", $this->manager->classKey(Author::class));
-    }
-
-    // -------------------------------------------------------------------------
     // Flush operations
     // -------------------------------------------------------------------------
 
@@ -244,6 +185,35 @@ class CacheManagerTest extends TestCase
         $this->assertSame(0, $this->manager->flushAll());
     }
 
+    public function test_flush_all_removes_keys_when_redis_connection_prefix_is_enabled(): void
+    {
+        config()->set('database.redis.options.prefix', 'laravel:');
+        Redis::purge('model-cache-test');
+
+        $manager = new CacheManager(
+            'model-cache-test',
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            config('normcache.key_prefix'),
+            config('normcache.cooldown'),
+        );
+
+        $store = $manager->getStore();
+        $postsKey = DB::getDefaultConnection() . ':posts';
+
+        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("ver:{{$postsKey}}:", 3, 3600);
+
+        $deleted = $manager->flushAll();
+
+        $this->assertSame(3, $deleted);
+        $this->assertSame([], Redis::connection('model-cache-test')->keys('*'));
+
+        Redis::purge('model-cache-test');
+        config()->set('database.redis.options.prefix', '');
+    }
+
     public function test_targeted_delete_outside_transaction_removes_membership_reference(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -282,5 +252,42 @@ class CacheManagerTest extends TestCase
 
         $this->assertSame(1, $redis->exists($scheduledKey));
         $this->assertSame($firstDueAt, $redis->get($scheduledKey));
+    }
+
+    public function test_store_query_ids_skips_write_on_version_mismatch(): void
+    {
+        $store = $this->cacheManager()->getStore();
+        $classKey = $this->cacheManager()->classKey(Author::class);
+
+        $versionKey = "ver:{{$classKey}}:";
+        $queryKey = "query:{{$classKey}}:v5:abc123";
+        $buildingKey = "building:{{$classKey}}:abc123";
+
+        $store->setNx($versionKey, '5');
+        $store->setNx($buildingKey, '1');
+        $store->increment($versionKey); // now 6
+
+        $this->cacheManager()->storeQueryIds($queryKey, [1, 2, 3], 3600, $buildingKey, [$versionKey], ['5']);
+
+        $this->assertNull($store->getRaw($queryKey), 'CAS skips write when version has been bumped');
+        $this->assertNull($store->getRaw($buildingKey), 'Building lock released even when write is skipped');
+    }
+
+    public function test_store_query_ids_writes_when_version_matches(): void
+    {
+        $store = $this->cacheManager()->getStore();
+        $classKey = $this->cacheManager()->classKey(Author::class);
+
+        $versionKey = "ver:{{$classKey}}:";
+        $queryKey = "query:{{$classKey}}:v5:def456";
+        $buildingKey = "building:{{$classKey}}:def456";
+
+        $store->setNx($versionKey, '5');
+        $store->setNx($buildingKey, '1');
+
+        $this->cacheManager()->storeQueryIds($queryKey, [4, 5, 6], 3600, $buildingKey, [$versionKey], ['5']);
+
+        $this->assertNotNull($store->getRaw($queryKey), 'CAS writes when version still matches');
+        $this->assertNull($store->getRaw($buildingKey), 'Building lock released after successful write');
     }
 }

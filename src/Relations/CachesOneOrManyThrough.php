@@ -5,6 +5,9 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\CacheableBuilder;
+use NormCache\Debug\NormCacheCollector;
+use NormCache\Events\QueryCacheHit;
+use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 
@@ -16,24 +19,42 @@ trait CachesOneOrManyThrough
             return parent::get($columns);
         }
 
+        $debugbarStart = NormCacheCollector::beginMeasure();
+
         $shouldCacheModels = $columns === ['*'] && $this->query->toBase()->columns === null;
         $builder = $this->prepareQueryBuilder($columns);
         $hash = QueryHasher::fromQuery($builder->toBase());
         $relatedClass = $this->related::class;
 
         try {
-            $cacheData = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
-            $key = $cacheData['key'];
+            $result = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
+            $key = $result['key'];
 
-            if ($cacheData['data'] !== null) {
+            if ($result['data'] !== null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheHit($relatedClass, $key));
+                }
+
+                NormCacheCollector::recordQuery('through hit', $relatedClass, $key, $debugbarStart, [
+                    'through' => $this->throughParent::class,
+                ]);
+
                 return $this->hydrateFromIds(
-                    $cacheData['data']['ids'],
+                    $result['data']['ids'],
                     $relatedClass,
                     $builder,
                     $shouldCacheModels ? null : $builder->getQuery()->columns,
-                    $cacheData['data']['throughKeys']
+                    $result['data']['throughKeys']
                 );
             }
+
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($relatedClass, $key));
+            }
+
+            NormCacheCollector::recordQuery('through miss', $relatedClass, $key, $debugbarStart, [
+                'through' => $this->throughParent::class,
+            ]);
 
             $result = parent::get($columns);
             $payload = $this->cachePayloadFromResult($result);

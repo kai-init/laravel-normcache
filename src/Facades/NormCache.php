@@ -3,9 +3,10 @@
 namespace NormCache\Facades;
 
 use Illuminate\Support\Facades\Facade;
+use NormCache\CacheManager;
 
 /**
- * @mixin \NormCache\CacheManager
+ * @mixin CacheManager
  */
 class NormCache extends Facade
 {

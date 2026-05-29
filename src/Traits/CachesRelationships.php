@@ -10,6 +10,7 @@ use NormCache\Relations\CacheableBelongsTo;
 use NormCache\Relations\CacheableBelongsToMany;
 use NormCache\Relations\CacheableHasManyThrough;
 use NormCache\Relations\CacheableHasOneThrough;
+use NormCache\Relations\CacheableMorphTo;
 use NormCache\Relations\CacheableMorphToMany;
 
 trait CachesRelationships
@@ -99,5 +100,20 @@ trait CachesRelationships
             $query, $parent, $table, $foreignPivotKey,
             $relatedPivotKey, $parentKey, $relatedKey, $relationName,
         );
+    }
+
+    protected function newMorphTo(
+        Builder $query,
+        Model $parent,
+        $foreignKey,
+        $ownerKey,
+        $type,
+        $relation,
+    ) {
+        if (!NormCache::isEnabled()) {
+            return parent::newMorphTo($query, $parent, $foreignKey, $ownerKey, $type, $relation);
+        }
+
+        return new CacheableMorphTo($query, $parent, $foreignKey, $ownerKey, $type, $relation);
     }
 }

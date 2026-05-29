@@ -2,36 +2,105 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use Illuminate\Database\Query\Expression;
 
 final class QueryInspector
 {
     private const COLUMN_IDENTIFIER = '[`"]?[A-Za-z_][A-Za-z0-9_]*[`"]?';
 
-    public static function isPureModelQuery(QueryBuilder $base, string $table): bool
+    public static function isCacheable(QueryBuilder $base, string $table, ?array $resolvedColumns = null): bool
     {
-        foreach ((array) $base->orders as $order) {
-            if (isset($order['type']) && $order['type'] === 'Raw') {
-                return false;
-            }
+        return self::isStructurallyCacheable($base, $table, $resolvedColumns)
+            && !self::hasDependencyBypass($base);
+    }
+
+    public static function isStructurallyCacheable(QueryBuilder $base, string $table, ?array $resolvedColumns = null): bool
+    {
+        return !self::hasNormalizationBypass($base, $table, $resolvedColumns)
+            && !self::hasSafetyBypass($base);
+    }
+
+    public static function hasDependencyBypass(QueryBuilder $base): bool
+    {
+        return self::hasRawOrderBypass($base)
+            || self::hasSubqueryWheres((array) $base->wheres);
+    }
+
+    public static function categoryLabels(): array
+    {
+        return [
+            'dependency' => "can't infer cache dependency",
+            'normalization' => "result can't be normalized into model keys",
+            'safety' => 'bypassed for query correctness',
+            'opted_out' => 'explicitly disabled',
+        ];
+    }
+
+    /**
+     * Categories:
+     *   dependency    — dependency tracking can't safely cover this query
+     *   normalization — result can't be decomposed into model cache keys
+     *   safety        — bypassed for query correctness; no caching workaround
+     *
+     * @param  array<int,mixed>|null  $resolvedColumns  null skips the calculated-column check
+     * @return array<string, list<string>>
+     */
+    public static function bypassReasons(QueryBuilder $base, string $table, ?array $resolvedColumns = null): array
+    {
+        $dependency = [];
+        $normalization = [];
+        $safety = [];
+
+        if (self::hasRawOrderBypass($base)) {
+            $dependency[] = 'raw ORDER expression';
         }
 
         if (self::hasSubqueryWheres((array) $base->wheres)) {
-            return false;
+            $dependency[] = 'subquery WHERE (whereHas/whereExists)';
         }
 
         if (!self::isCanonicalFrom($base, $table)) {
-            return false;
+            $normalization[] = 'non-standard FROM (subquery or raw expression)';
         }
 
-        return empty($base->joins)
-            && empty($base->groups)
-            && empty($base->havings)
-            && empty($base->unions)
-            && empty($base->aggregate)
-            && empty($base->distinct)
-            && is_null($base->lock);
+        if (!empty($base->joins)) {
+            $normalization[] = 'JOIN clauses';
+        }
+
+        if (!empty($base->groups)) {
+            $normalization[] = 'GROUP BY';
+        }
+
+        if (!empty($base->havings)) {
+            $normalization[] = 'HAVING';
+        }
+
+        if (!empty($base->unions)) {
+            $normalization[] = 'UNION';
+        }
+
+        if (!empty($base->aggregate)) {
+            $normalization[] = 'aggregate function (count/sum/etc.)';
+        }
+
+        if (!empty($base->distinct)) {
+            $normalization[] = 'DISTINCT';
+        }
+
+        if (!is_null($base->lock)) {
+            $safety[] = 'query lock (SELECT FOR UPDATE)';
+        }
+
+        if (self::hasCalculatedColumns($resolvedColumns)) {
+            $normalization[] = 'calculated or raw SELECT expressions';
+        }
+
+        return array_filter([
+            'dependency' => $dependency,
+            'normalization' => $normalization,
+            'safety' => $safety,
+        ]);
     }
 
     public static function resolveSelectedColumns(QueryBuilder $base, ?array $fallback): ?array
@@ -43,7 +112,7 @@ final class QueryInspector
         }
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression || !str_ends_with((string) $column, '*')) {
+            if (!is_string($column) || !str_ends_with($column, '*')) {
                 return $columns;
             }
         }
@@ -58,11 +127,11 @@ final class QueryInspector
         }
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression) {
+            if (!is_string($column)) {
                 return true;
             }
 
-            if (!self::isCacheableSelectedColumn((string) $column)) {
+            if (!self::isCacheableSelectedColumn($column)) {
                 return true;
             }
         }
@@ -92,15 +161,22 @@ final class QueryInspector
         }
 
         if ($where['type'] === 'Basic' && $where['operator'] === '=') {
+            // Single-ID lookups are unaffected by ORDER BY or LIMIT.
             return [$where['value']];
         }
 
+        // Multi-ID lookups need SQL to apply ORDER BY or LIMIT before model-cache fetches.
         if (!empty($base->orders) || $base->limit > 0) {
             return null;
         }
 
         if ($where['type'] === 'In' || $where['type'] === 'InRaw') {
             $values = $where['values'];
+
+            if (self::containsExpression((array) $values)) {
+                return null;
+            }
+
             sort($values);
 
             return $values;
@@ -147,6 +223,34 @@ final class QueryInspector
             || (bool) preg_match('/^' . preg_quote($table, '/') . '\s+as\s+\w+$/i', $from);
     }
 
+    private static function hasNormalizationBypass(QueryBuilder $base, string $table, ?array $resolvedColumns): bool
+    {
+        return !self::isCanonicalFrom($base, $table)
+            || !empty($base->joins)
+            || !empty($base->groups)
+            || !empty($base->havings)
+            || !empty($base->unions)
+            || !empty($base->aggregate)
+            || !empty($base->distinct)
+            || self::hasCalculatedColumns($resolvedColumns);
+    }
+
+    public static function hasSafetyBypass(QueryBuilder $base): bool
+    {
+        return !is_null($base->lock);
+    }
+
+    private static function hasRawOrderBypass(QueryBuilder $base): bool
+    {
+        foreach ((array) $base->orders as $order) {
+            if (isset($order['type']) && $order['type'] === 'Raw') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static function hasSubqueryWheres(array $wheres): bool
     {
         static $subqueryTypes = ['Exists', 'NotExists', 'Sub', 'InSub', 'NotInSub'];
@@ -158,10 +262,29 @@ final class QueryInspector
                 return true;
             }
 
+            if (in_array($type, ['In', 'NotIn'], true) && self::containsExpression((array) ($where['values'] ?? []))) {
+                return true;
+            }
+
+            if ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
+                return true;
+            }
+
             if ($type === 'Nested' && isset($where['query'])) {
                 if (self::hasSubqueryWheres((array) $where['query']->wheres)) {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static function containsExpression(array $values): bool
+    {
+        foreach ($values as $value) {
+            if ($value instanceof Expression) {
+                return true;
             }
         }
 

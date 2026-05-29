@@ -148,7 +148,7 @@ trait Cacheable
         }
     }
 
-    private function flushIfDeleted(bool|null $result): void
+    private function flushIfDeleted(?bool $result): void
     {
         if ($result) {
             NormCache::flushInstance($this);
