@@ -7,17 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.0]
+## [2.0.0] — 2026-05-29
 
 ### Added
 
 - **`dependsOn(array $modelClasses)`:** cache cross-table queries by declaring which model classes can invalidate them. Normalization and safety checks still apply.
 - **Scalar result caching:** `count`, `sum`, `avg`, `min`, and `max` are cached under a versioned key and invalidated with their parent model. Works with `dependsOn()`.
-- **Relation aggregate caching:** `withCount` / `withSum` / other Eloquent relation aggregates are cached per parent and invalidated with related model versions.
+- **Relation aggregate caching:** `withCount` / `withSum` / other Eloquent relation aggregates are cached per parent and invalidated with related model versions. Non-`Cacheable` related models fall through to Eloquent's computed path and are never cached.
 - **`MorphTo` eager-load caching:** each morph type is served from the model cache. Falls back per type when constraints, `morphWithCount`, macros, or a non-`Cacheable` related type are present.
 - **`Builder::explain()`:** returns a string describing why a query is cached or bypassed.
 - **Debugbar integration:** hits, misses, and bypasses appear on the Debugbar timeline. Absent when Debugbar is not installed.
-- **Manual invalidation:** query grouping with `tag()`, `flushTag()`, and `flushTagAcrossModels()`.
+- **Manual invalidation:** query grouping with `tag()`, `flushTag()`, and `flushTagAcrossModels()`. Tag keys are embedded in `raw`, `query`, `count`, and `scalar` namespaces and flushed atomically.
+- **Stampede protection:** cache waiters `BRPOP` a wake channel instead of storming the database. The waiter timeout and build-lock TTL are configurable. Requires Redis 6.0+ for sub-second precision.
+- **Queue worker cache recovery:** cache is automatically re-enabled between jobs via `JobProcessed` and `Looping` hooks. Octane requests and tasks reset the same way via `RequestReceived` / `TaskReceived`.
 
 ### Fixed
 
