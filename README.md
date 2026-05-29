@@ -1,6 +1,6 @@
 # Laravel Normcache
 
-Normalized caching for Laravel Eloquent. Self-invalidating, Redis-backed.
+**Normalized caching for Laravel Eloquent. Self-invalidating, Redis-backed.**
 
 [![Tests](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml/badge.svg)](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%205-brightgreen.svg)](phpstan.neon)
