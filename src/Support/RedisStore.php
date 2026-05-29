@@ -109,8 +109,9 @@ final class RedisStore
         return (int) $this->connection->incr($this->prefix($key));
     }
 
-    /** Blocks until an item appears on the list key or the timeout expires. Returns true if woken. */
-    public function brpop(string $key, int $timeoutSeconds): bool
+    /** Blocks until an item appears on the list key or the timeout expires. Returns true if woken.
+     *  Requires Redis 6.0+ for sub-second precision; older Redis rounds the timeout up to 1s. */
+    public function brpop(string $key, float $timeoutSeconds): bool
     {
         $result = $this->connection->brpop($this->prefix($key), $timeoutSeconds);
 

@@ -71,8 +71,8 @@ class CacheManager
         private bool $dispatchEvents = true,
         private bool $fallbackEnabled = false,
         private bool $fireRetrieved = false,
-        private int $buildingLockTtl = 30,
-        private int $stampedeWaitS = 1,
+        private int $buildingLockTtl = 5,
+        private int $stampedeWaitMs = 200,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
     }
@@ -337,7 +337,7 @@ class CacheManager
 
     public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
     {
-        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitS);
+        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
 
         $result = $depClasses !== []
             ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)

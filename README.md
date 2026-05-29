@@ -89,7 +89,7 @@ Post::withoutAggregateCache()->withCount('comments')->get(); // skip aggregate c
 
 ### Relationship caching
 
-`BelongsTo`, `BelongsToMany`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` are cached for eager loads — on a warm hit no SQL is executed. `HasOne`, `HasMany`, `MorphOne`, and `MorphMany` are cached via the query cache when the related model uses `Cacheable`.
+`BelongsTo`, `BelongsToMany`, `MorphTo`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` are cached for eager loads — on a warm hit no SQL is executed. `HasOne`, `HasMany`, `MorphOne`, and `MorphMany` are cached via the query cache when the related model uses `Cacheable`.
 
 `attach`, `detach`, `sync`, and `updateExistingPivot` automatically invalidate the relevant pivot cache.
 
@@ -149,12 +149,14 @@ return [
     'ttl'            => env('NORMCACHE_TTL', 604800),      // model keys: 7 days
     'query_ttl'      => env('NORMCACHE_QUERY_TTL', 3600),  // query/raw/pivot keys: 1 hour
     'key_prefix'     => env('NORMCACHE_PREFIX', ''),
-    'cooldown'       => env('NORMCACHE_COOLDOWN', 0),      // version bump debounce in seconds
-    'cluster'        => env('NORMCACHE_CLUSTER', false),
-    'events'         => env('NORMCACHE_EVENTS', true),
-    'fallback'       => env('NORMCACHE_FALLBACK', false),
-    'fire_retrieved' => env('NORMCACHE_FIRE_RETRIEVED', false),
-    'debugbar'       => env('NORMCACHE_DEBUGBAR', false),
+    'cooldown'          => env('NORMCACHE_COOLDOWN', 0),           // version bump debounce in seconds
+    'building_lock_ttl' => env('NORMCACHE_BUILDING_LOCK_TTL', 5),  // seconds before an abandoned cache build lock expires
+    'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200), // ms to wait for a build in progress (Redis 6.0+ for sub-second)
+    'cluster'           => env('NORMCACHE_CLUSTER', false),
+    'events'            => env('NORMCACHE_EVENTS', true),
+    'fallback'          => env('NORMCACHE_FALLBACK', false),
+    'fire_retrieved'    => env('NORMCACHE_FIRE_RETRIEVED', false),
+    'debugbar'          => env('NORMCACHE_DEBUGBAR', false),
 ];
 ```
 
@@ -199,11 +201,18 @@ Enable with `'cluster' => true` in the config. `flushAll()` is supported.
 
 ---
 
+## Octane & Horizon
+
+Works out of the box. State is reset between Octane requests and queue jobs — including re-enabling the cache if a Redis error disabled it mid-job.
+
+---
+
 ## Performance
 
 - **Single round trip on cache hit** — version check + ID fetch + model `MGET` in one Lua `EVAL`.
 - **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
 - **No scanning on invalidation** — version bump makes stale keys unreachable; TTL handles eviction.
+- **Stampede protection** — waiters `BRPOP` a wake channel (200ms) instead of storming the DB. Requires Redis 6.0+ for sub-second precision.
 - **igbinary support** — smaller payloads and faster serialization when the extension is installed.
 
 ---
