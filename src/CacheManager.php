@@ -42,7 +42,7 @@ class CacheManager
 
     public const K_WAKE = 'wake';
 
-    public const K_COMPUTED = 'computed';
+    public const K_RAW = 'raw';
 
     private static array $classKeyCache = [];
 
@@ -115,18 +115,18 @@ class CacheManager
     // High-level cache reads
     // -------------------------------------------------------------------------
 
-    public function getModelsFromQuery(string $modelClass, string $hash): array
+    public function getModelsFromQuery(string $modelClass, string $hash, ?string $tag = null): array
     {
         $classKey = $this->classKey($modelClass);
 
-        $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000));
+        $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag);
 
         if (!is_array($result)) {
             $version = $this->currentVersion($modelClass);
 
             return $this->queryResult(
                 'miss',
-                $this->queryPrefix($classKey) . $version . ':' . $hash,
+                $this->queryPrefix($classKey, $tag) . $version . ':' . $hash,
                 null,
                 null,
                 $this->buildingPrefix($classKey) . $hash
@@ -136,7 +136,7 @@ class CacheManager
         $luaStatus = $result[0] ?? null;
         $version = $this->normalizeVersion($result[1]);
         $this->versionLocal[$classKey] = $version;
-        $queryKey = $this->queryPrefix($classKey) . $version . ':' . $hash;
+        $queryKey = $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
 
         $deserialize = fn($r) => $this->store->unserializeMany($r);
 
@@ -239,7 +239,7 @@ class CacheManager
         return $cached !== null ? $cached[0] : null;
     }
 
-    public function getQueryWithDeps(string $modelClass, array $depClasses, string $hash): array
+    public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->classKey($modelClass);
         [$classKeys] = $this->versionKeyData($classKey, $depClasses);
@@ -247,7 +247,7 @@ class CacheManager
         $versions = $this->fetchVersionsByClassKeys($classKeys);
 
         $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions));
-        $key = $this->computedPrefix($classKey) . $seg . ':' . $hash;
+        $key = $this->rawPrefix($classKey) . ($tag !== null ? $tag . ':' : '') . $seg . ':' . $hash;
 
         $blob = $this->store->get($key);
 
@@ -264,7 +264,7 @@ class CacheManager
         return ['status' => 'miss', 'key' => $key, 'blob' => null, 'buildingKey' => $buildingKey];
     }
 
-    public function storeDepsResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
+    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
     {
         $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
 
@@ -273,13 +273,16 @@ class CacheManager
         }
     }
 
-    public function hydrateBlob(array $blob, string $modelClass): array
+    public function hydrateRaw(array $blob, string $modelClass): array
     {
         $prototype = self::prototype($modelClass);
         $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
 
         if ($this->dispatchEvents && $models !== []) {
-            event(new ModelCacheHit($modelClass, array_map(fn($m) => $m->getKey(), $models)));
+            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
+            if ($keys !== []) {
+                event(new ModelCacheHit($modelClass, $keys));
+            }
         }
 
         return $models;
@@ -332,13 +335,13 @@ class CacheManager
         }
     }
 
-    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = []): ?array
+    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
     {
         $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitS);
 
         $result = $depClasses !== []
-            ? $this->getQueryWithDeps($modelClass, $depClasses, $hash)
-            : $this->getModelsFromQuery($modelClass, $hash);
+            ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
+            : $this->getModelsFromQuery($modelClass, $hash, $tag);
 
         return match ($result['status']) {
             'building' => null,
@@ -542,7 +545,25 @@ class CacheManager
             self::K_SCHEDULED . ':*',
             self::K_BUILDING . ':*',
             self::K_WAKE . ':*',
-            self::K_COMPUTED . ':*',
+            self::K_RAW . ':*',
+        ]);
+    }
+
+    public function flushTag(string $modelClass, string $tag): int
+    {
+        $classKey = $this->classKey($modelClass);
+
+        return $this->store->flushByPatterns([
+            self::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
+            self::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
+        ]);
+    }
+
+    public function flushTagAcrossModels(string $tag): int
+    {
+        return $this->store->flushByPatterns([
+            self::K_RAW . ':*:' . $tag . ':*',
+            self::K_QUERY . ':*:' . $tag . ':*',
         ]);
     }
 
@@ -764,12 +785,12 @@ class CacheManager
     // Private — Lua scripts
     // -------------------------------------------------------------------------
 
-    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs): mixed
+    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs, ?string $tag = null): mixed
     {
         return $this->store->eval(LuaScripts::get('fetch_versioned_query'), [
             $this->verKey($classKey),
             $this->scheduledKey($classKey),
-            $this->queryPrefix($classKey),
+            $this->queryPrefix($classKey, $tag),
             $this->modelPrefix($classKey),
             $this->buildingPrefix($classKey),
         ], [$hash, $nowMs, $this->buildingLockTtl]);
@@ -848,14 +869,16 @@ class CacheManager
     }
 
     /** Prefix for single-version query keys: appended with "{version}:{hash}". */
-    private function queryPrefix(string $classKey): string
+    private function queryPrefix(string $classKey, ?string $tag = null): string
     {
-        return self::K_QUERY . ':{' . $classKey . '}:v';
+        $base = self::K_QUERY . ':{' . $classKey . '}:';
+
+        return $tag !== null ? $base . $tag . ':v' : $base . 'v';
     }
 
-    private function computedPrefix(string $classKey): string
+    private function rawPrefix(string $classKey): string
     {
-        return self::K_COMPUTED . ':{' . $classKey . '}:';
+        return self::K_RAW . ':{' . $classKey . '}:';
     }
 
     private function buildingPrefix(string $classKey): string

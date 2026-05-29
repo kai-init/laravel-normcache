@@ -235,7 +235,7 @@ final class QueryInspector
             || self::hasCalculatedColumns($resolvedColumns);
     }
 
-    private static function hasSafetyBypass(QueryBuilder $base): bool
+    public static function hasSafetyBypass(QueryBuilder $base): bool
     {
         return !is_null($base->lock);
     }

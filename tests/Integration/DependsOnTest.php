@@ -16,7 +16,7 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
     public function test_depends_on_returns_correct_results(): void
@@ -178,7 +178,7 @@ class DependsOnTest extends TestCase
         $this->assertStringContainsString('dependsOn()', $result);
     }
 
-    public function test_join_with_depends_on_still_bypasses_cache(): void
+    public function test_join_with_depends_on_caches_as_blob(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -188,21 +188,21 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
-    public function test_explain_keeps_join_unsafe_when_depends_on_set(): void
+    public function test_explain_shows_computed_blob_for_join_with_depends_on(): void
     {
         $result = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->dependsOn([Post::class])
             ->explain();
 
-        $this->assertStringStartsWith('not cached', $result);
-        $this->assertStringContainsString('JOIN', $result);
+        $this->assertStringContainsString('cached', $result);
+        $this->assertStringContainsString('raw (dependsOn())', $result);
     }
 
-    public function test_from_subquery_with_depends_on_still_bypasses_cache(): void
+    public function test_from_subquery_with_depends_on_caches_as_blob(): void
     {
         Author::create(['name' => 'Alice']);
 
@@ -210,7 +210,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
     public function test_raw_order_with_depends_on_can_cache(): void
@@ -222,7 +222,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
     public function test_where_in_subquery_requires_depends_on(): void
@@ -247,7 +247,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:computed:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
     public function test_behaviora_l_distinct_with_depends_on_preserves_distinct_semantics(): void
@@ -264,7 +264,7 @@ class DependsOnTest extends TestCase
         $this->assertSame(
             count($uncached),
             count($cached),
-            'DISTINCT queries with dependsOn() fall through to DB — both return the same row count.'
+            'DISTINCT queries with dependsOn() use the blob path — both return the same deduplicated row count.'
         );
     }
 
@@ -305,8 +305,67 @@ class DependsOnTest extends TestCase
         $this->assertNotNull($cached->first(), 'Query returns results.');
         $this->assertNotNull(
             $cached->first()->getAttribute('sum_views'),
-            'sum_views is populated — GROUP BY queries fall through to DB with dependsOn().'
+            'sum_views is populated — GROUP BY queries use the blob path with dependsOn().'
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // tag() — manual flush grouping
+    // -------------------------------------------------------------------------
+
+    public function test_tag_is_embedded_in_computed_key(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:raw:*:homepage:*'));
+        $this->assertEmpty($this->redisKeys('test:raw:*[^:]homepage*'));
+    }
+
+    public function test_tagged_keys_are_isolated_from_untagged_keys(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->get();
+        Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
+
+        $all = $this->redisKeys('test:raw:*');
+        $tagged = $this->redisKeys('test:raw:*:homepage:*');
+
+        $this->assertCount(2, $all);
+        $this->assertCount(1, $tagged);
+    }
+
+    public function test_flush_tag_removes_only_matching_keys(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->get();
+        Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
+
+        $removed = \NormCache\Facades\NormCache::flushTag(Author::class, 'homepage');
+
+        $this->assertSame(1, $removed);
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertEmpty($this->redisKeys('test:raw:*:homepage:*'));
+    }
+
+    public function test_flush_tag_across_models_removes_all_matching(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::whereHas('posts')->dependsOn([Post::class])->tag('deploy')->get();
+        Post::query()->dependsOn([Author::class])->tag('deploy')->get();
+
+        $removed = \NormCache\Facades\NormCache::flushTagAcrossModels('deploy');
+
+        $this->assertSame(2, $removed);
+        $this->assertEmpty($this->redisKeys('test:raw:*:deploy:*'));
     }
 
     // -------------------------------------------------------------------------

@@ -32,6 +32,8 @@ class CacheableBuilder extends Builder
 
     private array $pendingAggregates = [];
 
+    private ?string $cacheTag = null;
+
     // -------------------------------------------------------------------------
     // Fluent configuration
     // -------------------------------------------------------------------------
@@ -58,6 +60,13 @@ class CacheableBuilder extends Builder
     public function withoutAggregateCache(): static
     {
         $this->cacheAggregates = false;
+
+        return $this;
+    }
+
+    public function tag(string $tag): static
+    {
+        $this->cacheTag = $tag;
 
         return $this;
     }
@@ -110,6 +119,10 @@ class CacheableBuilder extends Builder
             return $this->dependsOn !== null ? 'cached: dependsOn() opt-in' : 'cached';
         }
 
+        if ($this->dependsOn !== null && !isset($grouped['safety']) && !isset($grouped['opted_out'])) {
+            return 'cached: raw (dependsOn())';
+        }
+
         $labels = QueryInspector::categoryLabels();
         $parts = [];
         foreach ($grouped as $category => $reasons) {
@@ -134,6 +147,10 @@ class CacheableBuilder extends Builder
         try {
             if ($this->shouldUseCache($base, $resolvedCols)) {
                 return $this->getFromCacheableQuery($base, $model, $resolvedCols);
+            }
+
+            if ($this->dependsOn !== null && !$this->insideTransaction() && !QueryInspector::hasSafetyBypass($base)) {
+                return $this->getFromRawCache($base, $model, $this->queryCacheKey($base), $this->cacheTag);
             }
 
             $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
@@ -236,13 +253,13 @@ class CacheableBuilder extends Builder
         $hash = $this->queryCacheKey($base);
 
         if ($this->dependsOn !== null) {
-            return $this->getByQueryWithDeps($base, $model, $selectedCols, $hash);
+            return $this->getFromRawCache($base, $model, $hash, $this->cacheTag);
         }
 
-        $result = NormCache::getModelsFromQuery($model, $hash);
+        $result = NormCache::getModelsFromQuery($model, $hash, $this->cacheTag);
 
         if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild($model, $hash);
+            $result = NormCache::waitForBuild($model, $hash, tag: $this->cacheTag);
 
             if ($result === null) {
                 NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
@@ -274,19 +291,21 @@ class CacheableBuilder extends Builder
         return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this));
     }
 
-    private function getByQueryWithDeps(QueryBuilder $base, string $model, ?array $selectedCols, string $hash): Collection
+    private function getFromRawCache(QueryBuilder $base, string $model, string $hash, ?string $tag = null): Collection
     {
         $debugbarStart = NormCacheCollector::beginMeasure();
 
-        $result = NormCache::getQueryWithDeps($model, $this->dependsOn, $hash);
+        $result = NormCache::getRawCache($model, $this->dependsOn, $hash, $tag);
 
         if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild($model, $hash, returnOnMiss: false, depClasses: $this->dependsOn);
+            $result = NormCache::waitForBuild($model, $hash, returnOnMiss: false, depClasses: $this->dependsOn, tag: $tag);
 
             if ($result === null) {
                 NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'deps']);
 
-                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+                $blob = array_map(fn($r) => (array) $r, $base->get()->all());
+
+                return $this->finalizeResult(NormCache::hydrateRaw($blob, $model));
             }
         }
 
@@ -294,9 +313,9 @@ class CacheableBuilder extends Builder
             NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
 
             $blob = array_map(fn($r) => (array) $r, $base->get()->all());
-            NormCache::storeDepsResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
 
-            return $this->finalizeResult(NormCache::hydrateBlob($blob, $model));
+            return $this->finalizeResult(NormCache::hydrateRaw($blob, $model));
         }
 
         if (NormCache::isEventsEnabled()) {
@@ -304,11 +323,11 @@ class CacheableBuilder extends Builder
         }
 
         NormCacheCollector::recordQuery('query hit', $model, $result['key'], $debugbarStart, [
-            'kind' => 'deps blob',
+            'kind' => 'raw',
             'contains' => class_basename($model) . ' (' . count($result['blob']) . ' models)',
         ]);
 
-        return $this->finalizeResult(NormCache::hydrateBlob($result['blob'], $model));
+        return $this->finalizeResult(NormCache::hydrateRaw($result['blob'], $model));
     }
 
     private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
