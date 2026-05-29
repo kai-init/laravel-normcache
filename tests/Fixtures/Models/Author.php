@@ -40,4 +40,9 @@ class Author extends Model
     {
         return $this->morphMany(Comment::class, 'commentable');
     }
+
+    public function uncachedPosts(): HasMany
+    {
+        return $this->hasMany(UncachedPost::class, 'author_id');
+    }
 }

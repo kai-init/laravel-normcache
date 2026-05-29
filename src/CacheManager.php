@@ -121,18 +121,6 @@ class CacheManager
 
         $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag);
 
-        if (!is_array($result)) {
-            $version = $this->currentVersion($modelClass);
-
-            return $this->queryResult(
-                'miss',
-                $this->queryPrefix($classKey, $tag) . $version . ':' . $hash,
-                null,
-                null,
-                $this->buildingPrefix($classKey) . $hash
-            );
-        }
-
         $luaStatus = $result[0] ?? null;
         $version = $this->normalizeVersion($result[1]);
         $this->versionLocal[$classKey] = $version;
@@ -253,40 +241,31 @@ class CacheManager
         $blob = $this->store->get($key);
 
         if ($blob !== null) {
-            return ['status' => 'hit', 'key' => $key, 'blob' => $blob, 'buildingKey' => null];
+            return $this->rawResult('hit', $key, $blob, null);
         }
 
         $buildingKey = $this->buildingPrefix($classKey) . $hash;
 
         if (!$this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
-            return ['status' => 'building', 'key' => null, 'blob' => null, 'buildingKey' => null];
+            return $this->rawResult('building', null, null, null);
         }
 
-        return ['status' => 'miss', 'key' => $key, 'blob' => null, 'buildingKey' => $buildingKey];
+        return $this->rawResult('miss', $key, null, $buildingKey);
     }
 
-    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
+    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
     {
-        $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
+        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
 
-        if ($buildingKey !== null) {
-            $this->store->releaseBuilding($buildingKey, $this->buildingToWakeKey($buildingKey));
-        }
-    }
+        $result = $depClasses !== []
+            ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
+            : $this->getModelsFromQuery($modelClass, $hash, $tag);
 
-    public function hydrateRaw(array $blob, string $modelClass): array
-    {
-        $prototype = self::prototype($modelClass);
-        $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
-
-        if ($this->dispatchEvents && $models !== []) {
-            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
-            if ($keys !== []) {
-                event(new ModelCacheHit($modelClass, $keys));
-            }
-        }
-
-        return $models;
+        return match ($result['status']) {
+            'building' => null,
+            'miss' => $returnOnMiss ? $result : $this->discardBuildAndReturnNull($result),
+            default => $result,
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -336,19 +315,40 @@ class CacheManager
         }
     }
 
-    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
+    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
     {
-        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
+        $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
 
-        $result = $depClasses !== []
-            ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
-            : $this->getModelsFromQuery($modelClass, $hash, $tag);
+        if ($buildingKey !== null) {
+            $this->store->releaseBuilding($buildingKey, $this->buildingToWakeKey($buildingKey));
+        }
+    }
 
-        return match ($result['status']) {
-            'building' => null,
-            'miss' => $returnOnMiss ? $result : $this->discardBuildAndReturnNull($result),
-            default => $result,
-        };
+    // -------------------------------------------------------------------------
+    // Private — write internals
+    // -------------------------------------------------------------------------
+
+    private function cacheModelAttrs(string $modelClass, array $modelAttrs): void
+    {
+        if (empty($modelAttrs)) {
+            return;
+        }
+
+        $classKey = $this->classKey($modelClass);
+        $modelVersion = $this->currentVersion($modelClass);
+
+        $attrsByKey = [];
+        foreach ($modelAttrs as $id => $attrs) {
+            $attrsByKey[$this->modelPrefix($classKey) . $id] = $attrs;
+        }
+
+        $this->store->setManyTrackedIfVersion(
+            $attrsByKey,
+            $this->ttl,
+            $this->membersKey($classKey),
+            $this->verKey($classKey),
+            $modelVersion
+        );
     }
 
     private function discardBuildAndReturnNull(array $result): null
@@ -367,15 +367,6 @@ class CacheManager
             array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->buildingToWakeKey($buildingKey) : '']),
             array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids)])
         );
-    }
-
-    private function buildingToWakeKey(string $buildingKey): string
-    {
-        $classKeyEnd = strpos($buildingKey, '}:') + 2;
-
-        return self::K_WAKE
-            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
-            . substr(strrchr($buildingKey, ':'), 1);
     }
 
     // -------------------------------------------------------------------------
@@ -451,6 +442,21 @@ class CacheManager
         ]);
 
         return $ordered;
+    }
+
+    public function hydrateRaw(array $blob, string $modelClass): array
+    {
+        $prototype = self::prototype($modelClass);
+        $models = array_map(fn($attrs) => $prototype->newFromBuilder($attrs), $blob);
+
+        if ($this->dispatchEvents && $models !== []) {
+            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
+            if ($keys !== []) {
+                event(new ModelCacheHit($modelClass, $keys));
+            }
+        }
+
+        return $models;
     }
 
     // -------------------------------------------------------------------------
@@ -799,23 +805,6 @@ class CacheManager
         ], [$hash, $nowMs, $this->buildingLockTtl]);
     }
 
-    private function fetchVersionsByClassKeys(array $classKeys): array
-    {
-        $versions = [];
-
-        foreach ($classKeys as $classKey) {
-            if (isset($this->versionLocal[$classKey])) {
-                $versions[] = $this->versionLocal[$classKey];
-            } else {
-                $version = $this->normalizeVersion($this->resolveCurrentVersion($classKey));
-                $this->versionLocal[$classKey] = $version;
-                $versions[] = $version;
-            }
-        }
-
-        return $versions;
-    }
-
     private function luaFetchVersionedCache(array $versionKeys, string $keyPrefix, string $hash): array
     {
         $result = $this->store->eval(
@@ -848,7 +837,7 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
-    // Private — key building
+    // Key building
     // -------------------------------------------------------------------------
 
     public function classKey(string $class): string
@@ -931,6 +920,32 @@ class CacheManager
         return [$classKeys, $versionKeys];
     }
 
+    private function fetchVersionsByClassKeys(array $classKeys): array
+    {
+        $versions = [];
+
+        foreach ($classKeys as $classKey) {
+            if (isset($this->versionLocal[$classKey])) {
+                $versions[] = $this->versionLocal[$classKey];
+            } else {
+                $version = $this->normalizeVersion($this->resolveCurrentVersion($classKey));
+                $this->versionLocal[$classKey] = $version;
+                $versions[] = $version;
+            }
+        }
+
+        return $versions;
+    }
+
+    private function buildingToWakeKey(string $buildingKey): string
+    {
+        $classKeyEnd = strpos($buildingKey, '}:') + 2;
+
+        return self::K_WAKE
+            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
+            . substr(strrchr($buildingKey, ':'), 1);
+    }
+
     // -------------------------------------------------------------------------
     // Private — model metadata
     // -------------------------------------------------------------------------
@@ -992,6 +1007,16 @@ class CacheManager
         return $value !== null ? (int) $value : 0;
     }
 
+    private function rawResult(string $status, ?string $key, mixed $blob, ?string $buildingKey): array
+    {
+        return [
+            'status' => $status,
+            'key' => $key,
+            'blob' => $blob,
+            'buildingKey' => $buildingKey,
+        ];
+    }
+
     private function queryResult(string $status, ?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = []): array
     {
         return [
@@ -1005,26 +1030,4 @@ class CacheManager
         ];
     }
 
-    private function cacheModelAttrs(string $modelClass, array $modelAttrs): void
-    {
-        if (empty($modelAttrs)) {
-            return;
-        }
-
-        $classKey = $this->classKey($modelClass);
-        $modelVersion = $this->currentVersion($modelClass);
-
-        $attrsByKey = [];
-        foreach ($modelAttrs as $id => $attrs) {
-            $attrsByKey[$this->modelPrefix($classKey) . $id] = $attrs;
-        }
-
-        $this->store->setManyTrackedIfVersion(
-            $attrsByKey,
-            $this->ttl,
-            $this->membersKey($classKey),
-            $this->verKey($classKey),
-            $modelVersion
-        );
-    }
 }

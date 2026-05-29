@@ -15,6 +15,7 @@ use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 use NormCache\Support\QueryInspector;
+use NormCache\Traits\Cacheable;
 use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesCacheInvalidation;
 
@@ -92,10 +93,24 @@ class CacheableBuilder extends Builder
             return parent::withAggregate($relations, $function, $column);
         }
 
+        $uncacheable = [];
+
         foreach (Arr::wrap($relations) as $name => $constraint) {
             if (is_numeric($name)) {
                 $name = $constraint;
                 $constraint = null;
+            }
+
+            $relatedClass = $this->model->{$name}()->getRelated()::class;
+
+            if (!self::relatedIsCacheable($relatedClass)) {
+                if ($constraint !== null) {
+                    $uncacheable[$name] = $constraint;
+                } else {
+                    $uncacheable[] = $name;
+                }
+
+                continue;
             }
 
             $this->pendingAggregates[] = [
@@ -104,6 +119,10 @@ class CacheableBuilder extends Builder
                 'function' => strtolower($function),
                 'column' => $column,
             ];
+        }
+
+        if (!empty($uncacheable)) {
+            parent::withAggregate($uncacheable, $function, $column);
         }
 
         return $this;
@@ -469,6 +488,13 @@ class CacheableBuilder extends Builder
         }
 
         NormCacheCollector::recordBypass($modelClass, $bypassReasons, $debugbarStart);
+    }
+
+    private static function relatedIsCacheable(string $class): bool
+    {
+        static $cache = [];
+
+        return $cache[$class] ??= in_array(Cacheable::class, class_uses_recursive($class), true);
     }
 
     private function insideTransaction(): bool

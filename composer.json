@@ -1,6 +1,6 @@
 {
     "name": "kai-init/laravel-normcache",
-    "description": "Normalized, self-invalidating Redis cache for Laravel Eloquent. Caches query IDs and model entities separately with versioned invalidation.",
+    "description": "Normalized caching for Laravel Eloquent. Self-invalidating, Redis-backed. Caches query IDs and model entities separately with versioned invalidation.",
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -31,7 +31,8 @@
         "predis/predis": "^3.4"
     },
     "suggest": {
-        "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)"
+        "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)",
+        "ext-igbinary": "Faster, smaller serialization for cached model payloads — detected automatically when available"
     },
     "autoload": {
         "psr-4": {

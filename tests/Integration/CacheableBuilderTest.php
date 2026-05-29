@@ -13,6 +13,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedAuthor;
+use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
@@ -293,6 +294,18 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(1, Author::withCount('posts')->first()->posts_count);
         $this->assertCount(1, $this->redisKeys('test:agg:*'));
+    }
+
+    public function test_with_count_on_non_cacheable_relation_falls_through_to_eloquent(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        UncachedPost::create(['title' => 'Post 1', 'author_id' => $author->id]);
+        UncachedPost::create(['title' => 'Post 2', 'author_id' => $author->id]);
+
+        $result = Author::withCount('uncachedPosts')->get()->firstWhere('id', $author->id);
+
+        $this->assertSame(2, (int) $result->uncached_posts_count);
+        $this->assertEmpty($this->redisKeys('test:agg:*'));
     }
 
     public function test_eager_loaded_relations_are_returned(): void

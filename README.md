@@ -1,5 +1,7 @@
 # Laravel Normcache
 
+Normalized caching for Laravel Eloquent. Self-invalidating, Redis-backed.
+
 [![Tests](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml/badge.svg)](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%205-brightgreen.svg)](phpstan.neon)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
@@ -15,6 +17,19 @@ model:{posts}:12      →  { id:12, title:..., body:... }
 ```
 
 **Requirements:** PHP 8.2+, Laravel 11/12/13, Redis 4.0+
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Usage](#usage)
+- [Cache Bypasses](#cache-bypasses)
+- [Limitations](#limitations)
+- [Configuration](#configuration)
+- [Observability](#observability)
+- [Redis Clustering](#redis-clustering)
+- [Octane & Horizon](#octane--horizon)
+- [Performance](#performance)
+- [License](#license)
 
 ---
 
@@ -39,7 +54,7 @@ class Post extends Model
 
 ## Usage
 
-### Basic queries
+### Basic Queries
 
 ```php
 Post::all();
@@ -48,13 +63,13 @@ Post::find(1);
 Post::paginate(20);
 ```
 
-### Bypassing the cache
+### Bypassing the Cache
 
 ```php
 Post::withoutCache()->get();
 ```
 
-### Cross-table queries (`dependsOn`)
+### Cross-Table Queries
 
 Queries that span multiple tables are not cached by default — Normcache can't infer which model writes should invalidate them. `dependsOn()` lets you declare the dependency explicitly:
 
@@ -73,7 +88,7 @@ All `dependsOn` queries are cached as versioned raw rows. When any declared mode
 
 **List every table the query reads.** An under-declared dependency means silent staleness until TTL. Use `tag()` / `flushTag()` when you need manual invalidation for events the model version system cannot see.
 
-### Per-query TTL
+### Per-Query TTL
 
 ```php
 Post::query()->remember(600)->get();
@@ -88,13 +103,13 @@ Post::withCount('comments')->get();
 Post::withoutAggregateCache()->withCount('comments')->get(); // skip aggregate cache
 ```
 
-### Relationship caching
+### Relationship Caching
 
 `BelongsTo`, `BelongsToMany`, `MorphTo`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` are cached for eager loads — on a warm hit no SQL is executed. `HasOne`, `HasMany`, `MorphOne`, and `MorphMany` are cached via the query cache when the related model uses `Cacheable`.
 
 `attach`, `detach`, `sync`, and `updateExistingPivot` automatically invalidate the relevant pivot cache.
 
-### Manual flush
+### Manual Flush
 
 ```bash
 php artisan normcache:flush --model="App\Models\Post"
@@ -113,7 +128,7 @@ DB::table('posts')->update(['published' => true]);
 NormCache::flushModel(Post::class);
 ```
 
-#### Tag-based flush
+### Tag-Based Flush
 
 Tag any query to group cache entries for manual flushing — useful for invalidation events the version system can't see (deploys, config changes, nightly rebuilds):
 
@@ -128,7 +143,7 @@ NormCache::flushTagAcrossModels('homepage');       // all models — cluster-wid
 
 ---
 
-## What bypasses the cache
+## Cache Bypasses
 
 | Query feature                                        | Workaround            |
 | ---------------------------------------------------- | --------------------- |
@@ -137,6 +152,17 @@ NormCache::flushTagAcrossModels('homepage');       // all models — cluster-wid
 | Raw SQL / `DB::table(...)`                           | None — flush manually |
 
 Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, raw `ORDER BY`, calculated columns — is cacheable with `dependsOn()`.
+
+---
+
+## Limitations
+
+- Normcache only hooks Eloquent models that use the `Cacheable` trait. Query builder calls such as `DB::table(...)`, `DB::select()`, and `DB::statement()` are never cached.
+- Writes outside Eloquent are invisible to the model version system. Flush the affected model or tag manually after imports, raw updates, maintenance jobs, or external syncs.
+- Dynamic connection switching (`Post::on('replica')`) is not supported. Use separate model classes with fixed `$connection` values when the same table is read through multiple connections.
+- `dependsOn()` is explicit by design. If a query reads another table, include that model class or manually flush a tag that covers the query.
+- Models are expected to use standard single-column primary keys.
+- Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.
 
 ---
 
@@ -194,7 +220,7 @@ This adds a **Normcache** timeline tab showing every query hit, miss, bypass, an
 
 ---
 
-## Redis Cluster
+## Redis Clustering
 
 Every key uses a hash tag derived from the model class — `{posts}`, `{analytics:posts}` — so all keys for a given model land on the same cluster slot. `MGET` batches, Lua scripts, and pipelines never cross node boundaries.
 
