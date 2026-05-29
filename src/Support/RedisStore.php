@@ -355,7 +355,7 @@ final class RedisStore
         }
 
         // PhpRedis may return false with a NOSCRIPT last-error instead of throwing.
-        if ($result === false && method_exists($this->connection, 'client')) {
+        if ($result === false && $this->connection instanceof PhpRedisConnection) {
             $lastError = strtolower((string) ($this->connection->client()->getLastError() ?? ''));
             if (str_contains($lastError, 'noscript')) {
                 $this->connection->client()->clearLastError();

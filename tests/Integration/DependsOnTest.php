@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -347,7 +348,7 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class])->get();
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
 
-        $removed = \NormCache\Facades\NormCache::flushTag(Author::class, 'homepage');
+        $removed = NormCache::flushTag(Author::class, 'homepage');
 
         $this->assertSame(1, $removed);
         $this->assertNotEmpty($this->redisKeys('test:raw:*'));
@@ -362,7 +363,7 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class])->tag('deploy')->get();
         Post::query()->dependsOn([Author::class])->tag('deploy')->get();
 
-        $removed = \NormCache\Facades\NormCache::flushTagAcrossModels('deploy');
+        $removed = NormCache::flushTagAcrossModels('deploy');
 
         $this->assertSame(2, $removed);
         $this->assertEmpty($this->redisKeys('test:raw:*:deploy:*'));

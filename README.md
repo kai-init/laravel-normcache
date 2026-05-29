@@ -5,7 +5,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-Most caching packages cache query results as a single blob — the entire collection, serialized and stored together. Normcache takes a different approach: it stores the list of matching IDs separately from the model data, and keeps each model's attributes in its own key.Every model is stored once across all queries — a single version bump invalidates everything that returned it, in O(1).
+Most caching packages store each query result as one serialized collection. Normcache takes a different approach: a query cache only stores the matching IDs, while each model's attributes live in their own key. The same model can appear in many cached queries but is only stored once, so a single version bump invalidates everything that returned it, in O(1).
 
 ```
 query:{posts}:v3:...  →  [4, 7, 12]
@@ -65,12 +65,13 @@ Author::whereHas('posts', fn($q) => $q->where('published', true))
 
 // Works for any query shape — JOIN, GROUP BY, DISTINCT, subquery WHERE, raw ORDER BY:
 Author::join('posts', 'posts.author_id', '=', 'authors.id')->dependsOn([Post::class])->get();
-Post::select('author_id', DB::raw('SUM(views) as total'))->groupBy('author_id')->dependsOn([Post::class])->get();
+Post::select('author_id', DB::raw('SUM(views) as total'))
+    ->groupBy('author_id')->dependsOn([Post::class])->get();
 ```
 
 All `dependsOn` queries are cached as versioned raw rows. When any declared model class is written, the versioned key becomes unreachable and the next read re-populates from the database. Pessimistic locks always bypass the cache.
 
-**List every table the query reads.** An under-declared dependency means silent staleness until TTL — there is no backstop.
+**List every table the query reads.** An under-declared dependency means silent staleness until TTL. Use `tag()` / `flushTag()` when you need manual invalidation for events the model version system cannot see.
 
 ### Per-query TTL
 

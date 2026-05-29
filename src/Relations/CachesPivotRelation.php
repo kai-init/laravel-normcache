@@ -27,7 +27,7 @@ trait CachesPivotRelation
 
     public function get($columns = ['*']): Collection
     {
-        $columns = is_array($columns) ? $columns : [$columns];
+        $columns = $this->normalizeColumns($columns);
 
         if (!$this->shouldUsePivotCache()) {
             return parent::get($columns);
@@ -254,5 +254,10 @@ trait CachesPivotRelation
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection($result)
         );
+    }
+
+    private function normalizeColumns(mixed $columns): array
+    {
+        return is_array($columns) ? $columns : [$columns];
     }
 }

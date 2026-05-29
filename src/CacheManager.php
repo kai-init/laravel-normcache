@@ -150,19 +150,20 @@ class CacheManager
         };
     }
 
-    public function getNamespacedCache(string $namespace, string $modelClass, string $hash, array $depClasses = []): array
+    public function getNamespacedCache(string $namespace, string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): array
     {
         $classKey = $this->classKey($modelClass);
         [$classKeys, $versionKeys] = $this->versionKeyData($classKey, $depClasses);
 
-        [$versions, $rawData] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:', $hash);
+        $tagSegment = $tag !== null ? $tag . ':' : '';
+        [$versions, $rawData] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:' . $tagSegment, $hash);
 
         foreach ($classKeys as $i => $key) {
             $this->versionLocal[$key] = $this->normalizeVersion($versions[$i]);
         }
 
         $seg = implode(':', array_map(fn($v) => 'v' . $v, $versions));
-        $key = "{$namespace}:{{$classKey}}:{$seg}:{$hash}";
+        $key = "{$namespace}:{{$classKey}}:{$tagSegment}{$seg}:{$hash}";
 
         return [
             'key' => $key,
@@ -556,6 +557,7 @@ class CacheManager
         return $this->store->flushByPatterns([
             self::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
             self::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
+            self::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
         ]);
     }
 
@@ -564,6 +566,7 @@ class CacheManager
         return $this->store->flushByPatterns([
             self::K_RAW . ':*:' . $tag . ':*',
             self::K_QUERY . ':*:' . $tag . ':*',
+            self::K_COUNT . ':*:' . $tag . ':*',
         ]);
     }
 

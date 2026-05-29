@@ -194,7 +194,7 @@ class CacheableBuilder extends Builder
         $queryStart = NormCacheCollector::beginMeasure();
 
         try {
-            ['key' => $countKey, 'data' => $countData] = NormCache::getNamespacedCache('count', $this->model::class, $hash, $this->dependsOn ?? []);
+            ['key' => $countKey, 'data' => $countData] = NormCache::getNamespacedCache('count', $this->model::class, $hash, $this->dependsOn ?? [], $this->cacheTag);
             $cachedTotal = $countData[0] ?? null;
 
             if (NormCache::isEventsEnabled()) {
