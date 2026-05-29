@@ -386,7 +386,6 @@ class CacheManager
         $ids = array_values($ids);
 
         $classKey = $this->classKey($modelClass);
-        $modelVersion = $this->currentVersion($modelClass);
 
         if ($raw === null) {
             $keys = array_map(fn($id) => $this->modelPrefix($classKey) . $id, $ids);
@@ -419,7 +418,6 @@ class CacheManager
             $projection,
             $missedQuery,
             $preserveQueryShape,
-            $modelVersion,
         );
 
         $ordered = [];
@@ -728,8 +726,8 @@ class CacheManager
         ?array $projection,
         ?EloquentBuilder $missedQuery,
         bool $preserveQueryShape,
-        int $modelVersion,
     ): array {
+        $modelVersion = $this->currentVersion($modelClass);
         $prototype = self::prototype($modelClass);
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();

@@ -28,8 +28,9 @@ trait CachesPivotRelation
     public function get($columns = ['*']): Collection
     {
         $columns = $this->normalizeColumns($columns);
+        $cacheParentIds = $this->getCacheParentIds();
 
-        if (!$this->shouldUsePivotCache()) {
+        if (!$this->shouldUsePivotCache($cacheParentIds)) {
             return parent::get($columns);
         }
 
@@ -41,7 +42,6 @@ trait CachesPivotRelation
         $constraintHash = $this->currentConstraintHash($columns);
         $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
         $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
-        $cacheParentIds = $this->getCacheParentIds();
 
         try {
             $cache = NormCache::getPivotCache(
@@ -149,10 +149,10 @@ trait CachesPivotRelation
         return QueryHasher::hash(json_encode($shape));
     }
 
-    private function shouldUsePivotCache(): bool
+    private function shouldUsePivotCache(array $cacheParentIds): bool
     {
         return NormCache::isEnabled()
-            && !empty($this->getCacheParentIds())
+            && !empty($cacheParentIds)
             && $this->query instanceof CacheableBuilder
             && !$this->query->isCacheSkipped()
             && $this->parent->getConnection()->transactionLevel() === 0;
