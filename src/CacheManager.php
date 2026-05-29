@@ -221,13 +221,6 @@ class CacheManager
         return $this->store->getMany($keys);
     }
 
-    public function getQueryAggregate(string $key): mixed
-    {
-        $cached = $this->store->get($key);
-
-        return $cached !== null ? $cached[0] : null;
-    }
-
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->classKey($modelClass);

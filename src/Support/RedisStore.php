@@ -51,17 +51,6 @@ final class RedisStore
         return ($value !== null && $value !== false) ? $value : null;
     }
 
-    public function getJson(string $key): ?array
-    {
-        $raw = $this->connection->get($this->prefix($key));
-        if ($raw === null || $raw === false) {
-            return null;
-        }
-        $decoded = json_decode($raw, true);
-
-        return is_array($decoded) ? $decoded : null;
-    }
-
     public function set(string $key, mixed $value, int $ttl): void
     {
         $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
@@ -178,45 +167,6 @@ final class RedisStore
         }
     }
 
-    /**
-     * Write model attribute entries in a pipeline, also adding their prefixed keys to a
-     * Redis set (memberKey) so the whole group can be flushed atomically.
-     */
-    public function setManyTracked(array $attrsByKey, int $ttl, string $memberKey): void
-    {
-        if (empty($attrsByKey)) {
-            return;
-        }
-
-        if (!$this->cluster) {
-            $this->connection->pipeline(function ($pipe) use ($attrsByKey, $ttl, $memberKey) {
-                $prefixedKeys = [];
-                foreach ($attrsByKey as $key => $attrs) {
-                    $p = $this->prefix($key);
-                    $prefixedKeys[] = $p;
-                    $pipe->setex($p, $ttl, $this->serialize($attrs));
-                }
-                $pipe->sadd($memberKey, ...$prefixedKeys);
-                $pipe->expire($memberKey, $ttl);
-            });
-
-            return;
-        }
-
-        foreach ($this->groupByTag(array_keys($attrsByKey)) as $keys) {
-            $this->connection->pipeline(function ($pipe) use ($keys, $attrsByKey, $ttl, $memberKey) {
-                $prefixedKeys = [];
-                foreach ($keys as $key) {
-                    $p = $this->prefix($key);
-                    $prefixedKeys[] = $p;
-                    $pipe->setex($p, $ttl, $this->serialize($attrsByKey[$key]));
-                }
-                $pipe->sadd($memberKey, ...$prefixedKeys);
-                $pipe->expire($memberKey, $ttl);
-            });
-        }
-    }
-
     public function setManyTrackedIfVersion(array $attrsByKey, int $ttl, string $memberKey, string $versionKey, int $expectedVersion): void
     {
         if (empty($attrsByKey)) {
@@ -244,11 +194,6 @@ final class RedisStore
             $pipe->del($prefixedKey);
             $pipe->srem($prefixedMemberKey, $prefixedKey);
         });
-    }
-
-    public function smembers(string $prefixedKey): array
-    {
-        return $this->connection->smembers($prefixedKey) ?: [];
     }
 
     public function sscanAndFlushSet(string $prefixedMemberKey): void

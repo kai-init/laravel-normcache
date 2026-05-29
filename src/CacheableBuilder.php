@@ -300,6 +300,10 @@ class CacheableBuilder extends Builder
             $result = NormCache::waitForBuild($model, $hash, tag: $this->cacheTag);
 
             if ($result === null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheMiss($model, 'building:budget-exhausted'));
+                }
+
                 NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
                 return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
