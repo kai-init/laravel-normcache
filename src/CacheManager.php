@@ -8,44 +8,13 @@ use Illuminate\Support\Facades\DB;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
+use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\LuaScripts;
 use NormCache\Support\QueryInspector;
 use NormCache\Support\RedisStore;
 
 class CacheManager
 {
-    // -------------------------------------------------------------------------
-    // Key-prefix constants — single source of truth for PHP and Lua
-    // -------------------------------------------------------------------------
-
-    public const K_VER = 'ver';
-
-    public const K_SCHEDULED = 'scheduled';
-
-    public const K_QUERY = 'query';
-
-    public const K_MODEL = 'model';
-
-    public const K_BUILDING = 'building';
-
-    public const K_MEMBERS = 'members:model';
-
-    public const K_AGG = 'agg';
-
-    public const K_COUNT = 'count';
-
-    public const K_SCALAR = 'scalar';
-
-    public const K_PIVOT = 'pivot';
-
-    public const K_THROUGH = 'through';
-
-    public const K_WAKE = 'wake';
-
-    public const K_RAW = 'raw';
-
-    private static array $classKeyCache = [];
-
     private static array $prototypes = [];
 
     private static array $hydratorClosures = [];
@@ -56,6 +25,8 @@ class CacheManager
     private array $flushQueue = [];
 
     private RedisStore $store;
+
+    private CacheKeyBuilder $keys;
 
     public function __construct(
         string $redisConnection,
@@ -72,6 +43,7 @@ class CacheManager
         private int $stampedeWaitMs = 200,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
+        $this->keys = new CacheKeyBuilder();
     }
 
     // -------------------------------------------------------------------------
@@ -109,13 +81,13 @@ class CacheManager
 
     public function getModelsFromQuery(string $modelClass, string $hash, ?string $tag = null): array
     {
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
 
         $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag);
 
         $luaStatus = $result[0] ?? null;
         $version = $this->normalizeVersion($result[1]);
-        $queryKey = $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
+        $queryKey = $this->keys->queryPrefix($classKey, $tag) . $version . ':' . $hash;
 
         $deserialize = fn($r) => $this->store->unserializeMany($r);
 
@@ -123,7 +95,7 @@ class CacheManager
             'hit' => $this->queryResult('hit', $queryKey, $result[2], $deserialize($result[3]), null),
             'stale' => $this->queryResult('stale', null, $result[2], $deserialize($result[3]), null),
             'empty' => $this->queryResult('empty', $queryKey, [], [], null),
-            'miss' => $this->queryResult('miss', $queryKey, null, null, $this->buildingPrefix($classKey) . $hash, [$this->verKey($classKey)], [(string) $version]),
+            'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $hash, [$this->keys->verKey($classKey)], [(string) $version]),
             'building' => $this->queryResult('building', null, null, null, null),
             default => $this->queryResult('miss', $queryKey, null, null, null),
         };
@@ -131,38 +103,38 @@ class CacheManager
 
     public function getNamespacedCache(string $namespace, string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): array
     {
-        $classKey = $this->classKey($modelClass);
-        $versionKeys = $this->depVersionKeys($classKey, $depClasses);
+        $classKey = $this->keys->classKey($modelClass);
+        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
 
-        $tagSegment = $this->tagSegment($tag);
-        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:' . $tagSegment, $hash);
+        $ts = $this->keys->tagSegment($tag);
+        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
 
         return [
-            'key' => "{$namespace}:{{$classKey}}:{$tagSegment}{$seg}:{$hash}",
+            'key' => "{$namespace}:{{$classKey}}:{$ts}{$seg}:{$hash}",
             'data' => $blob !== false ? $this->store->unserialize($blob) : null,
         ];
     }
 
     public function getThroughCache(string $relatedClass, string $throughClass, string $hash): array
     {
-        $relatedKey = $this->classKey($relatedClass);
-        $throughKey = $this->classKey($throughClass);
+        $relatedKey = $this->keys->classKey($relatedClass);
+        $throughKey = $this->keys->classKey($throughClass);
 
         [$seg, $blob] = $this->luaFetchVersionedCache(
-            [$this->verKey($relatedKey), $this->verKey($throughKey)],
-            self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':',
+            [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)],
+            CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':',
             $hash
         );
 
-        $key = self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':' . $seg . ':' . $hash;
+        $key = CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':' . $seg . ':' . $hash;
 
         return ['key' => $key, 'data' => $blob !== false ? $this->store->unserialize($blob) : null];
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
     {
-        $parentKey = $this->classKey($parentClass);
-        $relatedKey = $this->classKey($relatedClass);
+        $parentKey = $this->keys->classKey($parentClass);
+        $relatedKey = $this->keys->classKey($relatedClass);
 
         [$seg, $blobs] = $this->luaFetchVersionedPivotCache($parentKey, $relatedKey, $relation, $constraintHash, $parentIds);
 
@@ -178,8 +150,8 @@ class CacheManager
         $argv = [(string) count($parentIds), ...array_map('strval', $parentIds), (string) count($specs)];
 
         foreach ($specs as $spec) {
-            $keys[] = $this->verKey($this->classKey($spec['relatedClass']));
-            $keys[] = $this->verKey($this->classKey($spec['secondClass'] ?? $spec['relatedClass']));
+            $keys[] = $this->keys->verKey($this->keys->classKey($spec['relatedClass']));
+            $keys[] = $this->keys->verKey($this->keys->classKey($spec['secondClass'] ?? $spec['relatedClass']));
             array_push($argv, $spec['staticSuffix'], $spec['secondLabel'] ?? '');
         }
 
@@ -193,13 +165,13 @@ class CacheManager
 
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
-        $classKey = $this->classKey($modelClass);
-        $tagSegment = $this->tagSegment($tag);
+        $classKey = $this->keys->classKey($modelClass);
+        $ts = $this->keys->tagSegment($tag);
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
-            $this->depVersionKeys($classKey, $depClasses),
-            $this->rawPrefix($classKey) . $tagSegment,
-            $this->buildingPrefix($classKey),
+            $this->keys->depVersionKeys($classKey, $depClasses),
+            $this->keys->rawPrefix($classKey) . $ts,
+            $this->keys->buildingPrefix($classKey),
             $hash
         );
 
@@ -207,17 +179,17 @@ class CacheManager
             return $this->rawResult('building', null, null, null);
         }
 
-        $key = $this->rawPrefix($classKey) . $tagSegment . $seg . ':' . $hash;
+        $key = $this->keys->rawPrefix($classKey) . $ts . $seg . ':' . $hash;
 
         return match ($status) {
             'hit' => $this->rawResult('hit', $key, $this->store->unserialize($blob), null),
-            'miss' => $this->rawResult('miss', $key, null, $this->buildingPrefix($classKey) . $hash),
+            'miss' => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $hash),
         };
     }
 
     public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
     {
-        $this->store->brpop($this->wakePrefix($this->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
+        $this->store->brpop($this->keys->wakePrefix($this->keys->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
 
         $result = $depClasses !== []
             ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
@@ -276,7 +248,7 @@ class CacheManager
         $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
 
         if ($buildingKey !== null) {
-            $this->store->releaseBuilding($buildingKey, $this->buildingToWakeKey($buildingKey));
+            $this->store->releaseBuilding($buildingKey, $this->keys->buildingToWakeKey($buildingKey));
         }
     }
 
@@ -290,19 +262,19 @@ class CacheManager
             return;
         }
 
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
         $modelVersion = $this->currentVersion($modelClass);
 
         $attrsByKey = [];
         foreach ($modelAttrs as $id => $attrs) {
-            $attrsByKey[$this->modelPrefix($classKey) . $id] = $attrs;
+            $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
         }
 
         $this->store->setManyTrackedIfVersion(
             $attrsByKey,
             $this->ttl,
-            $this->membersKey($classKey),
-            $this->verKey($classKey),
+            $this->keys->membersKey($classKey),
+            $this->keys->verKey($classKey),
             $modelVersion
         );
     }
@@ -320,7 +292,7 @@ class CacheManager
     {
         $this->store->eval(
             LuaScripts::get('store_query_cas'),
-            array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->buildingToWakeKey($buildingKey) : '']),
+            array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '']),
             array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids)])
         );
     }
@@ -348,10 +320,10 @@ class CacheManager
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
 
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
 
         if ($raw === null) {
-            $keys = array_map(fn($id) => $this->modelPrefix($classKey) . $id, $ids);
+            $keys = array_map(fn($id) => $this->keys->modelPrefix($classKey) . $id, $ids);
             $raw = $this->store->getMany($keys);
         }
 
@@ -472,7 +444,7 @@ class CacheManager
 
         $conn = $model->getConnection()->getName();
         $class = $model::class;
-        $key = $this->modelKey($class, $model->getKey());
+        $key = $this->keys->modelKey($class, $model->getKey());
 
         if (DB::connection($conn)->transactionLevel() > 0) {
             $this->queueModelFlush($conn, $class);
@@ -481,61 +453,61 @@ class CacheManager
         }
 
         $this->handle(function () use ($class, $key) {
-            $classKey = $this->classKey($class);
+            $classKey = $this->keys->classKey($class);
             $this->doInvalidateVersion($class);
             $this->store->deleteFromSet(
                 $this->store->prefix($key),
-                $this->store->prefix($this->membersKey($classKey))
+                $this->store->prefix($this->keys->membersKey($classKey))
             );
         });
     }
 
     public function forceFlushModel(string $modelClass): void
     {
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
         $this->doInvalidateVersion($modelClass);
 
-        $this->store->sscanAndFlushSet($this->store->prefix($this->membersKey($classKey)));
+        $this->store->sscanAndFlushSet($this->store->prefix($this->keys->membersKey($classKey)));
     }
 
     public function flushAll(): int
     {
         return $this->store->flushByPatterns([
-            self::K_QUERY . ':*',
-            self::K_MODEL . ':*',
-            self::K_MEMBERS . ':*',
-            self::K_VER . ':*',
-            self::K_AGG . ':*',
-            self::K_COUNT . ':*',
-            self::K_SCALAR . ':*',
-            self::K_PIVOT . ':*',
-            self::K_THROUGH . ':*',
-            self::K_SCHEDULED . ':*',
-            self::K_BUILDING . ':*',
-            self::K_WAKE . ':*',
-            self::K_RAW . ':*',
+            CacheKeyBuilder::K_QUERY . ':*',
+            CacheKeyBuilder::K_MODEL . ':*',
+            CacheKeyBuilder::K_MEMBERS . ':*',
+            CacheKeyBuilder::K_VER . ':*',
+            CacheKeyBuilder::K_AGG . ':*',
+            CacheKeyBuilder::K_COUNT . ':*',
+            CacheKeyBuilder::K_SCALAR . ':*',
+            CacheKeyBuilder::K_PIVOT . ':*',
+            CacheKeyBuilder::K_THROUGH . ':*',
+            CacheKeyBuilder::K_SCHEDULED . ':*',
+            CacheKeyBuilder::K_BUILDING . ':*',
+            CacheKeyBuilder::K_WAKE . ':*',
+            CacheKeyBuilder::K_RAW . ':*',
         ]);
     }
 
     public function flushTag(string $modelClass, string $tag): int
     {
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
 
         return $this->store->flushByPatterns([
-            self::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
-            self::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
-            self::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
-            self::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
         ]);
     }
 
     public function flushTagAcrossModels(string $tag): int
     {
         return $this->store->flushByPatterns([
-            self::K_RAW . ':*:' . $tag . ':*',
-            self::K_QUERY . ':*:' . $tag . ':*',
-            self::K_COUNT . ':*:' . $tag . ':*',
-            self::K_SCALAR . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_RAW . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
         ]);
     }
 
@@ -587,10 +559,10 @@ class CacheManager
 
     private function doInvalidateVersion(string $modelClass): void
     {
-        $classKey = $this->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass);
 
         if ($this->cooldown <= 0) {
-            $this->store->increment($this->verKey($classKey));
+            $this->store->increment($this->keys->verKey($classKey));
 
             return;
         }
@@ -602,7 +574,7 @@ class CacheManager
     private function resolveCurrentVersion(string $classKey): string|int|null
     {
         if ($this->cooldown <= 0) {
-            return $this->store->getRaw($this->verKey($classKey));
+            return $this->store->getRaw($this->keys->verKey($classKey));
         }
 
         return $this->luaFetchVersionWithCooldown($classKey, (int) floor(microtime(true) * 1000));
@@ -612,7 +584,7 @@ class CacheManager
     {
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->cooldown * 1000);
 
-        $this->store->setNx($this->scheduledKey($classKey), (string) $dueAtMs);
+        $this->store->setNx($this->keys->scheduledKey($classKey), (string) $dueAtMs);
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void
@@ -706,7 +678,7 @@ class CacheManager
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
             if (!$isTrashed) {
-                $attrsByKey[$this->modelPrefix($classKey) . $id] = $attrs;
+                $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
             }
 
             if ($projection !== null) {
@@ -718,8 +690,8 @@ class CacheManager
             $this->store->setManyTrackedIfVersion(
                 $attrsByKey,
                 $this->ttl,
-                $this->membersKey($classKey),
-                $this->verKey($classKey),
+                $this->keys->membersKey($classKey),
+                $this->keys->verKey($classKey),
                 $modelVersion
             );
         }
@@ -733,10 +705,8 @@ class CacheManager
             $builder = $modelClass::query();
             if ($builder instanceof CacheableBuilder) {
                 $missedQuery?->applyRemovedScopesTo($builder);
-
                 return $builder->withoutCache();
             }
-
             return $builder;
         }
 
@@ -756,11 +726,11 @@ class CacheManager
     private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs, ?string $tag = null): mixed
     {
         return $this->store->eval(LuaScripts::get('fetch_versioned_query'), [
-            $this->verKey($classKey),
-            $this->scheduledKey($classKey),
-            $this->queryPrefix($classKey, $tag),
-            $this->modelPrefix($classKey),
-            $this->buildingPrefix($classKey),
+            $this->keys->verKey($classKey),
+            $this->keys->scheduledKey($classKey),
+            $this->keys->queryPrefix($classKey, $tag),
+            $this->keys->modelPrefix($classKey),
+            $this->keys->buildingPrefix($classKey),
         ], [$hash, $nowMs, $this->buildingLockTtl]);
     }
 
@@ -778,9 +748,9 @@ class CacheManager
     private function luaFetchVersionedPivotCache(string $parentKey, string $relatedKey, string $relation, string $constraintHash, array $parentIds): array
     {
         $result = $this->store->eval(LuaScripts::get('fetch_versioned_pivot'), [
-            $this->verKey($parentKey),
-            $this->verKey($relatedKey),
-            self::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':',
+            $this->keys->verKey($parentKey),
+            $this->keys->verKey($relatedKey),
+            CacheKeyBuilder::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':',
         ], array_merge([$relation, $constraintHash], $parentIds));
 
         return [(string) ($result[0] ?? ''), $result[1] ?? []];
@@ -790,7 +760,7 @@ class CacheManager
     {
         return $this->store->eval(
             LuaScripts::get('fetch_version_with_cooldown'),
-            [$this->verKey($classKey), $this->scheduledKey($classKey)],
+            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
             [$nowMs]
         );
     }
@@ -819,91 +789,7 @@ class CacheManager
 
     public function classKey(string $class): string
     {
-        return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
-    }
-
-    private function verKey(string $classKey): string
-    {
-        return self::K_VER . ':{' . $classKey . '}:';
-    }
-
-    private function scheduledKey(string $classKey): string
-    {
-        return self::K_SCHEDULED . ':{' . $classKey . '}:';
-    }
-
-    private function modelPrefix(string $classKey): string
-    {
-        return self::K_MODEL . ':{' . $classKey . '}:';
-    }
-
-    /** Prefix for single-version query keys: appended with "{version}:{hash}". */
-    private function queryPrefix(string $classKey, ?string $tag = null): string
-    {
-        $base = self::K_QUERY . ':{' . $classKey . '}:';
-
-        return $tag !== null ? $base . $tag . ':v' : $base . 'v';
-    }
-
-    private function rawPrefix(string $classKey): string
-    {
-        return self::K_RAW . ':{' . $classKey . '}:';
-    }
-
-    private function buildingPrefix(string $classKey): string
-    {
-        return self::K_BUILDING . ':{' . $classKey . '}:';
-    }
-
-    private function wakePrefix(string $classKey): string
-    {
-        return self::K_WAKE . ':{' . $classKey . '}:';
-    }
-
-    private function membersKey(string $classKey): string
-    {
-        return self::K_MEMBERS . ':{' . $classKey . '}';
-    }
-
-    private function tagSegment(?string $tag): string
-    {
-        return $tag !== null ? $tag . ':' : '';
-    }
-
-    private function modelKey(string $modelClass, string $id): string
-    {
-        return $this->modelPrefix($this->classKey($modelClass)) . $id;
-    }
-
-    private function resolveClassKey(string $class): string
-    {
-        $model = self::prototype($class);
-        $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
-
-        return "{$connection}:{$model->getTable()}";
-    }
-
-    private function sortClassesByKey(array $classes): array
-    {
-        usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
-
-        return $classes;
-    }
-
-    private function depVersionKeys(string $classKey, array $depClasses): array
-    {
-        $all = array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)));
-
-        return array_map(fn($key) => $this->verKey($key), $all);
-    }
-
-    private function buildingToWakeKey(string $buildingKey): string
-    {
-        $classKeyEnd = strpos($buildingKey, '}:') + 2;
-
-        return self::K_WAKE
-            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
-            . substr(strrchr($buildingKey, ':'), 1);
+        return $this->keys->classKey($class);
     }
 
     // -------------------------------------------------------------------------
@@ -928,7 +814,7 @@ class CacheManager
 
     public function currentVersion(string $modelClass): int
     {
-        return $this->normalizeVersion($this->resolveCurrentVersion($this->classKey($modelClass)));
+        return $this->normalizeVersion($this->resolveCurrentVersion($this->keys->classKey($modelClass)));
     }
 
     public function fallback(\Exception $e): void

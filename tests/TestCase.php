@@ -5,6 +5,7 @@ namespace NormCache\Tests;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
+use NormCache\Support\CacheKeyBuilder;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use ReflectionProperty;
 
@@ -56,7 +57,7 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function resetClassKeyCache(): void
     {
-        (new ReflectionProperty(CacheManager::class, 'classKeyCache'))->setValue(null, []);
+        (new ReflectionProperty(CacheKeyBuilder::class, 'classKeyCache'))->setValue(null, []);
         (new ReflectionProperty(CacheManager::class, 'prototypes'))->setValue(null, []);
     }
 

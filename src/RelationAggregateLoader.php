@@ -11,6 +11,7 @@ use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
+use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryHasher;
 
 class RelationAggregateLoader
@@ -27,7 +28,7 @@ class RelationAggregateLoader
 
         $parentClass = $this->model::class;
         $pkName = $this->model->getKeyName();
-        $prefix = CacheManager::K_AGG . ':{' . NormCache::classKey($parentClass) . '}:';
+        $prefix = CacheKeyBuilder::K_AGG . ':{' . NormCache::classKey($parentClass) . '}:';
 
         $ids = array_map(fn($m) => $m->getKey(), $models);
         $idCount = count($ids);
