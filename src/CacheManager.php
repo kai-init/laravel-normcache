@@ -4,7 +4,6 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
@@ -12,17 +11,17 @@ use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\LuaScripts;
 use NormCache\Support\QueryInspector;
 use NormCache\Support\RedisStore;
+use NormCache\Traits\HandlesInvalidation;
 
 class CacheManager
 {
+    use HandlesInvalidation;
+
     private static array $prototypes = [];
 
     private static array $hydratorClosures = [];
 
     private static array $deletedAtColumns = [];
-
-    /** @var array<string, array<string, true>> */
-    private array $flushQueue = [];
 
     private RedisStore $store;
 
@@ -393,206 +392,6 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
-    // Invalidation
-    // -------------------------------------------------------------------------
-
-    public function invalidateVersion(Model $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
-
-            return;
-        }
-
-        $this->handle(fn() => $this->doInvalidateVersion($model::class));
-    }
-
-    public function flushModel(Model|string $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        if (is_string($model)) {
-            $this->handle(fn() => $this->forceFlushModel($model));
-
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
-
-            return;
-        }
-
-        $this->handle(fn() => $this->forceFlushModel($model::class));
-    }
-
-    public function flushInstance(Model $model): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-        $class = $model::class;
-        $key = $this->keys->modelKey($class, $model->getKey());
-
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $class);
-
-            return;
-        }
-
-        $this->handle(function () use ($class, $key) {
-            $classKey = $this->keys->classKey($class);
-            $this->doInvalidateVersion($class);
-            $this->store->deleteFromSet(
-                $this->store->prefix($key),
-                $this->store->prefix($this->keys->membersKey($classKey))
-            );
-        });
-    }
-
-    public function forceFlushModel(string $modelClass): void
-    {
-        $classKey = $this->keys->classKey($modelClass);
-        $this->doInvalidateVersion($modelClass);
-
-        $this->store->sscanAndFlushSet($this->store->prefix($this->keys->membersKey($classKey)));
-    }
-
-    public function flushAll(): int
-    {
-        return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_QUERY . ':*',
-            CacheKeyBuilder::K_MODEL . ':*',
-            CacheKeyBuilder::K_MEMBERS . ':*',
-            CacheKeyBuilder::K_VER . ':*',
-            CacheKeyBuilder::K_AGG . ':*',
-            CacheKeyBuilder::K_COUNT . ':*',
-            CacheKeyBuilder::K_SCALAR . ':*',
-            CacheKeyBuilder::K_PIVOT . ':*',
-            CacheKeyBuilder::K_THROUGH . ':*',
-            CacheKeyBuilder::K_SCHEDULED . ':*',
-            CacheKeyBuilder::K_BUILDING . ':*',
-            CacheKeyBuilder::K_WAKE . ':*',
-            CacheKeyBuilder::K_RAW . ':*',
-        ]);
-    }
-
-    public function flushTag(string $modelClass, string $tag): int
-    {
-        $classKey = $this->keys->classKey($modelClass);
-
-        return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
-        ]);
-    }
-
-    public function flushTagAcrossModels(string $tag): int
-    {
-        return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RAW . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
-        ]);
-    }
-
-    public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
-    {
-        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
-            foreach ($modelClasses as $modelClass) {
-                $this->queueModelFlush($connectionName, $modelClass);
-            }
-
-            return;
-        }
-
-        foreach ($modelClasses as $modelClass) {
-            $this->doInvalidateVersion($modelClass);
-        }
-    }
-
-    public function commitPending(string $connectionName): void
-    {
-        $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
-
-        unset($this->flushQueue[$connectionName]);
-
-        if (empty($flushes) || !$this->enabled) {
-            return;
-        }
-
-        $this->handle(function () use ($flushes) {
-            foreach ($flushes as $modelClass) {
-                $this->forceFlushModel($modelClass);
-            }
-        });
-    }
-
-    public function discardPending(string $connectionName): void
-    {
-        unset($this->flushQueue[$connectionName]);
-    }
-
-    public function discardAllPending(): void
-    {
-        $this->flushQueue = [];
-    }
-
-    // -------------------------------------------------------------------------
-    // Private — invalidation internals
-    // -------------------------------------------------------------------------
-
-    private function doInvalidateVersion(string $modelClass): void
-    {
-        $classKey = $this->keys->classKey($modelClass);
-
-        if ($this->cooldown <= 0) {
-            $this->store->increment($this->keys->verKey($classKey));
-
-            return;
-        }
-
-        $this->resolveCurrentVersion($classKey);
-        $this->scheduleInvalidation($classKey);
-    }
-
-    private function resolveCurrentVersion(string $classKey): string|int|null
-    {
-        if ($this->cooldown <= 0) {
-            return $this->store->getRaw($this->keys->verKey($classKey));
-        }
-
-        return $this->luaFetchVersionWithCooldown($classKey, (int) floor(microtime(true) * 1000));
-    }
-
-    private function scheduleInvalidation(string $classKey): void
-    {
-        $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->cooldown * 1000);
-
-        $this->store->setNx($this->keys->scheduledKey($classKey), (string) $dueAtMs);
-    }
-
-    private function queueModelFlush(string $connectionName, string $modelClass): void
-    {
-        $this->flushQueue[$connectionName][$modelClass] = true;
-    }
-
-    // -------------------------------------------------------------------------
     // Private — model hydration / DB fallback
     // -------------------------------------------------------------------------
 
@@ -827,7 +626,7 @@ class CacheManager
         $this->disable();
     }
 
-    private function handle(callable $operation): void
+    protected function handle(callable $operation): void
     {
         if (!$this->enabled) {
             return;
