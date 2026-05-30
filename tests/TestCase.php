@@ -58,7 +58,7 @@ abstract class TestCase extends OrchestraTestCase
     protected function resetClassKeyCache(): void
     {
         (new ReflectionProperty(CacheKeyBuilder::class, 'classKeyCache'))->setValue(null, []);
-        (new ReflectionProperty(CacheManager::class, 'prototypes'))->setValue(null, []);
+        (new ReflectionProperty(CacheKeyBuilder::class, 'prototypes'))->setValue(null, []);
     }
 
     protected function modelCacheEntry(string $class, mixed $id): mixed

@@ -2,6 +2,7 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 
 class CacheKeyBuilder
@@ -33,6 +34,8 @@ class CacheKeyBuilder
     public const K_RAW = 'raw';
 
     private static array $classKeyCache = [];
+
+    private static array $prototypes = [];
 
     public function classKey(string $class): string
     {
@@ -107,9 +110,14 @@ class CacheKeyBuilder
             . substr(strrchr($buildingKey, ':'), 1);
     }
 
+    public static function prototypeFor(string $class): Model
+    {
+        return self::$prototypes[$class] ??= new $class;
+    }
+
     private function resolveClassKey(string $class): string
     {
-        $model = new $class;
+        $model = self::prototypeFor($class);
         $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
         return "{$connection}:{$model->getTable()}";

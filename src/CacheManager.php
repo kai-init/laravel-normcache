@@ -17,8 +17,6 @@ class CacheManager
 {
     use HandlesInvalidation;
 
-    private static array $prototypes = [];
-
     private static array $hydratorClosures = [];
 
     private static array $deletedAtColumns = [];
@@ -182,7 +180,7 @@ class CacheManager
 
         return match ($status) {
             'hit' => $this->rawResult('hit', $key, $this->store->unserialize($blob), null),
-            'miss' => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $hash),
+            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $hash),
         };
     }
 
@@ -513,9 +511,13 @@ class CacheManager
             ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
             ->cloneWithoutBindings(['select', 'order']);
 
-        return (new CacheableBuilder($base))
+        $builder = (new CacheableBuilder($base))
             ->setModel($missedQuery->getModel())
             ->withoutCache();
+
+        $missedQuery->applyRemovedScopesTo($builder);
+
+        return $builder;
     }
 
     // -------------------------------------------------------------------------
@@ -597,7 +599,7 @@ class CacheManager
 
     private static function prototype(string $modelClass): Model
     {
-        return self::$prototypes[$modelClass] ??= new $modelClass;
+        return CacheKeyBuilder::prototypeFor($modelClass);
     }
 
     private static function deletedAtColumn(string $modelClass): ?string

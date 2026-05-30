@@ -62,7 +62,7 @@ class CacheServiceProvider extends ServiceProvider
             Event::listen(JobProcessed::class, $resetManager);
             Event::listen(Looping::class, $resetManager);
 
-            // Reset L1 version cache and re-enable (in case fallback disabled it) between Octane requests.
+            // Re-enable (in case fallback disabled it) between Octane requests.
             foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
                 if (class_exists($octaneEvent)) {
                     Event::listen($octaneEvent, $resetManager);
