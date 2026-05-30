@@ -52,8 +52,7 @@ trait CachesPivotRelation
                 $constraintHash
             );
 
-            $parentVersion = $cache['parentVersion'];
-            $relatedVersion = $cache['relatedVersion'];
+            $seg = $cache['seg'];
             $cachedByParentId = $cache['data'];
             $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
 
@@ -88,7 +87,7 @@ trait CachesPivotRelation
             $relatedKey = NormCache::classKey($relatedClass);
             $keyMap = [];
             foreach ($cacheParentIds as $parentId) {
-                $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:v{$parentVersion}:v{$relatedVersion}:{$parentId}";
+                $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:{$seg}:{$parentId}";
             }
 
             $this->populatePivotCache($results, $keyMap, $relatedClass, $shouldCacheRelatedModels);

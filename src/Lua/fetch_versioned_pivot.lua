@@ -6,7 +6,7 @@
 -- ARGV[2]     = constraint hash
 -- ARGV[3..]   = parent IDs
 --
--- Returns: {vers, [raw_data...]}
+-- Returns: {seg, [raw_data...]}
 local n = #KEYS - 1
 local ver_keys = {}
 for i = 1, n do ver_keys[i] = KEYS[i] end
@@ -21,4 +21,4 @@ local pivot_keys = {}
 for i = 3, #ARGV do pivot_keys[#pivot_keys + 1] = prefix .. ARGV[i] end
 local data = {}
 if #pivot_keys > 0 then data = redis.call('MGET', unpack(pivot_keys)) end
-return {vers, data}
+return {seg, data}

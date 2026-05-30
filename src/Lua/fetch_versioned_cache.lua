@@ -5,7 +5,7 @@
 -- KEYS[n+1]   = key prefix (everything before the version segment)
 -- ARGV[1]     = hash (suffix after the version segment)
 --
--- Returns: {vers, data_or_false}
+-- Returns: {seg, data_or_false}
 local n = #KEYS - 1
 local ver_keys = {}
 for i = 1, n do ver_keys[i] = KEYS[i] end
@@ -16,4 +16,4 @@ local seg = 'v' .. vers[1]
 for i = 2, n do seg = seg .. ':v' .. vers[i] end
 
 local data = redis.call('GET', KEYS[n+1] .. seg .. ':' .. ARGV[1])
-return {vers, data or false}
+return {seg, data or false}

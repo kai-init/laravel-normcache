@@ -53,7 +53,6 @@ class LuaScriptBehaviorTest extends TestCase
 
         $version = NormCache::currentVersion(Author::class);
         $this->setKey("query:{{$ck}}:v{$version}:{$hash}", 'not-valid-json');
-        NormCache::flushVersionLocal();
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -82,7 +81,6 @@ class LuaScriptBehaviorTest extends TestCase
 
         // Bump version directly in Redis — simulates a write from another process
         $this->redis()->incr("test:ver:{{$ck}}:");
-        NormCache::flushVersionLocal();
 
         // Simulate a concurrent request having already claimed the building key
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
@@ -115,7 +113,6 @@ class LuaScriptBehaviorTest extends TestCase
         // Place a past-due scheduled invalidation directly in Redis
         $pastMs = (int) (microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
-        NormCache::flushVersionLocal();
 
         Author::get(); // read triggers the Lua cooldown check
 
@@ -137,7 +134,6 @@ class LuaScriptBehaviorTest extends TestCase
         $version = NormCache::currentVersion(Author::class);
 
         $this->setKey("scheduled:{{$ck}}:", 'garbage');
-        NormCache::flushVersionLocal();
 
         Author::get();
 

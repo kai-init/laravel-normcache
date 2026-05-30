@@ -36,6 +36,7 @@ class CacheableBelongsTo extends BelongsTo
             || !NormCache::isEnabled()
             || !$this->query instanceof CacheableBuilder
             || $this->query->isCacheSkipped()
+            || $this->query->hasRemovedScopes()
             || $this->parent->getConnection()->transactionLevel() > 0
             || $this->getOwnerKeyName() !== $this->related->getKeyName()
             || $this->query->getEagerLoads() !== []) {

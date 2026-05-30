@@ -49,6 +49,18 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
+    public function applyRemovedScopesTo(self $target): void
+    {
+        foreach ($this->removedScopes as $scope) {
+            $target->withoutGlobalScope($scope);
+        }
+    }
+
+    public function hasRemovedScopes(): bool
+    {
+        return !empty($this->removedScopes);
+    }
+
     public function isCacheSkipped(): bool
     {
         return $this->skipCache;

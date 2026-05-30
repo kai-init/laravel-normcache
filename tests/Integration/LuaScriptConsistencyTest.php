@@ -71,7 +71,6 @@ class LuaScriptConsistencyTest extends TestCase
         $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
 
         $this->setCooldown(1);
-        NormCache::flushVersionLocal();
 
         $version = NormCache::currentVersion(Author::class);
 
@@ -87,7 +86,6 @@ class LuaScriptConsistencyTest extends TestCase
         $this->setKey("scheduled:{{$ck}}:", 'garbage');
 
         $this->setCooldown(1);
-        NormCache::flushVersionLocal();
 
         $version = NormCache::currentVersion(Author::class);
 
@@ -111,8 +109,6 @@ class LuaScriptConsistencyTest extends TestCase
         $hash = $this->authorQueryHash();
         $authorVer = NormCache::currentVersion(Author::class);
         $postVer = NormCache::currentVersion(Post::class);
-
-        NormCache::flushVersionLocal();
 
         // Simulate a concurrent request having claimed the building key
         $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
@@ -143,7 +139,6 @@ class LuaScriptConsistencyTest extends TestCase
         $hash = $this->authorQueryHash();
 
         Author::get(); // cache populated at current version v
-        NormCache::flushVersionLocal();
 
         // Advance Redis version by 3 so the cached entry is exactly 3 behind
         $this->bumpVersionInRedis($ck, 3);
@@ -171,7 +166,6 @@ class LuaScriptConsistencyTest extends TestCase
         $hash = $this->authorQueryHash();
 
         Author::get(); // cache populated at current version v
-        NormCache::flushVersionLocal();
 
         // Advance by 4: the cached entry is now 4 versions behind, out of reach
         $this->bumpVersionInRedis($ck, 4);

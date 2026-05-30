@@ -55,7 +55,6 @@ class CacheServiceProvider extends ServiceProvider
             // disable again on the first failed call — worst case is one extra Redis attempt per job.
             $resetManager = function () {
                 $manager = $this->app->make(CacheManager::class);
-                $manager->flushVersionLocal();
                 $manager->discardAllPending();
                 $manager->enable();
             };

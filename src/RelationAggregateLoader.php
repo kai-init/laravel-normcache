@@ -5,7 +5,6 @@ namespace NormCache;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
-use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Str;
 use NormCache\Debug\NormCacheCollector;
@@ -28,44 +27,57 @@ class RelationAggregateLoader
 
         $parentClass = $this->model::class;
         $pkName = $this->model->getKeyName();
-        $prefix = 'agg:{' . NormCache::classKey($parentClass) . '}:';
+        $prefix = CacheManager::K_AGG . ':{' . NormCache::classKey($parentClass) . '}:';
 
         $ids = array_map(fn($m) => $m->getKey(), $models);
         $idCount = count($ids);
 
-        $specs = [];
-        $keys = [];
-        $offset = 0;
+        $relations = [];
+        $luaSpecs = [];
 
         foreach ($pendingAggregates as $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
 
-            $relation = $this->model->{$name}();
-            $relatedClass = $relation->getRelated()::class;
-            $alias = $this->resolveAlias($name, $function, $column);
-            $constraintHash = $this->constraintKey($relatedClass, $constraint);
-            $suffix = ":{$column}:{$function}:{$name}:{$constraintHash}" . $this->versionSuffix($relation);
-
-            foreach ($ids as $id) {
-                $keys[] = "{$prefix}{$id}{$suffix}";
+            if (!isset($relations[$name])) {
+                $relations[$name] = $this->model->{$name}();
             }
 
-            $specs[] = ['agg' => $agg, 'alias' => $alias, 'suffix' => $suffix, 'offset' => $offset];
-            $offset += $idCount;
+            $relation = $relations[$name];
+            $relatedClass = $relation->getRelated()::class;
+
+            $secondClass = null;
+            $secondLabel = '';
+            if ($relation instanceof BelongsTo) {
+                $secondClass = $relation->getParent()::class;
+                $secondLabel = 'p';
+            } elseif ($relation instanceof HasOneOrManyThrough) {
+                $secondClass = $relation->getParent()::class;
+                $secondLabel = 't';
+            }
+
+            $luaSpecs[] = [
+                'staticSuffix' => ':' . $column . ':' . $function . ':' . $name . ':' . $this->constraintKey($relatedClass, $constraint),
+                'relatedClass' => $relatedClass,
+                'secondClass' => $secondClass,
+                'secondLabel' => $secondLabel,
+            ];
         }
 
         $debugbarStart = NormCacheCollector::beginMeasure();
-        $data = NormCache::getRelationAggregates($keys);
+        ['data' => $data, 'suffixes' => $verSuffixes] = NormCache::fetchVersionedAggregates($prefix, $ids, $luaSpecs);
+
         $toCache = [];
+        $offset = 0;
 
         $hydrator = self::$cache['hydrator'] ??= \Closure::bind(static function ($model, $key, $value) {
             $model->attributes[$key] = $value;
             $model->original[$key] = $value;
         }, null, Model::class);
 
-        foreach ($specs as $spec) {
-            ['agg' => $agg, 'alias' => $alias, 'suffix' => $suffix, 'offset' => $offset] = $spec;
+        foreach ($pendingAggregates as $i => $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
+            $alias = $this->resolveAlias($name, $function, $column);
+            $suffix = $luaSpecs[$i]['staticSuffix'] . $verSuffixes[$i];
 
             $missed = [];
             $cachedValues = [];
@@ -121,6 +133,8 @@ class RelationAggregateLoader
                 $value = $cachedValues[$id] ?? $fetched[$id] ?? null;
                 $hydrator($model, $alias, $value);
             }
+
+            $offset += $idCount;
         }
 
         if (!empty($toCache)) {
@@ -133,21 +147,6 @@ class RelationAggregateLoader
     // -------------------------------------------------------------------------
     // Private
     // -------------------------------------------------------------------------
-
-    private function versionSuffix(Relation $relation): string
-    {
-        $suffix = ':v' . NormCache::currentVersion($relation->getRelated()::class);
-
-        if ($relation instanceof BelongsTo) {
-            $suffix .= ':p' . NormCache::currentVersion($relation->getParent()::class);
-        }
-
-        if ($relation instanceof HasOneOrManyThrough) {
-            $suffix .= ':t' . NormCache::currentVersion($relation->getParent()::class);
-        }
-
-        return $suffix;
-    }
 
     private function fetchMissed(
         array $missedIds,

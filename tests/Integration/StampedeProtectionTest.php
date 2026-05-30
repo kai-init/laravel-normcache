@@ -45,7 +45,6 @@ class StampedeProtectionTest extends TestCase
         Author::get();
 
         $this->redis()->incr("test:ver:{{$ck}}:");
-        NormCache::flushVersionLocal();
         $newVersion = NormCache::currentVersion(Author::class);
 
         $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
@@ -71,7 +70,6 @@ class StampedeProtectionTest extends TestCase
         $hash = $this->authorQueryHash();
 
         $this->redis()->incr("test:ver:{{$ck}}:");
-        NormCache::flushVersionLocal();
         $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
 
         $queryCount = 0;
@@ -93,7 +91,6 @@ class StampedeProtectionTest extends TestCase
         $hash = $this->authorQueryHash();
 
         $this->redis()->incr("test:ver:{{$ck}}:");
-        NormCache::flushVersionLocal();
         $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
 
         $queryCount = 0;
@@ -127,7 +124,6 @@ class StampedeProtectionTest extends TestCase
         $this->assertGreaterThan(0, $this->redis()->llen("test:wake:{{$ck}}:{$hash}"));
 
         $queryCount = 0;
-        NormCache::flushVersionLocal();
         Author::get();
         $this->assertSame(0, $queryCount);
     }

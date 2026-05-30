@@ -15,7 +15,6 @@ abstract class TestCase extends OrchestraTestCase
         parent::setUp();
 
         Redis::connection('model-cache-test')->flushdb();
-        $this->cacheManager()->flushVersionLocal();
         $this->resetClassKeyCache();
     }
 
