@@ -49,18 +49,6 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
-    public function applyRemovedScopesTo(self $target): void
-    {
-        foreach ($this->removedScopes as $scope) {
-            $target->withoutGlobalScope($scope);
-        }
-    }
-
-    public function hasRemovedScopes(): bool
-    {
-        return !empty($this->removedScopes);
-    }
-
     public function isCacheSkipped(): bool
     {
         return $this->skipCache;
@@ -191,7 +179,7 @@ class CacheableBuilder extends Builder
             }
 
             if ($this->shouldUseRawCache($base)) {
-                return $this->getFromRawCache($base, $model, $this->queryCacheKey($base), $this->cacheTag);
+                return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
             }
 
             $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
@@ -310,11 +298,11 @@ class CacheableBuilder extends Builder
     {
         $debugbarStart = NormCacheCollector::beginMeasure();
 
-        $hash = $this->queryCacheKey($base);
-
         if ($this->dependsOn !== null) {
-            return $this->getFromRawCache($base, $model, $hash, $this->cacheTag);
+            return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
         }
+
+        $hash = $this->queryCacheKey($base);
 
         $result = NormCache::getModelsFromQuery($model, $hash, $this->cacheTag);
 
@@ -466,10 +454,6 @@ class CacheableBuilder extends Builder
         return $this->applyAfterQueryCallbacks($this->model->newCollection($models));
     }
 
-    // -------------------------------------------------------------------------
-    // Private — fallback path
-    // -------------------------------------------------------------------------
-
     private function getWithoutCache($columns): Collection
     {
         $this->replayPendingAggregates();
@@ -562,6 +546,18 @@ class CacheableBuilder extends Builder
         return $this->model->getConnection()->transactionLevel() > 0;
     }
 
+    public function applyRemovedScopesTo(self $target): void
+    {
+        foreach ($this->removedScopes as $scope) {
+            $target->withoutGlobalScope($scope);
+        }
+    }
+
+    public function hasRemovedScopes(): bool
+    {
+        return !empty($this->removedScopes);
+    }
+
     private function queryCacheKey(QueryBuilder $base): string
     {
         $cols = $base->columns;
@@ -571,5 +567,10 @@ class CacheableBuilder extends Builder
         } finally {
             $base->columns = $cols;
         }
+    }
+
+    private function rawCacheKey(QueryBuilder $base): string
+    {
+        return QueryHasher::fromQuery($base);
     }
 }

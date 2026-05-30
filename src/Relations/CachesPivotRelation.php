@@ -4,6 +4,7 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryCacheHit;
@@ -27,7 +28,7 @@ trait CachesPivotRelation
 
     public function get($columns = ['*']): Collection
     {
-        $columns = $this->normalizeColumns($columns);
+        $columns = Arr::wrap($columns);
         $cacheParentIds = $this->getCacheParentIds();
 
         if (!$this->shouldUsePivotCache($cacheParentIds)) {
@@ -253,10 +254,5 @@ trait CachesPivotRelation
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection($result)
         );
-    }
-
-    private function normalizeColumns(mixed $columns): array
-    {
-        return is_array($columns) ? $columns : [$columns];
     }
 }

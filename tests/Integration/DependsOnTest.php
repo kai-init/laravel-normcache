@@ -476,6 +476,38 @@ class DependsOnTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // Projection isolation
+    // -------------------------------------------------------------------------
+
+    public function test_depends_on_queries_differing_only_in_select_use_separate_cache_keys(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        // Full-column query — populates a raw cache entry.
+        Author::whereHas('posts')->dependsOn([Post::class])->get();
+
+        // Same structural query but projected to id only — must NOT reuse the full-column blob.
+        $projected = Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
+
+        $this->assertArrayNotHasKey('name', $projected->first()->getAttributes());
+    }
+
+    public function test_depends_on_warm_hit_preserves_projected_columns(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        // Cold miss — caches the projected blob.
+        Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
+
+        // Warm hit — served from cache, must still have only the projected columns.
+        $cached = Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
+
+        $this->assertArrayNotHasKey('name', $cached->first()->getAttributes());
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
