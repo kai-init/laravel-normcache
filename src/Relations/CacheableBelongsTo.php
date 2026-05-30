@@ -23,8 +23,10 @@ class CacheableBelongsTo extends BelongsTo
             return parent::getEager();
         }
 
-        return $this->related->newCollection(
-            NormCache::getModels($this->eagerKeys, $this->related::class)
+        return $this->query->applyAfterQueryCallbacks(
+            $this->related->newCollection(
+                NormCache::getModels($this->eagerKeys, $this->related::class)
+            )
         );
     }
 

@@ -451,7 +451,7 @@ class CacheableBuilder extends Builder
             $models = $this->eagerLoadRelations($models);
         }
 
-        return $this->model->newCollection($models);
+        return $this->applyAfterQueryCallbacks($this->model->newCollection($models));
     }
 
     // -------------------------------------------------------------------------

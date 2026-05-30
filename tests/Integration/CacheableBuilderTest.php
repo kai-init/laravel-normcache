@@ -332,6 +332,28 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('Alice', $post->author->name);
     }
 
+    public function test_belongs_to_warm_hit_runs_after_query_callbacks(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $count = 0;
+
+        Post::with(['author' => function ($query) use (&$count) {
+            $query->afterQuery(function () use (&$count) {
+                $count++;
+            });
+        }])->get();
+
+        Post::with(['author' => function ($query) use (&$count) {
+            $query->afterQuery(function () use (&$count) {
+                $count++;
+            });
+        }])->get();
+
+        $this->assertSame(2, $count);
+    }
+
     public function test_belongs_to_eager_load_respects_join_only_global_scope_on_warm_hit(): void
     {
         Author::create(['name' => 'Alice', 'country_id' => null]);
@@ -740,6 +762,23 @@ class CacheableBuilderTest extends TestCase
         Author::all();
 
         Event::assertNotDispatched(QueryBypassed::class);
+    }
+
+    public function test_warm_hit_runs_after_query_callbacks(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        $count = 0;
+
+        Author::query()->afterQuery(function () use (&$count) {
+            $count++;
+        })->get();
+
+        Author::query()->afterQuery(function () use (&$count) {
+            $count++;
+        })->get();
+
+        $this->assertSame(2, $count);
     }
 
     private function clearGlobalScope(string $modelClass, string $name): void
