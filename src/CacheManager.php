@@ -88,11 +88,6 @@ class CacheManager
         return $this->dispatchEvents;
     }
 
-    public function isFallbackEnabled(): bool
-    {
-        return $this->fallbackEnabled;
-    }
-
     public function enable(): void
     {
         $this->enabled = true;
@@ -139,7 +134,7 @@ class CacheManager
         $classKey = $this->classKey($modelClass);
         $versionKeys = $this->depVersionKeys($classKey, $depClasses);
 
-        $tagSegment = $tag !== null ? $tag . ':' : '';
+        $tagSegment = $this->tagSegment($tag);
         [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:' . $tagSegment, $hash);
 
         return [
@@ -199,7 +194,7 @@ class CacheManager
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->classKey($modelClass);
-        $tagSegment = $tag !== null ? $tag . ':' : '';
+        $tagSegment = $this->tagSegment($tag);
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
             $this->depVersionKeys($classKey, $depClasses),
@@ -242,19 +237,13 @@ class CacheManager
     public function storeThroughResult(string $key, array $payload, string $relatedClass, array $modelAttrs): void
     {
         $this->store->set($key, $payload, $this->queryTtl);
-
-        if (!empty($modelAttrs)) {
-            $this->cacheModelAttrs($relatedClass, $modelAttrs);
-        }
+        $this->cacheModelAttrs($relatedClass, $modelAttrs);
     }
 
     public function storePivotResult(array $pivotEntriesByKey, string $relatedClass, array $modelAttrs): void
     {
         $this->store->setMany($pivotEntriesByKey, $this->queryTtl);
-
-        if (!empty($modelAttrs)) {
-            $this->cacheModelAttrs($relatedClass, $modelAttrs);
-        }
+        $this->cacheModelAttrs($relatedClass, $modelAttrs);
     }
 
     public function setRelationAggregates(array $entries): void
@@ -744,8 +733,10 @@ class CacheManager
             $builder = $modelClass::query();
             if ($builder instanceof CacheableBuilder) {
                 $missedQuery?->applyRemovedScopesTo($builder);
+
                 return $builder->withoutCache();
             }
+
             return $builder;
         }
 
@@ -872,6 +863,11 @@ class CacheManager
     private function membersKey(string $classKey): string
     {
         return self::K_MEMBERS . ':{' . $classKey . '}';
+    }
+
+    private function tagSegment(?string $tag): string
+    {
+        return $tag !== null ? $tag . ':' : '';
     }
 
     private function modelKey(string $modelClass, string $id): string
