@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-use Illuminate\Support\Str;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
@@ -77,7 +76,7 @@ class RelationAggregateLoader
 
         foreach ($pendingAggregates as $i => $agg) {
             ['name' => $name, 'constraint' => $constraint, 'function' => $function, 'column' => $column] = $agg;
-            $alias = $this->resolveAlias($name, $function, $column);
+            $alias = $agg['alias'];
             $suffix = $luaSpecs[$i]['staticSuffix'] . $verSuffixes[$i];
 
             $missed = [];
@@ -96,7 +95,7 @@ class RelationAggregateLoader
 
             $fetched = [];
             if (!empty($missed)) {
-                $fetched = $this->fetchMissed($missed, $name, $constraint, $function, $column, $pkName, $alias);
+                $fetched = $this->fetchMissed($missed, "{$name} as {$alias}", $constraint, $function, $column, $pkName, $alias);
 
                 foreach ($missed as $id) {
                     $toCache["{$prefix}{$id}{$suffix}"] = ['v' => $fetched[$id] ?? null];
@@ -181,8 +180,5 @@ class RelationAggregateLoader
         return QueryHasher::fromQuery($builder->toBase());
     }
 
-    private function resolveAlias(string $name, string $function, string $column): string
-    {
-        return self::$cache["al:{$name}:{$function}:{$column}"] ??= Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "$name $column $function"));
-    }
+
 }

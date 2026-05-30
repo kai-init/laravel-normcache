@@ -102,9 +102,10 @@ class CacheManager
     {
         $classKey = $this->keys->classKey($modelClass);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
+        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
 
         $ts = $this->keys->tagSegment($tag);
-        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
+        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
 
         return [
             'key' => "{$namespace}:{{$classKey}}:{$ts}{$seg}:{$hash}",
@@ -119,6 +120,7 @@ class CacheManager
 
         [$seg, $blob] = $this->luaFetchVersionedCache(
             [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)],
+            [$this->keys->scheduledKey($relatedKey), $this->keys->scheduledKey($throughKey)],
             CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':',
             $hash
         );
@@ -144,12 +146,17 @@ class CacheManager
     public function fetchVersionedAggregates(string $keyPrefix, array $parentIds, array $specs): array
     {
         $keys = [$keyPrefix];
-        $argv = [(string) count($parentIds), ...array_map('strval', $parentIds), (string) count($specs)];
+        $argv = [(string) count($parentIds), ...array_map('strval', $parentIds), (string) count($specs), (string) (int) floor(microtime(true) * 1000)];
 
         foreach ($specs as $spec) {
             $keys[] = $this->keys->verKey($this->keys->classKey($spec['relatedClass']));
             $keys[] = $this->keys->verKey($this->keys->classKey($spec['secondClass'] ?? $spec['relatedClass']));
             array_push($argv, $spec['staticSuffix'], $spec['secondLabel'] ?? '');
+        }
+
+        foreach ($specs as $spec) {
+            $keys[] = $this->keys->scheduledKey($this->keys->classKey($spec['relatedClass']));
+            $keys[] = $this->keys->scheduledKey($this->keys->classKey($spec['secondClass'] ?? $spec['relatedClass']));
         }
 
         [$blobs, $suffixes] = $this->luaFetchVersionedAggregates($keys, $argv);
@@ -167,6 +174,7 @@ class CacheManager
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
             $this->keys->depVersionKeys($classKey, $depClasses),
+            $this->keys->depScheduledKeys($classKey, $depClasses),
             $this->keys->rawPrefix($classKey) . $ts,
             $this->keys->buildingPrefix($classKey),
             $hash
@@ -535,12 +543,12 @@ class CacheManager
         ], [$hash, $nowMs, $this->buildingLockTtl]);
     }
 
-    private function luaFetchVersionedCache(array $versionKeys, string $keyPrefix, string $hash): array
+    private function luaFetchVersionedCache(array $versionKeys, array $scheduledKeys, string $keyPrefix, string $hash): array
     {
         $result = $this->store->eval(
             LuaScripts::get('fetch_versioned_cache'),
-            array_merge($versionKeys, [$keyPrefix]),
-            [$hash]
+            array_merge($versionKeys, $scheduledKeys, [$keyPrefix]),
+            [$hash, (int) floor(microtime(true) * 1000)]
         );
 
         return [(string) ($result[0] ?? ''), $result[1] ?? false];
@@ -551,8 +559,10 @@ class CacheManager
         $result = $this->store->eval(LuaScripts::get('fetch_versioned_pivot'), [
             $this->keys->verKey($parentKey),
             $this->keys->verKey($relatedKey),
+            $this->keys->scheduledKey($parentKey),
+            $this->keys->scheduledKey($relatedKey),
             CacheKeyBuilder::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':',
-        ], array_merge([$relation, $constraintHash], $parentIds));
+        ], array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds));
 
         return [(string) ($result[0] ?? ''), $result[1] ?? []];
     }
@@ -566,12 +576,12 @@ class CacheManager
         );
     }
 
-    private function luaFetchVersionedRaw(array $versionKeys, string $rawPrefix, string $buildingPrefix, string $hash): array
+    private function luaFetchVersionedRaw(array $versionKeys, array $scheduledKeys, string $rawPrefix, string $buildingPrefix, string $hash): array
     {
         $result = $this->store->eval(
             LuaScripts::get('fetch_versioned_raw'),
-            array_merge($versionKeys, [$rawPrefix, $buildingPrefix]),
-            [$hash, (string) $this->buildingLockTtl]
+            array_merge($versionKeys, $scheduledKeys, [$rawPrefix, $buildingPrefix]),
+            [$hash, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000)]
         );
 
         return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null];

@@ -9,6 +9,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
@@ -181,5 +182,112 @@ class LuaScriptConsistencyTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount); // no stale found, falls through to DB
         $this->assertCount(1, $results);
+    }
+
+    // -------------------------------------------------------------------------
+    // Cooldown invalidation across cache families
+    // -------------------------------------------------------------------------
+
+    public function test_cooldown_due_invalidation_applies_to_raw_depends_on_cache(): void
+    {
+        $this->setCooldown(1);
+
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Visible', 'author_id' => $author->id, 'published' => true]);
+
+        $query = fn() => Author::query()
+            ->whereHas('posts', fn($q) => $q->where('published', true))
+            ->dependsOn([Post::class])
+            ->get();
+
+        $this->assertCount(1, $query());
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+
+        $post->update(['published' => false]);
+
+        $postClassKey = NormCache::classKey(Post::class);
+        $pastMs = (int) floor(microtime(true) * 1000) - 5000;
+        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+
+        $this->assertSame('0', (string) ($this->getKey("ver:{{$postClassKey}}:") ?? '0'));
+
+        $this->assertCount(0, $query());
+        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
+        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
+    }
+
+    public function test_cooldown_due_invalidation_applies_to_scalar_cache(): void
+    {
+        $this->setCooldown(1);
+
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Visible', 'author_id' => $author->id, 'published' => true]);
+
+        $query = fn() => Author::query()
+            ->whereHas('posts', fn($q) => $q->where('published', true))
+            ->dependsOn([Post::class])
+            ->count();
+
+        $this->assertSame(1, $query());
+        $this->assertNotEmpty($this->redisKeys('test:scalar:*'));
+
+        $post->update(['published' => false]);
+
+        $postClassKey = NormCache::classKey(Post::class);
+        $pastMs = (int) floor(microtime(true) * 1000) - 5000;
+        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+
+        $this->assertSame(0, $query());
+        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
+        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
+    }
+
+    public function test_cooldown_due_invalidation_applies_to_pivot_cache(): void
+    {
+        $this->setCooldown(1);
+
+        $author = Author::create(['name' => 'Alice']);
+        $old = Tag::create(['name' => 'old']);
+        $new = Tag::create(['name' => 'new']);
+
+        $author->tags()->attach($old->id);
+
+        $this->assertSame(['old'], $author->tags()->get()->pluck('name')->all());
+        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+
+        $author->tags()->detach($old->id);
+        $author->tags()->attach($new->id);
+
+        $authorClassKey = NormCache::classKey(Author::class);
+        $tagClassKey = NormCache::classKey(Tag::class);
+        $pastMs = (int) floor(microtime(true) * 1000) - 5000;
+        $this->setKey("scheduled:{{$authorClassKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{{$tagClassKey}}:", (string) $pastMs);
+
+        $this->assertSame(['new'], $author->tags()->get()->pluck('name')->all());
+    }
+
+    public function test_cooldown_due_invalidation_applies_to_aggregate_cache(): void
+    {
+        $this->setCooldown(1);
+
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
+        Post::create(['title' => 'Post 2', 'author_id' => $author->id]);
+
+        $query = fn() => Author::withCount('posts')->find($author->id);
+
+        $this->assertSame(2, $query()->posts_count);
+        $this->assertNotEmpty($this->redisKeys('test:agg:*'));
+
+        Post::create(['title' => 'Post 3', 'author_id' => $author->id]);
+
+        $postClassKey = NormCache::classKey(Post::class);
+        $pastMs = (int) floor(microtime(true) * 1000) - 5000;
+        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+
+        $this->assertSame(3, $query()->posts_count);
+        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
+        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
     }
 }

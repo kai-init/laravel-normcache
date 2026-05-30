@@ -101,6 +101,13 @@ class CacheKeyBuilder
         return array_map(fn($key) => $this->verKey($key), $all);
     }
 
+    public function depScheduledKeys(string $classKey, array $depClasses): array
+    {
+        $all = array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)));
+
+        return array_map(fn($key) => $this->scheduledKey($key), $all);
+    }
+
     public function buildingToWakeKey(string $buildingKey): string
     {
         $classKeyEnd = strpos($buildingKey, '}:') + 2;

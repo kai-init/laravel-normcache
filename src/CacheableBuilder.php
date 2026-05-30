@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
@@ -70,6 +71,10 @@ class CacheableBuilder extends Builder
 
     public function tag(string $tag): static
     {
+        if (preg_match('/[:{}\s*]/', $tag)) {
+            throw new \InvalidArgumentException("Cache tag must not contain reserved characters (: { } * or whitespace).");
+        }
+
         $this->cacheTag = $tag;
 
         return $this;
@@ -111,13 +116,29 @@ class CacheableBuilder extends Builder
                 $constraint = null;
             }
 
+            // Parse "relation as alias" syntax (mirrors Eloquent's own handling).
+            $explicitAlias = null;
+            $segments = explode(' ', $name);
+            if (count($segments) === 3 && strtolower($segments[1]) === 'as') {
+                [$name, $explicitAlias] = [$segments[0], $segments[2]];
+            }
+
+            $lowerFunction = strtolower($function);
+
+            // Resolve alias once — explicit if provided, otherwise derived the same way
+            // Eloquent and RelationAggregateLoader derive it (e.g. "posts *" → "posts_count").
+            $alias = $explicitAlias ?? Str::snake(
+                preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$column} {$lowerFunction}")
+            );
+
             $relatedClass = $this->model->{$name}()->getRelated()::class;
 
             if (!self::relatedIsCacheable($relatedClass)) {
+                $original = $explicitAlias !== null ? "{$name} as {$explicitAlias}" : $name;
                 if ($constraint !== null) {
-                    $uncacheable[$name] = $constraint;
+                    $uncacheable[$original] = $constraint;
                 } else {
-                    $uncacheable[] = $name;
+                    $uncacheable[] = $original;
                 }
 
                 continue;
@@ -125,8 +146,9 @@ class CacheableBuilder extends Builder
 
             $this->pendingAggregates[] = [
                 'name' => $name,
+                'alias' => $alias,
                 'constraint' => $constraint,
-                'function' => strtolower($function),
+                'function' => $lowerFunction,
                 'column' => $column,
             ];
         }
@@ -175,10 +197,18 @@ class CacheableBuilder extends Builder
 
         try {
             if ($this->shouldUseCache($base, $resolvedCols)) {
+                if (!empty($this->pendingAggregates) && $this->ordersReferenceAggregates($base)) {
+                    return $this->getWithoutCache($columns);
+                }
+
                 return $this->getFromCacheableQuery($base, $model, $resolvedCols);
             }
 
             if ($this->shouldUseRawCache($base)) {
+                if (!empty($base->joins) && empty($base->columns)) {
+                    $base->select($this->model->getTable() . '.*');
+                }
+
                 return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
             }
 
@@ -464,9 +494,8 @@ class CacheableBuilder extends Builder
     private function replayPendingAggregates(): void
     {
         foreach ($this->pendingAggregates as $agg) {
-            $relations = $agg['constraint'] !== null
-                ? [$agg['name'] => $agg['constraint']]
-                : $agg['name'];
+            $name = "{$agg['name']} as {$agg['alias']}";
+            $relations = $agg['constraint'] !== null ? [$name => $agg['constraint']] : $name;
 
             parent::withAggregate($relations, $agg['function'], $agg['column']);
         }
@@ -539,6 +568,23 @@ class CacheableBuilder extends Builder
         static $cache = [];
 
         return $cache[$class] ??= in_array(Cacheable::class, class_uses_recursive($class), true);
+    }
+
+    private function ordersReferenceAggregates(QueryBuilder $base): bool
+    {
+        if (empty($base->orders) || empty($this->pendingAggregates)) {
+            return false;
+        }
+
+        $aliases = array_column($this->pendingAggregates, 'alias');
+
+        foreach ($base->orders as $order) {
+            if (isset($order['column']) && in_array($order['column'], $aliases, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function insideTransaction(): bool

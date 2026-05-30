@@ -519,4 +519,19 @@ class DependsOnTest extends TestCase
         Post::create(['title' => 'p2', 'author_id' => $a->id, 'views' => 20, 'published' => false]);
         Post::create(['title' => 'p3', 'author_id' => $b->id, 'views' => 30, 'published' => true]);
     }
+
+    public function test_join_with_depends_on_select_star_does_not_overwrite_base_model_id(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Earlier', 'author_id' => $author->id]); // ensures post->id != author->id
+        $post = Post::create(['title' => 'Target', 'author_id' => $author->id]);
+
+        $result = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->first();
+
+        $this->assertSame($author->id, $result->id);
+        $this->assertNotSame($post->id, $result->id);
+    }
 }

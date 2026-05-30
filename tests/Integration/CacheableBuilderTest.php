@@ -781,6 +781,45 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(2, $count);
     }
 
+    public function test_with_count_alias_is_supported_on_cold_and_warm_paths(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
+        Post::create(['title' => 'Post 2', 'author_id' => $author->id]);
+
+        $cold = Author::query()->withCount('posts as published_posts_count')->first();
+        $warm = Author::query()->withCount('posts as published_posts_count')->first();
+
+        $this->assertSame(2, $cold->published_posts_count);
+        $this->assertSame(2, $warm->published_posts_count);
+    }
+
+    public function test_with_count_order_by_count_matches_eloquent_order(): void
+    {
+        $a = Author::create(['name' => 'A']);
+        $b = Author::create(['name' => 'B']);
+        $c = Author::create(['name' => 'C']);
+
+        Post::create(['title' => 'B1', 'author_id' => $b->id]);
+        Post::create(['title' => 'B2', 'author_id' => $b->id]);
+        Post::create(['title' => 'A1', 'author_id' => $a->id]);
+
+        $expected = ['B', 'A', 'C'];
+
+        $cold = Author::withCount('posts')->orderByDesc('posts_count')->orderBy('name')->get()->pluck('name')->all();
+        $warm = Author::withCount('posts')->orderByDesc('posts_count')->orderBy('name')->get()->pluck('name')->all();
+
+        $this->assertSame($expected, $cold);
+        $this->assertSame($expected, $warm);
+    }
+
+    public function test_tag_rejects_reserved_characters(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Author::query()->tag('homepage:{bad}:*')->get();
+    }
+
     private function clearGlobalScope(string $modelClass, string $name): void
     {
         $prop = new ReflectionProperty(Model::class, 'globalScopes');
