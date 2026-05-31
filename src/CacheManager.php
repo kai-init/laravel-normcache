@@ -193,7 +193,7 @@ class CacheManager
         };
     }
 
-    public function waitForBuild(string $modelClass, string $hash, bool $returnOnMiss = true, array $depClasses = [], ?string $tag = null): ?array
+    public function waitForBuild(string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): ?array
     {
         $this->store->brpop($this->keys->wakePrefix($this->keys->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
 
@@ -203,7 +203,6 @@ class CacheManager
 
         return match ($result['status']) {
             'building' => null,
-            'miss' => $returnOnMiss ? $result : $this->discardBuildAndReturnNull($result),
             default => $result,
         };
     }
@@ -283,15 +282,6 @@ class CacheManager
             $this->keys->verKey($classKey),
             $modelVersion
         );
-    }
-
-    private function discardBuildAndReturnNull(array $result): null
-    {
-        if ($result['buildingKey'] !== null) {
-            $this->store->delete($result['buildingKey']);
-        }
-
-        return null;
     }
 
     private function storeQueryIdsCAS(string $key, array $ids, int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions): void

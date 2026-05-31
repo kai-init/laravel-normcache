@@ -393,7 +393,7 @@ class CacheableBuilder extends Builder
         $result = NormCache::getRawCache($model, $this->dependsOn, $hash, $tag);
 
         if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild($model, $hash, returnOnMiss: false, depClasses: $this->dependsOn, tag: $tag);
+            $result = NormCache::waitForBuild($model, $hash, depClasses: $this->dependsOn, tag: $tag);
 
             if ($result === null) {
                 if (NormCache::isEventsEnabled()) {

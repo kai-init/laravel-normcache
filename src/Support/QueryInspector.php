@@ -161,6 +161,10 @@ final class QueryInspector
         }
 
         if ($where['type'] === 'Basic' && $where['operator'] === '=') {
+            if ($where['value'] instanceof Expression) {
+                return null;
+            }
+
             // Single-ID lookups are unaffected by ORDER BY or LIMIT.
             return [$where['value']];
         }
@@ -183,6 +187,12 @@ final class QueryInspector
         }
 
         return null;
+    }
+
+    public static function isCacheableScalarColumn(mixed $column): bool
+    {
+        return is_string($column)
+            && (bool) preg_match('/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/', $column);
     }
 
     /** @return array<string, string> output => source */

@@ -121,7 +121,7 @@ final class RedisStore
             $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
 
             return array_map(
-                fn($v) => $v !== null ? $this->unserialize($v) : null,
+                fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
                 $this->connection->mget($prefixed)
             );
         }
@@ -135,7 +135,7 @@ final class RedisStore
             $idx = 0;
             foreach ($groupKeys as $key) {
                 $value = $raw[$idx++];
-                $results[$key] = $value !== null ? $this->unserialize($value) : null;
+                $results[$key] = ($value !== null && $value !== false) ? $this->unserialize($value) : null;
             }
         }
 

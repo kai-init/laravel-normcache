@@ -142,6 +142,15 @@ trait CachesPivotRelation
             }
         }
 
+        // WHERE bindings intentionally excluded — they contain the FK constraint's parent IDs,
+        // which must not vary the per-query constraint hash.
+        $rawBindings = $base->getRawBindings();
+        foreach (['order', 'having', 'join'] as $group) {
+            if (!empty($rawBindings[$group])) {
+                $shape['bindings_' . $group] = $rawBindings[$group];
+            }
+        }
+
         if (empty($shape)) {
             return 'nc';
         }

@@ -8,6 +8,7 @@ use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
+use NormCache\Support\QueryInspector;
 
 /**
  * @mixin CacheableBuilder
@@ -27,12 +28,12 @@ trait CachesScalarResults
 
     public function sum($column): mixed
     {
-        return $this->cacheScalar("sum:{$column}", fn() => parent::sum($column));
+        return $this->cacheScalar('sum', fn() => parent::sum($column), $column);
     }
 
     public function avg($column): mixed
     {
-        return $this->cacheScalar("avg:{$column}", fn() => parent::avg($column));
+        return $this->cacheScalar('avg', fn() => parent::avg($column), $column);
     }
 
     public function average($column): mixed
@@ -42,12 +43,12 @@ trait CachesScalarResults
 
     public function min($column): mixed
     {
-        return $this->cacheScalar("min:{$column}", fn() => parent::min($column));
+        return $this->cacheScalar('min', fn() => parent::min($column), $column);
     }
 
     public function max($column): mixed
     {
-        return $this->cacheScalar("max:{$column}", fn() => parent::max($column));
+        return $this->cacheScalar('max', fn() => parent::max($column), $column);
     }
 
     public function exists(): bool
@@ -62,18 +63,25 @@ trait CachesScalarResults
 
     public function pluck($column, $key = null)
     {
-        $kind = 'pluck:' . $column . ($key !== null ? ':' . $key : '');
-
-        return $this->cacheScalar($kind, fn() => parent::pluck($column, $key));
+        return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), $column, $key);
     }
 
     public function value($column): mixed
     {
-        return $this->cacheScalar('value:' . $column, fn() => parent::value($column));
+        return $this->cacheScalar('value', fn() => parent::value($column), $column);
     }
 
-    private function cacheScalar(string $kind, \Closure $fallback): mixed
+    private function cacheScalar(string $kindPrefix, \Closure $fallback, mixed ...$columns): mixed
     {
+        foreach ($columns as $col) {
+            if ($col !== null && !QueryInspector::isCacheableScalarColumn($col)) {
+                return $fallback();
+            }
+        }
+
+        $nonNull = array_filter($columns, fn($c) => $c !== null);
+        $kind = $nonNull !== [] ? $kindPrefix . ':' . implode(':', $nonNull) : $kindPrefix;
+
         if ($this->skipCache || !NormCache::isEnabled()) {
             return $fallback();
         }

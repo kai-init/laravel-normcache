@@ -90,7 +90,7 @@ trait HandlesInvalidation
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->keys->classKey($modelClass);
-        $this->doInvalidateVersion($modelClass);
+        $this->store->increment($this->keys->verKey($classKey)); // bypass cooldown
 
         $this->store->sscanAndFlushSet($this->store->prefix($this->keys->membersKey($classKey)));
     }

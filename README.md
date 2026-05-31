@@ -188,7 +188,7 @@ return [
 
 - **`ttl`** — Lifetime of individual model attribute keys. Default: 7 days.
 - **`query_ttl`** — Lifetime of query, raw, pivot, and through cache keys. Default: 1 hour.
-- **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Consecutive writes within the window bump the version only once.
+- **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Consecutive writes within the window bump the version only once. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
 - **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving. (`NORMCACHE_STALE_TTL_DEPTH` is accepted as a deprecated fallback.)

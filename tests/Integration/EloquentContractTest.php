@@ -383,7 +383,6 @@ class EloquentContractTest extends TestCase
         );
     }
 
-
     public function test_sum(): void
     {
         $this->fixtures();
@@ -1735,5 +1734,67 @@ class EloquentContractTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         $this->cacheManager()->flushTagAcrossModels('tag*with*stars');
+    }
+
+    // -------------------------------------------------------------------------
+    // Scalar expression guard
+    // -------------------------------------------------------------------------
+
+    public function test_sum_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn() => Post::sum(DB::raw('views')),
+            fn() => Post::withoutCache()->sum(DB::raw('views')),
+        );
+    }
+
+    public function test_value_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn() => Post::orderBy('id')->value(DB::raw('title')),
+            fn() => Post::withoutCache()->orderBy('id')->value(DB::raw('title')),
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Expression primary key guard
+    // -------------------------------------------------------------------------
+
+    public function test_where_id_with_expression_falls_through_to_normal_query_cache(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+
+        $this->contract(
+            fn() => Author::where('id', DB::raw($alice->id))->get(),
+            fn() => Author::withoutCache()->where('id', DB::raw($alice->id))->get(),
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Pivot constraint hash — raw order bindings
+    // -------------------------------------------------------------------------
+
+    public function test_pivot_orderby_raw_with_different_bindings_returns_distinct_results(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+
+        $phpFirst = $alice->tags()
+            ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['php'])
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $laravelFirst = $alice->tags()
+            ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['laravel'])
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $this->assertSame(['php', 'laravel'], $phpFirst);
+        $this->assertSame(['laravel', 'php'], $laravelFirst);
     }
 }

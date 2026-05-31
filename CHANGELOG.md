@@ -17,10 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`withAggregate` parameter order:** signature now matches Laravel's `($relations, $column, $function)`. The previous reversal worked for simple columns but produced invalid SQL for complex `DB::raw()` expressions.
-- **`withCount` with removed parent global scopes:** `fetchMissed()` now propagates the parent builder's removed scopes to the aggregate sub-query, fixing incorrect counts when `withoutGlobalScope()` was active.
-- **`prepareMissedQuery` removed scopes:** the `preserveQueryShape=true` branch now replays removed global scopes on the fallback DB query.
-- **`HasOneThrough` + `latestOfMany()` warm-cache:** the through-relation warm path no longer returns `null` when `latestOfMany()` adds synthetic join columns to the projection.
+- **`withAggregate` parameter order:** corrected to match Laravel's `($relations, $column, $function)`; the reversal produced invalid SQL with `DB::raw()` columns.
+- **Removed global scopes on aggregate/missed queries:** `withoutGlobalScope()` on a parent query is now propagated to both the aggregate sub-query and the miss-reload path.
+- **`HasOneThrough` + `latestOfMany()` warm-cache:** warm path no longer returns `null` when `latestOfMany()` adds synthetic join columns to the projection.
+- **`flushModel()` bypasses cooldown:** manual flushes always invalidate immediately; cooldown debounce applies only to automatic write-triggered invalidations.
+- **Scalar cache skips expression columns:** `sum`, `avg`, `min`, `max`, `value`, and `pluck` fall through to Eloquent for `DB::raw()` arguments.
+- **Pivot constraint hash covers raw order/having bindings:** `orderByRaw` calls with different bindings on the same relation no longer collide in cache.
+- **Raw cache waiter becomes the builder on orphaned lock:** a waiter that wakes to a dead builder now populates cache itself rather than silently falling back to the database.
+- **Expression primary-key guard:** `where('id', DB::raw(...))` falls through to the query cache path.
+- **PhpRedis `MGET` missing-key handling:** `getMany` treats `false` identically to `null` in both cluster and non-cluster paths.
 
 ---
 
