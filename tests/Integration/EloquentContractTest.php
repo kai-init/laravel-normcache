@@ -804,6 +804,38 @@ class EloquentContractTest extends TestCase
         $this->assertSame($cold, $warm, 'warm aggregate values differ from cold');
     }
 
+    public function test_with_count_having_raw_on_aggregate_alias_behaves_same_as_native(): void
+    {
+        // havingRaw stores the SQL in a 'sql' key, not 'column' — the guard must check both.
+        $this->fixtures();
+
+        $nativeException = null;
+        $nativeResult = null;
+        try {
+            $nativeResult = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->havingRaw('posts_count > 0')->get();
+        } catch (\Exception $e) {
+            $nativeException = get_class($e);
+        }
+
+        $normcacheException = null;
+        $normcacheResult = null;
+        try {
+            $normcacheResult = Author::withCount('posts')->havingRaw('posts_count > 0')->get();
+        } catch (\Exception $e) {
+            $normcacheException = get_class($e);
+        }
+
+        $this->assertSame($nativeException, $normcacheException, 'NormCache must fail identically to native Eloquent on havingRaw aggregate alias');
+
+        if ($nativeResult !== null && $normcacheResult !== null) {
+            $this->assertSame(
+                $this->normalize($nativeResult),
+                $this->normalize($normcacheResult),
+                'NormCache result must match native Eloquent on havingRaw aggregate alias',
+            );
+        }
+    }
+
     public function test_with_count_having_on_aggregate_alias_behaves_same_as_native(): void
     {
         // HAVING on an aggregate alias requires the aggregate in SQL — deferred loading
@@ -1258,6 +1290,34 @@ class EloquentContractTest extends TestCase
                 ->whereHas('posts', fn($q) => $q->where('published', true))
                 ->count(),
         );
+    }
+
+    public function test_raw_depends_on_with_group_by_and_withcount_skips_aggregate_on_null_pk_models(): void
+    {
+        // GROUP BY raw dependsOn results lack primary keys — RelationAggregateLoader must
+        // skip aggregate loading rather than cache null-keyed entries or mismatch the query.
+        $alice = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+        Comment::create(['body' => 'Hi', 'commentable_type' => Post::class, 'commentable_id' => $post->id]);
+
+        $run = fn() => Post::select('author_id', DB::raw('COUNT(*) as post_count'))
+            ->groupBy('author_id')
+            ->dependsOn([Post::class])
+            ->withCount('comments')
+            ->get();
+
+        $cold = $run();
+        $warm = $run();
+
+        // No empty-ID aggregate entries should be written (null PK casts to "" in string context,
+        // producing keys like agg:{classKey}::suffix with a double colon after the class tag).
+        $this->assertEmpty(
+            array_filter($this->redisKeys('test:agg:*'), fn($k) => str_contains($k, '}::')),
+            'null-PK aggregate entries must not be cached'
+        );
+
+        $this->assertCount(1, $cold);
+        $this->assertCount(1, $warm);
     }
 
     public function test_depends_on_join_auto_qualifies_select(): void
@@ -1723,6 +1783,25 @@ class EloquentContractTest extends TestCase
     // -------------------------------------------------------------------------
     // flushTag validation
     // -------------------------------------------------------------------------
+
+    public function test_flush_tag_clears_aggregate_cache_for_tagged_query(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+
+        // Prime the tagged aggregate cache
+        Author::query()->tag('home')->withCount('posts')->get();
+
+        // External write that bypasses NormCache (versions unchanged, so aggregate is still "fresh")
+        DB::table('posts')->insert(['title' => 'P2', 'author_id' => $alice->id, 'created_at' => now(), 'updated_at' => now()]);
+
+        // Explicit tag flush — must also clear the aggregate cache
+        $this->cacheManager()->flushTag(Author::class, 'home');
+
+        $result = Author::query()->tag('home')->withCount('posts')->get();
+
+        $this->assertSame(2, $result->first()->posts_count, 'flushTag must clear tagged aggregate cache entries');
+    }
 
     public function test_flush_tag_rejects_unsafe_characters(): void
     {

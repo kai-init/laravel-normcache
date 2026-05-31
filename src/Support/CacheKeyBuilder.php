@@ -89,6 +89,11 @@ class CacheKeyBuilder
         return $tag !== null ? $tag . ':' : '';
     }
 
+    public function rawBuildLockSuffix(?string $tag, string $hash): string
+    {
+        return sha1($this->tagSegment($tag) . $hash);
+    }
+
     public function modelKey(string $modelClass, string $id): string
     {
         return $this->modelPrefix($this->classKey($modelClass)) . $id;

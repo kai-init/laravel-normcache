@@ -220,6 +220,10 @@ class CacheableBuilder extends Builder
 
             if ($this->shouldUseRawCache($base)) {
                 if (!empty($base->joins) && empty($base->columns)) {
+                    if (config('app.debug')) {
+                        logger()->warning('NormCache: dependsOn() JOIN without explicit select — added ' . $this->model->getTable() . '.* automatically.');
+                    }
+
                     $base->select($this->model->getTable() . '.*');
                 }
 
@@ -487,7 +491,14 @@ class CacheableBuilder extends Builder
     private function finalizeResult(array $models): Collection
     {
         if (!empty($this->pendingAggregates)) {
-            $models = (new RelationAggregateLoader($this->model, $this))->load($models, $this->pendingAggregates);
+            // Raw paths can yield null-PK rows (GROUP BY etc.) — load aggregates only for valid-PK models.
+            $targets = $this->dependsOn !== null
+                ? array_values(array_filter($models, fn($m) => $m->getKey() !== null))
+                : $models;
+
+            if (!empty($targets)) {
+                (new RelationAggregateLoader($this->model, $this, $this->cacheTag))->load($targets, $this->pendingAggregates);
+            }
         }
 
         if ($models && $this->eagerLoad) {
@@ -591,28 +602,46 @@ class CacheableBuilder extends Builder
 
         $aliases = array_column($this->pendingAggregates, 'alias');
 
-        foreach ($base->orders ?? [] as $order) {
-            if (isset($order['column']) && in_array($order['column'], $aliases, true)) {
+        foreach ($base->orders ?? [] as $clause) {
+            if (isset($clause['column']) && in_array($clause['column'], $aliases, true)) {
                 return true;
             }
-            // raw ORDER BY: check if the SQL fragment contains any pending alias
-            if (isset($order['sql'])) {
-                foreach ($aliases as $alias) {
-                    if (str_contains((string) $order['sql'], $alias)) {
-                        return true;
-                    }
-                }
+            if (isset($clause['sql']) && $this->rawSqlReferencesAlias((string) $clause['sql'], $aliases)) {
+                return true;
             }
         }
 
-        foreach ($base->havings ?? [] as $having) {
-            if (isset($having['column']) && in_array($having['column'], $aliases, true)) {
+        foreach ($base->havings ?? [] as $clause) {
+            if (isset($clause['column']) && in_array($clause['column'], $aliases, true)) {
+                return true;
+            }
+            if (isset($clause['sql']) && $this->rawSqlReferencesAlias((string) $clause['sql'], $aliases)) {
                 return true;
             }
         }
 
         foreach ($base->groups ?? [] as $group) {
             if (is_string($group) && in_array($group, $aliases, true)) {
+                return true;
+            }
+        }
+
+        foreach ($base->wheres as $clause) {
+            if (isset($clause['column']) && in_array($clause['column'], $aliases, true)) {
+                return true;
+            }
+            if (isset($clause['sql']) && $this->rawSqlReferencesAlias((string) $clause['sql'], $aliases)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function rawSqlReferencesAlias(string $sql, array $aliases): bool
+    {
+        foreach ($aliases as $alias) {
+            if (str_contains($sql, $alias)) {
                 return true;
             }
         }

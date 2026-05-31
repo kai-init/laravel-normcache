@@ -172,13 +172,15 @@ class CacheManager
     {
         $classKey = $this->keys->classKey($modelClass);
         $ts = $this->keys->tagSegment($tag);
+        $lockSuffix = $this->keys->rawBuildLockSuffix($tag, $hash);
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
             $this->keys->depVersionKeys($classKey, $depClasses),
             $this->keys->depScheduledKeys($classKey, $depClasses),
             $this->keys->rawPrefix($classKey) . $ts,
             $this->keys->buildingPrefix($classKey),
-            $hash
+            $hash,
+            $lockSuffix
         );
 
         if ($status === 'building') {
@@ -189,13 +191,15 @@ class CacheManager
 
         return match ($status) {
             'hit' => $this->rawResult('hit', $key, $this->store->unserialize($blob), null),
-            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $hash),
+            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $lockSuffix),
         };
     }
 
     public function waitForBuild(string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): ?array
     {
-        $this->store->brpop($this->keys->wakePrefix($this->keys->classKey($modelClass)) . $hash, $this->stampedeWaitMs / 1000.0);
+        $classKey = $this->keys->classKey($modelClass);
+        $wakeHash = $depClasses !== [] ? $this->keys->rawBuildLockSuffix($tag, $hash) : $hash;
+        $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeHash, $this->stampedeWaitMs / 1000.0);
 
         $result = $depClasses !== []
             ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
@@ -569,12 +573,12 @@ class CacheManager
         );
     }
 
-    private function luaFetchVersionedRaw(array $versionKeys, array $scheduledKeys, string $rawPrefix, string $buildingPrefix, string $hash): array
+    private function luaFetchVersionedRaw(array $versionKeys, array $scheduledKeys, string $rawPrefix, string $buildingPrefix, string $hash, string $lockSuffix): array
     {
         $result = $this->store->eval(
             LuaScripts::get('fetch_versioned_raw'),
             array_merge($versionKeys, $scheduledKeys, [$rawPrefix, $buildingPrefix]),
-            [$hash, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000)]
+            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000)]
         );
 
         return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null];

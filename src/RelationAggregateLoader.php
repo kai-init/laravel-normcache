@@ -19,8 +19,12 @@ class RelationAggregateLoader
 
     public function __construct(
         private Model $model,
-        private ?CacheableBuilder $parentBuilder = null,
-    ) {}
+        private ?CacheableBuilder $parentBuilder,
+        private ?string $cacheTag,
+        private CacheKeyBuilder $keys,
+    ) {
+        $this->keys = new CacheKeyBuilder;
+    }
 
     public function load(array $models, array $pendingAggregates): array
     {
@@ -29,8 +33,9 @@ class RelationAggregateLoader
         }
 
         $parentClass = $this->model::class;
+
         $pkName = $this->model->getKeyName();
-        $prefix = CacheKeyBuilder::K_AGG . ':{' . NormCache::classKey($parentClass) . '}:';
+        $prefix = CacheKeyBuilder::K_AGG . ':{' . NormCache::classKey($parentClass) . '}:' . $this->keys->tagSegment($this->cacheTag);
 
         $ids = array_map(fn($m) => $m->getKey(), $models);
         $idCount = count($ids);

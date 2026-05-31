@@ -6,13 +6,14 @@
 -- KEYS[n+1..2n]    = scheduled keys (one per version key, same order)
 -- KEYS[2n+1]       = raw key prefix  (raw:{classKey}: or raw:{classKey}:tag:)
 -- KEYS[2n+2]       = building key prefix  (building:{classKey}:)
--- ARGV[1]          = hash
--- ARGV[2]          = building lock TTL in seconds
--- ARGV[3]          = current timestamp in ms
+-- ARGV[1]          = query hash (used to look up the versioned raw cache entry)
+-- ARGV[2]          = lock suffix (sha1 of tag+hash, used as building key suffix)
+-- ARGV[3]          = building lock TTL in seconds
+-- ARGV[4]          = current timestamp in ms
 --
 -- Returns: {'hit', seg, blob} | {'miss', seg, false} | {'building', seg, false}
 local n = (#KEYS - 2) / 2
-local now = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
 
 local vers = {}
 for i = 1, n do
@@ -41,8 +42,8 @@ if data then
     return {'hit', seg, data}
 end
 
-local building_key = building_prefix .. ARGV[1]
-if redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[2])) then
+local building_key = building_prefix .. ARGV[2]
+if redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[3])) then
     return {'miss', seg, false}
 end
 return {'building', seg, false}
