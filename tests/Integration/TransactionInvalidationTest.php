@@ -165,8 +165,9 @@ class TransactionInvalidationTest extends TestCase
         } catch (\RuntimeException) {
         }
 
-        $this->assertTrue($keyExistedMidTx, 'model key must not be deleted before the transaction commits');
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id), 'model key must survive a rolled-back bulk delete');
+        // Invalidation is deferred to commit; the key must survive both mid-transaction and rollback.
+        $this->assertTrue($keyExistedMidTx);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
     public function test_committed_transaction_invalidates_stale_query_cache(): void

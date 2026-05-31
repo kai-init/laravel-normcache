@@ -93,13 +93,14 @@ class CacheEventsTest extends TestCase
     public function test_partial_model_cache_miss_fires_both_events(): void
     {
         $alice = Author::create(['name' => 'Alice']);
-        Author::all(); // warms alice's model key
+        Author::all(); // warm alice's model key
 
         $bob = Author::create(['name' => 'Bob']); // bob's model key not cached yet
 
         Event::fake([ModelCacheHit::class, ModelCacheMiss::class]);
 
-        Author::all(); // query cache miss (version bumped), so fetches both IDs then mget
+        // query cache is stale (version bumped by Bob's insert), so both IDs are fetched via MGET
+        Author::all();
 
         Event::assertDispatched(ModelCacheHit::class);
         Event::assertDispatched(ModelCacheMiss::class);

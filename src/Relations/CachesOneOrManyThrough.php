@@ -43,7 +43,7 @@ trait CachesOneOrManyThrough
                     $result['data']['ids'],
                     $relatedClass,
                     $builder,
-                    $shouldCacheModels ? null : $builder->getQuery()->columns,
+                    $this->projectionColumns($shouldCacheModels),
                     $result['data']['throughKeys']
                 );
             }
@@ -93,6 +93,23 @@ trait CachesOneOrManyThrough
                 $model->getKey() => $model->getAttribute('laravel_through_key'),
             ])->all(),
         ];
+    }
+
+    private function projectionColumns(bool $shouldCacheModels): ?array
+    {
+        if ($shouldCacheModels) {
+            return null;
+        }
+
+        $cols = $this->query->toBase()->columns;
+
+        if ($cols === null || $cols === ['*']) {
+            return null;
+        }
+
+        $hasWildcard = (bool) array_filter($cols, fn($c) => str_ends_with((string) $c, '*'));
+
+        return $hasWildcard ? null : $cols;
     }
 
     private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection

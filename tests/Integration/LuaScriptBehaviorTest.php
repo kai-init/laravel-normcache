@@ -49,7 +49,7 @@ class LuaScriptBehaviorTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        Author::get(); // populate cache at current version
+        Author::get();
 
         $version = NormCache::currentVersion(Author::class);
         $this->setKey("query:{{$ck}}:v{$version}:{$hash}", 'not-valid-json');
@@ -61,9 +61,10 @@ class LuaScriptBehaviorTest extends TestCase
 
         $results = Author::get();
 
-        $this->assertGreaterThan(0, $queryCount); // treated as miss, DB queried
+        $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
-        $this->assertIsArray(json_decode($this->getKey("query:{{$ck}}:v{$version}:{$hash}"), true)); // corrupt entry replaced with valid JSON
+        // Lua deletes the corrupt entry and the fresh DB result is written back in its place.
+        $this->assertIsArray(json_decode($this->getKey("query:{{$ck}}:v{$version}:{$hash}"), true));
     }
 
     // -------------------------------------------------------------------------
@@ -77,12 +78,12 @@ class LuaScriptBehaviorTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        Author::get(); // populate v1 cache
+        Author::get();
 
-        // Bump version directly in Redis — simulates a write from another process
+        // Simulates another process bumping the version after the cache was populated.
         $this->redis()->incr("test:ver:{{$ck}}:");
 
-        // Simulate a concurrent request having already claimed the building key
+        // Simulate a concurrent request having already claimed the building lock.
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
@@ -92,7 +93,7 @@ class LuaScriptBehaviorTest extends TestCase
 
         $results = Author::get();
 
-        $this->assertSame(0, $queryCount); // stale v1 served — no DB round trip
+        $this->assertSame(0, $queryCount);
         $this->assertCount(1, $results);
         $this->assertSame('Alice', $results->first()->name);
     }
@@ -114,10 +115,10 @@ class LuaScriptBehaviorTest extends TestCase
         $pastMs = (int) (microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
 
-        Author::get(); // read triggers the Lua cooldown check
+        Author::get(); // read triggers the Lua cooldown check — past-due scheduled key fires the bump
 
-        $this->assertSame($version + 1, (int) $this->getKey("ver:{{$ck}}:")); // INCR fired
-        $this->assertNull($this->getKey("scheduled:{{$ck}}:")); // scheduled key cleaned up
+        $this->assertSame($version + 1, (int) $this->getKey("ver:{{$ck}}:"));
+        $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 
     // -------------------------------------------------------------------------
@@ -137,7 +138,8 @@ class LuaScriptBehaviorTest extends TestCase
 
         Author::get();
 
-        $this->assertSame($version, (int) $this->getKey("ver:{{$ck}}:")); // version unchanged
-        $this->assertNull($this->getKey("scheduled:{{$ck}}:")); // garbage key removed
+        // Non-numeric value cannot be a valid timestamp — Lua cleans it without bumping the version.
+        $this->assertSame($version, (int) $this->getKey("ver:{{$ck}}:"));
+        $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 }

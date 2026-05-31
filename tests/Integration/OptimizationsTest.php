@@ -51,7 +51,6 @@ class OptimizationsTest extends TestCase
         $redis = Redis::connection(config('normcache.connection'));
         $prefix = config('normcache.key_prefix');
 
-        // Query cache entries are stored as JSON ID arrays.
         $keys = $redis->keys($prefix . 'query:*');
         $this->assertNotEmpty($keys);
 

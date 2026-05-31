@@ -124,7 +124,7 @@ class ModelCachingTest extends TestCase
 
         Post::all();
         $post->delete();
-        Post::all(); // re-warm cache with post excluded
+        Post::all();
 
         $post->restore();
 
@@ -195,7 +195,7 @@ class ModelCachingTest extends TestCase
         $post->delete();
         $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
 
-        // Force a model cache miss. Trashed model should not be re-cached.
+        // Trashed models must not be written to the model cache on a miss; normal queries would then surface them.
         NormCache::getModels([$post->id], Post::class);
 
         $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
@@ -296,8 +296,7 @@ class ModelCachingTest extends TestCase
         $redis->del($modelKey);
         $this->assertFalse((bool) $redis->exists($modelKey));
 
-        // The members set still references the dead key within its TTL window —
-        // this is acceptable: the set itself will expire, bounding the growth.
+        // Dead keys can accumulate in the members set, but the set's own TTL bounds that growth.
         $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members set must expire, bounding dead-key accumulation');
     }
 }

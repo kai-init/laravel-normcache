@@ -38,6 +38,7 @@ class CacheManager
         private bool $fireRetrieved = false,
         private int $buildingLockTtl = 5,
         private int $stampedeWaitMs = 200,
+        private int $staleTtlDepth = 3,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
         $this->keys = new CacheKeyBuilder();
@@ -540,7 +541,7 @@ class CacheManager
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->modelPrefix($classKey),
             $this->keys->buildingPrefix($classKey),
-        ], [$hash, $nowMs, $this->buildingLockTtl]);
+        ], [$hash, $nowMs, $this->buildingLockTtl, $this->staleTtlDepth]);
     }
 
     private function luaFetchVersionedCache(array $versionKeys, array $scheduledKeys, string $keyPrefix, string $hash): array

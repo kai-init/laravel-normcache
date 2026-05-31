@@ -41,6 +41,16 @@ class Author extends Model
         return $this->morphMany(Comment::class, 'commentable');
     }
 
+    public function latestPost(): HasOne
+    {
+        return $this->hasOne(Post::class)->latestOfMany();
+    }
+
+    public function mostViewedPost(): HasOne
+    {
+        return $this->hasOne(Post::class)->ofMany('views', 'MAX');
+    }
+
     public function uncachedPosts(): HasMany
     {
         return $this->hasMany(UncachedPost::class, 'author_id');

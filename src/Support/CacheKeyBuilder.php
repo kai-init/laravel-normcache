@@ -96,14 +96,18 @@ class CacheKeyBuilder
 
     public function depVersionKeys(string $classKey, array $depClasses): array
     {
-        $all = array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)));
+        $all = array_values(array_unique(
+            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)))
+        ));
 
         return array_map(fn($key) => $this->verKey($key), $all);
     }
 
     public function depScheduledKeys(string $classKey, array $depClasses): array
     {
-        $all = array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)));
+        $all = array_values(array_unique(
+            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)))
+        ));
 
         return array_map(fn($key) => $this->scheduledKey($key), $all);
     }

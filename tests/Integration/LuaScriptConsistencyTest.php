@@ -58,9 +58,8 @@ class LuaScriptConsistencyTest extends TestCase
     // -------------------------------------------------------------------------
     // luaFetchVersionWithCooldown — cooldown fires on version resolution
     //
-    // This script is used by CacheManager::resolveCurrentVersion() when
-    // cooldown > 0. It is distinct from the cooldown logic inside
-    // luaFetchVersionedQuery (which runs on every read).
+    // Used by CacheManager::resolveCurrentVersion() when cooldown > 0.
+    // Distinct from the cooldown check inside luaFetchVersionedQuery (per-read).
     // -------------------------------------------------------------------------
 
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
@@ -95,11 +94,10 @@ class LuaScriptConsistencyTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // dependsOn blob — building key causes DB fallthrough (dependsOn path)
+    // dependsOn blob — building key causes DB fallthrough
     //
-    // In luaFetchVersionedQuery, a claimed building key triggers stale serving.
-    // In luaFetchQueryWithDeps there is no stale serving, so a claimed building
-    // key returns 'building' and the caller falls through to the DB directly.
+    // luaFetchVersionedQuery serves stale when the building lock is held.
+    // luaFetchQueryWithDeps has no stale path, so 'building' falls through to DB.
     // -------------------------------------------------------------------------
 
     public function test_building_key_in_deps_query_causes_db_fallthrough(): void
@@ -111,7 +109,6 @@ class LuaScriptConsistencyTest extends TestCase
         $authorVer = NormCache::currentVersion(Author::class);
         $postVer = NormCache::currentVersion(Post::class);
 
-        // Simulate a concurrent request having claimed the building key
         $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
 
         $queryCount = 0;
@@ -121,7 +118,7 @@ class LuaScriptConsistencyTest extends TestCase
 
         $results = Author::query()->dependsOn([Post::class])->get();
 
-        $this->assertGreaterThan(0, $queryCount); // 'building' → no stale path → DB fallthrough
+        $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
     }
 
@@ -139,12 +136,12 @@ class LuaScriptConsistencyTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        Author::get(); // cache populated at current version v
+        Author::get();
 
-        // Advance Redis version by 3 so the cached entry is exactly 3 behind
+        // serve_stale() walks back at most 3 versions; 3 bumps puts the entry at exactly the boundary
         $this->bumpVersionInRedis($ck, 3);
 
-        // Claim building key so serve_stale is attempted instead of a fresh miss
+        // Building lock must be held so the Lua script attempts stale serving rather than a fresh miss
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
@@ -166,9 +163,9 @@ class LuaScriptConsistencyTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        Author::get(); // cache populated at current version v
+        Author::get();
 
-        // Advance by 4: the cached entry is now 4 versions behind, out of reach
+        // 4 bumps puts the entry one past the stale-serve depth limit of 3
         $this->bumpVersionInRedis($ck, 4);
 
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
@@ -180,7 +177,7 @@ class LuaScriptConsistencyTest extends TestCase
 
         $results = Author::get();
 
-        $this->assertGreaterThan(0, $queryCount); // no stale found, falls through to DB
+        $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
     }
 
@@ -209,6 +206,7 @@ class LuaScriptConsistencyTest extends TestCase
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
 
+        // Post version is still 0 (never bumped) — the scheduled key is what triggers the bump
         $this->assertSame('0', (string) ($this->getKey("ver:{{$postClassKey}}:") ?? '0'));
 
         $this->assertCount(0, $query());

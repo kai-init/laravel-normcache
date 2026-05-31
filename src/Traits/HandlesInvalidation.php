@@ -115,6 +115,10 @@ trait HandlesInvalidation
 
     public function flushTag(string $modelClass, string $tag): int
     {
+        if (preg_match('/[:{}\s*]/', $tag)) {
+            throw new \InvalidArgumentException("Cache tag must not contain reserved characters (: { } * or whitespace).");
+        }
+
         $classKey = $this->keys->classKey($modelClass);
 
         return $this->store->flushByPatterns([
@@ -127,6 +131,10 @@ trait HandlesInvalidation
 
     public function flushTagAcrossModels(string $tag): int
     {
+        if (preg_match('/[:{}\s*]/', $tag)) {
+            throw new \InvalidArgumentException("Cache tag must not contain reserved characters (: { } * or whitespace).");
+        }
+
         return $this->store->flushByPatterns([
             CacheKeyBuilder::K_RAW . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',

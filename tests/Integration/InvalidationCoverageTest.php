@@ -290,7 +290,7 @@ class InvalidationCoverageTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
         $versionBefore = NormCache::currentVersion(Author::class);
 
-        // Builder created via newQuery() on a live instance — $this->model->exists is true
+        // newQuery() on a live instance sets $this->model->exists = true, which takes the instance-flush path
         $author->newQuery()->where('id', $author->id)->update(['name' => 'Alicia']);
 
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));

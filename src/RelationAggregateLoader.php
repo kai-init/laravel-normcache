@@ -17,7 +17,10 @@ class RelationAggregateLoader
 {
     private static array $cache = [];
 
-    public function __construct(private Model $model) {}
+    public function __construct(
+        private Model $model,
+        private ?CacheableBuilder $parentBuilder = null,
+    ) {}
 
     public function load(array $models, array $pendingAggregates): array
     {
@@ -159,14 +162,17 @@ class RelationAggregateLoader
     ): array {
         $relations = $constraint !== null ? [$name => $constraint] : $name;
 
-        return ($this->model::class)::withoutCache()
+        $query = ($this->model::class)::withoutCache()
             ->withoutGlobalScope(SoftDeletingScope::class)
             ->select($pkName)
-            ->withAggregate($relations, $function, $column)
-            ->whereIn($pkName, $missedIds)
-            ->get()
-            ->pluck($alias, $pkName)
-            ->all();
+            ->withAggregate($relations, $column, $function)
+            ->whereIn($pkName, $missedIds);
+
+        if ($this->parentBuilder?->hasRemovedScopes()) {
+            $this->parentBuilder->applyRemovedScopesTo($query);
+        }
+
+        return $query->get()->pluck($alias, $pkName)->all();
     }
 
     private function constraintKey(string $relatedClass, ?callable $constraint): string

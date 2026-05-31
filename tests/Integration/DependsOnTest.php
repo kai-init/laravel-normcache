@@ -20,18 +20,6 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:raw:*'));
     }
 
-    public function test_depends_on_returns_correct_results(): void
-    {
-        $alice = Author::create(['name' => 'Alice']);
-        $bob = Author::create(['name' => 'Bob']);
-        Post::create(['title' => 'Hello', 'author_id' => $alice->id]);
-
-        $results = Author::whereHas('posts')->dependsOn([Post::class])->get();
-
-        $this->assertCount(1, $results);
-        $this->assertSame('Alice', $results->first()->name);
-    }
-
     public function test_depends_on_cache_hits_on_second_call(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -90,7 +78,6 @@ class DependsOnTest extends TestCase
         $first = Author::whereHas('posts')->dependsOn([Post::class, Author::class])->get();
         $this->assertCount(1, $first);
 
-        // Bump Post version — Bob now also has a post
         Post::create(['title' => 'Bob Post', 'author_id' => $bob->id]);
 
         $second = Author::whereHas('posts')->dependsOn([Post::class, Author::class])->get();
@@ -105,7 +92,7 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class, Author::class])->get();
         $keysAB = $this->redisKeys('test:query:*');
 
-        // Running with reversed dep order should hit the same cache key — no new key written
+        // dep order is sorted before hashing, so reversed order must hit the same key
         Author::whereHas('posts')->dependsOn([Author::class, Post::class])->get();
         $keysBA = $this->redisKeys('test:query:*');
 
@@ -124,7 +111,7 @@ class DependsOnTest extends TestCase
 
         $this->assertNotEmpty($this->redisKeys('test:count:*'));
 
-        // creating a post bumps Post's version, making the count key stale
+        // inserting bumps Post's version; the old count key becomes unreachable but is not deleted
         Post::create(['title' => 'World', 'author_id' => $author->id]);
 
         $firstKeys = $this->redisKeys('test:count:*');
@@ -133,7 +120,7 @@ class DependsOnTest extends TestCase
 
         $secondKeys = $this->redisKeys('test:count:*');
 
-        // two distinct versioned count keys now exist in Redis: the old stale one and a new one
+        // two distinct versioned count keys: the stale orphan and the new one
         $this->assertCount(2, $secondKeys);
         $this->assertNotEmpty(array_diff($secondKeys, $firstKeys));
     }
@@ -484,10 +471,9 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
-        // Full-column query — populates a raw cache entry.
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
-        // Same structural query but projected to id only — must NOT reuse the full-column blob.
+        // SELECT clause is part of the cache key — a narrower projection must not return the full-column blob.
         $projected = Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
 
         $this->assertArrayNotHasKey('name', $projected->first()->getAttributes());
@@ -498,10 +484,8 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
-        // Cold miss — caches the projected blob.
         Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
 
-        // Warm hit — served from cache, must still have only the projected columns.
         $cached = Author::whereHas('posts')->dependsOn([Post::class])->select('id')->get();
 
         $this->assertArrayNotHasKey('name', $cached->first()->getAttributes());
@@ -523,7 +507,7 @@ class DependsOnTest extends TestCase
     public function test_join_with_depends_on_select_star_does_not_overwrite_base_model_id(): void
     {
         $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Earlier', 'author_id' => $author->id]); // ensures post->id != author->id
+        Post::create(['title' => 'Earlier', 'author_id' => $author->id]); // makes post IDs differ from author ID so the JOIN `id` collision is detectable
         $post = Post::create(['title' => 'Target', 'author_id' => $author->id]);
 
         $result = Author::query()

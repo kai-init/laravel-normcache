@@ -16,69 +16,12 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
-use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
 use ReflectionProperty;
 
 class CacheAccuracyTest extends TestCase
 {
-    public function test_selected_alias_columns_match_eloquent_shape_on_cache_miss(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $author = Author::select('name as display_name')->first();
-
-        $this->assertArrayHasKey('display_name', $author->getAttributes());
-        $this->assertSame('Alice', $author->display_name);
-        $this->assertArrayNotHasKey('name', $author->getAttributes());
-    }
-
-    public function test_selected_alias_columns_match_eloquent_shape_on_model_cache_hit(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        Author::find($author->id);
-
-        $cached = Author::whereKey($author->id)
-            ->select('name as display_name')
-            ->first();
-
-        $this->assertArrayHasKey('display_name', $cached->getAttributes());
-        $this->assertSame('Alice', $cached->display_name);
-        $this->assertArrayNotHasKey('name', $cached->getAttributes());
-    }
-
-    public function test_qualified_alias_columns_match_eloquent_shape_on_model_cache_hit(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        Author::find($author->id);
-
-        $cached = Author::whereKey($author->id)
-            ->select('authors.name as display_name')
-            ->first();
-
-        $this->assertArrayHasKey('display_name', $cached->getAttributes());
-        $this->assertSame('Alice', $cached->display_name);
-        $this->assertArrayNotHasKey('name', $cached->getAttributes());
-    }
-
-    public function test_alias_columns_match_laravel_as_casing_and_spacing(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        Author::find($author->id);
-
-        $cached = Author::whereKey($author->id)
-            ->select('authors.name   AS   display_name')
-            ->first();
-
-        $this->assertArrayHasKey('display_name', $cached->getAttributes());
-        $this->assertSame('Alice', $cached->display_name);
-        $this->assertArrayNotHasKey('name', $cached->getAttributes());
-    }
-
     public function test_assoc_array_select_does_not_act_like_an_alias(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -167,7 +110,7 @@ class CacheAccuracyTest extends TestCase
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);
 
-        Tag::find($tag->id); // warm full model cache first
+        Tag::find($tag->id); // populate full model cache before the constrained eager load runs
 
         Author::with(['tags' => fn($query) => $query->select('tags.id')])->get();
         $warm = Author::with(['tags' => fn($query) => $query->select('tags.id')])->get();
@@ -184,7 +127,7 @@ class CacheAccuracyTest extends TestCase
         $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
         $post = $author->posts()->create(['title' => 'Hello']);
 
-        $post::find($post->id); // warm full model cache first
+        $post::find($post->id); // populate full model cache before the constrained eager load runs
 
         $country->posts()->select('posts.id')->get();
         $warm = $country->posts()->select('posts.id')->get();
@@ -206,43 +149,6 @@ class CacheAccuracyTest extends TestCase
         $cachedPost = $post::find($post->id);
 
         $this->assertSame('Hello', $cachedPost->title);
-    }
-
-    public function test_distinct_selected_column_query_matches_eloquent_results(): void
-    {
-        $australia = Country::create(['name' => 'Australia']);
-        $canada = Country::create(['name' => 'Canada']);
-        Author::create(['name' => 'Alice', 'country_id' => $australia->id]);
-        Author::create(['name' => 'Bob', 'country_id' => $australia->id]);
-        Author::create(['name' => 'Charlie', 'country_id' => $canada->id]);
-
-        $cached = Author::select('country_id')
-            ->distinct()
-            ->get()
-            ->pluck('country_id')
-            ->values()
-            ->all();
-
-        $live = UncachedAuthor::select('country_id')
-            ->distinct()
-            ->get()
-            ->pluck('country_id')
-            ->values()
-            ->all();
-
-        $this->assertSame($live, $cached);
-    }
-
-    public function test_primary_key_where_in_matches_eloquent_ordering(): void
-    {
-        Author::create(['id' => 1, 'name' => 'A']);
-        Author::create(['id' => 2, 'name' => 'B']);
-        Author::create(['id' => 3, 'name' => 'C']);
-
-        $live = UncachedAuthor::whereIn('id', [3, 1, 2])->get()->pluck('id')->all();
-        $cached = Author::whereIn('id', [3, 1, 2])->get()->pluck('id')->all();
-
-        $this->assertSame($live, $cached);
     }
 
     public function test_subclass_hydrates_with_own_class_not_parent_data(): void

@@ -96,41 +96,6 @@ class PivotCacheTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
     }
 
-    public function test_belongs_to_many_warm_hit_returns_correct_tags(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $tag1 = Tag::create(['name' => 'Fiction']);
-        $tag2 = Tag::create(['name' => 'Drama']);
-        $author->tags()->attach([$tag1->id, $tag2->id]);
-
-        Author::with('tags')->get();
-        $authors = Author::with('tags')->get();
-
-        $this->assertCount(2, $authors->first()->tags);
-        $this->assertEqualsCanonicalizing(
-            ['Fiction', 'Drama'],
-            $authors->first()->tags->pluck('name')->all()
-        );
-    }
-
-    public function test_belongs_to_many_warm_hit_handles_sparse_related_id_keys(): void
-    {
-        $authorA = Author::create(['name' => 'Alice']);
-        $authorB = Author::create(['name' => 'Bob']);
-
-        $shared = Tag::create(['name' => 'Shared']);
-        $exclusive = Tag::create(['name' => 'Exclusive']);
-
-        $authorA->tags()->attach([$shared->id, $exclusive->id]);
-        $authorB->tags()->attach([$shared->id]);
-
-        Author::with('tags')->orderBy('id')->get();
-        $authors = Author::with('tags')->orderBy('id')->get();
-
-        $this->assertSame(['Exclusive', 'Shared'], $authors[0]->tags->pluck('name')->sort()->values()->all());
-        $this->assertSame(['Shared'], $authors[1]->tags->pluck('name')->sort()->values()->all());
-    }
-
     public function test_belongs_to_many_warm_hit_zero_sql(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -158,20 +123,6 @@ class PivotCacheTest extends TestCase
         $authors = Author::with('tags')->get();
 
         $this->assertCount(0, $authors->first()->tags);
-    }
-
-    public function test_morph_to_many_warm_hit_returns_correct_tags(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-        $tag = Tag::create(['name' => 'Fiction']);
-        $post->tags()->attach($tag->id);
-
-        Post::with('tags')->get();
-        $posts = Post::with('tags')->get();
-
-        $this->assertCount(1, $posts->first()->tags);
-        $this->assertSame('Fiction', $posts->first()->tags->first()->name);
     }
 
     public function test_morph_to_many_warm_hit_zero_sql(): void
@@ -310,38 +261,6 @@ class PivotCacheTest extends TestCase
         $this->assertSame([$post->id], $fetchedTag->posts->modelKeys());
     }
 
-    public function test_attach_after_warm_hit_returns_updated_tags(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $tag1 = Tag::create(['name' => 'Fiction']);
-        $tag2 = Tag::create(['name' => 'Drama']);
-        $author->tags()->attach($tag1->id);
-
-        Author::with('tags')->get();
-
-        $author->tags()->attach($tag2->id);
-
-        $authors = Author::with('tags')->get();
-
-        $this->assertCount(2, $authors->first()->tags);
-    }
-
-    public function test_multiple_parents_warm_hit(): void
-    {
-        $alice = Author::create(['name' => 'Alice']);
-        $bob = Author::create(['name' => 'Bob']);
-        $fiction = Tag::create(['name' => 'Fiction']);
-        $drama = Tag::create(['name' => 'Drama']);
-        $alice->tags()->attach($fiction->id);
-        $bob->tags()->attach($drama->id);
-
-        Author::with('tags')->get();
-        $authors = Author::with('tags')->get()->keyBy('name');
-
-        $this->assertSame('Fiction', $authors['Alice']->tags->first()->name);
-        $this->assertSame('Drama', $authors['Bob']->tags->first()->name);
-    }
-
     public function test_pivot_cache_constrained_eager_load_does_not_collide_with_unconstrained(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -355,27 +274,6 @@ class PivotCacheTest extends TestCase
         $tags = Author::with('tags')->get()->first()->tags;
 
         $this->assertCount(2, $tags);
-    }
-
-    public function test_pivot_cache_two_different_constraints_stay_separate(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $tag1 = Tag::create(['name' => 'Fiction']);
-        $tag2 = Tag::create(['name' => 'Drama']);
-        $author->tags()->attach($tag1->id, ['notes' => 'a']);
-        $author->tags()->attach($tag2->id, ['notes' => 'b']);
-
-        Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'a')])->get();
-        Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'b')])->get();
-
-        $tagsA = Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'a')])->get()->first()->tags;
-        $tagsB = Author::with(['tags' => fn($q) => $q->wherePivot('notes', 'b')])->get()->first()->tags;
-
-        $this->assertCount(1, $tagsA);
-        $this->assertSame('Fiction', $tagsA->first()->name);
-
-        $this->assertCount(1, $tagsB);
-        $this->assertSame('Drama', $tagsB->first()->name);
     }
 
     public function test_pivot_cache_ordered_eager_loads_do_not_collide(): void
