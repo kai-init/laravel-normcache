@@ -82,7 +82,8 @@ trait CachesOneOrManyThrough
     {
         return NormCache::isEnabled()
             && $this->parent->getConnection()->transactionLevel() === 0
-            && !($this->query instanceof CacheableBuilder && $this->query->isCacheSkipped());
+            && !($this->query instanceof CacheableBuilder && $this->query->isCacheSkipped())
+            && $this->query->toBase()->lock === null;
     }
 
     private function cachePayloadFromResult(Collection $result): array

@@ -78,7 +78,7 @@ class OptimizationsTest extends TestCase
         $result = app('normcache')->getModelsFromQuery(Author::class, $hash);
 
         $this->assertSame('hit', $result['status']);
-        $this->assertSame([$author->id], $result['ids']);
+        $this->assertSame([(string) $author->id], $result['ids']);
         $this->assertIsArray($result['models']);
         $this->assertIsArray($result['models'][0]);
         $this->assertSame('Payload Author', $result['models'][0]['name']);
@@ -111,7 +111,7 @@ class OptimizationsTest extends TestCase
 
         $raw = app('normcache')->getStore()->getRaw("query:{{$classKey}}:v{$version}:{$hash}");
         $repaired = $raw !== null ? json_decode($raw, true) : null;
-        $this->assertSame([$found->first()->id], $repaired);
+        $this->assertSame([(string) $found->first()->id], $repaired);
     }
 
     public function test_empty_query_result_warm_hit_stays_empty(): void

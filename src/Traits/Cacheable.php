@@ -55,6 +55,7 @@ trait Cacheable
     {
         $existsBefore = $this->exists;
         $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
+        $this->preInvalidateForObservers($existsBefore);
         $result = parent::save($options);
 
         if ($result) {
@@ -68,6 +69,7 @@ trait Cacheable
     {
         $existsBefore = $this->exists;
         $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
+        $this->preInvalidateForObservers($existsBefore);
         $result = parent::saveQuietly($options);
 
         if ($result) {
@@ -156,6 +158,15 @@ trait Cacheable
     private function flushIfDeleted(?bool $result): void
     {
         if ($result) {
+            NormCache::flushInstance($this);
+        }
+    }
+
+    // Flush before save so observers see fresh DB data — Eloquent events fire before invalidateAfterSave.
+    private function preInvalidateForObservers(bool $existsBefore): void
+    {
+        if ($existsBefore && $this->isDirty() && NormCache::isEnabled()
+            && $this->getConnection()->transactionLevel() === 0) {
             NormCache::flushInstance($this);
         }
     }

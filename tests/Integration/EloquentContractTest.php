@@ -1853,6 +1853,55 @@ class EloquentContractTest extends TestCase
         $this->assertSame($native, $cached);
     }
 
+    public function test_query_id_cache_preserves_large_integer_primary_keys(): void
+    {
+        $largeId = 9007199254740993; // 2^53 + 1 — first integer lossy in float64 / cjson
+        DB::table('authors')->insert([
+            'id' => $largeId,
+            'name' => 'BigId',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->contract(
+            fn() => Author::where('name', 'BigId')->get(),
+            fn() => Author::withoutCache()->where('name', 'BigId')->get(),
+        );
+    }
+
+    public function test_with_count_pluck_aggregate_alias_matches_native(): void
+    {
+        // pluck() goes through scalar cache paths and must replay pending aggregates first.
+        $this->fixtures();
+
+        $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all();
+        $cached = Author::withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all();
+
+        $this->assertSame($native, $cached, 'pluck on aggregate alias must match native Eloquent');
+    }
+
+    public function test_with_count_value_aggregate_alias_matches_native(): void
+    {
+        // value() goes through scalar cache paths and must replay pending aggregates first.
+        $this->fixtures();
+
+        $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->value('posts_count');
+        $cached = Author::withCount('posts')->orderBy('name')->value('posts_count');
+
+        $this->assertSame($native, $cached, 'value on aggregate alias must match native Eloquent');
+    }
+
+    public function test_with_count_cursor_aggregate_alias_matches_native(): void
+    {
+        // cursor() bypasses get() and must replay pending aggregates before iterating.
+        $this->fixtures();
+
+        $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->cursor()->map->posts_count->all();
+        $cached = Author::withCount('posts')->orderBy('name')->cursor()->map->posts_count->all();
+
+        $this->assertSame($native, $cached, 'cursor on aggregate alias must match native Eloquent');
+    }
+
     // -------------------------------------------------------------------------
     // flushTag validation
     // -------------------------------------------------------------------------

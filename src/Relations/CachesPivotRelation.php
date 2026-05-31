@@ -160,11 +160,24 @@ trait CachesPivotRelation
 
     private function shouldUsePivotCache(array $cacheParentIds): bool
     {
-        return NormCache::isEnabled()
-            && !empty($cacheParentIds)
-            && $this->query instanceof CacheableBuilder
-            && !$this->query->isCacheSkipped()
-            && $this->parent->getConnection()->transactionLevel() === 0;
+        if (!NormCache::isEnabled()
+            || empty($cacheParentIds)
+            || !$this->query instanceof CacheableBuilder
+            || $this->query->isCacheSkipped()
+            || $this->query->hasRemovedScopes()
+            || $this->parent->getConnection()->transactionLevel() !== 0
+            || $this->query->toBase()->lock !== null) {
+            return false;
+        }
+
+        // whereRaw with ? params can't be separated from FK bindings — same SQL, different values would collide.
+        foreach ($this->query->toBase()->wheres as $where) {
+            if (($where['type'] ?? null) === 'raw' && str_contains(($where['sql'] ?? ''), '?')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function getCacheParentIds(): array

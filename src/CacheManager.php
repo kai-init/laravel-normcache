@@ -255,6 +255,8 @@ class CacheManager
 
     public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): void
     {
+        $ids = array_map('strval', $ids);
+
         if (!empty($versionKeys)) {
             $this->storeQueryIdsCAS($key, $ids, $ttl ?? $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions);
 

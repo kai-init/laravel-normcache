@@ -39,7 +39,8 @@ class CacheableBelongsTo extends BelongsTo
             || $this->query->hasRemovedScopes()
             || $this->parent->getConnection()->transactionLevel() > 0
             || $this->getOwnerKeyName() !== $this->related->getKeyName()
-            || $this->query->getEagerLoads() !== []) {
+            || $this->query->getEagerLoads() !== []
+            || $this->query->toBase()->lock !== null) {
             return false;
         }
 

@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
+use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryBypassed;
@@ -54,6 +55,10 @@ class CacheableBuilder extends Builder
 
     public function remember(int $ttl): static
     {
+        if ($ttl <= 0) {
+            throw new \InvalidArgumentException('NormCache TTL must be greater than zero.');
+        }
+
         $this->queryTtl = $ttl;
 
         return $this;
@@ -65,7 +70,6 @@ class CacheableBuilder extends Builder
 
         if (!empty($this->pendingAggregates)) {
             $this->replayPendingAggregates();
-            $this->pendingAggregates = [];
         }
 
         return $this;
@@ -269,7 +273,6 @@ class CacheableBuilder extends Builder
                 // Replay into $base before hashing so aggregate subqueries are part of the blob key.
                 if (!empty($this->pendingAggregates)) {
                     $this->replayPendingAggregates();
-                    $this->pendingAggregates = [];
                 }
 
                 return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
@@ -334,6 +337,24 @@ class CacheableBuilder extends Builder
         return parent::eagerLoadRelations($models);
     }
 
+    public function cursor(): LazyCollection
+    {
+        if (!empty($this->pendingAggregates)) {
+            $this->replayPendingAggregates();
+        }
+
+        return parent::cursor();
+    }
+
+    public function lazy($chunkSize = 1000): LazyCollection
+    {
+        if (!empty($this->pendingAggregates)) {
+            $this->replayPendingAggregates();
+        }
+
+        return parent::lazy($chunkSize);
+    }
+
     // -------------------------------------------------------------------------
     // Private — query execution
     // -------------------------------------------------------------------------
@@ -360,7 +381,6 @@ class CacheableBuilder extends Builder
                 NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'agg-blob']);
 
                 $this->replayPendingAggregates();
-                $this->pendingAggregates = [];
 
                 return $this->finalizeResult(parent::get($columns)->all());
             }
@@ -375,7 +395,6 @@ class CacheableBuilder extends Builder
 
             $aggAliases = array_column($this->pendingAggregates, 'alias');
             $this->replayPendingAggregates();
-            $this->pendingAggregates = [];
             $models = parent::get($columns);
             // getRawOriginal() preserves $hidden; getAttribute(alias) applies dynamic casts (withExists → bool).
             $blob = $models->map(function ($m) use ($aggAliases) {
@@ -640,7 +659,6 @@ class CacheableBuilder extends Builder
     private function getWithoutCache($columns): Collection
     {
         $this->replayPendingAggregates();
-        $this->pendingAggregates = [];
 
         return parent::get($columns);
     }
@@ -653,6 +671,8 @@ class CacheableBuilder extends Builder
 
             parent::withAggregate($relations, $agg['column'], $agg['function']);
         }
+
+        $this->pendingAggregates = [];
     }
 
     // -------------------------------------------------------------------------

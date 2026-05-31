@@ -63,11 +63,19 @@ trait CachesScalarResults
 
     public function pluck($column, $key = null)
     {
+        if (!empty($this->pendingAggregates)) {
+            $this->replayPendingAggregates();
+        }
+
         return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), $column, $key);
     }
 
     public function value($column): mixed
     {
+        if (!empty($this->pendingAggregates)) {
+            $this->replayPendingAggregates();
+        }
+
         return $this->cacheScalar('value', fn() => parent::value($column), $column);
     }
 

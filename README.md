@@ -225,6 +225,8 @@ This adds a **Normcache** timeline tab showing every query hit, miss, bypass, an
 
 Single-model operations keep all keys on one slot via a per-model hash tag (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with a separate single-slot Lua call, then read or write on the primary model's slot.
 
+**Consistency note:** cross-model version resolution is not atomic — a writer that bumps a dep version between the two GETs will cause at most one stale response before the next request picks up the new version. This is the same eventually-consistent trade-off accepted by all distributed caches. Use `cluster_hash_tag` (see config) if you need full atomicity at the cost of all keys landing on one slot.
+
 Enable with `'cluster' => true`. `flushAll()` is supported.
 
 ---
@@ -240,7 +242,7 @@ Works out of the box. State is reset between Octane requests and queue jobs — 
 - **Single round trip on cache hit** — version check + ID fetch + model `MGET` in one Lua `EVAL`.
 - **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
 - **No scanning on invalidation** — version bump makes stale keys unreachable; TTL handles eviction.
-- **Stampede protection** — waiters `BRPOP` a wake channel (200ms) instead of storming the DB. Requires Redis 6.0+ for sub-second precision.
+- **Stampede protection** — waiters `BRPOP` a wake channel (200ms) instead of storming the DB. Requires Redis 6.0+ for sub-second precision; both PhpRedis and Predis support this.
 - **igbinary support** — smaller payloads and faster serialization when the extension is installed.
 
 ---
