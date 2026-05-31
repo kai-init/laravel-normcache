@@ -54,10 +54,11 @@ trait Cacheable
     public function save(array $options = []): bool
     {
         $existsBefore = $this->exists;
+        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
         $result = parent::save($options);
 
         if ($result) {
-            $this->invalidateAfterSave($existsBefore);
+            $this->invalidateAfterSave($existsBefore, $originalKey);
         }
 
         return $result;
@@ -66,10 +67,11 @@ trait Cacheable
     public function saveQuietly(array $options = []): bool
     {
         $existsBefore = $this->exists;
+        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
         $result = parent::saveQuietly($options);
 
         if ($result) {
-            $this->invalidateAfterSave($existsBefore);
+            $this->invalidateAfterSave($existsBefore, $originalKey);
         }
 
         return $result;
@@ -137,13 +139,16 @@ trait Cacheable
     // Private
     // -------------------------------------------------------------------------
 
-    private function invalidateAfterSave(bool $existsBefore): void
+    private function invalidateAfterSave(bool $existsBefore, mixed $originalKey = null): void
     {
         if (!$existsBefore && $this->wasRecentlyCreated) {
             NormCache::invalidateVersion($this);
         } elseif ($this->isRestoreSave($existsBefore)) {
             NormCache::invalidateVersion($this);
         } elseif ($existsBefore && $this->wasChanged()) {
+            if ($originalKey !== null && $originalKey !== $this->getKey()) {
+                NormCache::evictModelKey(static::class, $originalKey);
+            }
             NormCache::flushInstance($this);
         }
     }

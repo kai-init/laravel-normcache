@@ -156,39 +156,33 @@ class CacheableBuilderTest extends TestCase
         }
     }
 
-    public function test_aggregate_cache_keys_can_accumulate_after_version_bumps(): void
+    public function test_with_count_result_is_cached_and_invalidated_on_version_bump(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
 
-        Author::withCount('posts')->get();
+        $this->assertSame(1, Author::withCount('posts')->find($author->id)->posts_count);
 
-        $aggKeysAfterFirstLoad = $this->redisKeys('test:agg:*');
-        $this->assertCount(1, $aggKeysAfterFirstLoad);
+        $queryCount = 0;
+        DB::listen(fn() => $queryCount++);
+        Author::withCount('posts')->find($author->id);
+        $this->assertSame(0, $queryCount, 'Expected cache hit — no DB queries');
 
         Post::create(['title' => 'Post 2', 'author_id' => $author->id]);
 
-        Author::withCount('posts')->get();
-
-        $aggKeysAfterSecondLoad = $this->redisKeys('test:agg:*');
-
-        $this->assertCount(2, $aggKeysAfterSecondLoad);
+        $this->assertSame(2, Author::withCount('posts')->find($author->id)->posts_count);
     }
 
-    public function test_flush_model_can_reuse_existing_aggregate_keys(): void
+    public function test_flush_model_invalidates_aggregate_blob_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
 
-        Author::withCount('posts')->get();
-
-        $keysBeforeFlush = $this->redisKeys('test:agg:*');
-        $this->assertCount(1, $keysBeforeFlush);
+        $this->assertSame(1, Author::withCount('posts')->find($author->id)->posts_count);
 
         NormCache::forceFlushModel(Author::class);
 
-        $this->assertSame(1, Author::withCount('posts')->first()->posts_count);
-        $this->assertCount(1, $this->redisKeys('test:agg:*'));
+        $this->assertSame(1, Author::withCount('posts')->find($author->id)->posts_count);
     }
 
     public function test_with_count_on_non_cacheable_relation_falls_through_to_eloquent(): void

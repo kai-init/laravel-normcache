@@ -31,7 +31,7 @@ class CacheManager
         private int $queryTtl,
         string $keyPrefix,
         private int $cooldown,
-        bool $cluster = false,
+        private bool $cluster = false,
         private bool $enabled = true,
         private bool $dispatchEvents = true,
         private bool $fallbackEnabled = false,
@@ -104,8 +104,14 @@ class CacheManager
         $classKey = $this->keys->classKey($modelClass);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
-
         $ts = $this->keys->tagSegment($tag);
+
+        if ($this->cluster) {
+            [$seg, $data] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
+
+            return ['key' => "{$namespace}:{{$classKey}}:{$ts}{$seg}:{$hash}", 'data' => $data];
+        }
+
         [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
 
         return [
@@ -118,23 +124,40 @@ class CacheManager
     {
         $relatedKey = $this->keys->classKey($relatedClass);
         $throughKey = $this->keys->classKey($throughClass);
+        $versionKeys = [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)];
+        $scheduledKeys = [$this->keys->scheduledKey($relatedKey), $this->keys->scheduledKey($throughKey)];
+        $keyPrefix = CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
 
-        [$seg, $blob] = $this->luaFetchVersionedCache(
-            [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)],
-            [$this->keys->scheduledKey($relatedKey), $this->keys->scheduledKey($throughKey)],
-            CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':',
-            $hash
-        );
+        if ($this->cluster) {
+            [$seg, $data] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
 
-        $key = CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':' . $seg . ':' . $hash;
+            return ['key' => $keyPrefix . $seg . ':' . $hash, 'data' => $data];
+        }
 
-        return ['key' => $key, 'data' => $blob !== false ? $this->store->unserialize($blob) : null];
+        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
+
+        return ['key' => $keyPrefix . $seg . ':' . $hash, 'data' => $blob !== false ? $this->store->unserialize($blob) : null];
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
     {
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass);
+
+        if ($this->cluster) {
+            $seg = $this->resolveDepVersionsSeg(
+                [$this->keys->verKey($parentKey), $this->keys->verKey($relatedKey)],
+                [$this->keys->scheduledKey($parentKey), $this->keys->scheduledKey($relatedKey)],
+                (int) floor(microtime(true) * 1000)
+            );
+            $prefix = CacheKeyBuilder::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':' . $relation . ':' . $constraintHash . ':' . $seg . ':';
+            $pivotKeys = array_map(fn($id) => $prefix . $id, $parentIds);
+
+            return [
+                'seg' => $seg,
+                'data' => array_combine($parentIds, $this->store->getMany($pivotKeys)),
+            ];
+        }
 
         [$seg, $blobs] = $this->luaFetchVersionedPivotCache($parentKey, $relatedKey, $relation, $constraintHash, $parentIds);
 
@@ -144,39 +167,35 @@ class CacheManager
         ];
     }
 
-    public function fetchVersionedAggregates(string $keyPrefix, array $parentIds, array $specs): array
-    {
-        $keys = [$keyPrefix];
-        $argv = [(string) count($parentIds), ...array_map('strval', $parentIds), (string) count($specs), (string) (int) floor(microtime(true) * 1000)];
-
-        foreach ($specs as $spec) {
-            $keys[] = $this->keys->verKey($this->keys->classKey($spec['relatedClass']));
-            $keys[] = $this->keys->verKey($this->keys->classKey($spec['secondClass'] ?? $spec['relatedClass']));
-            array_push($argv, $spec['staticSuffix'], $spec['secondLabel'] ?? '');
-        }
-
-        foreach ($specs as $spec) {
-            $keys[] = $this->keys->scheduledKey($this->keys->classKey($spec['relatedClass']));
-            $keys[] = $this->keys->scheduledKey($this->keys->classKey($spec['secondClass'] ?? $spec['relatedClass']));
-        }
-
-        [$blobs, $suffixes] = $this->luaFetchVersionedAggregates($keys, $argv);
-
-        return [
-            'data' => $this->store->unserializeMany($blobs),
-            'suffixes' => $suffixes,
-        ];
-    }
-
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->keys->classKey($modelClass);
         $ts = $this->keys->tagSegment($tag);
         $lockSuffix = $this->keys->rawBuildLockSuffix($tag, $hash);
+        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
+        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
+
+        if ($this->cluster) {
+            $seg = $this->resolveDepVersionsSeg($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
+            $rawKey = $this->keys->rawPrefix($classKey) . $ts . $seg . ':' . $hash;
+            $data = $this->store->get($rawKey);
+
+            if ($data !== null) {
+                return $this->rawResult('hit', $rawKey, $data, null);
+            }
+
+            $buildingKey = $this->keys->buildingPrefix($classKey) . $lockSuffix;
+
+            if ($this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
+                return $this->rawResult('miss', $rawKey, null, $buildingKey);
+            }
+
+            return $this->rawResult('building', null, null, null);
+        }
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
-            $this->keys->depVersionKeys($classKey, $depClasses),
-            $this->keys->depScheduledKeys($classKey, $depClasses),
+            $versionKeys,
+            $scheduledKeys,
             $this->keys->rawPrefix($classKey) . $ts,
             $this->keys->buildingPrefix($classKey),
             $hash,
@@ -225,11 +244,6 @@ class CacheManager
     {
         $this->store->setMany($pivotEntriesByKey, $this->queryTtl);
         $this->cacheModelAttrs($relatedClass, $modelAttrs);
-    }
-
-    public function setRelationAggregates(array $entries): void
-    {
-        $this->store->setMany($entries, $this->queryTtl);
     }
 
     public function storeQueryAggregate(string $key, mixed $value, ?int $ttl = null): void
@@ -584,11 +598,36 @@ class CacheManager
         return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null];
     }
 
-    private function luaFetchVersionedAggregates(array $keys, array $argv): array
-    {
-        $result = $this->store->eval(LuaScripts::get('fetch_versioned_aggregates'), $keys, $argv);
+    // -------------------------------------------------------------------------
+    // Cluster-safe version resolution
+    // -------------------------------------------------------------------------
 
-        return [(array) ($result[0] ?? []), (array) ($result[1] ?? [])];
+    // One Lua call per unique key — each touches a single slot, safe in cluster.
+    private function resolveVersionMap(array $versionKeys, array $scheduledKeys, int $nowMs): array
+    {
+        $script = LuaScripts::get('fetch_version_with_cooldown');
+        $map = [];
+        foreach ($versionKeys as $i => $verKey) {
+            if (!array_key_exists($verKey, $map)) {
+                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [(string) $nowMs]) ?? '0');
+            }
+        }
+
+        return $map;
+    }
+
+    private function resolveDepVersionsSeg(array $versionKeys, array $scheduledKeys, int $nowMs): string
+    {
+        $map = $this->resolveVersionMap($versionKeys, $scheduledKeys, $nowMs);
+
+        return implode(':', array_map(fn($k) => 'v' . $map[$k], $versionKeys));
+    }
+
+    private function clusterFetchVersionedCache(array $versionKeys, array $scheduledKeys, string $keyPrefix, string $hash): array
+    {
+        $seg = $this->resolveDepVersionsSeg($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
+
+        return [$seg, $this->store->get($keyPrefix . $seg . ':' . $hash)];
     }
 
     // -------------------------------------------------------------------------

@@ -276,7 +276,6 @@ class LuaScriptConsistencyTest extends TestCase
         $query = fn() => Author::withCount('posts')->find($author->id);
 
         $this->assertSame(2, $query()->posts_count);
-        $this->assertNotEmpty($this->redisKeys('test:agg:*'));
 
         Post::create(['title' => 'Post 3', 'author_id' => $author->id]);
 

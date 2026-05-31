@@ -7,25 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.1] — 2026-05-31
+## [2.1.0] — 2026-05-31
 
 ### Added
 
-- **Cooldown invalidation across all cache families:** raw, scalar, pivot, and aggregate Lua scripts now apply due scheduled invalidations before composing version segments, matching `fetch_versioned_query`.
-- **`stale_ttl_depth` config:** controls stale-serving depth during stampede protection. Set to `0` to disable. Default: `3`.
-- **`EloquentContractTest` suite:** 130+ contract tests verifying that cold cache, warm cache, and native Eloquent return identical results across every intercepted operation — `get`, `first`, `paginate`, all scalar aggregates, all relation shapes, all `withAggregate` variants, collection loading, global scopes, bypass paths, and write shapes.
+- **Cooldown invalidation across all cache families:** raw, scalar, and pivot scripts now apply scheduled invalidations before reading, matching the query cache behaviour.
+- **`stale_version_depth` config:** controls how many stale versions to serve during stampede protection. Default: `3`, set to `0` to disable.
+
+### Changed
+
+- **Redis Cluster support:** cross-model paths (`dependsOn`, pivot, through, `withCount`) resolve each model's version key individually per slot. Single-instance behaviour is unchanged. Enable with `NORMCACHE_CLUSTER=true`.
+- **Aggregate caching simplified:** `withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached as a versioned blob per query. Invalidation and API are unchanged; the per-parent-ID key structure and `RelationAggregateLoader` have been removed.
 
 ### Fixed
 
-- **`withAggregate` parameter order:** corrected to match Laravel's `($relations, $column, $function)`; the reversal produced invalid SQL with `DB::raw()` columns.
-- **Removed global scopes on aggregate/missed queries:** `withoutGlobalScope()` on a parent query is now propagated to both the aggregate sub-query and the miss-reload path.
-- **`HasOneThrough` + `latestOfMany()` warm-cache:** warm path no longer returns `null` when `latestOfMany()` adds synthetic join columns to the projection.
-- **`flushModel()` bypasses cooldown:** manual flushes always invalidate immediately; cooldown debounce applies only to automatic write-triggered invalidations.
+- **Mutable primary keys:** changing a model's PK via `save()` now evicts the old `model:{table}:id` cache key.
+- **Raw build lock tag-segmented:** different tagged queries no longer share the same stampede lock.
+- **`where`/`whereRaw` on aggregate alias falls back correctly:** these patterns now trigger the native Eloquent path instead of running a broken ID query.
+- **`withAggregate` parameter order:** corrected to match Laravel's `($relations, $column, $function)`.
+- **Removed global scopes propagated to aggregate queries:** `withoutGlobalScope()` on a parent query is now respected in aggregate sub-queries and miss-reload paths.
+- **`flushModel()` bypasses cooldown:** manual flushes always invalidate immediately.
 - **Scalar cache skips expression columns:** `sum`, `avg`, `min`, `max`, `value`, and `pluck` fall through to Eloquent for `DB::raw()` arguments.
-- **Pivot constraint hash covers raw order/having bindings:** `orderByRaw` calls with different bindings on the same relation no longer collide in cache.
-- **Raw cache waiter becomes the builder on orphaned lock:** a waiter that wakes to a dead builder now populates cache itself rather than silently falling back to the database.
-- **Expression primary-key guard:** `where('id', DB::raw(...))` falls through to the query cache path.
-- **PhpRedis `MGET` missing-key handling:** `getMany` treats `false` identically to `null` in both cluster and non-cluster paths.
+- **Raw cache waiter takes over orphaned locks:** a waiter that wakes to a dead builder now populates the cache itself.
 
 ---
 

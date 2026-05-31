@@ -194,7 +194,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'agg:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -203,7 +203,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'agg:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
         });
     }
 }

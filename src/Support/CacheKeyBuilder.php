@@ -19,8 +19,6 @@ class CacheKeyBuilder
 
     public const K_MEMBERS = 'members:model';
 
-    public const K_AGG = 'agg';
-
     public const K_COUNT = 'count';
 
     public const K_SCALAR = 'scalar';

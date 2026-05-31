@@ -146,7 +146,6 @@ class CacheManagerTest extends TestCase
         $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
         $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
         $store->set("ver:{{$postsKey}}:", 3, 3600);
-        $store->set("agg:{{$postsKey}}:1:count:*:posts:nc:v1", ['v' => 5], 3600);
         $store->set("through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
         $store->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
         $store->set("building:query:{{$postsKey}}:v1:abc", 1, 3600);
@@ -154,7 +153,7 @@ class CacheManagerTest extends TestCase
 
         $deleted = $this->manager->flushAll();
 
-        $this->assertSame(8, $deleted);
+        $this->assertSame(7, $deleted);
         $this->assertEmpty($this->redisKeys('test:*'));
     }
 

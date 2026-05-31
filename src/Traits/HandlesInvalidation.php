@@ -87,6 +87,22 @@ trait HandlesInvalidation
         });
     }
 
+    public function evictModelKey(string $modelClass, mixed $id): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $this->handle(function () use ($modelClass, $id) {
+            $classKey = $this->keys->classKey($modelClass);
+            $key = $this->keys->modelPrefix($classKey) . $id;
+            $this->store->deleteFromSet(
+                $this->store->prefix($key),
+                $this->store->prefix($this->keys->membersKey($classKey))
+            );
+        });
+    }
+
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->keys->classKey($modelClass);
@@ -102,7 +118,6 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_MODEL . ':*',
             CacheKeyBuilder::K_MEMBERS . ':*',
             CacheKeyBuilder::K_VER . ':*',
-            CacheKeyBuilder::K_AGG . ':*',
             CacheKeyBuilder::K_COUNT . ':*',
             CacheKeyBuilder::K_SCALAR . ':*',
             CacheKeyBuilder::K_PIVOT . ':*',
@@ -127,7 +142,6 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_AGG . ':{' . $classKey . '}:' . $tag . ':*',
         ]);
     }
 
@@ -142,7 +156,6 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_AGG . ':*:' . $tag . ':*',
         ]);
     }
 

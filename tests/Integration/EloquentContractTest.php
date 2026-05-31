@@ -1767,6 +1767,23 @@ class EloquentContractTest extends TestCase
         $this->assertSame($native, $cached);
     }
 
+    public function test_mutating_primary_key_evicts_old_model_cache_key(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $oldId = $author->id;
+
+        // Warm the model cache for the old ID.
+        Author::find($oldId);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $oldId));
+
+        // Mutate the PK.
+        $author->id = 9999;
+        $author->save();
+
+        // Old model key must be evicted — not left as orphaned memory.
+        $this->assertNull($this->modelCacheEntry(Author::class, $oldId), 'old model cache key must be evicted after PK mutation');
+    }
+
     public function test_force_delete_returns_affected_row_count(): void
     {
         $p1 = Post::create(['title' => 'FD1', 'author_id' => Author::create(['name' => 'X'])->id]);

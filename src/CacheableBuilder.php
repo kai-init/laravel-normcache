@@ -5,6 +5,7 @@ namespace NormCache;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -145,7 +146,8 @@ class CacheableBuilder extends Builder
                 continue;
             }
 
-            $relatedClass = $this->model->{$name}()->getRelated()::class;
+            $relation = $this->model->{$name}();
+            $relatedClass = $relation->getRelated()::class;
 
             if (!self::relatedIsCacheable($relatedClass)) {
                 $original = $explicitAlias !== null ? "{$name} as {$explicitAlias}" : $name;
@@ -158,12 +160,23 @@ class CacheableBuilder extends Builder
                 continue;
             }
 
+            // Through model FK changes must also invalidate the blob; skip non-Cacheable through models.
+            $throughClass = null;
+            if ($relation instanceof HasOneOrManyThrough) {
+                $through = (new \ReflectionProperty($relation, 'throughParent'))->getValue($relation)::class;
+                if (self::relatedIsCacheable($through)) {
+                    $throughClass = $through;
+                }
+            }
+
             $this->pendingAggregates[] = [
                 'name' => $name,
                 'alias' => $alias,
                 'constraint' => $constraint,
                 'function' => $lowerFunction,
                 'column' => $colValue,
+                'relatedClass' => $relatedClass,
+                'throughClass' => $throughClass,
             ];
         }
 
@@ -211,8 +224,12 @@ class CacheableBuilder extends Builder
 
         try {
             if ($this->shouldUseCache($base, $resolvedCols)) {
-                if (!empty($this->pendingAggregates) && $this->queryReferencesPendingAggregateAlias($base)) {
-                    return $this->getWithoutCache($columns);
+                if (!empty($this->pendingAggregates)) {
+                    if ($this->queryReferencesPendingAggregateAlias($base)) {
+                        return $this->getWithoutCache($columns);
+                    }
+
+                    return $this->getFromAggregateBlobCache($base, $model, $columns);
                 }
 
                 return $this->getFromCacheableQuery($base, $model, $resolvedCols);
@@ -225,6 +242,12 @@ class CacheableBuilder extends Builder
                     }
 
                     $base->select($this->model->getTable() . '.*');
+                }
+
+                // Replay into $base before hashing so aggregate subqueries are part of the blob key.
+                if (!empty($this->pendingAggregates)) {
+                    $this->replayPendingAggregates();
+                    $this->pendingAggregates = [];
                 }
 
                 return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
@@ -292,6 +315,91 @@ class CacheableBuilder extends Builder
     // -------------------------------------------------------------------------
     // Private — query execution
     // -------------------------------------------------------------------------
+
+    private function getFromAggregateBlobCache(QueryBuilder $base, string $model, mixed $columns): Collection
+    {
+        $debugbarStart = NormCacheCollector::beginMeasure();
+        $depClasses = $this->inferAggregateDependencies();
+        $hash = $this->aggregateBlobHash($base);
+
+        $result = NormCache::getRawCache($model, $depClasses, $hash, $this->cacheTag);
+
+        if ($result['status'] === 'building') {
+            $result = NormCache::waitForBuild($model, $hash, depClasses: $depClasses, tag: $this->cacheTag);
+
+            if ($result === null) {
+                if (NormCache::isEventsEnabled()) {
+                    event(new QueryCacheMiss($model, 'building:budget-exhausted'));
+                }
+
+                NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'agg-blob']);
+
+                $this->replayPendingAggregates();
+                $this->pendingAggregates = [];
+
+                return $this->finalizeResult(parent::get($columns)->all());
+            }
+        }
+
+        if ($result['status'] === 'miss') {
+            if (NormCache::isEventsEnabled()) {
+                event(new QueryCacheMiss($model, $result['key']));
+            }
+
+            NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'agg-blob']);
+
+            $this->replayPendingAggregates();
+            $this->pendingAggregates = [];
+            $models = parent::get($columns);
+            // getRawOriginal() preserves $hidden attrs; attributesToArray() applies dynamic casts (withExists → bool).
+            $blob = $models->map(fn($m) => array_merge($m->getRawOriginal(), $m->attributesToArray()))->all();
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
+
+            return $this->finalizeResult($models->all());
+        }
+
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryCacheHit($model, $result['key']));
+        }
+
+        NormCacheCollector::recordQuery('query hit', $model, $result['key'], $debugbarStart, [
+            'kind' => 'agg-blob',
+            'contains' => class_basename($model) . ' (' . count($result['blob']) . ' models)',
+        ]);
+
+        $this->pendingAggregates = [];
+
+        return $this->finalizeResult(NormCache::hydrateRaw($result['blob'], $model));
+    }
+
+    private function inferAggregateDependencies(): array
+    {
+        $classes = [];
+        foreach ($this->pendingAggregates as $agg) {
+            $classes[] = $agg['relatedClass'];
+            if ($agg['throughClass'] ?? null) {
+                $classes[] = $agg['throughClass'];
+            }
+        }
+
+        return array_values(array_unique($classes));
+    }
+
+    private function aggregateBlobHash(QueryBuilder $base): string
+    {
+        $baseHash = $this->queryCacheKey($base);
+        // function+column in the spec hash prevents withSum and withAvg on the same relation from colliding.
+        $specHashes = array_map(function ($agg) {
+            $builder = ($agg['relatedClass'])::withoutCache();
+            if ($agg['constraint'] !== null) {
+                ($agg['constraint'])($builder);
+            }
+
+            return $agg['function'] . ':' . $agg['column'] . ':' . QueryHasher::fromQuery($builder->toBase());
+        }, $this->pendingAggregates);
+
+        return sha1($baseHash . ':' . implode(':', $specHashes));
+    }
 
     private function paginateWithCountCache(QueryBuilder $base, string $kind, $perPage, $columns, string $pageName, $page, $fallbackTotal): LengthAwarePaginator
     {
@@ -490,17 +598,6 @@ class CacheableBuilder extends Builder
 
     private function finalizeResult(array $models): Collection
     {
-        if (!empty($this->pendingAggregates)) {
-            // Raw paths can yield null-PK rows (GROUP BY etc.) — load aggregates only for valid-PK models.
-            $targets = $this->dependsOn !== null
-                ? array_values(array_filter($models, fn($m) => $m->getKey() !== null))
-                : $models;
-
-            if (!empty($targets)) {
-                (new RelationAggregateLoader($this->model, $this, $this->cacheTag))->load($targets, $this->pendingAggregates);
-            }
-        }
-
         if ($models && $this->eagerLoad) {
             $models = $this->eagerLoadRelations($models);
         }

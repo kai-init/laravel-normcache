@@ -96,7 +96,7 @@ Post::query()->remember(600)->get();
 
 ### Aggregates
 
-`withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached automatically and invalidated when related rows change.
+`withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached automatically. The result set is cached as a single versioned blob and invalidated when any related model version changes.
 
 ```php
 Post::withCount('comments')->get();
@@ -223,9 +223,9 @@ This adds a **Normcache** timeline tab showing every query hit, miss, bypass, an
 
 ## Redis Clustering
 
-Every key uses a hash tag derived from the model class — `{posts}`, `{analytics:posts}` — so all keys for a given model land on the same cluster slot. `MGET` batches, Lua scripts, and pipelines never cross node boundaries.
+Single-model operations keep all keys on one slot via a per-model hash tag (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with a separate single-slot Lua call, then read or write on the primary model's slot.
 
-Enable with `'cluster' => true` in the config. `flushAll()` is supported.
+Enable with `'cluster' => true`. `flushAll()` is supported.
 
 ---
 
