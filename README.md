@@ -225,7 +225,7 @@ This adds a **Normcache** timeline tab showing every query hit, miss, bypass, an
 
 Single-model operations keep all keys on one slot via a per-model hash tag (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with a separate single-slot Lua call, then read or write on the primary model's slot.
 
-**Consistency note:** cross-model version resolution is not atomic — a writer that bumps a dep version between the two GETs will cause at most one stale response before the next request picks up the new version. This is the same eventually-consistent trade-off accepted by all distributed caches. Use `cluster_hash_tag` (see config) if you need full atomicity at the cost of all keys landing on one slot.
+**Consistency note:** cross-model version resolution is not atomic — concurrent requests during a version bump may briefly serve stale data. For full atomicity, set `key_prefix` to a Redis hash tag such as `{ns}:` — all NormCache keys then land on one slot, restoring single-Lua-call semantics at the cost of no cross-slot distribution.
 
 Enable with `'cluster' => true`. `flushAll()` is supported.
 
