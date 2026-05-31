@@ -130,7 +130,7 @@ NormCache::flushModel(Post::class);
 
 ### Tag-Based Flush
 
-Tag any query to group cache entries for manual flushing — useful for invalidation events the version system can't see (deploys, config changes, nightly rebuilds):
+Tag any query to group cache entries for manual flushing — useful for invalidation events the version system can't see (deploys, config changes, nightly rebuilds). Tags must not contain `: { } *` or whitespace.
 
 ```php
 Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
@@ -169,14 +169,15 @@ Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, raw `ORDER
 ```php
 // config/normcache.php
 return [
-    'connection'     => env('NORMCACHE_CONNECTION', 'cache'),
-    'enabled'        => env('NORMCACHE_ENABLED', true),
-    'ttl'            => env('NORMCACHE_TTL', 604800),      // model keys: 7 days
-    'query_ttl'      => env('NORMCACHE_QUERY_TTL', 3600),  // query/raw/pivot keys: 1 hour
-    'key_prefix'     => env('NORMCACHE_PREFIX', ''),
-    'cooldown'          => env('NORMCACHE_COOLDOWN', 0),           // version bump debounce in seconds
-    'building_lock_ttl' => env('NORMCACHE_BUILDING_LOCK_TTL', 5),  // seconds before an abandoned cache build lock expires
-    'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200), // ms to wait for a build in progress (Redis 6.0+ for sub-second)
+    'connection'        => env('NORMCACHE_CONNECTION', 'cache'),
+    'enabled'           => env('NORMCACHE_ENABLED', true),
+    'ttl'               => env('NORMCACHE_TTL', 604800),
+    'query_ttl'         => env('NORMCACHE_QUERY_TTL', 3600),
+    'key_prefix'        => env('NORMCACHE_PREFIX', ''),
+    'cooldown'          => env('NORMCACHE_COOLDOWN', 0),
+    'building_lock_ttl' => env('NORMCACHE_BUILDING_LOCK_TTL', 5),
+    'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
+    'stale_ttl_depth'   => env('NORMCACHE_STALE_TTL_DEPTH', 3),
     'cluster'           => env('NORMCACHE_CLUSTER', false),
     'events'            => env('NORMCACHE_EVENTS', true),
     'fallback'          => env('NORMCACHE_FALLBACK', false),
@@ -185,13 +186,15 @@ return [
 ];
 ```
 
-**`cooldown`** — Consecutive writes within the window bump the version only once. Useful for write-heavy models.
-
-**`fallback`** — When `true`, Redis exceptions are caught, the cache is disabled for the request, and queries fall back to the database.
-
-**`events`** — Set to `false` to disable hit/miss event dispatches on hot paths.
-
-**`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event (disabled by default).
+- **`ttl`** — Lifetime of individual model attribute keys. Default: 7 days.
+- **`query_ttl`** — Lifetime of query, raw, pivot, and through cache keys. Default: 1 hour.
+- **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Consecutive writes within the window bump the version only once.
+- **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
+- **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
+- **`stale_ttl_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
+- **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.
+- **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
+- **`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event.
 
 ---
 

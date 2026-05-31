@@ -24,6 +24,11 @@ class Country extends Model
         return $this->hasManyThrough(Post::class, Author::class);
     }
 
+    public function firstPost(): HasOneThrough
+    {
+        return $this->hasOneThrough(Post::class, Author::class);
+    }
+
     public function latestPost(): HasOneThrough
     {
         return $this->hasOneThrough(Post::class, Author::class)->latestOfMany();

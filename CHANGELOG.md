@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.1] — 2026-05-31
+
+### Added
+
+- **Cooldown invalidation across all cache families:** raw, scalar, pivot, and aggregate Lua scripts now apply due scheduled invalidations before composing version segments, matching `fetch_versioned_query`.
+- **`stale_ttl_depth` config:** controls stale-serving depth during stampede protection. Set to `0` to disable. Default: `3`.
+- **`EloquentContractTest` suite:** 130+ contract tests verifying that cold cache, warm cache, and native Eloquent return identical results across every intercepted operation — `get`, `first`, `paginate`, all scalar aggregates, all relation shapes, all `withAggregate` variants, collection loading, global scopes, bypass paths, and write shapes.
+
+### Fixed
+
+- **`withAggregate` parameter order:** signature now matches Laravel's `($relations, $column, $function)`. The previous reversal worked for simple columns but produced invalid SQL for complex `DB::raw()` expressions.
+- **`withCount` with removed parent global scopes:** `fetchMissed()` now propagates the parent builder's removed scopes to the aggregate sub-query, fixing incorrect counts when `withoutGlobalScope()` was active.
+- **`prepareMissedQuery` removed scopes:** the `preserveQueryShape=true` branch now replays removed global scopes on the fallback DB query.
+- **`HasOneThrough` + `latestOfMany()` warm-cache:** the through-relation warm path no longer returns `null` when `latestOfMany()` adds synthetic join columns to the projection.
+
+---
+
 ## [2.0.0] — 2026-05-29
 
 ### Added

@@ -956,8 +956,8 @@ class EloquentContractTest extends TestCase
     {
         $this->fixtures();
         $this->contract(
-            fn() => Country::with('latestPost')->first(),
-            fn() => Country::withoutCache()->with('latestPost')->first(),
+            fn() => Country::with('firstPost')->first(),
+            fn() => Country::withoutCache()->with('firstPost')->first(),
         );
     }
 
