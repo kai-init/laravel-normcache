@@ -3,12 +3,11 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Support\Collection;
-use ReflectionProperty;
+use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -16,6 +15,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
+use ReflectionProperty;
 
 /**
  * Contract tests: every Eloquent operation NormCache intercepts must return an
@@ -38,18 +38,18 @@ class EloquentContractTest extends TestCase
     private function contract(callable $cached, callable $native): void
     {
         $expected = $this->normalize($native());
-        $cold     = $this->normalize($cached());
-        $warm     = $this->normalize($cached());
+        $cold = $this->normalize($cached());
+        $warm = $this->normalize($cached());
 
         $this->assertSame($expected, $cold, 'cold cache result differs from native Eloquent');
-        $this->assertSame($cold,     $warm, 'warm cache result differs from cold');
+        $this->assertSame($cold, $warm, 'warm cache result differs from cold');
     }
 
     private function normalize(mixed $value): mixed
     {
         if ($value instanceof LengthAwarePaginator) {
             return [
-                'data'  => collect($value->items())->map->toArray()->values()->all(),
+                'data' => collect($value->items())->map->toArray()->values()->all(),
                 'total' => $value->total(),
             ];
         }
@@ -78,14 +78,14 @@ class EloquentContractTest extends TestCase
         $country = Country::create(['name' => 'UK']);
 
         $alice = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
-        $bob   = Author::create(['name' => 'Bob',   'country_id' => $country->id]);
+        $bob = Author::create(['name' => 'Bob',   'country_id' => $country->id]);
         $carol = Author::create(['name' => 'Carol']);
 
         $p1 = Post::create(['title' => 'A1', 'author_id' => $alice->id, 'views' => 10, 'published' => true]);
         $p2 = Post::create(['title' => 'A2', 'author_id' => $alice->id, 'views' => 20, 'published' => false]);
         $p3 = Post::create(['title' => 'B1', 'author_id' => $bob->id,   'views' => 30, 'published' => true]);
 
-        $php     = Tag::create(['name' => 'php']);
+        $php = Tag::create(['name' => 'php']);
         $laravel = Tag::create(['name' => 'laravel']);
 
         $alice->tags()->attach([$php->id, $laravel->id]);
@@ -783,16 +783,16 @@ class EloquentContractTest extends TestCase
         UncachedPost::create(['title' => 'UP2', 'author_id' => $author->id]);
 
         $values = fn($result) => $result->map(fn($m) => [
-            'posts_count'          => (int) $m->posts_count,
+            'posts_count' => (int) $m->posts_count,
             'uncached_posts_count' => (int) $m->uncached_posts_count,
         ])->all();
 
         $native = $values(Author::withoutCache()->withoutAggregateCache()->withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
-        $cold   = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
-        $warm   = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
+        $cold = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
+        $warm = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
 
         $this->assertSame($native, $cold, 'cold aggregate values differ from native');
-        $this->assertSame($cold,   $warm, 'warm aggregate values differ from cold');
+        $this->assertSame($cold, $warm, 'warm aggregate values differ from cold');
     }
 
     public function test_with_count_having_on_aggregate_alias_behaves_same_as_native(): void
@@ -837,14 +837,14 @@ class EloquentContractTest extends TestCase
 
         $nativeException = null;
         try {
-            Author::withoutCache()->withoutAggregateCache()->withCount("posts  as  total_posts")->get();
+            Author::withoutCache()->withoutAggregateCache()->withCount('posts  as  total_posts')->get();
         } catch (\Exception $e) {
             $nativeException = get_class($e);
         }
 
         $normcacheException = null;
         try {
-            Author::withCount("posts  as  total_posts")->get();
+            Author::withCount('posts  as  total_posts')->get();
         } catch (\Exception $e) {
             $normcacheException = get_class($e);
         }
@@ -1070,16 +1070,16 @@ class EloquentContractTest extends TestCase
         // the native and cached paths due to prepareMissedQuery dropping beforeQuery hooks.
         // Test the semantically correct part: which Post was selected.
         $check = fn($c) => $c->map(fn($a) => [
-            'author'       => $a->name,
+            'author' => $a->name,
             'latest_title' => $a->latestPost?->title,
         ])->all();
 
         $native = $check(Author::withoutCache()->with('latestPost')->orderBy('name')->get());
-        $cold   = $check(Author::with('latestPost')->orderBy('name')->get());
-        $warm   = $check(Author::with('latestPost')->orderBy('name')->get());
+        $cold = $check(Author::with('latestPost')->orderBy('name')->get());
+        $warm = $check(Author::with('latestPost')->orderBy('name')->get());
 
         $this->assertSame($native, $cold, 'cold != native');
-        $this->assertSame($cold,   $warm, 'warm != cold');
+        $this->assertSame($cold, $warm, 'warm != cold');
     }
 
     public function test_with_has_one_of_many_aggregate_column(): void
@@ -1087,17 +1087,17 @@ class EloquentContractTest extends TestCase
         $this->fixtures(); // Alice: mostViewed=A2(20), Bob: mostViewed=B1(30), Carol: null
 
         $check = fn($c) => $c->map(fn($a) => [
-            'author'             => $a->name,
-            'most_viewed_title'  => $a->mostViewedPost?->title,
-            'most_viewed_views'  => $a->mostViewedPost?->views,
+            'author' => $a->name,
+            'most_viewed_title' => $a->mostViewedPost?->title,
+            'most_viewed_views' => $a->mostViewedPost?->views,
         ])->all();
 
         $native = $check(Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get());
-        $cold   = $check(Author::with('mostViewedPost')->orderBy('name')->get());
-        $warm   = $check(Author::with('mostViewedPost')->orderBy('name')->get());
+        $cold = $check(Author::with('mostViewedPost')->orderBy('name')->get());
+        $warm = $check(Author::with('mostViewedPost')->orderBy('name')->get());
 
         $this->assertSame($native, $cold, 'cold != native');
-        $this->assertSame($cold,   $warm, 'warm != cold');
+        $this->assertSame($cold, $warm, 'warm != cold');
     }
 
     // -------------------------------------------------------------------------

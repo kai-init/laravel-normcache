@@ -166,5 +166,4 @@ class ThroughRelationTest extends TestCase
 
         $this->assertNotEmpty($queries, 'withoutCache() on HasManyThrough should issue a DB query');
     }
-
 }

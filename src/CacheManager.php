@@ -41,7 +41,7 @@ class CacheManager
         private int $staleTtlDepth = 3,
     ) {
         $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
-        $this->keys = new CacheKeyBuilder();
+        $this->keys = new CacheKeyBuilder;
     }
 
     // -------------------------------------------------------------------------
@@ -511,8 +511,10 @@ class CacheManager
             $builder = $modelClass::query();
             if ($builder instanceof CacheableBuilder) {
                 $missedQuery?->applyRemovedScopesTo($builder);
+
                 return $builder->withoutCache();
             }
+
             return $builder;
         }
 

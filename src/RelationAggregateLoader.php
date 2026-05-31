@@ -185,6 +185,4 @@ class RelationAggregateLoader
 
         return QueryHasher::fromQuery($builder->toBase());
     }
-
-
 }

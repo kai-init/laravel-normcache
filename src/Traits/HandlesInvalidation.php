@@ -4,10 +4,11 @@ namespace NormCache\Traits;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use NormCache\CacheManager;
 use NormCache\Support\CacheKeyBuilder;
 
 /**
- * @phpstan-require-extends \NormCache\CacheManager
+ * @phpstan-require-extends CacheManager
  */
 trait HandlesInvalidation
 {
@@ -116,7 +117,7 @@ trait HandlesInvalidation
     public function flushTag(string $modelClass, string $tag): int
     {
         if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException("Cache tag must not contain reserved characters (: { } * or whitespace).");
+            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
         }
 
         $classKey = $this->keys->classKey($modelClass);
@@ -132,7 +133,7 @@ trait HandlesInvalidation
     public function flushTagAcrossModels(string $tag): int
     {
         if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException("Cache tag must not contain reserved characters (: { } * or whitespace).");
+            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
         }
 
         return $this->store->flushByPatterns([
