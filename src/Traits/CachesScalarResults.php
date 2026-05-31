@@ -16,6 +16,10 @@ trait CachesScalarResults
 {
     public function count($columns = '*'): int
     {
+        if ($columns !== '*' && !is_string($columns)) {
+            return (int) parent::count($columns);
+        }
+
         $kind = $columns === '*' ? 'count' : 'count:' . $columns;
 
         return (int) $this->cacheScalar($kind, fn() => parent::count($columns));

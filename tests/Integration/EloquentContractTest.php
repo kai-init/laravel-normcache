@@ -374,6 +374,16 @@ class EloquentContractTest extends TestCase
         );
     }
 
+    public function test_count_with_array_columns_bypasses_scalar_cache(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::count(['id']),
+            fn() => Author::withoutCache()->count(['id']),
+        );
+    }
+
+
     public function test_sum(): void
     {
         $this->fixtures();
@@ -819,11 +829,32 @@ class EloquentContractTest extends TestCase
         $this->assertSame($nativeException, $normcacheException, 'NormCache must fail identically to native Eloquent on HAVING aggregate alias');
     }
 
+    public function test_with_count_order_by_raw_aggregate_alias_matches_native(): void
+    {
+        // orderByRaw referencing an aggregate alias cannot be executed on the ID-fetch query
+        // (the alias column doesn't exist in SQL). NormCache must detect this and fall back
+        // to native Eloquent, which computes the aggregate as a subselect in the same query.
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withCount('posts')->orderByRaw('posts_count desc')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderByRaw('posts_count desc')->get(),
+        );
+    }
+
     public function test_without_aggregate_cache_falls_through_entirely(): void
     {
         $this->fixtures();
         $this->contract(
             fn() => Author::withoutAggregateCache()->withCount('posts')->withSum('posts', 'views')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount('posts')->withSum('posts', 'views')->orderBy('name')->get(),
+        );
+    }
+
+    public function test_without_aggregate_cache_called_after_with_count_replays_to_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withCount('posts')->withSum('posts', 'views')->withoutAggregateCache()->orderBy('name')->get(),
             fn() => Author::withoutCache()->withoutAggregateCache()->withCount('posts')->withSum('posts', 'views')->orderBy('name')->get(),
         );
     }
@@ -1232,6 +1263,9 @@ class EloquentContractTest extends TestCase
 
     public function test_depends_on_join_auto_qualifies_select(): void
     {
+        // When dependsOn() is used with a JOIN and no explicit select, NormCache automatically
+        // qualifies the select to `table.*` to avoid duplicate-column ambiguity during hydration.
+        // This is intentional and documented behavior.
         $this->fixtures();
         $this->contract(
             fn() => Author::query()

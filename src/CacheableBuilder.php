@@ -62,6 +62,11 @@ class CacheableBuilder extends Builder
     {
         $this->cacheAggregates = false;
 
+        if (!empty($this->pendingAggregates)) {
+            $this->replayPendingAggregates();
+            $this->pendingAggregates = [];
+        }
+
         return $this;
     }
 
@@ -589,6 +594,14 @@ class CacheableBuilder extends Builder
         foreach ($base->orders ?? [] as $order) {
             if (isset($order['column']) && in_array($order['column'], $aliases, true)) {
                 return true;
+            }
+            // raw ORDER BY: check if the SQL fragment contains any pending alias
+            if (isset($order['sql'])) {
+                foreach ($aliases as $alias) {
+                    if (str_contains((string) $order['sql'], $alias)) {
+                        return true;
+                    }
+                }
             }
         }
 
