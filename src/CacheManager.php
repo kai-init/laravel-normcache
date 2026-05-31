@@ -175,6 +175,8 @@ class CacheManager
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
 
+        $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
+
         if ($this->cluster) {
             $seg = $this->resolveDepVersionsSeg($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
             $rawKey = $this->keys->rawPrefix($classKey) . $ts . $seg . ':' . $hash;
@@ -184,10 +186,10 @@ class CacheManager
                 return $this->rawResult('hit', $rawKey, $data, null);
             }
 
-            $buildingKey = $this->keys->buildingPrefix($classKey) . $lockSuffix;
+            $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
 
             if ($this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
-                return $this->rawResult('miss', $rawKey, null, $buildingKey);
+                return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey);
             }
 
             return $this->rawResult('building', null, null, null);
@@ -210,7 +212,7 @@ class CacheManager
 
         return match ($status) {
             'hit' => $this->rawResult('hit', $key, $this->store->unserialize($blob), null),
-            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $lockSuffix),
+            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $seg . ':' . $lockSuffix, $wakeKey),
         };
     }
 
@@ -266,12 +268,12 @@ class CacheManager
         }
     }
 
-    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl): void
+    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl, ?string $wakeKey = null): void
     {
         $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
 
         if ($buildingKey !== null) {
-            $this->store->releaseBuilding($buildingKey, $this->keys->buildingToWakeKey($buildingKey));
+            $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey));
         }
     }
 
@@ -692,13 +694,14 @@ class CacheManager
         return $value !== null ? (int) $value : 0;
     }
 
-    private function rawResult(string $status, ?string $key, mixed $blob, ?string $buildingKey): array
+    private function rawResult(string $status, ?string $key, mixed $blob, ?string $buildingKey, ?string $wakeKey = null): array
     {
         return [
             'status' => $status,
             'key' => $key,
             'blob' => $blob,
             'buildingKey' => $buildingKey,
+            'wakeKey' => $wakeKey,
         ];
     }
 

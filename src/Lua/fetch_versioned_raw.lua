@@ -42,7 +42,7 @@ if data then
     return {'hit', seg, data}
 end
 
-local building_key = building_prefix .. ARGV[2]
+local building_key = building_prefix .. seg .. ':' .. ARGV[2]
 if redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[3])) then
     return {'miss', seg, false}
 end

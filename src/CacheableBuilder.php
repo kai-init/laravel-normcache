@@ -134,9 +134,11 @@ class CacheableBuilder extends Builder
                 preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$lowerFunction} {$colValue}")
             );
 
-            // dot-notation names
-            if (str_contains($name, '.')) {
-                $original = $explicitAlias !== null ? "{$name} as {$explicitAlias}" : $name;
+            $original = $explicitAlias !== null ? "{$name} as {$explicitAlias}" : $name;
+
+            $entry = $this->classifyAggregate($name, $alias, $constraint, $lowerFunction, $colValue);
+
+            if ($entry === null) {
                 if ($constraint !== null) {
                     $uncacheable[$original] = $constraint;
                 } else {
@@ -146,38 +148,7 @@ class CacheableBuilder extends Builder
                 continue;
             }
 
-            $relation = $this->model->{$name}();
-            $relatedClass = $relation->getRelated()::class;
-
-            if (!self::relatedIsCacheable($relatedClass)) {
-                $original = $explicitAlias !== null ? "{$name} as {$explicitAlias}" : $name;
-                if ($constraint !== null) {
-                    $uncacheable[$original] = $constraint;
-                } else {
-                    $uncacheable[] = $original;
-                }
-
-                continue;
-            }
-
-            // Through model FK changes must also invalidate the blob; skip non-Cacheable through models.
-            $throughClass = null;
-            if ($relation instanceof HasOneOrManyThrough) {
-                $through = (new \ReflectionProperty($relation, 'throughParent'))->getValue($relation)::class;
-                if (self::relatedIsCacheable($through)) {
-                    $throughClass = $through;
-                }
-            }
-
-            $this->pendingAggregates[] = [
-                'name' => $name,
-                'alias' => $alias,
-                'constraint' => $constraint,
-                'function' => $lowerFunction,
-                'column' => $colValue,
-                'relatedClass' => $relatedClass,
-                'throughClass' => $throughClass,
-            ];
+            $this->pendingAggregates[] = $entry;
         }
 
         if (!empty($uncacheable)) {
@@ -185,6 +156,57 @@ class CacheableBuilder extends Builder
         }
 
         return $this;
+    }
+
+    private function classifyAggregate(
+        string $name,
+        string $alias,
+        ?callable $constraint,
+        string $function,
+        string $column,
+    ): ?array {
+        if (str_contains($name, '.')) {
+            return null;
+        }
+
+        $relation = $this->model->{$name}();
+        $relatedClass = $relation->getRelated()::class;
+
+        if (!self::relatedIsCacheable($relatedClass)) {
+            return null;
+        }
+
+        // Constraints using relation-specific APIs or cross-table reads can't have deps inferred.
+        if ($constraint !== null) {
+            try {
+                $testBuilder = ($relatedClass)::withoutCache();
+                $constraint($testBuilder);
+                if (QueryInspector::hasDependencyBypass($testBuilder->toBase())) {
+                    return null;
+                }
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        // Through model FK changes must invalidate the blob; skip non-Cacheable through models.
+        $throughClass = null;
+        if ($relation instanceof HasOneOrManyThrough) {
+            $through = (new \ReflectionProperty($relation, 'throughParent'))->getValue($relation)::class;
+            if (self::relatedIsCacheable($through)) {
+                $throughClass = $through;
+            }
+        }
+
+        return [
+            'name' => $name,
+            'alias' => $alias,
+            'constraint' => $constraint,
+            'function' => $function,
+            'column' => $column,
+            'relatedClass' => $relatedClass,
+            'throughClass' => $throughClass,
+        ];
     }
 
     public function explain(): string
@@ -319,7 +341,10 @@ class CacheableBuilder extends Builder
     private function getFromAggregateBlobCache(QueryBuilder $base, string $model, mixed $columns): Collection
     {
         $debugbarStart = NormCacheCollector::beginMeasure();
-        $depClasses = $this->inferAggregateDependencies();
+        $depClasses = array_values(array_unique(array_merge(
+            $this->dependsOn ?? [],
+            $this->inferAggregateDependencies(),
+        )));
         $hash = $this->aggregateBlobHash($base);
 
         $result = NormCache::getRawCache($model, $depClasses, $hash, $this->cacheTag);
@@ -348,12 +373,20 @@ class CacheableBuilder extends Builder
 
             NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'agg-blob']);
 
+            $aggAliases = array_column($this->pendingAggregates, 'alias');
             $this->replayPendingAggregates();
             $this->pendingAggregates = [];
             $models = parent::get($columns);
-            // getRawOriginal() preserves $hidden attrs; attributesToArray() applies dynamic casts (withExists → bool).
-            $blob = $models->map(fn($m) => array_merge($m->getRawOriginal(), $m->attributesToArray()))->all();
-            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
+            // getRawOriginal() preserves $hidden; getAttribute(alias) applies dynamic casts (withExists → bool).
+            $blob = $models->map(function ($m) use ($aggAliases) {
+                $attrs = $m->getRawOriginal();
+                foreach ($aggAliases as $alias) {
+                    $attrs[$alias] = $m->getAttribute($alias);
+                }
+
+                return $attrs;
+            })->all();
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null);
 
             return $this->finalizeResult($models->all());
         }
@@ -387,15 +420,14 @@ class CacheableBuilder extends Builder
 
     private function aggregateBlobHash(QueryBuilder $base): string
     {
-        $baseHash = $this->queryCacheKey($base);
-        // function+column in the spec hash prevents withSum and withAvg on the same relation from colliding.
+        $baseHash = $this->rawCacheKey($base);
         $specHashes = array_map(function ($agg) {
             $builder = ($agg['relatedClass'])::withoutCache();
             if ($agg['constraint'] !== null) {
                 ($agg['constraint'])($builder);
             }
 
-            return $agg['function'] . ':' . $agg['column'] . ':' . QueryHasher::fromQuery($builder->toBase());
+            return $agg['name'] . ':' . $agg['alias'] . ':' . $agg['function'] . ':' . $agg['column'] . ':' . QueryHasher::fromQuery($builder->toBase());
         }, $this->pendingAggregates);
 
         return sha1($baseHash . ':' . implode(':', $specHashes));
@@ -528,7 +560,7 @@ class CacheableBuilder extends Builder
             NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
 
             $blob = array_map(fn($r) => (array) $r, $base->get()->all());
-            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl);
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null);
 
             return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
         }
@@ -608,6 +640,7 @@ class CacheableBuilder extends Builder
     private function getWithoutCache($columns): Collection
     {
         $this->replayPendingAggregates();
+        $this->pendingAggregates = [];
 
         return parent::get($columns);
     }
@@ -738,7 +771,7 @@ class CacheableBuilder extends Builder
     private function rawSqlReferencesAlias(string $sql, array $aliases): bool
     {
         foreach ($aliases as $alias) {
-            if (str_contains($sql, $alias)) {
+            if (preg_match('/(?<![A-Za-z0-9_])' . preg_quote($alias, '/') . '(?![A-Za-z0-9_])/', $sql)) {
                 return true;
             }
         }

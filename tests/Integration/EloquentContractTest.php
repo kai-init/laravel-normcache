@@ -629,6 +629,62 @@ class EloquentContractTest extends TestCase
     // withAggregate / deferred aggregates
     // -------------------------------------------------------------------------
 
+    public function test_aggregate_blob_key_includes_selected_columns(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+
+        $idOnly = Author::select('id')->withCount('posts')->where('id', $alice->id)->get()->first();
+        $nameOnly = Author::select('name')->withCount('posts')->where('id', $alice->id)->get()->first();
+
+        $this->assertArrayHasKey('id', $idOnly->getAttributes(), 'id-only projection must contain id');
+        $this->assertArrayNotHasKey('name', $idOnly->getAttributes(), 'id-only projection must not contain name from other query blob');
+        $this->assertArrayHasKey('name', $nameOnly->getAttributes(), 'name-only projection must contain name');
+        $this->assertArrayNotHasKey('id', $nameOnly->getAttributes(), 'name-only projection must not contain id from other query blob');
+    }
+
+    public function test_aggregate_blob_key_includes_relation_name(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+
+        $this->contract(
+            fn() => Author::withCount('posts')->where('id', $alice->id)->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount('posts')->where('id', $alice->id)->get(),
+        );
+        $this->contract(
+            fn() => Author::withCount('firstPost')->where('id', $alice->id)->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount('firstPost')->where('id', $alice->id)->get(),
+        );
+    }
+
+    public function test_aggregate_constraint_with_where_has_falls_back_to_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withCount(['posts' => fn($q) => $q->whereHas('tags')])->orderBy('name')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount(['posts' => fn($q) => $q->whereHas('tags')])->orderBy('name')->get(),
+        );
+    }
+
+    public function test_aggregate_blob_respects_explicit_depends_on(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+
+        Author::dependsOn([Tag::class])->withCount('posts')->where('id', $alice->id)->get(); // prime
+
+        $tagVersionBefore = $this->cacheManager()->currentVersion(Tag::class);
+        Tag::create(['name' => 'dummy']); // bumps Tag version; inferred dep is Post only
+        $tagVersionAfter = $this->cacheManager()->currentVersion(Tag::class);
+        $this->assertGreaterThan($tagVersionBefore, $tagVersionAfter, 'Tag version must bump on create');
+
+        DB::enableQueryLog();
+        Author::dependsOn([Tag::class])->withCount('posts')->where('id', $alice->id)->get();
+        $log = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertNotEmpty($log, 'blob must be invalidated when explicit dependsOn Tag version bumps');
+    }
+
     public function test_with_count_has_many(): void
     {
         $this->fixtures();

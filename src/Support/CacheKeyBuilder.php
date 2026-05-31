@@ -115,6 +115,11 @@ class CacheKeyBuilder
         return array_map(fn($key) => $this->scheduledKey($key), $all);
     }
 
+    public function wakeKey(string $classKey, string $lockSuffix): string
+    {
+        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
+    }
+
     public function buildingToWakeKey(string $buildingKey): string
     {
         $classKeyEnd = strpos($buildingKey, '}:') + 2;
