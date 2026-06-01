@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration;
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
@@ -517,5 +518,42 @@ class DependsOnTest extends TestCase
 
         $this->assertSame($author->id, $result->id);
         $this->assertNotSame($post->id, $result->id);
+    }
+
+    public function test_where_raw_cross_table_dependency_is_not_cached_as_normal_model_query(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Hello',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $comment = Comment::create([
+            'body' => 'Looks good',
+            'commentable_type' => Post::class,
+            'commentable_id' => $post->id,
+        ]);
+
+        $sql = <<<'SQL'
+            exists (
+                select 1
+                from comments
+                where comments.commentable_id = posts.id
+                and comments.commentable_type = ?
+            )
+        SQL;
+
+        $first = Post::whereRaw($sql, [Post::class])->get();
+
+        $this->assertCount(1, $first);
+        $this->assertTrue($first->first()->is($post));
+
+        $comment->delete();
+
+        $second = Post::whereRaw($sql, [Post::class])->get();
+
+        $this->assertCount(0, $second);
     }
 }
