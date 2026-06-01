@@ -472,7 +472,7 @@ final class RedisStore
 
                 [$cursor, $chunk] = $result;
                 $keys = [...$keys, ...$chunk];
-            } while ($cursor !== 0);
+            } while ((int) $cursor !== 0);
         }
 
         return $keys;
