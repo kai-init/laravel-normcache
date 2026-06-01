@@ -109,22 +109,27 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        $hash = $this->queryCacheKey($base) . ":{$kind}";
+        $hash = 'scalar:' . $this->queryCacheKey($base) . ":{$kind}";
 
         try {
-            ['key' => $cacheKey, 'data' => $result] = NormCache::getNamespacedCache(
-                'scalar',
+            $result = NormCache::getRawCache(
                 $this->model::class,
-                $hash,
                 $this->dependsOn ?? [],
+                $hash,
                 $this->cacheTag
             );
-            $hit = $result !== null;
-            $result = $hit ? $result[0] : null;
+
+            if ($result['status'] === 'building') {
+                return $fallback();
+            }
+
+            $hit = $result['status'] === 'hit';
+            $cacheKey = $result['key'];
+            $value = $hit ? ($result['blob'][0] ?? null) : null;
 
             if (!$hit) {
-                $result = $fallback();
-                NormCache::storeQueryAggregate($cacheKey, $result, $this->queryTtl);
+                $value = $fallback();
+                NormCache::storeRawResult($cacheKey, [$value], $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
             }
 
             if (NormCache::isEventsEnabled()) {
@@ -142,7 +147,7 @@ trait CachesScalarResults
                 ['kind' => $kind]
             );
 
-            return $result;
+            return $value;
         } catch (\Exception $e) {
             NormCache::fallback($e);
 

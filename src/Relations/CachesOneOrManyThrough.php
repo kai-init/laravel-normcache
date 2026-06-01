@@ -56,21 +56,23 @@ trait CachesOneOrManyThrough
                 'through' => $this->throughParent::class,
             ]);
 
-            $result = parent::get($columns);
-            $payload = $this->cachePayloadFromResult($result);
+            $models = parent::get($columns);
+            $payload = $this->cachePayloadFromResult($models);
 
             $modelAttrs = [];
             if ($shouldCacheModels) {
-                foreach ($result as $model) {
+                foreach ($models as $model) {
                     $attrs = $model->getRawOriginal();
                     unset($attrs['laravel_through_key']);
                     $modelAttrs[$model->getKey()] = $attrs;
                 }
             }
 
-            NormCache::storeThroughResult($key, $payload, $relatedClass, $modelAttrs);
+            if (NormCache::storeVersionedResult($key, $payload, versionKeys: $result['versionKeys'], expectedVersions: $result['expectedVersions'])) {
+                NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
+            }
 
-            return $result;
+            return $models;
         } catch (\Exception $e) {
             NormCache::fallback($e);
 

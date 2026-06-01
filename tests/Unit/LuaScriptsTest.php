@@ -9,12 +9,11 @@ use ReflectionProperty;
 class LuaScriptsTest extends TestCase
 {
     private static array $knownScripts = [
-        'store_query_cas',
+        'store_versioned_cas',
         'fetch_versioned_query',
         'fetch_versioned_cache',
         'fetch_versioned_pivot',
         'fetch_version_with_cooldown',
-        'fetch_raw_by_seg',
         'set_many_tracked_if_version',
     ];
 
@@ -49,12 +48,12 @@ class LuaScriptsTest extends TestCase
     public function test_static_cache_is_populated_after_first_load(): void
     {
         $cache = (new ReflectionProperty(LuaScripts::class, 'cache'))->getValue();
-        $this->assertArrayNotHasKey('store_query_cas', $cache);
+        $this->assertArrayNotHasKey('store_versioned_cas', $cache);
 
-        LuaScripts::get('store_query_cas');
+        LuaScripts::get('store_versioned_cas');
 
         $cache = (new ReflectionProperty(LuaScripts::class, 'cache'))->getValue();
-        $this->assertArrayHasKey('store_query_cas', $cache);
+        $this->assertArrayHasKey('store_versioned_cas', $cache);
     }
 
     public function test_loaded_content_matches_file_on_disk(): void

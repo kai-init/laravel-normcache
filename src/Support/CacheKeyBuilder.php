@@ -137,6 +137,16 @@ class CacheKeyBuilder
         return $keyPrefix . $seg . ':' . $hash;
     }
 
+    public function versionSegment(array $versionKeys, array $resolvedVersions): string
+    {
+        return implode(':', array_map(fn($key) => 'v' . $resolvedVersions[$key], $versionKeys));
+    }
+
+    public function versionsFromSegment(string $seg): array
+    {
+        return array_map(fn($version) => substr($version, 1), explode(':', $seg));
+    }
+
     public function membersKey(string $classKey): string
     {
         return self::K_MEMBERS . ':{' . $classKey . '}';

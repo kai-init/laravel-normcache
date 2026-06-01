@@ -8,6 +8,7 @@ use NormCache\CacheManager;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
@@ -214,6 +215,131 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
     }
 
+    public function test_raw_result_write_is_skipped_when_dependency_version_changes_during_build(): void
+    {
+        $manager = $this->cacheManager();
+        $hash = 'manual-raw-build';
+
+        $miss = $manager->getRawCache(Author::class, [Post::class], $hash);
+
+        $this->assertSame('miss', $miss['status']);
+
+        $this->bumpVersionInRedis(NormCache::classKey(Post::class));
+
+        $manager->storeRawResult(
+            $miss['key'],
+            [['id' => 1, 'name' => 'Stale']],
+            $miss['buildingKey'],
+            60,
+            $miss['wakeKey'],
+            $miss['versionKeys'],
+            $miss['expectedVersions'],
+        );
+
+        $this->assertNull($manager->getStore()->get($miss['key']));
+        $this->assertNull($manager->getStore()->getRaw($miss['buildingKey']));
+    }
+
+    public function test_namespaced_result_write_is_skipped_when_dependency_version_changes_during_build(): void
+    {
+        $manager = $this->cacheManager();
+        $cache = $manager->getNamespacedCache('count', Author::class, 'manual-count-build', [Post::class]);
+
+        $this->bumpVersionInRedis(NormCache::classKey(Post::class));
+
+        $manager->storeVersionedResult(
+            $cache['key'],
+            [10],
+            60,
+            $cache['versionKeys'],
+            $cache['expectedVersions'],
+        );
+
+        $this->assertNull($manager->getStore()->get($cache['key']));
+    }
+
+    public function test_through_result_write_is_skipped_when_dependency_version_changes_during_build(): void
+    {
+        $manager = $this->cacheManager();
+        $cache = $manager->getThroughCache(Post::class, Country::class, 'manual-through-build');
+
+        $this->bumpVersionInRedis(NormCache::classKey(Country::class));
+
+        $manager->storeVersionedResult(
+            $cache['key'],
+            ['ids' => [1], 'throughKeys' => [1 => 1]],
+            60,
+            $cache['versionKeys'],
+            $cache['expectedVersions'],
+        );
+
+        $this->assertNull($manager->getStore()->get($cache['key']));
+    }
+
+    public function test_related_model_payload_is_not_cached_when_through_result_write_is_skipped(): void
+    {
+        $manager = $this->cacheManager();
+        $cache = $manager->getThroughCache(Post::class, Country::class, 'manual-through-build');
+
+        $this->bumpVersionInRedis(NormCache::classKey(Country::class));
+
+        if ($manager->storeVersionedResult(
+            $cache['key'],
+            ['ids' => [1], 'throughKeys' => [1 => 1]],
+            60,
+            $cache['versionKeys'],
+            $cache['expectedVersions'],
+        )) {
+            $manager->cacheModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Stale']]);
+        }
+
+        $this->assertNull($this->modelCacheEntry(Post::class, 1));
+    }
+
+    public function test_pivot_result_write_is_skipped_when_dependency_version_changes_during_build(): void
+    {
+        $manager = $this->cacheManager();
+        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build');
+        $authorKey = NormCache::classKey(Author::class);
+        $tagKey = NormCache::classKey(Tag::class);
+        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
+
+        $this->bumpVersionInRedis($tagKey);
+
+        $manager->storeVersionedResult(
+            $pivotKey,
+            [['id' => 1, 'pivot' => []]],
+            60,
+            $cache['versionKeys'],
+            $cache['expectedVersions'],
+        );
+
+        $this->assertNull($manager->getStore()->get($pivotKey));
+    }
+
+    public function test_related_model_payload_is_not_cached_when_pivot_result_write_is_skipped(): void
+    {
+        $manager = $this->cacheManager();
+        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build');
+        $authorKey = NormCache::classKey(Author::class);
+        $tagKey = NormCache::classKey(Tag::class);
+        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
+
+        $this->bumpVersionInRedis($tagKey);
+
+        if ($manager->storeVersionedResult(
+            $pivotKey,
+            [['id' => 1, 'pivot' => []]],
+            60,
+            $cache['versionKeys'],
+            $cache['expectedVersions'],
+        )) {
+            $manager->cacheModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Stale']]);
+        }
+
+        $this->assertNull($this->modelCacheEntry(Tag::class, 1));
+    }
+
     public function test_cooldown_due_invalidation_applies_to_scalar_cache(): void
     {
         $this->setCooldown(1);
@@ -227,7 +353,8 @@ class LuaScriptConsistencyTest extends TestCase
             ->count();
 
         $this->assertSame(1, $query());
-        $this->assertNotEmpty($this->redisKeys('test:scalar:*'));
+        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertEmpty($this->redisKeys('test:scalar:*'));
 
         $post->update(['published' => false]);
 

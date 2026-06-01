@@ -420,7 +420,7 @@ class CacheableBuilder extends Builder
 
                 return $attrs;
             })->all();
-            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null);
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
 
             return $this->finalizeResult($models->all());
         }
@@ -482,7 +482,7 @@ class CacheableBuilder extends Builder
     {
         $queryStart = NormCacheCollector::beginMeasure();
 
-        ['key' => $countKey, 'data' => $data] = NormCache::getNamespacedCache(
+        $result = NormCache::getNamespacedCache(
             'count',
             $this->model::class,
             $this->queryCacheKey($base),
@@ -490,26 +490,26 @@ class CacheableBuilder extends Builder
             $this->cacheTag
         );
 
-        $cachedTotal = $data[0] ?? null;
+        $cachedTotal = $result['data'][0] ?? null;
 
         if (NormCache::isEventsEnabled()) {
             event($cachedTotal !== null
-                ? new QueryCacheHit($this->model::class, $countKey)
-                : new QueryCacheMiss($this->model::class, $countKey)
+                ? new QueryCacheHit($this->model::class, $result['key'])
+                : new QueryCacheMiss($this->model::class, $result['key'])
             );
         }
 
         NormCacheCollector::recordQuery(
             $cachedTotal !== null ? 'query hit' : 'query miss',
             $this->model::class,
-            $countKey,
+            $result['key'],
             $queryStart,
             ['kind' => $kind]
         );
 
         if ($cachedTotal === null) {
             $cachedTotal = $base->getCountForPagination();
-            NormCache::storeQueryAggregate($countKey, $cachedTotal, $this->queryTtl);
+            NormCache::storeVersionedResult($result['key'], [$cachedTotal], $this->queryTtl, $result['versionKeys'], $result['expectedVersions']);
         }
 
         return (int) $cachedTotal;
@@ -594,7 +594,7 @@ class CacheableBuilder extends Builder
             NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
 
             $blob = array_map(fn($r) => (array) $r, $base->get()->all());
-            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null);
+            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
 
             return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
         }
