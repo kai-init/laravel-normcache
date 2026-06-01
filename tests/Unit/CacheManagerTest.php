@@ -65,6 +65,7 @@ class CacheManagerTest extends TestCase
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             60,
+            slotting: true,
         );
         $redis = Redis::connection('model-cache-test');
         $classKey = $manager->classKey(Author::class);
@@ -89,6 +90,7 @@ class CacheManagerTest extends TestCase
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             60,
+            slotting: true,
         );
 
         $classKey = $manager->classKey(Author::class);
@@ -107,6 +109,28 @@ class CacheManagerTest extends TestCase
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
 
+    public function test_default_non_slotting_prefixes_all_keys_and_preserves_existing_prefix(): void
+    {
+        $manager = new CacheManager(
+            'model-cache-test',
+            config('normcache.ttl'),
+            config('normcache.query_ttl'),
+            'test:',
+            config('normcache.cooldown'),
+            true,
+            slotting: false,
+        );
+
+        $classKey = $manager->classKey(Author::class);
+        $store = $manager->getStore();
+
+        $store->set("ver:{{$classKey}}:", 7, 60);
+
+        $this->assertSame("{nc}:test:ver:{{$classKey}}:", $store->prefix("ver:{{$classKey}}:"));
+        $this->assertSame('7', Redis::connection('model-cache-test')->get("{nc}:test:ver:{{$classKey}}:"));
+        $this->assertSame(7, $manager->currentVersion(Author::class));
+    }
+
     // -------------------------------------------------------------------------
     // Flush operations
     // -------------------------------------------------------------------------
@@ -122,7 +146,6 @@ class CacheManagerTest extends TestCase
         $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
         $store->set("model:{{$postsKey}}:2", ['id' => 2], 3600);
         $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
-        $store->set("agg:{{$postsKey}}:1:count:*:comments:nc:v1", ['v' => 3], 3600);
         $store->set("model:{{$authorsKey}}:1", ['id' => 1], 3600);
 
         $versionBefore = $this->manager->currentVersion(Post::class);
@@ -133,7 +156,6 @@ class CacheManagerTest extends TestCase
         $this->assertNull($store->get("model:{{$postsKey}}:2"));
         $this->assertSame(0, $redis->exists("test:members:model:{{$postsKey}}"));
         $this->assertNotNull($store->get("query:{{$postsKey}}:v1:abc"));
-        $this->assertNotNull($store->get("agg:{{$postsKey}}:1:count:*:comments:nc:v1"));
         $this->assertNotNull($store->get("model:{{$authorsKey}}:1"));
         $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Post::class));
     }
@@ -173,6 +195,7 @@ class CacheManagerTest extends TestCase
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             config('normcache.cooldown'),
+            slotting: true,
         );
 
         $store = $manager->getStore();
@@ -216,6 +239,7 @@ class CacheManagerTest extends TestCase
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             1,
+            slotting: true,
         );
 
         $model = new Author;

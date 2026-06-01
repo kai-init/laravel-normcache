@@ -62,14 +62,69 @@ class CacheKeyBuilder
         return $tag !== null ? $base . $tag . ':v' : $base . 'v';
     }
 
+    public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash): string
+    {
+        return $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
+    }
+
+    public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
+    {
+        return "{$namespace}:{{$classKey}}:" . $this->tagSegment($tag);
+    }
+
+    public function namespacedKey(string $namespace, string $classKey, ?string $tag, string $seg, string $hash): string
+    {
+        return $this->namespacedPrefix($namespace, $classKey, $tag) . $seg . ':' . $hash;
+    }
+
     public function rawPrefix(string $classKey): string
     {
         return self::K_RAW . ':{' . $classKey . '}:';
     }
 
+    public function rawKey(string $classKey, ?string $tag, string $seg, string $hash): string
+    {
+        return $this->rawPrefix($classKey) . $this->tagSegment($tag) . $seg . ':' . $hash;
+    }
+
     public function buildingPrefix(string $classKey): string
     {
         return self::K_BUILDING . ':{' . $classKey . '}:';
+    }
+
+    public function rawBuildingKey(string $classKey, string $seg, string $lockSuffix): string
+    {
+        return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
+    }
+
+    public function throughPrefix(string $relatedKey, string $throughKey): string
+    {
+        return self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
+    }
+
+    public function throughKey(string $relatedKey, string $throughKey, string $seg, string $hash): string
+    {
+        return $this->throughPrefix($relatedKey, $throughKey) . $seg . ':' . $hash;
+    }
+
+    public function pivotBasePrefix(string $parentKey, string $relatedKey): string
+    {
+        return self::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':';
+    }
+
+    public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
+    {
+        return $this->pivotBasePrefix($parentKey, $relatedKey) . $relation . ':' . $constraintHash . ':' . $seg . ':';
+    }
+
+    public function pivotKey(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, mixed $parentId): string
+    {
+        return $this->pivotPrefix($parentKey, $relatedKey, $relation, $constraintHash, $seg) . $parentId;
+    }
+
+    public function versionedKey(string $keyPrefix, string $seg, string $hash): string
+    {
+        return $keyPrefix . $seg . ':' . $hash;
     }
 
     public function wakePrefix(string $classKey): string

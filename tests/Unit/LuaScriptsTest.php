@@ -14,6 +14,7 @@ class LuaScriptsTest extends TestCase
         'fetch_versioned_cache',
         'fetch_versioned_pivot',
         'fetch_version_with_cooldown',
+        'fetch_raw_by_seg',
         'set_many_tracked_if_version',
     ];
 

@@ -25,13 +25,17 @@ class CacheManager
 
     private CacheKeyBuilder $keys;
 
+    private bool $cluster;
+
+    private bool $slotting;
+
     public function __construct(
         string $redisConnection,
         private int $ttl,
         private int $queryTtl,
         string $keyPrefix,
         private int $cooldown,
-        private bool $cluster = false,
+        bool $cluster = false,
         private bool $enabled = true,
         private bool $dispatchEvents = true,
         private bool $fallbackEnabled = false,
@@ -39,8 +43,11 @@ class CacheManager
         private int $buildingLockTtl = 5,
         private int $stampedeWaitMs = 200,
         private int $staleVersionDepth = 3,
+        bool $slotting = false,
     ) {
-        $this->store = new RedisStore($redisConnection, $keyPrefix, $cluster);
+        $this->cluster = $cluster;
+        $this->slotting = $cluster && $slotting;
+        $this->store = new RedisStore($redisConnection, $keyPrefix, $this->slotting, $slotting ? '' : '{nc}:');
         $this->keys = new CacheKeyBuilder;
     }
 
@@ -56,6 +63,11 @@ class CacheManager
     public function isEventsEnabled(): bool
     {
         return $this->dispatchEvents;
+    }
+
+    public function isCluster(): bool
+    {
+        return $this->cluster;
     }
 
     public function enable(): void
@@ -85,7 +97,7 @@ class CacheManager
 
         $luaStatus = $result[0] ?? null;
         $version = $this->normalizeVersion($result[1]);
-        $queryKey = $this->keys->queryPrefix($classKey, $tag) . $version . ':' . $hash;
+        $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
 
         $deserialize = fn($r) => $this->store->unserializeMany($r);
 
@@ -104,18 +116,18 @@ class CacheManager
         $classKey = $this->keys->classKey($modelClass);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
-        $ts = $this->keys->tagSegment($tag);
+        $keyPrefix = $this->keys->namespacedPrefix($namespace, $classKey, $tag);
 
-        if ($this->cluster) {
-            [$seg, $data] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
+        if ($this->slotting) {
+            [$seg, $data] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
 
-            return ['key' => "{$namespace}:{{$classKey}}:{$ts}{$seg}:{$hash}", 'data' => $data];
+            return ['key' => $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash), 'data' => $data];
         }
 
-        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $namespace . ':{' . $classKey . '}:' . $ts, $hash);
+        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
 
         return [
-            'key' => "{$namespace}:{{$classKey}}:{$ts}{$seg}:{$hash}",
+            'key' => $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash),
             'data' => $blob !== false ? $this->store->unserialize($blob) : null,
         ];
     }
@@ -126,17 +138,17 @@ class CacheManager
         $throughKey = $this->keys->classKey($throughClass);
         $versionKeys = [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)];
         $scheduledKeys = [$this->keys->scheduledKey($relatedKey), $this->keys->scheduledKey($throughKey)];
-        $keyPrefix = CacheKeyBuilder::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
+        $keyPrefix = $this->keys->throughPrefix($relatedKey, $throughKey);
 
-        if ($this->cluster) {
+        if ($this->slotting) {
             [$seg, $data] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
 
-            return ['key' => $keyPrefix . $seg . ':' . $hash, 'data' => $data];
+            return ['key' => $this->keys->throughKey($relatedKey, $throughKey, $seg, $hash), 'data' => $data];
         }
 
         [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
 
-        return ['key' => $keyPrefix . $seg . ':' . $hash, 'data' => $blob !== false ? $this->store->unserialize($blob) : null];
+        return ['key' => $this->keys->throughKey($relatedKey, $throughKey, $seg, $hash), 'data' => $blob !== false ? $this->store->unserialize($blob) : null];
     }
 
     public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
@@ -144,14 +156,13 @@ class CacheManager
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass);
 
-        if ($this->cluster) {
+        if ($this->slotting) {
             $seg = $this->resolveDepVersionsSeg(
                 [$this->keys->verKey($parentKey), $this->keys->verKey($relatedKey)],
                 [$this->keys->scheduledKey($parentKey), $this->keys->scheduledKey($relatedKey)],
                 (int) floor(microtime(true) * 1000)
             );
-            $prefix = CacheKeyBuilder::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':' . $relation . ':' . $constraintHash . ':' . $seg . ':';
-            $pivotKeys = array_map(fn($id) => $prefix . $id, $parentIds);
+            $pivotKeys = array_map(fn($id) => $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id), $parentIds);
 
             return [
                 'seg' => $seg,
@@ -170,50 +181,51 @@ class CacheManager
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $ts = $this->keys->tagSegment($tag);
         $lockSuffix = $this->keys->rawBuildLockSuffix($tag, $hash);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
 
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
 
-        if ($this->cluster) {
+        if ($this->slotting) {
             $seg = $this->resolveDepVersionsSeg($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
-            $rawKey = $this->keys->rawPrefix($classKey) . $ts . $seg . ':' . $hash;
-            $data = $this->store->get($rawKey);
+            $rawKey = $this->keys->rawKey($classKey, $tag, $seg, $hash);
+            $buildingKey = $this->keys->rawBuildingKey($classKey, $seg, $lockSuffix);
+            [$status, $seg, $blob] = $this->luaFetchRawBySeg($rawKey, $buildingKey, $seg);
 
-            if ($data !== null) {
-                return $this->rawResult('hit', $rawKey, $data, null);
+            if ($status === 'hit') {
+                return $this->rawResult('hit', $rawKey, $this->store->unserialize($blob), null);
             }
 
-            $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
-
-            if ($this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
-                return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey);
+            if ($status === 'building') {
+                return $this->rawResult('building', null, null, null);
             }
 
-            return $this->rawResult('building', null, null, null);
+            return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey);
         }
 
         [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
             $versionKeys,
             $scheduledKeys,
-            $this->keys->rawPrefix($classKey) . $ts,
+            $this->keys->rawPrefix($classKey) . $this->keys->tagSegment($tag),
             $this->keys->buildingPrefix($classKey),
             $hash,
             $lockSuffix
         );
 
+        $rawKey = $this->keys->rawKey($classKey, $tag, $seg, $hash);
+
+        if ($status === 'hit') {
+            return $this->rawResult('hit', $rawKey, $this->store->unserialize($blob), null);
+        }
+
         if ($status === 'building') {
             return $this->rawResult('building', null, null, null);
         }
 
-        $key = $this->keys->rawPrefix($classKey) . $ts . $seg . ':' . $hash;
+        $buildingKey = $this->keys->rawBuildingKey($classKey, $seg, $lockSuffix);
 
-        return match ($status) {
-            'hit' => $this->rawResult('hit', $key, $this->store->unserialize($blob), null),
-            default => $this->rawResult('miss', $key, null, $this->keys->buildingPrefix($classKey) . $seg . ':' . $lockSuffix, $wakeKey),
-        };
+        return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey);
     }
 
     public function waitForBuild(string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): ?array
@@ -576,7 +588,7 @@ class CacheManager
             $this->keys->verKey($relatedKey),
             $this->keys->scheduledKey($parentKey),
             $this->keys->scheduledKey($relatedKey),
-            CacheKeyBuilder::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':',
+            $this->keys->pivotBasePrefix($parentKey, $relatedKey),
         ], array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds));
 
         return [(string) ($result[0] ?? ''), $result[1] ?? []];
@@ -600,6 +612,17 @@ class CacheManager
         );
 
         return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null];
+    }
+
+    private function luaFetchRawBySeg(string $rawKey, string $buildingKey, string $seg): array
+    {
+        $result = $this->store->eval(
+            LuaScripts::get('fetch_raw_by_seg'),
+            [$rawKey, $buildingKey],
+            [$seg, (string) $this->buildingLockTtl]
+        );
+
+        return [$result[0] ?? 'building', (string) ($result[1] ?? $seg), $result[2] ?? null];
     }
 
     // -------------------------------------------------------------------------
@@ -631,7 +654,7 @@ class CacheManager
     {
         $seg = $this->resolveDepVersionsSeg($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
 
-        return [$seg, $this->store->get($keyPrefix . $seg . ':' . $hash)];
+        return [$seg, $this->store->get($this->keys->versionedKey($keyPrefix, $seg, $hash))];
     }
 
     // -------------------------------------------------------------------------

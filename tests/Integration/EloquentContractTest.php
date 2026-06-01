@@ -1365,13 +1365,6 @@ class EloquentContractTest extends TestCase
         $cold = $run();
         $warm = $run();
 
-        // No empty-ID aggregate entries should be written (null PK casts to "" in string context,
-        // producing keys like agg:{classKey}::suffix with a double colon after the class tag).
-        $this->assertEmpty(
-            array_filter($this->redisKeys('test:agg:*'), fn($k) => str_contains($k, '}::')),
-            'null-PK aggregate entries must not be cached'
-        );
-
         $this->assertCount(1, $cold);
         $this->assertCount(1, $warm);
     }

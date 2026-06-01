@@ -174,6 +174,7 @@ return [
     'ttl'               => env('NORMCACHE_TTL', 604800),
     'query_ttl'         => env('NORMCACHE_QUERY_TTL', 3600),
     'key_prefix'        => env('NORMCACHE_PREFIX', ''),
+    'slotting'          => env('NORMCACHE_SLOTTING', false),
     'cooldown'          => env('NORMCACHE_COOLDOWN', 0),
     'building_lock_ttl' => env('NORMCACHE_BUILDING_LOCK_TTL', 5),
     'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
@@ -188,6 +189,7 @@ return [
 
 - **`ttl`** — Lifetime of individual model attribute keys. Default: 7 days.
 - **`query_ttl`** — Lifetime of query, raw, pivot, and through cache keys. Default: 1 hour.
+- **`slotting`** — When `false` (default), all NormCache keys are placed on one Redis Cluster slot using the `{nc}` slot prefix.
 - **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Consecutive writes within the window bump the version only once. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
@@ -223,11 +225,18 @@ This adds a **Normcache** timeline tab showing every query hit, miss, bypass, an
 
 ## Redis Clustering
 
-Single-model operations keep all keys on one slot via a per-model hash tag (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with a separate single-slot Lua call, then read or write on the primary model's slot.
+By default, Redis Cluster support uses single-slot mode. With `cluster` enabled and `slotting` disabled, every NormCache key is prefixed with `{nc}:`, so cross-model operations can keep version checks, reads, and build-lock acquisition in one single-slot Lua command.
 
-**Consistency note:** cross-model version resolution is not atomic — a writer that bumps a dep version between the two GETs will cause at most one stale response before the next request picks up the new version. This is the same eventually-consistent trade-off accepted by all distributed caches. Use `cluster_hash_tag` (see config) if you need full atomicity at the cost of all keys landing on one slot.
+```php
+'cluster' => true,
+'slotting' => false, // default
+```
 
-Enable with `'cluster' => true`. `flushAll()` is supported.
+Set `slotting` to `true` only when you want Redis Cluster slot sharding across model groups. In sharded mode, single-model operations keep keys on one slot via per-model hash tags (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with separate single-slot Lua calls, then read or write on the primary model's slot.
+
+**Consistency note:** sharded cross-model version resolution is not atomic. A writer that bumps a dependency version between version reads may cause stale response before the next request uses the new version. This is the same eventually-consistent trade-off accepted by most distributed caches.
+
+`flushAll()` is supported.
 
 ---
 
