@@ -35,6 +35,58 @@ class CacheKeyBuilder
 
     private static array $prototypes = [];
 
+    public static function prototypeFor(string $class): Model
+    {
+        return self::$prototypes[$class] ??= new $class;
+    }
+
+    public function modelPrefix(string $classKey): string
+    {
+        return self::K_MODEL . ':{' . $classKey . '}:';
+    }
+
+    public function queryPrefix(string $classKey, ?string $tag = null): string
+    {
+        $base = self::K_QUERY . ':{' . $classKey . '}:';
+
+        return $tag !== null ? $base . $tag . ':v' : $base . 'v';
+    }
+
+    public function rawPrefix(string $classKey): string
+    {
+        return self::K_RAW . ':{' . $classKey . '}:';
+    }
+
+    public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
+    {
+        return "{$namespace}:{{$classKey}}:" . $this->tagSegment($tag);
+    }
+
+    public function pivotBasePrefix(string $parentKey, string $relatedKey): string
+    {
+        return self::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':';
+    }
+
+    public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
+    {
+        return $this->pivotBasePrefix($parentKey, $relatedKey) . $relation . ':' . $constraintHash . ':' . $seg . ':';
+    }
+
+    public function throughPrefix(string $relatedKey, string $throughKey): string
+    {
+        return self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
+    }
+
+    public function buildingPrefix(string $classKey): string
+    {
+        return self::K_BUILDING . ':{' . $classKey . '}:';
+    }
+
+    public function wakePrefix(string $classKey): string
+    {
+        return self::K_WAKE . ':{' . $classKey . '}:';
+    }
+
     public function classKey(string $class): string
     {
         return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
@@ -50,26 +102,9 @@ class CacheKeyBuilder
         return self::K_SCHEDULED . ':{' . $classKey . '}:';
     }
 
-    public function modelPrefix(string $classKey): string
-    {
-        return self::K_MODEL . ':{' . $classKey . '}:';
-    }
-
-    public function queryPrefix(string $classKey, ?string $tag = null): string
-    {
-        $base = self::K_QUERY . ':{' . $classKey . '}:';
-
-        return $tag !== null ? $base . $tag . ':v' : $base . 'v';
-    }
-
     public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash): string
     {
         return $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
-    }
-
-    public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
-    {
-        return "{$namespace}:{{$classKey}}:" . $this->tagSegment($tag);
     }
 
     public function namespacedKey(string $namespace, string $classKey, ?string $tag, string $seg, string $hash): string
@@ -77,19 +112,9 @@ class CacheKeyBuilder
         return $this->namespacedPrefix($namespace, $classKey, $tag) . $seg . ':' . $hash;
     }
 
-    public function rawPrefix(string $classKey): string
-    {
-        return self::K_RAW . ':{' . $classKey . '}:';
-    }
-
     public function rawKey(string $classKey, ?string $tag, string $seg, string $hash): string
     {
         return $this->rawPrefix($classKey) . $this->tagSegment($tag) . $seg . ':' . $hash;
-    }
-
-    public function buildingPrefix(string $classKey): string
-    {
-        return self::K_BUILDING . ':{' . $classKey . '}:';
     }
 
     public function rawBuildingKey(string $classKey, string $seg, string $lockSuffix): string
@@ -97,24 +122,9 @@ class CacheKeyBuilder
         return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
     }
 
-    public function throughPrefix(string $relatedKey, string $throughKey): string
-    {
-        return self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
-    }
-
     public function throughKey(string $relatedKey, string $throughKey, string $seg, string $hash): string
     {
         return $this->throughPrefix($relatedKey, $throughKey) . $seg . ':' . $hash;
-    }
-
-    public function pivotBasePrefix(string $parentKey, string $relatedKey): string
-    {
-        return self::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':';
-    }
-
-    public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
-    {
-        return $this->pivotBasePrefix($parentKey, $relatedKey) . $relation . ':' . $constraintHash . ':' . $seg . ':';
     }
 
     public function pivotKey(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, mixed $parentId): string
@@ -127,29 +137,28 @@ class CacheKeyBuilder
         return $keyPrefix . $seg . ':' . $hash;
     }
 
-    public function wakePrefix(string $classKey): string
-    {
-        return self::K_WAKE . ':{' . $classKey . '}:';
-    }
-
     public function membersKey(string $classKey): string
     {
         return self::K_MEMBERS . ':{' . $classKey . '}';
     }
 
-    public function tagSegment(?string $tag): string
-    {
-        return $tag !== null ? $tag . ':' : '';
-    }
-
-    public function rawBuildLockSuffix(?string $tag, string $hash): string
-    {
-        return sha1($this->tagSegment($tag) . $hash);
-    }
-
     public function modelKey(string $modelClass, string $id): string
     {
         return $this->modelPrefix($this->classKey($modelClass)) . $id;
+    }
+
+    public function wakeKey(string $classKey, string $lockSuffix): string
+    {
+        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
+    }
+
+    public function buildingToWakeKey(string $buildingKey): string
+    {
+        $classKeyEnd = strpos($buildingKey, '}:') + 2;
+
+        return self::K_WAKE
+            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
+            . substr(strrchr($buildingKey, ':'), 1);
     }
 
     public function depVersionKeys(string $classKey, array $depClasses): array
@@ -170,23 +179,14 @@ class CacheKeyBuilder
         return array_map(fn($key) => $this->scheduledKey($key), $all);
     }
 
-    public function wakeKey(string $classKey, string $lockSuffix): string
+    public function tagSegment(?string $tag): string
     {
-        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
+        return $tag !== null ? $tag . ':' : '';
     }
 
-    public function buildingToWakeKey(string $buildingKey): string
+    public function rawBuildIdentityHash(?string $tag, string $hash): string
     {
-        $classKeyEnd = strpos($buildingKey, '}:') + 2;
-
-        return self::K_WAKE
-            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
-            . substr(strrchr($buildingKey, ':'), 1);
-    }
-
-    public static function prototypeFor(string $class): Model
-    {
-        return self::$prototypes[$class] ??= new $class;
+        return sha1($this->tagSegment($tag) . $hash);
     }
 
     private function resolveClassKey(string $class): string

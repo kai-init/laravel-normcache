@@ -181,7 +181,7 @@ class CacheManager
     public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $lockSuffix = $this->keys->rawBuildLockSuffix($tag, $hash);
+        $lockSuffix = $this->keys->rawBuildIdentityHash($tag, $hash);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
 
@@ -231,7 +231,7 @@ class CacheManager
     public function waitForBuild(string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): ?array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $wakeHash = $depClasses !== [] ? $this->keys->rawBuildLockSuffix($tag, $hash) : $hash;
+        $wakeHash = $depClasses !== [] ? $this->keys->rawBuildIdentityHash($tag, $hash) : $hash;
         $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeHash, $this->stampedeWaitMs / 1000.0);
 
         $result = $depClasses !== []
