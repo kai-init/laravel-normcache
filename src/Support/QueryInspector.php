@@ -24,6 +24,7 @@ final class QueryInspector
     public static function hasDependencyBypass(QueryBuilder $base): bool
     {
         return self::hasRawOrderBypass($base)
+            || self::hasRawWhereBypass((array) $base->wheres)
             || self::hasSubqueryWheres((array) $base->wheres);
     }
 

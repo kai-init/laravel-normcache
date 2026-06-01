@@ -93,9 +93,24 @@ class CacheableBuilder extends Builder
         }
 
         foreach ($modelClasses as $class) {
-            if (!is_string($class) || (!isset(self::$validatedModelClasses[$class]) && !is_a($class, Model::class, true))) {
-                throw new \InvalidArgumentException("dependsOn() class '{$class}' is not an Eloquent model.");
+            if (!is_string($class)) {
+                throw new \InvalidArgumentException('dependsOn() expects model class names, not model instances.');
             }
+
+            if (isset(self::$validatedModelClasses[$class])) {
+                continue;
+            }
+
+            if (!is_a($class, Model::class, true)) {
+                throw new \InvalidArgumentException("dependsOn() class [{$class}] must be an Eloquent model.");
+            }
+
+            if (!in_array(Cacheable::class, class_uses_recursive($class), true)) {
+                throw new \InvalidArgumentException(
+                    "dependsOn() class [{$class}] must use the NormCache\\Traits\\Cacheable trait."
+                );
+            }
+
             self::$validatedModelClasses[$class] = true;
         }
 
