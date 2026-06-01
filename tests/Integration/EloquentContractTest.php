@@ -869,7 +869,7 @@ class EloquentContractTest extends TestCase
         $nativeResult = null;
         try {
             $nativeResult = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->havingRaw('posts_count > 0')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $nativeException = get_class($e);
         }
 
@@ -877,7 +877,7 @@ class EloquentContractTest extends TestCase
         $normcacheResult = null;
         try {
             $normcacheResult = Author::withCount('posts')->havingRaw('posts_count > 0')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $normcacheException = get_class($e);
         }
 
@@ -902,14 +902,14 @@ class EloquentContractTest extends TestCase
         $nativeException = null;
         try {
             Author::withoutCache()->withoutAggregateCache()->withCount('posts')->having('posts_count', '>', 1)->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $nativeException = get_class($e);
         }
 
         $normcacheException = null;
         try {
             Author::withCount('posts')->having('posts_count', '>', 1)->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $normcacheException = get_class($e);
         }
 
@@ -956,14 +956,14 @@ class EloquentContractTest extends TestCase
         $nativeException = null;
         try {
             Author::withoutCache()->withoutAggregateCache()->withCount('posts  as  total_posts')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $nativeException = get_class($e);
         }
 
         $normcacheException = null;
         try {
             Author::withCount('posts  as  total_posts')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $normcacheException = get_class($e);
         }
 
@@ -979,14 +979,14 @@ class EloquentContractTest extends TestCase
         $nativeException = null;
         try {
             Author::withoutCache()->withoutAggregateCache()->withCount('posts.comments')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $nativeException = get_class($e);
         }
 
         $normcacheException = null;
         try {
             Author::withCount('posts.comments')->get();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $normcacheException = get_class($e);
         }
 

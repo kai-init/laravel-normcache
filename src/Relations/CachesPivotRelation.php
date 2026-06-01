@@ -102,7 +102,7 @@ trait CachesPivotRelation
 
             return $results;
         } catch (\Exception $e) {
-            NormCache::fallback($e);
+            NormCache::Throwable($e);
 
             return parent::get($columns);
         }

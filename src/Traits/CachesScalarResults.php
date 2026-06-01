@@ -2,6 +2,7 @@
 
 namespace NormCache\Traits;
 
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryBypassed;
@@ -97,7 +98,7 @@ trait CachesScalarResults
         $debugbarStart = NormCacheCollector::beginMeasure();
 
         $base = $this->toBase();
-        $bypassReasons = $this->computeBypassReasons($base);
+        $bypassReasons = $this->computeScalarBypassReasons($base);
 
         if (!empty($bypassReasons)) {
             if (NormCache::isEventsEnabled()) {
@@ -148,10 +149,22 @@ trait CachesScalarResults
             );
 
             return $value;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             NormCache::fallback($e);
 
             return $fallback();
         }
+    }
+
+    /** @return array<string, list<string>> */
+    private function computeScalarBypassReasons(QueryBuilder $base): array
+    {
+        $bypassReasons = $this->computeBypassReasons($base);
+
+        if ($this->dependsOn !== null) {
+            unset($bypassReasons['dependency'], $bypassReasons['normalization']);
+        }
+
+        return $bypassReasons;
     }
 }

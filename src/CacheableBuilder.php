@@ -181,7 +181,7 @@ class CacheableBuilder extends Builder
             $this->recordBypass($model, $bypassReasons, $debugbarStart);
 
             return $this->getWithoutCache($columns);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             NormCache::fallback($e);
 
             return $this->getWithoutCache($columns);
@@ -256,7 +256,7 @@ class CacheableBuilder extends Builder
     {
         try {
             return parent::paginate($perPage, $columns, $pageName, $page, $this->resolvePaginationTotal($base, $kind));
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             NormCache::fallback($e);
 
             return parent::paginate($perPage, $columns, $pageName, $page, $fallbackTotal);

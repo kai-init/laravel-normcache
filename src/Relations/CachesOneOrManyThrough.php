@@ -73,7 +73,7 @@ trait CachesOneOrManyThrough
             }
 
             return $models;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             NormCache::fallback($e);
 
             return parent::get($columns);

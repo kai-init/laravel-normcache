@@ -724,7 +724,7 @@ class CacheManager
     // Infrastructure
     // -------------------------------------------------------------------------
 
-    public function fallback(\Exception $e): void
+    public function fallback(\Throwable $e): void
     {
         if (!$this->fallbackEnabled) {
             throw $e;
@@ -742,7 +742,7 @@ class CacheManager
 
         try {
             $operation();
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $this->fallback($e);
         }
     }
