@@ -32,6 +32,7 @@ class CacheServiceProvider extends ServiceProvider
             config('normcache.building_lock_ttl', 5),
             config('normcache.stampede_wait_ms', 200),
             config('normcache.stale_version_depth', 3),
+            config('normcache.slotting', false),
         ));
 
         $this->app->alias(CacheManager::class, 'normcache');

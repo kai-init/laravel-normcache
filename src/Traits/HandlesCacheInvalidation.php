@@ -6,6 +6,20 @@ use NormCache\Facades\NormCache;
 
 trait HandlesCacheInvalidation
 {
+    private bool $suppressInvalidation = false;
+
+    public function withoutInvalidation(callable $callback): mixed
+    {
+        $previous = $this->suppressInvalidation;
+        $this->suppressInvalidation = true;
+
+        try {
+            return $callback();
+        } finally {
+            $this->suppressInvalidation = $previous;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Inserts — version bump only, model cache unaffected
     // -------------------------------------------------------------------------
@@ -37,10 +51,7 @@ trait HandlesCacheInvalidation
 
     public function insertGetId(array $values, $sequence = null): int
     {
-        $id = parent::insertGetId($values, $sequence);
-        NormCache::invalidateVersion($this->model);
-
-        return $id;
+        return (int) $this->coordinateInvalidation(false, fn() => parent::insertGetId($values, $sequence));
     }
 
     // -------------------------------------------------------------------------
@@ -115,6 +126,10 @@ trait HandlesCacheInvalidation
     private function coordinateInvalidation(bool $isUpdate, callable $callback): mixed
     {
         $result = $callback();
+
+        if ($this->suppressInvalidation) {
+            return $result;
+        }
 
         if ($result === 0 || $result === false) {
             return $result;

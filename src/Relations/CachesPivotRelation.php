@@ -91,11 +91,18 @@ trait CachesPivotRelation
                 $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:{$seg}:{$parentId}";
             }
 
-            $this->populatePivotCache($results, $keyMap, $relatedClass, $shouldCacheRelatedModels);
+            $this->populatePivotCache(
+                $results,
+                $keyMap,
+                $relatedClass,
+                $shouldCacheRelatedModels,
+                $cache['versionKeys'],
+                $cache['expectedVersions']
+            );
 
             return $results;
         } catch (\Exception $e) {
-            NormCache::fallback($e);
+            NormCache::Throwable($e);
 
             return parent::get($columns);
         }
@@ -209,7 +216,7 @@ trait CachesPivotRelation
         return $columns === ['*'] ? null : $columns;
     }
 
-    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels): void
+    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels, array $versionKeys, array $expectedVersions): void
     {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
         $modelAttrs = [];
@@ -240,7 +247,13 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        NormCache::storePivotResult($pivotEntriesByKey, $relatedClass, $modelAttrs);
+        foreach ($pivotEntriesByKey as $key => $payload) {
+            if (!NormCache::storeVersionedResult($key, $payload, versionKeys: $versionKeys, expectedVersions: $expectedVersions)) {
+                return;
+            }
+        }
+
+        NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }
 
     private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass, ?array $selectedRelatedColumns): Collection

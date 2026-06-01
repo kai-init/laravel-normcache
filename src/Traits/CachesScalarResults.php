@@ -2,6 +2,7 @@
 
 namespace NormCache\Traits;
 
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\QueryBypassed;
@@ -97,7 +98,7 @@ trait CachesScalarResults
         $debugbarStart = NormCacheCollector::beginMeasure();
 
         $base = $this->toBase();
-        $bypassReasons = $this->computeBypassReasons($base);
+        $bypassReasons = $this->computeScalarBypassReasons($base);
 
         if (!empty($bypassReasons)) {
             if (NormCache::isEventsEnabled()) {
@@ -109,22 +110,27 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        $hash = $this->queryCacheKey($base) . ":{$kind}";
+        $hash = 'scalar:' . $this->queryCacheKey($base) . ":{$kind}";
 
         try {
-            ['key' => $cacheKey, 'data' => $result] = NormCache::getNamespacedCache(
-                'scalar',
+            $result = NormCache::getRawCache(
                 $this->model::class,
-                $hash,
                 $this->dependsOn ?? [],
+                $hash,
                 $this->cacheTag
             );
-            $hit = $result !== null;
-            $result = $hit ? $result[0] : null;
+
+            if ($result['status'] === 'building') {
+                return $fallback();
+            }
+
+            $hit = $result['status'] === 'hit';
+            $cacheKey = $result['key'];
+            $value = $hit ? ($result['blob'][0] ?? null) : null;
 
             if (!$hit) {
-                $result = $fallback();
-                NormCache::storeQueryAggregate($cacheKey, $result, $this->queryTtl);
+                $value = $fallback();
+                NormCache::storeRawResult($cacheKey, [$value], $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
             }
 
             if (NormCache::isEventsEnabled()) {
@@ -142,11 +148,23 @@ trait CachesScalarResults
                 ['kind' => $kind]
             );
 
-            return $result;
-        } catch (\Exception $e) {
+            return $value;
+        } catch (\Throwable $e) {
             NormCache::fallback($e);
 
             return $fallback();
         }
+    }
+
+    /** @return array<string, list<string>> */
+    private function computeScalarBypassReasons(QueryBuilder $base): array
+    {
+        $bypassReasons = $this->computeBypassReasons($base);
+
+        if ($this->dependsOn !== null) {
+            unset($bypassReasons['dependency'], $bypassReasons['normalization']);
+        }
+
+        return $bypassReasons;
     }
 }

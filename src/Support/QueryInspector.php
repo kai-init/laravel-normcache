@@ -24,6 +24,7 @@ final class QueryInspector
     public static function hasDependencyBypass(QueryBuilder $base): bool
     {
         return self::hasRawOrderBypass($base)
+            || self::hasRawWhereBypass((array) $base->wheres)
             || self::hasSubqueryWheres((array) $base->wheres);
     }
 
@@ -248,6 +249,25 @@ final class QueryInspector
     public static function hasSafetyBypass(QueryBuilder $base): bool
     {
         return !is_null($base->lock);
+    }
+
+    private static function hasRawWhereBypass(array $wheres): bool
+    {
+        foreach ($wheres as $where) {
+            $type = strtolower((string) ($where['type'] ?? ''));
+
+            if ($type === 'raw') {
+                return true;
+            }
+
+            if ($type === 'nested' && isset($where['query'])) {
+                if (self::hasRawWhereBypass((array) $where['query']->wheres)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static function hasRawOrderBypass(QueryBuilder $base): bool

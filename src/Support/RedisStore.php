@@ -21,7 +21,8 @@ final class RedisStore
     public function __construct(
         string $redisConnection,
         private string $keyPrefix,
-        private bool $cluster,
+        private bool $slotting,
+        private string $slotPrefix = '',
     ) {
         $this->igbinary = extension_loaded('igbinary');
         $this->connection = Redis::connection($redisConnection);
@@ -33,7 +34,7 @@ final class RedisStore
 
     public function prefix(string $key): string
     {
-        return $this->keyPrefix !== '' ? $this->keyPrefix . $key : $key;
+        return $this->slotPrefix . $this->keyPrefix . $key;
     }
 
     public function get(string $key): mixed
@@ -117,8 +118,8 @@ final class RedisStore
             return [];
         }
 
-        if (!$this->cluster) {
-            $prefixed = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
+        if (!$this->slotting) {
+            $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
 
             return array_map(
                 fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
@@ -148,7 +149,7 @@ final class RedisStore
             return;
         }
 
-        if (!$this->cluster) {
+        if (!$this->slotting) {
             $this->connection->pipeline(function ($pipe) use ($pairs, $ttl) {
                 foreach ($pairs as $key => $value) {
                     $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
@@ -223,7 +224,7 @@ final class RedisStore
             return;
         }
 
-        if (!$this->cluster) {
+        if (!$this->slotting) {
             foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
                 $this->del($chunk);
             }
@@ -279,7 +280,7 @@ final class RedisStore
     /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
     public function eval(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = $this->keyPrefix !== '' ? array_map(fn($k) => $this->keyPrefix . $k, $keys) : $keys;
+        $prefixedKeys = array_map(fn($k) => $this->prefix($k), $keys);
         $n = count($prefixedKeys);
         $allArgs = array_merge($prefixedKeys, $args);
 
@@ -471,7 +472,7 @@ final class RedisStore
 
                 [$cursor, $chunk] = $result;
                 $keys = [...$keys, ...$chunk];
-            } while ($cursor !== 0);
+            } while ((int) $cursor !== 0);
         }
 
         return $keys;

@@ -321,4 +321,145 @@ class InvalidationCoverageTest extends TestCase
             Author::flushEventListeners();
         }
     }
+
+    public function test_dirty_existing_model_save_only_invalidates_once_outside_transaction(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Original',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        // Reset the version after setup so the create invalidation does not matter.
+        NormCache::flushModel(Post::class);
+
+        $before = NormCache::currentVersion(Post::class);
+
+        $post->title = 'Changed';
+        $post->save();
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame(
+            $before + 1,
+            $after,
+            'Dirty existing model save should invalidate the model version exactly once.'
+        );
+    }
+
+    public function test_dirty_existing_model_save_quietly_only_invalidates_once_outside_transaction(): void
+    {
+        config()->set('normcache.cooldown', 0);
+
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Original',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $before = NormCache::currentVersion(Post::class);
+
+        $post->title = 'Changed';
+        $post->saveQuietly();
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame(
+            $before + 1,
+            $after,
+            'Dirty existing model saveQuietly should invalidate the model version exactly once.'
+        );
+    }
+
+    public function test_clean_existing_model_save_does_not_invalidate(): void
+    {
+        config()->set('normcache.cooldown', 0);
+
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Original',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $before = NormCache::currentVersion(Post::class);
+
+        $post->save();
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame($before, $after);
+    }
+
+    public function test_builder_update_still_invalidates_once(): void
+    {
+        config()->set('normcache.cooldown', 0);
+
+        $author = Author::create(['name' => 'Alice']);
+
+        Post::create([
+            'title' => 'Original',
+            'author_id' => $author->id,
+            'published' => false,
+        ]);
+
+        $before = NormCache::currentVersion(Post::class);
+
+        Post::where('published', false)->update(['published' => true]);
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame($before + 1, $after);
+    }
+
+    public function test_model_create_invalidates_once(): void
+    {
+        config()->set('normcache.cooldown', 0);
+
+        $author = Author::create(['name' => 'Alice']);
+
+        $before = NormCache::currentVersion(Post::class);
+
+        Post::create([
+            'title' => 'Created',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame(
+            $before + 1,
+            $after,
+            'Model create should invalidate the model version exactly once.'
+        );
+    }
+
+    public function test_model_restore_invalidates_once(): void
+    {
+        config()->set('normcache.cooldown', 0);
+
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Original',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $post->delete();
+
+        $before = NormCache::currentVersion(Post::class);
+
+        $post->restore();
+
+        $after = NormCache::currentVersion(Post::class);
+
+        $this->assertSame($before + 1, $after);
+    }
 }

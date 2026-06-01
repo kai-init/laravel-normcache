@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration;
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
@@ -56,14 +57,14 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->get();
         $this->assertCount(1, $first);
 
         $post->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->get();
         $this->assertCount(0, $second);
@@ -97,8 +98,8 @@ class DependsOnTest extends TestCase
         $keysBA = $this->redisKeys('test:query:*');
 
         $this->assertSame(
-            array_map(fn($k) => str_replace('test:', '', $k), $keysAB),
-            array_map(fn($k) => str_replace('test:', '', $k), $keysBA)
+            array_map(fn ($k) => str_replace('test:', '', $k), $keysAB),
+            array_map(fn ($k) => str_replace('test:', '', $k), $keysBA)
         );
     }
 
@@ -201,14 +202,14 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->count();
         $this->assertSame(1, $first);
 
         Post::query()->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->count();
         $this->assertSame(0, $second);
@@ -227,6 +228,83 @@ class DependsOnTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertEmpty($queries);
+    }
+
+    public function test_join_count_with_depends_on_caches_as_scalar_result(): void
+    {
+        $this->seedAuthorsWithPosts();
+
+        $first = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->count();
+
+        $this->assertSame(3, $first);
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+
+        $second = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->count();
+
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame(3, $second);
+        $this->assertEmpty($queries);
+        $this->assertNotEmpty($this->redisKeys('test:raw:*scalar:*'));
+    }
+
+    public function test_distinct_count_with_depends_on_caches_as_scalar_result(): void
+    {
+        $this->seedAuthorsWithPosts();
+
+        $first = Post::query()
+            ->distinct()
+            ->dependsOn([Post::class])
+            ->count('author_id');
+
+        $this->assertSame(2, $first);
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+
+        $second = Post::query()
+            ->distinct()
+            ->dependsOn([Post::class])
+            ->count('author_id');
+
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame(2, $second);
+        $this->assertEmpty($queries);
+    }
+
+    public function test_locked_count_with_depends_on_still_bypasses_scalar_cache(): void
+    {
+        $this->seedAuthorsWithPosts();
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->count();
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->lockForUpdate()
+            ->dependsOn([Post::class])
+            ->count();
+
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertNotEmpty($queries);
     }
 
     public function test_explain_returns_cached_when_depends_on_set(): void
@@ -447,7 +525,7 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->tag('homepage')
             ->get();
@@ -455,7 +533,7 @@ class DependsOnTest extends TestCase
 
         $post->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->tag('homepage')
             ->get();
@@ -517,5 +595,42 @@ class DependsOnTest extends TestCase
 
         $this->assertSame($author->id, $result->id);
         $this->assertNotSame($post->id, $result->id);
+    }
+
+    public function test_where_raw_cross_table_dependency_is_not_cached_as_normal_model_query(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $post = Post::create([
+            'title' => 'Hello',
+            'author_id' => $author->id,
+            'published' => true,
+        ]);
+
+        $comment = Comment::create([
+            'body' => 'Looks good',
+            'commentable_type' => Post::class,
+            'commentable_id' => $post->id,
+        ]);
+
+        $sql = <<<'SQL'
+            exists (
+                select 1
+                from comments
+                where comments.commentable_id = posts.id
+                and comments.commentable_type = ?
+            )
+        SQL;
+
+        $first = Post::whereRaw($sql, [Post::class])->get();
+
+        $this->assertCount(1, $first);
+        $this->assertTrue($first->first()->is($post));
+
+        $comment->delete();
+
+        $second = Post::whereRaw($sql, [Post::class])->get();
+
+        $this->assertCount(0, $second);
     }
 }

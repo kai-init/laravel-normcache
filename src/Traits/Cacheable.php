@@ -2,6 +2,7 @@
 
 namespace NormCache\Traits;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
@@ -53,30 +54,12 @@ trait Cacheable
 
     public function save(array $options = []): bool
     {
-        $existsBefore = $this->exists;
-        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
-        $this->preInvalidateForObservers($existsBefore);
-        $result = parent::save($options);
-
-        if ($result) {
-            $this->invalidateAfterSave($existsBefore, $originalKey);
-        }
-
-        return $result;
+        return $this->saveWithCacheInvalidation(fn() => parent::save($options));
     }
 
     public function saveQuietly(array $options = []): bool
     {
-        $existsBefore = $this->exists;
-        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
-        $this->preInvalidateForObservers($existsBefore);
-        $result = parent::saveQuietly($options);
-
-        if ($result) {
-            $this->invalidateAfterSave($existsBefore, $originalKey);
-        }
-
-        return $result;
+        return $this->saveWithCacheInvalidation(fn() => Model::withoutEvents(fn() => parent::save($options)));
     }
 
     public function delete(): ?bool
@@ -97,62 +80,95 @@ trait Cacheable
 
     public function increment($column, $amount = 1, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::increment($column, $amount, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::increment($column, $amount, $extra));
     }
 
     public function decrement($column, $amount = 1, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::decrement($column, $amount, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::decrement($column, $amount, $extra));
     }
 
     public function incrementQuietly($column, $amount = 1, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::incrementQuietly($column, $amount, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::incrementQuietly($column, $amount, $extra));
     }
 
     public function decrementQuietly($column, $amount = 1, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::decrementQuietly($column, $amount, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::decrementQuietly($column, $amount, $extra));
     }
 
     public function incrementEach(array $columns, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::incrementEach($columns, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::incrementEach($columns, $extra));
     }
 
     public function decrementEach(array $columns, array $extra = []): int
     {
-        return $this->flushAfterCounterMutation(
-            parent::decrementEach($columns, $extra)
-        );
+        return $this->flushAfterCounterMutation(parent::decrementEach($columns, $extra));
+    }
+
+    protected function performInsert(Builder $query): bool
+    {
+        if (method_exists($query, 'withoutInvalidation')) {
+            return $query->withoutInvalidation(fn() => parent::performInsert($query));
+        }
+
+        return parent::performInsert($query);
+    }
+
+    protected function performUpdate(Builder $query): bool
+    {
+        if (method_exists($query, 'withoutInvalidation')) {
+            return $query->withoutInvalidation(fn() => parent::performUpdate($query));
+        }
+
+        return parent::performUpdate($query);
     }
 
     // -------------------------------------------------------------------------
     // Private
     // -------------------------------------------------------------------------
 
+    private function saveWithCacheInvalidation(callable $save): bool
+    {
+        $existsBefore = $this->exists;
+        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
+
+        $this->evictBeforeSaveForObservers($existsBefore, $originalKey);
+
+        $result = $save();
+
+        if ($result) {
+            $this->invalidateAfterSave($existsBefore, $originalKey);
+        }
+
+        return $result;
+    }
+
     private function invalidateAfterSave(bool $existsBefore, mixed $originalKey = null): void
     {
         if (!$existsBefore && $this->wasRecentlyCreated) {
             NormCache::invalidateVersion($this);
-        } elseif ($this->isRestoreSave($existsBefore)) {
-            NormCache::invalidateVersion($this);
-        } elseif ($existsBefore && $this->wasChanged()) {
-            if ($originalKey !== null && $originalKey !== $this->getKey()) {
-                NormCache::evictModelKey(static::class, $originalKey);
-            }
-            NormCache::flushInstance($this);
+
+            return;
         }
+
+        if ($this->isRestoreSave($existsBefore)) {
+            NormCache::invalidateVersion($this);
+
+            return;
+        }
+
+        if (!$existsBefore || !$this->wasChanged()) {
+            return;
+        }
+
+        if ($originalKey !== null && $originalKey !== $this->getKey()) {
+            NormCache::evictModelKey(static::class, $originalKey);
+        }
+
+        NormCache::flushInstance($this);
     }
 
     private function flushIfDeleted(?bool $result): void
@@ -162,13 +178,30 @@ trait Cacheable
         }
     }
 
-    // Flush before save so observers see fresh DB data — Eloquent events fire before invalidateAfterSave.
-    private function preInvalidateForObservers(bool $existsBefore): void
+    // Evict before save so observers do not read a stale model payload.
+    private function evictBeforeSaveForObservers(bool $existsBefore, mixed $originalKey = null): void
     {
-        if ($existsBefore && $this->isDirty() && NormCache::isEnabled()
-            && $this->getConnection()->transactionLevel() === 0) {
-            NormCache::flushInstance($this);
+        if (!$existsBefore) {
+            return;
         }
+
+        if (!$this->isDirty()) {
+            return;
+        }
+
+        if ($this->isPendingRestoreSave()) {
+            return;
+        }
+
+        if (!NormCache::isEnabled()) {
+            return;
+        }
+
+        if ($this->getConnection()->transactionLevel() !== 0) {
+            return;
+        }
+
+        NormCache::evictModelKey(static::class, $originalKey ?? $this->getKey());
     }
 
     private function flushAfterCounterMutation(int|bool $result): int
@@ -191,6 +224,17 @@ trait Cacheable
         $deletedAtColumn = $this->getDeletedAtColumn();
 
         return $this->wasChanged($deletedAtColumn) && $this->{$deletedAtColumn} === null;
+    }
+
+    private function isPendingRestoreSave(): bool
+    {
+        if (!method_exists($this, 'getDeletedAtColumn')) {
+            return false;
+        }
+
+        $deletedAtColumn = $this->getDeletedAtColumn();
+
+        return $this->isDirty($deletedAtColumn) && $this->{$deletedAtColumn} === null;
     }
 
     private function runWithoutCache(callable $callback)
