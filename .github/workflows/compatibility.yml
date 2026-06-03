@@ -57,7 +57,10 @@ jobs:
           coverage: none
 
       - name: Install dependencies
-        run: composer update --prefer-dist --no-interaction --no-progress
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+          composer update --prefer-dist --no-interaction --no-progress
 
       - name: Run standalone compatibility tests
         env:
@@ -112,7 +115,10 @@ jobs:
           coverage: none
 
       - name: Install dependencies
-        run: composer update --prefer-dist --no-interaction --no-progress
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+          composer update --prefer-dist --no-interaction --no-progress
 
       - name: Wait for Redis Cluster
         run: |

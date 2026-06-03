@@ -348,7 +348,7 @@ final class RedisStore
         $sha = self::$shas[$script] ??= sha1($script);
 
         try {
-            $shaArgs = $this->connection instanceof PredisConnection
+            $shaArgs = ($this->connection instanceof PredisConnection || $this->connection instanceof PredisClusterConnection)
                 ? [$sha, $n, ...$allArgs]
                 : [$sha, $allArgs, $n];
 

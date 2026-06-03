@@ -298,7 +298,11 @@ class RedisStoreTest extends TestCase
         $redis->setex('ver:{authors}:', 60, '5');
         $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
-        $redis->rawCommand('SCRIPT', 'FLUSH');
+        if ($redis instanceof \Illuminate\Redis\Connections\PhpRedisConnection) {
+            $redis->rawCommand('SCRIPT', 'FLUSH');
+        } else {
+            $redis->script('flush');
+        }
 
         $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 

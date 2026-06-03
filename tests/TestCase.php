@@ -36,12 +36,26 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('database.redis.client', env('REDIS_CLIENT', 'phpredis'));
         $app['config']->set('database.redis.options.prefix', '');
 
-        $app['config']->set('database.redis.model-cache-test', [
-            'host' => env('REDIS_HOST', '127.0.0.1'),
-            'port' => env('REDIS_PORT', 6379),
-            'database' => 15,
-            'password' => env('REDIS_PASSWORD', null),
-        ]);
+        if (env('REDIS_CLUSTER', false)) {
+            $nodes = explode(',', env('REDIS_CLUSTER_NODES', '127.0.0.1:6379'));
+            $app['config']->set('database.redis.clusters.model-cache-test', array_map(function ($node) {
+                [$host, $port] = explode(':', $node);
+                return [
+                    'host' => $host,
+                    'port' => $port,
+                    'database' => 0,
+                    'password' => env('REDIS_PASSWORD', null),
+                ];
+            }, $nodes));
+            $app['config']->set('normcache.cluster', true);
+        } else {
+            $app['config']->set('database.redis.model-cache-test', [
+                'host' => env('REDIS_HOST', '127.0.0.1'),
+                'port' => env('REDIS_PORT', 6379),
+                'database' => 15,
+                'password' => env('REDIS_PASSWORD', null),
+            ]);
+        }
 
         $app['config']->set('normcache.connection', 'model-cache-test');
         $app['config']->set('normcache.enabled', true);
