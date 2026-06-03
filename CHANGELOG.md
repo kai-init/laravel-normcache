@@ -26,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`Cacheable` namespace:** import the trait from `NormCache\Cacheable` instead of `NormCache\Traits\Cacheable`.
 - **Cache-mode selection:** normalized cache is kept for simple primary-table queries, including simple queries with declared dependencies; result cache is used for dependency-aware complex queries and result-style operations.
 - **Redis Cluster support:** cross-model paths (`dependsOn`, pivot, through, `withCount`) resolve each model's version key individually per slot. Single-instance behaviour is unchanged. Enable with `NORMCACHE_CLUSTER=true`.
 - **Aggregate caching simplified:** relation aggregates are cached as a versioned blob per query. The per-parent-ID aggregate key structure and old aggregate loader path have been removed.

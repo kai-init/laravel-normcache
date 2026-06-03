@@ -3,8 +3,8 @@
 namespace NormCache\Console;
 
 use Illuminate\Console\Command;
-use NormCache\Cacheable;
 use NormCache\Facades\NormCache;
+use NormCache\Traits\Cacheable;
 
 class FlushCommand extends Command
 {

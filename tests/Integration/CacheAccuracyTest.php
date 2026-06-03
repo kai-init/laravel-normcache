@@ -7,7 +7,6 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
-use NormCache\Cacheable;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
@@ -18,6 +17,7 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
 use ReflectionProperty;
 
 class CacheAccuracyTest extends TestCase

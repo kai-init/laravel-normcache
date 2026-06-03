@@ -1,9 +1,10 @@
 <?php
 
-namespace NormCache;
+namespace NormCache\Traits;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Relations\CachesRelationships;
 

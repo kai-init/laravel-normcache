@@ -43,8 +43,6 @@ Version 2.0.0 expands Normcache from simple normalized model-query caching into 
 - Stampede protection, stale-version serving, tag flushing, Redis Cluster handling, event reporting, and Debugbar traces are built into the core cache paths.
 - Debugbar integration shows cache hits, misses, bypasses, and timings on the request timeline when Debugbar is installed.
 
-The `Cacheable` trait now imports from `NormCache\Cacheable`.
-
 ---
 
 ## Installation
@@ -56,7 +54,7 @@ composer require kai-init/laravel-normcache
 Add the `Cacheable` trait to any model you want cached:
 
 ```php
-use NormCache\Cacheable;
+use NormCache\Traits\Cacheable;
 
 class Post extends Model
 {

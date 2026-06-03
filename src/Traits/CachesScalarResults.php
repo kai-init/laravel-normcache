@@ -2,7 +2,6 @@
 
 namespace NormCache\Traits;
 
-use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\QueryAnalyzer;

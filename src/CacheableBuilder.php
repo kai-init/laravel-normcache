@@ -19,6 +19,7 @@ use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
+use NormCache\Traits\Cacheable;
 use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesBuilderInvalidation;
 

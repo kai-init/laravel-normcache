@@ -7,10 +7,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use NormCache\Cacheable;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\DependencySet;
+use NormCache\Traits\Cacheable;
 
 trait CachesRelationAggregates
 {
