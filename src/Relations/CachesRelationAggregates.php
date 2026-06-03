@@ -116,11 +116,15 @@ trait CachesRelationAggregates
 
         if ($constraint !== null) {
             try {
-                $testBuilder = ($relatedClass)::withoutCache();
+                $testBuilder = ($relatedClass)::query();
                 $constraint($testBuilder);
                 $plan = $testBuilder->cachePlan($testBuilder->toBase(), CachePlanContext::models());
 
-                if (!$plan->dependencies->safe) {
+                if (
+                    !$plan->dependencies->safe
+                    || $plan->hasBypassReason('dependency')
+                    || $plan->hasBypassReason('normalization')
+                ) {
                     return null;
                 }
             } catch (\Throwable) {

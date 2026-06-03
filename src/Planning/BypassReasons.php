@@ -34,7 +34,7 @@ final class BypassReasons
             $dependency[] = 'subquery WHERE (whereHas/whereExists)';
         }
 
-        if (!self::isCanonicalFrom($base, $table)) {
+        if ($base->from !== $table) {
             $normalization[] = 'non-standard FROM (subquery or raw expression)';
         }
 
@@ -101,18 +101,6 @@ final class BypassReasons
         }
 
         return array_filter($merged);
-    }
-
-    private static function isCanonicalFrom(QueryBuilder $base, string $table): bool
-    {
-        $from = $base->from;
-
-        if (!is_string($from)) {
-            return false;
-        }
-
-        return $from === $table
-            || (bool) preg_match('/^' . preg_quote($table, '/') . '\s+as\s+\w+$/i', $from);
     }
 
     private static function hasRawWhereBypass(array $wheres): bool

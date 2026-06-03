@@ -71,7 +71,6 @@ final class CachePlanner
         $isResultStyleOperation = in_array($context->operation, [
             CacheOperation::Scalar,
             CacheOperation::PaginationCount,
-            CacheOperation::RelationAggregate,
             CacheOperation::Pivot,
             CacheOperation::Through,
         ], true);
@@ -136,6 +135,27 @@ final class CachePlanner
                     primaryKeys: $analysis->primaryKeys,
                 );
             }
+        }
+
+        // Scalar/count/pagination-count with cross-table shapes (JOIN, UNION, non-canonical FROM)
+        // cannot be safely versioned without explicit dependencies — downgrade to unsafe.
+        // Pivot and Through are excluded: they manage cross-table deps independently.
+        $isScalarLikeOperation = $context->operation === CacheOperation::Scalar
+            || $context->operation === CacheOperation::PaginationCount;
+
+        if (
+            $isScalarLikeOperation
+            && $explicit === null
+            && $inferred->models === []
+            && $inferred->tables === []
+            && $dependencies->safe
+            && (!empty($base->joins) || !empty($base->unions) || !is_string($base->from) || $base->from !== $builder->getModel()->getTable())
+        ) {
+            $dependencies = DependencySet::unsafe(['complex_query_requires_depends_on']);
+            $bypassReasons['dependency'] = array_values(array_unique([
+                ...($bypassReasons['dependency'] ?? []),
+                'complex_query_requires_depends_on',
+            ]));
         }
 
         if ($dependencies->safe && ($hasResultDependencies || $isResultStyleOperation)) {

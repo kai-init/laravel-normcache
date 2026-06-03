@@ -62,7 +62,12 @@ trait CachesScalarResults
 
     public function pluck($column, $key = null)
     {
-        return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), array_filter([$column, $key]));
+        $columns = [$column];
+        if ($key !== null) {
+            $columns[] = $key;
+        }
+
+        return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), $columns);
     }
 
     public function value($column): mixed
