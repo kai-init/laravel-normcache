@@ -7,7 +7,6 @@ use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
-use NormCache\VersionedCache;
 
 /**
  * @mixin CacheableBuilder

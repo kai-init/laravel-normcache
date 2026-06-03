@@ -7,6 +7,7 @@ use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
+use Predis\Client;
 use ReflectionProperty;
 
 abstract class TestCase extends OrchestraTestCase
@@ -15,7 +16,27 @@ abstract class TestCase extends OrchestraTestCase
     {
         parent::setUp();
 
-        Redis::connection('model-cache-test')->flushdb();
+        $redis = Redis::connection('model-cache-test');
+        $client = $redis->client();
+
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            if (class_exists(Client::class) && $client instanceof Client) {
+                foreach ($client as $node) {
+                    try {
+                        $node->flushdb();
+                    } catch (\Exception $e) {
+                        // Ignore READONLY errors from replicas
+                    }
+                }
+            } elseif ($client instanceof \RedisCluster) {
+                foreach ($client->_masters() as $master) {
+                    $client->flushdb($master);
+                }
+            }
+        } else {
+            $redis->flushdb();
+        }
+
         $this->resetClassKeyCache();
     }
 
@@ -33,13 +54,19 @@ abstract class TestCase extends OrchestraTestCase
             'prefix' => '',
         ]);
 
-        $app['config']->set('database.redis.client', env('REDIS_CLIENT', 'phpredis'));
+        $client = env('REDIS_CLIENT', 'phpredis');
+        $app['config']->set('database.redis.client', $client);
         $app['config']->set('database.redis.options.prefix', '');
 
-        if (env('REDIS_CLUSTER', false)) {
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            if ($client === 'predis') {
+                $app['config']->set('database.redis.options.cluster', 'redis');
+            }
+
             $nodes = explode(',', env('REDIS_CLUSTER_NODES', '127.0.0.1:6379'));
             $app['config']->set('database.redis.clusters.model-cache-test', array_map(function ($node) {
                 [$host, $port] = explode(':', $node);
+
                 return [
                     'host' => $host,
                     'port' => $port,

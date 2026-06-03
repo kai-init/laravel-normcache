@@ -327,8 +327,9 @@ class CacheManagerTest extends TestCase
     public function test_store_query_ids_writes_normally_with_building_key_only(): void
     {
         $store = $this->manager->getStore();
-        $buildingKey = 'building:test:write_with_building_key';
-        $key = 'query:test:write_with_building_key';
+        $classKey = $this->manager->classKey(Author::class);
+        $buildingKey = "building:{{$classKey}}:write_with_building_key";
+        $key = "query:{{$classKey}}:write_with_building_key";
 
         $store->setNx($buildingKey, 'token');
 

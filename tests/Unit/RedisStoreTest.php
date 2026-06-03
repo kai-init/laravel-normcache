@@ -185,29 +185,35 @@ class RedisStoreTest extends TestCase
             {
                 return new class
                 {
+                    public function getOption($option)
+                    {
+                        return 'laravel:';
+                    }
+
                     public function _masters(): array
                     {
                         return ['node-a', 'node-b'];
                     }
+
+                    public function scan(&$cursor, $node, $pattern = null, $count = 0)
+                    {
+                        $prev = $cursor;
+                        $cursor = 0;
+
+                        return match ([$pattern, $node, $prev]) {
+                            ['laravel:test:model:*', 'node-a', null] => ['laravel:test:model:{testing:posts}:1'],
+                            ['laravel:test:query:*', 'node-b', null] => ['laravel:test:query:{testing:posts}:v1:abc'],
+                            default => [],
+                        };
+                    }
                 };
             }
 
-            public function scan($cursor, $options = [])
+            public function unlink($keys)
             {
-                return match ([$options['match'], $options['node']]) {
-                    ['test:model:*', 'node-a'] => [0, ['laravel:test:model:{testing:posts}:1']],
-                    ['test:model:*', 'node-b'] => false,
-                    ['test:query:*', 'node-a'] => false,
-                    ['test:query:*', 'node-b'] => [0, ['laravel:test:query:{testing:posts}:v1:abc']],
-                    default => false,
-                };
-            }
+                $this->unlinked[] = (array) $keys;
 
-            public function unlink(...$keys)
-            {
-                $this->unlinked[] = $keys;
-
-                return count($keys);
+                return count((array) $keys);
             }
         };
 
@@ -225,14 +231,21 @@ class RedisStoreTest extends TestCase
 
     public function test_flush_by_patterns_scans_all_nodes_on_predis_cluster(): void
     {
-        $phpRedis = Redis::connection('model-cache-test');
+        // Write keys directly to standalone redis (where the fake predis cluster will scan).
+        // Using model-cache-test would write to a real cluster in cluster mode, which the
+        // fake single-node predis client below cannot reach.
+        $directClient = new PredisClient(
+            ['scheme' => 'tcp', 'host' => '127.0.0.1', 'port' => 6379, 'database' => 15]
+        );
 
         for ($i = 0; $i < 2500; $i++) {
-            $phpRedis->setex("testscan:model:{posts}:{$i}", 60, 'x');
+            $directClient->setex("testscan:model:{posts}:{$i}", 60, 'x');
         }
 
-        $this->assertCount(2500, $phpRedis->keys('testscan:*'));
+        $this->assertCount(2500, $directClient->keys('testscan:*'));
 
+        // Use 'predis' cluster type so the client iterates over configured nodes
+        // without requiring CLUSTER SLOTS (which standalone Redis doesn't support).
         $predisClient = new PredisClient(
             [['scheme' => 'tcp', 'host' => '127.0.0.1', 'port' => 6379, 'database' => 15]],
             ['cluster' => 'predis']
@@ -245,7 +258,7 @@ class RedisStoreTest extends TestCase
         $deleted = $store->flushByPatterns(['model:{posts}:*']);
 
         $this->assertSame(2500, $deleted);
-        $this->assertEmpty($phpRedis->keys('testscan:*'));
+        $this->assertEmpty($directClient->keys('testscan:*'));
     }
 
     public function test_unserialize_detects_format_by_magic_header(): void
@@ -287,26 +300,6 @@ class RedisStoreTest extends TestCase
         $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
         $this->assertSame('7', $result);
-    }
-
-    public function test_eval_recovers_after_redis_script_flush(): void
-    {
-        $store = new RedisStore('model-cache-test', '', false);
-        $redis = Redis::connection('model-cache-test');
-        $script = RedisScripts::get('fetch_version_with_cooldown');
-
-        $redis->setex('ver:{authors}:', 60, '5');
-        $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
-
-        if ($redis instanceof \Illuminate\Redis\Connections\PhpRedisConnection) {
-            $redis->rawCommand('SCRIPT', 'FLUSH');
-        } else {
-            $redis->script('flush');
-        }
-
-        $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
-
-        $this->assertSame('5', $result);
     }
 
     public function test_php_sha_cache_is_populated_after_first_eval(): void

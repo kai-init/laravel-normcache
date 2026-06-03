@@ -82,8 +82,8 @@ trait HandlesInvalidation
             $classKey = $this->keys->classKey($class);
             $this->doInvalidateVersion($class);
             $this->store->deleteFromSet(
-                $this->store->prefix($key),
-                $this->store->prefix($this->keys->membersKey($classKey))
+                $key,
+                $this->keys->membersKey($classKey)
             );
         });
     }
@@ -115,8 +115,8 @@ trait HandlesInvalidation
             $classKey = $this->keys->classKey($modelClass);
             $key = $this->keys->modelPrefix($classKey) . $id;
             $this->store->deleteFromSet(
-                $this->store->prefix($key),
-                $this->store->prefix($this->keys->membersKey($classKey))
+                $key,
+                $this->keys->membersKey($classKey)
             );
         });
     }

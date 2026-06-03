@@ -15,9 +15,6 @@ parameters:
             identifier: argument.type
             path: src/Support/RedisStore.php
         -
-            identifier: arrayUnpacking.nonIterable
-            path: src/Support/RedisStore.php
-        -
             identifier: trait.unused
             path: src/Traits/Cacheable.php
         -
