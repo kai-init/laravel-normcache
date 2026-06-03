@@ -105,7 +105,7 @@ Pessimistic locks always bypass the cache.
 
 ### Per-Query TTL
 
-Use `ttl()` (or `remember()` for backward compatibility) to set a custom cache duration:
+Use `ttl()` to set a custom cache duration:
 
 ```php
 Post::where('active', true)->ttl(600)->get();
