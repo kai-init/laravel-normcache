@@ -21,14 +21,14 @@
     ],
     "require": {
         "php": "^8.2",
-        "laravel/framework": "^11.0|^12.0|^13.0"
+        "laravel/framework": "^12.0|^13.0"
     },
     "require-dev": {
         "laravel/pint": "^1.18",
-        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "orchestra/testbench": "^10.0|^11.0",
         "phpunit/phpunit": "^10.5|^11.0|^12.0",
         "larastan/larastan": "^3.0",
-        "predis/predis": "^3.4"
+        "predis/predis": "^3.4.0 <3.5"
     },
     "suggest": {
         "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)",

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.1] — 2026-06-03
+
+### Fixed
+
+- **Redis Cluster Cross-Slot Violations:** Resolved errors caused by optional keys (like building or wake keys) mapping to different slots when empty. Scripts now use dummy keys sharing the primary hash tag to ensure slot consistency.
+- **Predis Cluster Compatibility:** Fixed `NotSupportedException` for `EVALSHA` in cluster mode by adding an automatic fallback to `EVAL`.
+- **Unified Scanning logic:** Abstracted `SCAN` and `SSCAN` behavior into a client-agnostic orchestrator, resolving cursor and result format differences between Phpredis and Predis.
+- **Closure Reference Capture:** Fixed a bug in scanning methods where scanned results were lost due to incorrect variable capture in arrow functions.
+- **Connection Prefix Detection:** Improved extraction of Redis connection prefixes to support both standalone and clustered configurations for all clients.
+- **Master-only Flush:** Ensured `flushdb` in cluster mode properly targets master nodes and ignores read-only replicas.
+
+---
+
 ## [2.0.0] — 2026-06-03
 
 ### Added
