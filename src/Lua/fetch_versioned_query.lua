@@ -9,6 +9,7 @@
 -- ARGV[2] = current timestamp in ms
 -- ARGV[3] = building lock TTL in seconds
 -- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
+-- ARGV[5] = building lock token
 --
 -- Returns: {status, ver, [ids, models]}
 local function mget_models(model_prefix, ids)
@@ -60,8 +61,8 @@ local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
 local ids_raw = redis.call('GET', query_key)
 if not ids_raw then
     local building_key = KEYS[5] .. ARGV[1]
-    local claimed = redis.call('SET', building_key, '1', 'NX', 'EX', tonumber(ARGV[3]))
-    if claimed then return {'miss', ver} end
+    local claimed = redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3]))
+    if claimed then return {'miss', ver, ARGV[5]} end
     return serve_stale(ver, ARGV[1], KEYS[3], KEYS[4], tonumber(ARGV[4]) or 3) or {'building', ver}
 end
 

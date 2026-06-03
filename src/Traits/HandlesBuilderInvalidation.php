@@ -4,7 +4,7 @@ namespace NormCache\Traits;
 
 use NormCache\Facades\NormCache;
 
-trait HandlesCacheInvalidation
+trait HandlesBuilderInvalidation
 {
     private bool $suppressInvalidation = false;
 

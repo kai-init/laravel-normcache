@@ -18,8 +18,8 @@ parameters:
             identifier: arrayUnpacking.nonIterable
             path: src/Support/RedisStore.php
         -
-            identifier: notIdentical.alwaysTrue
-            path: src/Support/RedisStore.php
+            identifier: trait.unused
+            path: src/Traits/Cacheable.php
         -
             identifier: trait.unused
-            path: src/Traits/*
+            path: src/Relations/*

@@ -626,7 +626,7 @@ class EloquentContractTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // withAggregate / deferred aggregates
+    // withAggregate
     // -------------------------------------------------------------------------
 
     public function test_aggregate_blob_key_includes_selected_columns(): void
@@ -775,6 +775,20 @@ class EloquentContractTest extends TestCase
         );
     }
 
+    public function test_with_count_belongs_to_many_invalidates_when_pivot_changes(): void
+    {
+        ['carol' => $carol, 'php' => $php] = $this->fixtures();
+
+        Author::withCount('tags')->orderBy('name')->get();
+
+        $carol->tags()->attach($php->id);
+
+        $this->assertSame(
+            $this->normalize(Author::withoutCache()->withoutAggregateCache()->withCount('tags')->orderBy('name')->get()),
+            $this->normalize(Author::withCount('tags')->orderBy('name')->get()),
+        );
+    }
+
     public function test_with_exists_adds_correct_boolean_attribute(): void
     {
         $this->fixtures();
@@ -838,10 +852,6 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_mixed_cacheable_and_non_cacheable_in_one_call(): void
     {
-        // Cacheable relation goes through pendingAggregates (deferred Redis path);
-        // non-cacheable relation goes through parent::withAggregate (Eloquent subselect).
-        // Both aggregate VALUES must match native. Attribute insertion order is not
-        // compared — it is an implementation detail that users should not rely on.
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $author->id]);
         UncachedPost::create(['title' => 'UP1', 'author_id' => $author->id]);
@@ -894,9 +904,6 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_having_on_aggregate_alias_behaves_same_as_native(): void
     {
-        // HAVING on an aggregate alias requires the aggregate in SQL — deferred loading
-        // cannot provide it, so NormCache must fall back to native Eloquent.
-        // SQLite rejects HAVING without GROUP BY, so we verify they fail identically.
         $this->fixtures();
 
         $nativeException = null;
@@ -937,7 +944,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_without_aggregate_cache_called_after_with_count_replays_to_native(): void
+    public function test_without_aggregate_cache_called_after_with_count_matches_native(): void
     {
         $this->fixtures();
         $this->contract(
@@ -1022,6 +1029,19 @@ class EloquentContractTest extends TestCase
         $this->contract(
             fn() => Post::with('author')->orderBy('title')->get(),
             fn() => Post::withoutCache()->with('author')->orderBy('title')->get(),
+        );
+    }
+
+    public function test_with_belongs_to_computed_select_matches_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Post::with([
+                'author' => fn($query) => $query->selectRaw('id, upper(name) as upper_name'),
+            ])->orderBy('title')->get(),
+            fn() => Post::withoutCache()->with([
+                'author' => fn($query) => $query->selectRaw('id, upper(name) as upper_name'),
+            ])->orderBy('title')->get(),
         );
     }
 
@@ -1315,7 +1335,7 @@ class EloquentContractTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // dependsOn — raw cache
+    // dependsOn — result cache
     // -------------------------------------------------------------------------
 
     public function test_depends_on_get(): void
@@ -1348,9 +1368,9 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_raw_depends_on_with_group_by_and_withcount_skips_aggregate_on_null_pk_models(): void
+    public function test_result_depends_on_with_group_by_and_withcount_skips_aggregate_on_null_pk_models(): void
     {
-        // GROUP BY raw dependsOn results lack primary keys — RelationAggregateLoader must
+        // GROUP BY result dependsOn results lack primary keys — RelationAggregateLoader must
         // skip aggregate loading rather than cache null-keyed entries or mismatch the query.
         $alice = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'P1', 'author_id' => $alice->id]);
@@ -1864,7 +1884,6 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_pluck_aggregate_alias_matches_native(): void
     {
-        // pluck() goes through scalar cache paths and must replay pending aggregates first.
         $this->fixtures();
 
         $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all();
@@ -1875,7 +1894,6 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_value_aggregate_alias_matches_native(): void
     {
-        // value() goes through scalar cache paths and must replay pending aggregates first.
         $this->fixtures();
 
         $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->value('posts_count');
@@ -1886,7 +1904,6 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_cursor_aggregate_alias_matches_native(): void
     {
-        // cursor() bypasses get() and must replay pending aggregates before iterating.
         $this->fixtures();
 
         $native = Author::withoutCache()->withoutAggregateCache()->withCount('posts')->orderBy('name')->cursor()->map->posts_count->all();

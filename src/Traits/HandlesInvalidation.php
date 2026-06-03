@@ -15,7 +15,8 @@ trait HandlesInvalidation
     /** @var array<string, array<string, true>> */
     private array $flushQueue = [];
 
-    abstract protected function handle(callable $operation): void;
+    /** @var array<string, array<string, true>> */
+    private array $versionQueue = [];
 
     // -------------------------------------------------------------------------
     // Invalidation
@@ -35,7 +36,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(fn() => $this->doInvalidateVersion($model::class));
+        $this->attempt(fn() => $this->doInvalidateVersion($model::class));
     }
 
     public function flushModel(Model|string $model): void
@@ -45,7 +46,7 @@ trait HandlesInvalidation
         }
 
         if (is_string($model)) {
-            $this->handle(fn() => $this->forceFlushModel($model));
+            $this->attempt(fn() => $this->forceFlushModel($model));
 
             return;
         }
@@ -58,7 +59,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(fn() => $this->forceFlushModel($model::class));
+        $this->attempt(fn() => $this->forceFlushModel($model::class));
     }
 
     public function flushInstance(Model $model): void
@@ -77,7 +78,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(function () use ($class, $key) {
+        $this->attempt(function () use ($class, $key) {
             $classKey = $this->keys->classKey($class);
             $this->doInvalidateVersion($class);
             $this->store->deleteFromSet(
@@ -87,13 +88,30 @@ trait HandlesInvalidation
         });
     }
 
+    public function invalidateTableVersion(string $connectionName, string $table): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $classKey = $this->keys->tableKey($connectionName, $table);
+
+        if (DB::connection($connectionName)->transactionLevel() > 0) {
+            $this->queueVersionFlush($connectionName, $classKey);
+
+            return;
+        }
+
+        $this->attempt(fn() => $this->doInvalidateKey($classKey));
+    }
+
     public function evictModelKey(string $modelClass, mixed $id): void
     {
         if (!$this->enabled) {
             return;
         }
 
-        $this->handle(function () use ($modelClass, $id) {
+        $this->attempt(function () use ($modelClass, $id) {
             $classKey = $this->keys->classKey($modelClass);
             $key = $this->keys->modelPrefix($classKey) . $id;
             $this->store->deleteFromSet(
@@ -125,7 +143,7 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_SCHEDULED . ':*',
             CacheKeyBuilder::K_BUILDING . ':*',
             CacheKeyBuilder::K_WAKE . ':*',
-            CacheKeyBuilder::K_RAW . ':*',
+            CacheKeyBuilder::K_RESULT . ':*',
         ]);
     }
 
@@ -138,7 +156,7 @@ trait HandlesInvalidation
         $classKey = $this->keys->classKey($modelClass);
 
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RAW . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_RESULT . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
@@ -152,7 +170,7 @@ trait HandlesInvalidation
         }
 
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RAW . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
@@ -177,16 +195,22 @@ trait HandlesInvalidation
     public function commitPending(string $connectionName): void
     {
         $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
+        $versions = array_keys($this->versionQueue[$connectionName] ?? []);
 
         unset($this->flushQueue[$connectionName]);
+        unset($this->versionQueue[$connectionName]);
 
-        if (empty($flushes) || !$this->enabled) {
+        if ((empty($flushes) && empty($versions)) || !$this->enabled) {
             return;
         }
 
-        $this->handle(function () use ($flushes) {
+        $this->attempt(function () use ($flushes, $versions) {
             foreach ($flushes as $modelClass) {
                 $this->forceFlushModel($modelClass);
+            }
+
+            foreach ($versions as $classKey) {
+                $this->doInvalidateKey($classKey);
             }
         });
     }
@@ -194,11 +218,13 @@ trait HandlesInvalidation
     public function discardPending(string $connectionName): void
     {
         unset($this->flushQueue[$connectionName]);
+        unset($this->versionQueue[$connectionName]);
     }
 
     public function discardAllPending(): void
     {
         $this->flushQueue = [];
+        $this->versionQueue = [];
     }
 
     // -------------------------------------------------------------------------
@@ -207,8 +233,11 @@ trait HandlesInvalidation
 
     private function doInvalidateVersion(string $modelClass): void
     {
-        $classKey = $this->keys->classKey($modelClass);
+        $this->doInvalidateKey($this->keys->classKey($modelClass));
+    }
 
+    private function doInvalidateKey(string $classKey): void
+    {
         if ($this->cooldown <= 0) {
             $this->store->increment($this->keys->verKey($classKey));
 
@@ -238,5 +267,10 @@ trait HandlesInvalidation
     private function queueModelFlush(string $connectionName, string $modelClass): void
     {
         $this->flushQueue[$connectionName][$modelClass] = true;
+    }
+
+    private function queueVersionFlush(string $connectionName, string $classKey): void
+    {
+        $this->versionQueue[$connectionName][$classKey] = true;
     }
 }

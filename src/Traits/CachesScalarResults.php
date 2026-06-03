@@ -2,14 +2,12 @@
 
 namespace NormCache\Traits;
 
-use Illuminate\Database\Query\Builder as QueryBuilder;
-use NormCache\CacheableBuilder;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Events\QueryBypassed;
-use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheMiss;
-use NormCache\Facades\NormCache;
-use NormCache\Support\QueryInspector;
+use NormCache\Enums\CacheMode;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Planning\QueryAnalyzer;
+use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\CacheReporter;
+use NormCache\VersionedCache;
 
 /**
  * @mixin CacheableBuilder
@@ -19,22 +17,22 @@ trait CachesScalarResults
     public function count($columns = '*'): int
     {
         if ($columns !== '*' && !is_string($columns)) {
-            return (int) parent::count($columns);
+            return parent::count($columns);
         }
 
-        $kind = $columns === '*' ? 'count' : 'count:' . $columns;
+        $kind = $columns === '*' ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_COUNT . ':' . $columns;
 
-        return (int) $this->cacheScalar($kind, fn() => parent::count($columns));
+        return (int) $this->cacheScalar($kind, fn() => parent::count($columns), (array) $columns);
     }
 
     public function sum($column): mixed
     {
-        return $this->cacheScalar('sum', fn() => parent::sum($column), $column);
+        return $this->cacheScalar('sum', fn() => parent::sum($column), (array) $column);
     }
 
     public function avg($column): mixed
     {
-        return $this->cacheScalar('avg', fn() => parent::avg($column), $column);
+        return $this->cacheScalar('avg', fn() => parent::avg($column), (array) $column);
     }
 
     public function average($column): mixed
@@ -44,12 +42,12 @@ trait CachesScalarResults
 
     public function min($column): mixed
     {
-        return $this->cacheScalar('min', fn() => parent::min($column), $column);
+        return $this->cacheScalar('min', fn() => parent::min($column), (array) $column);
     }
 
     public function max($column): mixed
     {
-        return $this->cacheScalar('max', fn() => parent::max($column), $column);
+        return $this->cacheScalar('max', fn() => parent::max($column), (array) $column);
     }
 
     public function exists(): bool
@@ -64,107 +62,40 @@ trait CachesScalarResults
 
     public function pluck($column, $key = null)
     {
-        if (!empty($this->pendingAggregates)) {
-            $this->replayPendingAggregates();
-        }
-
-        return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), $column, $key);
+        return $this->cacheScalar('pluck', fn() => parent::pluck($column, $key), array_filter([$column, $key]));
     }
 
     public function value($column): mixed
     {
-        if (!empty($this->pendingAggregates)) {
-            $this->replayPendingAggregates();
-        }
-
-        return $this->cacheScalar('value', fn() => parent::value($column), $column);
+        return $this->cacheScalar('value', fn() => parent::value($column), (array) $column);
     }
 
-    private function cacheScalar(string $kindPrefix, \Closure $fallback, mixed ...$columns): mixed
+    private function cacheScalar(string $kind, \Closure $fallback, array $columns = []): mixed
     {
-        foreach ($columns as $col) {
-            if ($col !== null && !QueryInspector::isCacheableScalarColumn($col)) {
-                return $fallback();
-            }
-        }
-
-        $nonNull = array_filter($columns, fn($c) => $c !== null);
-        $kind = $nonNull !== [] ? $kindPrefix . ':' . implode(':', $nonNull) : $kindPrefix;
-
-        if ($this->skipCache || !NormCache::isEnabled()) {
+        if (QueryAnalyzer::hasCalculatedColumns($columns)) {
             return $fallback();
         }
-
-        $debugbarStart = NormCacheCollector::beginMeasure();
 
         $base = $this->toBase();
-        $bypassReasons = $this->computeScalarBypassReasons($base);
+        $plan = $this->cachePlan($base, CachePlanContext::scalar($kind, $columns, $this->inferAggregateDependencies()));
 
-        if (!empty($bypassReasons)) {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryBypassed($this->model::class, $bypassReasons));
+        if ($plan->mode === CacheMode::Bypass) {
+            if (!$plan->hasBypassReason('opted_out')) {
+                CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
             }
-
-            NormCacheCollector::recordBypass($this->model::class, $bypassReasons, $debugbarStart);
 
             return $fallback();
         }
 
-        $hash = 'scalar:' . $this->queryCacheKey($base) . ":{$kind}";
-
-        try {
-            $result = NormCache::getRawCache(
-                $this->model::class,
-                $this->dependsOn ?? [],
-                $hash,
-                $this->cacheTag
-            );
-
-            if ($result['status'] === 'building') {
-                return $fallback();
-            }
-
-            $hit = $result['status'] === 'hit';
-            $cacheKey = $result['key'];
-            $value = $hit ? ($result['blob'][0] ?? null) : null;
-
-            if (!$hit) {
-                $value = $fallback();
-                NormCache::storeRawResult($cacheKey, [$value], $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
-            }
-
-            if (NormCache::isEventsEnabled()) {
-                event($hit
-                    ? new QueryCacheHit($this->model::class, $cacheKey)
-                    : new QueryCacheMiss($this->model::class, $cacheKey)
-                );
-            }
-
-            NormCacheCollector::recordQuery(
-                $hit ? 'query hit' : 'query miss',
-                $this->model::class,
-                $cacheKey,
-                $debugbarStart,
-                ['kind' => $kind]
-            );
-
-            return $value;
-        } catch (\Throwable $e) {
-            NormCache::fallback($e);
-
-            return $fallback();
-        }
-    }
-
-    /** @return array<string, list<string>> */
-    private function computeScalarBypassReasons(QueryBuilder $base): array
-    {
-        $bypassReasons = $this->computeBypassReasons($base);
-
-        if ($this->dependsOn !== null) {
-            unset($bypassReasons['dependency'], $bypassReasons['normalization']);
-        }
-
-        return $bypassReasons;
+        return (new VersionedCache)->rememberScalar(
+            $this,
+            $base,
+            $plan,
+            $fallback,
+            $kind,
+            $this->getQueryTtl(),
+            $this->getCacheTag(),
+            str_starts_with($kind, 'count') ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_SCALAR
+        );
     }
 }

@@ -3,7 +3,7 @@
 namespace NormCache\Debug;
 
 use DebugBar\DataCollector\TimeDataCollector;
-use NormCache\Support\QueryInspector;
+use NormCache\Planning\BypassReasons;
 
 /**
  * DebugBar data collector for NormCache.
@@ -91,7 +91,7 @@ class NormCacheDebugBarCollector extends TimeDataCollector
 
     public function addBypassMeasure(string $modelClass, array $groupedReasons, ?float $startTime): void
     {
-        $labels = QueryInspector::categoryLabels();
+        $labels = BypassReasons::labels();
         $parts = [];
 
         foreach ($groupedReasons as $category => $items) {

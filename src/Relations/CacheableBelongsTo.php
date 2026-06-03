@@ -4,7 +4,10 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use NormCache\CacheableBuilder;
+use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Planning\QueryAnalyzer;
 
 class CacheableBelongsTo extends BelongsTo
 {
@@ -19,48 +22,31 @@ class CacheableBelongsTo extends BelongsTo
 
     public function getEager()
     {
-        if (!$this->shouldUseCacheForEagerLoad()) {
+        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
+
+        if (!$this->shouldUseCacheForEagerLoad($columns)) {
             return parent::getEager();
         }
 
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection(
-                NormCache::getModels($this->eagerKeys, $this->related::class)
+                NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $this->query, false)
             )
         );
     }
 
-    private function shouldUseCacheForEagerLoad(): bool
+    private function shouldUseCacheForEagerLoad(?array $columns): bool
     {
         if ($this->eagerKeys === []
-            || !NormCache::isEnabled()
             || !$this->query instanceof CacheableBuilder
-            || $this->query->isCacheSkipped()
-            || $this->query->hasRemovedScopes()
-            || $this->parent->getConnection()->transactionLevel() > 0
             || $this->getOwnerKeyName() !== $this->related->getKeyName()
-            || $this->query->getEagerLoads() !== []
-            || $this->query->toBase()->lock !== null) {
+            || $this->query->getEagerLoads() !== []) {
             return false;
         }
 
         $base = $this->query->toBase();
+        $plan = $this->query->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
 
-        if (count($base->wheres) !== 1
-            || !empty($base->joins)
-            || !empty($base->orders)
-            || $base->columns !== null
-            || $base->offset > 0
-            || $base->limit > 0) {
-            return false;
-        }
-
-        $where = $base->wheres[0];
-
-        if (($where['column'] ?? null) !== $this->getQualifiedOwnerKeyName()) {
-            return false;
-        }
-
-        return ($where['type'] ?? null) === 'In' || ($where['type'] ?? null) === 'InRaw';
+        return $plan->mode === CacheMode::Normalized;
     }
 }

@@ -1,0 +1,200 @@
+<?php
+
+namespace NormCache\Planning;
+
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\CacheableBuilder;
+use NormCache\Enums\CacheMode;
+use NormCache\Enums\CacheOperation;
+use NormCache\Facades\NormCache;
+
+final class CachePlanner
+{
+    public function __construct(
+        private readonly QueryAnalyzer $analyzer = new QueryAnalyzer,
+    ) {}
+
+    public function plan(
+        CacheableBuilder $builder,
+        QueryBuilder $base,
+        CachePlanContext $context,
+    ): CachePlan {
+        $slotting = NormCache::isSlotting();
+        $contextReasons = $this->resolveContextReasons($builder, $context);
+
+        $analysis = $this->analyzer->forBuilder(
+            $base,
+            $builder->getModel()->getTable(),
+            $context->columns,
+            [$builder->getModel()->getKeyName(), $builder->getModel()->getQualifiedKeyName()],
+            $contextReasons,
+        );
+
+        // 1. Resolve Dependencies
+        $modelClass = $builder->getModel()::class;
+        $explicit = $builder->explicitDependencies();
+        $inferred = $context->inferredDependencies;
+
+        $dependencies = $explicit !== null
+            ? new DependencySet(
+                models: array_keys(array_flip([$modelClass, ...$inferred->models, ...$explicit])),
+                tables: $inferred->tables,
+            )
+            : ($analysis->hasDependencyBypass() || !$inferred->safe
+                ? DependencySet::unsafe(array_values(array_unique([
+                    ...$analysis->dependencyReasons(),
+                    ...$inferred->reasons,
+                    ...($analysis->hasDependencyBypass() ? ['Query requires explicit dependencies.'] : []),
+                ])))
+                : new DependencySet(
+                    models: array_keys(array_flip([$modelClass, ...$inferred->models])),
+                    tables: $inferred->tables,
+                ));
+
+        // 2. Qualify Normalization
+        $normalizable = false;
+        $normalizationReasons = [];
+        if ($context->requiresNormalization()) {
+            if ($analysis->hasSafetyBypass()) {
+                $normalizationReasons[] = 'Query has safety bypass.';
+            } elseif ($analysis->hasDependencyBypass()) {
+                $normalizationReasons[] = 'Query has dependency bypass.';
+            } elseif ($analysis->hasNormalizationBypass()) {
+                $normalizationReasons[] = 'Query shape cannot be normalized.';
+            } else {
+                $normalizable = true;
+            }
+        }
+
+        // 3. Resolve Cache Mode
+        $hasResultDependencies = $explicit !== null || $inferred->models !== [] || $inferred->tables !== [];
+        $isResultStyleOperation = in_array($context->operation, [
+            CacheOperation::Scalar,
+            CacheOperation::PaginationCount,
+            CacheOperation::RelationAggregate,
+            CacheOperation::Pivot,
+            CacheOperation::Through,
+        ], true);
+
+        if ($analysis->hasOptedOutBypass()) {
+            return new CachePlan(
+                mode: CacheMode::Bypass,
+                operation: $context->operation,
+                dependencies: $dependencies,
+                normalizable: false,
+                columns: $context->columns,
+                primaryKeys: $analysis->primaryKeys,
+                reasons: $analysis->optedOutReasons(),
+                bypassReasons: ['opted_out' => $analysis->optedOutReasons()],
+            );
+        }
+
+        $bypassReasons = $analysis->bypassReasons;
+
+        // Relation-specific bypass relaxations or strictness
+        if ($context->operation === CacheOperation::BelongsToEagerLoad || $context->operation === CacheOperation::MorphToEagerLoad) {
+            if ($analysis->primaryKeys === null) {
+                $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
+            }
+        }
+
+        if ($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through) {
+            // Pivot/Through operations allow exactly one join (to the intermediate table)
+            if (count($bypassReasons['normalization'] ?? []) === 1 && $bypassReasons['normalization'][0] === 'JOIN clauses') {
+                $base = $builder->toBase();
+                if (count($base->joins ?? []) === 1) {
+                    unset($bypassReasons['normalization']);
+                }
+            }
+        }
+
+        if (isset($bypassReasons['safety'])) {
+            return new CachePlan(
+                mode: CacheMode::Bypass,
+                operation: $context->operation,
+                dependencies: $dependencies,
+                normalizable: false,
+                columns: $context->columns,
+                primaryKeys: $analysis->primaryKeys,
+                reasons: $bypassReasons['safety'],
+                bypassReasons: ['safety' => $bypassReasons['safety']],
+            );
+        }
+
+        if ($normalizable && $dependencies->safe && empty($bypassReasons['normalization'])) {
+            // Issue 6: Multi-dependency normalized queries in cluster mode risk cross-slot errors.
+            // Route them to Result mode which is slotting-aware.
+            $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
+
+            if (!$slotting || !$isMultiDependency) {
+                return new CachePlan(
+                    mode: CacheMode::Normalized,
+                    operation: $context->operation,
+                    dependencies: $dependencies,
+                    normalizable: true,
+                    columns: $context->columns,
+                    primaryKeys: $analysis->primaryKeys,
+                );
+            }
+        }
+
+        if ($dependencies->safe && ($hasResultDependencies || $isResultStyleOperation)) {
+            $isStrictRelation = in_array($context->operation, [CacheOperation::Pivot, CacheOperation::Through], true);
+
+            if (!$isStrictRelation || empty($bypassReasons['normalization'])) {
+                return new CachePlan(
+                    mode: CacheMode::Result,
+                    operation: $context->operation,
+                    dependencies: $dependencies,
+                    normalizable: $normalizable && empty($bypassReasons['normalization']),
+                    columns: $context->columns,
+                    primaryKeys: $analysis->primaryKeys,
+                    reasons: $hasResultDependencies ? ['Using dependency result cache.'] : ['Using result cache.'],
+                );
+            }
+        }
+
+        if (!$dependencies->safe) {
+            $bypassReasons['dependency'] = array_values(array_unique([
+                ...($bypassReasons['dependency'] ?? []),
+                ...$dependencies->reasons,
+            ]));
+        }
+
+        return new CachePlan(
+            mode: CacheMode::Bypass,
+            operation: $context->operation,
+            dependencies: $dependencies,
+            normalizable: $normalizable,
+            columns: $context->columns,
+            primaryKeys: $analysis->primaryKeys,
+            reasons: array_values(array_unique([
+                ...$normalizationReasons,
+                ...$dependencies->reasons,
+                ...$analysis->dependencyReasons(),
+                ...$analysis->normalizationReasons(),
+                ...($bypassReasons['normalization'] ?? []),
+            ])),
+            bypassReasons: $bypassReasons,
+        );
+    }
+
+    private function resolveContextReasons(CacheableBuilder $builder, CachePlanContext $context): array
+    {
+        $reasons = $context->contextReasons;
+
+        if ($builder->isCacheSkipped()) {
+            $reasons['opted_out'][] = 'withoutCache() was called explicitly';
+        }
+
+        if (!NormCache::isEnabled()) {
+            $reasons['opted_out'][] = 'cache is globally disabled';
+        }
+
+        if ($builder->getModel()->getConnection()->transactionLevel() > 0) {
+            $reasons['safety'][] = 'inside a database transaction';
+        }
+
+        return $reasons;
+    }
+}

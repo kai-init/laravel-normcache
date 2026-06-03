@@ -29,16 +29,17 @@ class CacheKeyBuilder
 
     public const K_WAKE = 'wake';
 
-    public const K_RAW = 'raw';
+    public const K_RESULT = 'result';
 
-    private static array $classKeyCache = [];
+    private static array $classKeys = [];
 
     private static array $prototypes = [];
 
-    public static function prototypeFor(string $class): Model
-    {
-        return self::$prototypes[$class] ??= new $class;
-    }
+    private static array $deletedAtColumns = [];
+
+    // -------------------------------------------------------------------------
+    // Prefixes
+    // -------------------------------------------------------------------------
 
     public function modelPrefix(string $classKey): string
     {
@@ -52,9 +53,9 @@ class CacheKeyBuilder
         return $tag !== null ? $base . $tag . ':v' : $base . 'v';
     }
 
-    public function rawPrefix(string $classKey): string
+    public function resultPrefix(string $classKey): string
     {
-        return self::K_RAW . ':{' . $classKey . '}:';
+        return self::K_RESULT . ':{' . $classKey . '}:';
     }
 
     public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
@@ -87,9 +88,30 @@ class CacheKeyBuilder
         return self::K_WAKE . ':{' . $classKey . '}:';
     }
 
+    // -------------------------------------------------------------------------
+    // High-level resolution
+    // -------------------------------------------------------------------------
+
     public function classKey(string $class): string
     {
-        return self::$classKeyCache[$class] ??= $this->resolveClassKey($class);
+        return self::$classKeys[$class] ??= $this->resolveClassKey($class);
+    }
+
+    public static function prototype(string $class): Model
+    {
+        return self::$prototypes[$class] ??= new $class;
+    }
+
+    public static function deletedAtColumn(string $class): ?string
+    {
+        return self::$deletedAtColumns[$class] ??= method_exists(self::prototype($class), 'getDeletedAtColumn')
+            ? self::prototype($class)->getDeletedAtColumn()
+            : null;
+    }
+
+    public function tableKey(string $connectionName, string $table): string
+    {
+        return "{$connectionName}:{$table}";
     }
 
     public function verKey(string $classKey): string
@@ -102,6 +124,20 @@ class CacheKeyBuilder
         return self::K_SCHEDULED . ':{' . $classKey . '}:';
     }
 
+    public function membersKey(string $classKey): string
+    {
+        return self::K_MEMBERS . ':{' . $classKey . '}';
+    }
+
+    public function wakeKey(string $classKey, string $lockSuffix): string
+    {
+        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
+    }
+
+    // -------------------------------------------------------------------------
+    // Specific Keys
+    // -------------------------------------------------------------------------
+
     public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash): string
     {
         return $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
@@ -112,12 +148,12 @@ class CacheKeyBuilder
         return $this->namespacedPrefix($namespace, $classKey, $tag) . $seg . ':' . $hash;
     }
 
-    public function rawKey(string $classKey, ?string $tag, string $seg, string $hash): string
+    public function resultKey(string $classKey, ?string $tag, string $seg, string $hash): string
     {
-        return $this->rawPrefix($classKey) . $this->tagSegment($tag) . $seg . ':' . $hash;
+        return $this->resultPrefix($classKey) . $this->tagSegment($tag) . $seg . ':' . $hash;
     }
 
-    public function rawBuildingKey(string $classKey, string $seg, string $lockSuffix): string
+    public function resultBuildingKey(string $classKey, string $seg, string $lockSuffix): string
     {
         return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
     }
@@ -131,6 +167,15 @@ class CacheKeyBuilder
     {
         return $this->pivotPrefix($parentKey, $relatedKey, $relation, $constraintHash, $seg) . $parentId;
     }
+
+    public function modelKey(string $modelClass, string $id): string
+    {
+        return $this->modelPrefix($this->classKey($modelClass)) . $id;
+    }
+
+    // -------------------------------------------------------------------------
+    // Versioning Helpers
+    // -------------------------------------------------------------------------
 
     public function versionedKey(string $keyPrefix, string $seg, string $hash): string
     {
@@ -147,21 +192,6 @@ class CacheKeyBuilder
         return array_map(fn($version) => substr($version, 1), explode(':', $seg));
     }
 
-    public function membersKey(string $classKey): string
-    {
-        return self::K_MEMBERS . ':{' . $classKey . '}';
-    }
-
-    public function modelKey(string $modelClass, string $id): string
-    {
-        return $this->modelPrefix($this->classKey($modelClass)) . $id;
-    }
-
-    public function wakeKey(string $classKey, string $lockSuffix): string
-    {
-        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
-    }
-
     public function buildingToWakeKey(string $buildingKey): string
     {
         $classKeyEnd = strpos($buildingKey, '}:') + 2;
@@ -171,37 +201,49 @@ class CacheKeyBuilder
             . substr(strrchr($buildingKey, ':'), 1);
     }
 
-    public function depVersionKeys(string $classKey, array $depClasses): array
+    // -------------------------------------------------------------------------
+    // Dependency Resolvers
+    // -------------------------------------------------------------------------
+
+    public function depVersionKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
         $all = array_values(array_unique(
-            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)))
+            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)), $this->sortKeys($depTableKeys))
         ));
 
         return array_map(fn($key) => $this->verKey($key), $all);
     }
 
-    public function depScheduledKeys(string $classKey, array $depClasses): array
+    public function depScheduledKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
         $all = array_values(array_unique(
-            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)))
+            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)), $this->sortKeys($depTableKeys))
         ));
 
         return array_map(fn($key) => $this->scheduledKey($key), $all);
     }
+
+    // -------------------------------------------------------------------------
+    // Suffixes / Segments
+    // -------------------------------------------------------------------------
 
     public function tagSegment(?string $tag): string
     {
         return $tag !== null ? $tag . ':' : '';
     }
 
-    public function rawBuildIdentityHash(?string $tag, string $hash): string
+    public function resultBuildIdentityHash(?string $tag, string $hash): string
     {
         return sha1($this->tagSegment($tag) . $hash);
     }
 
+    // -------------------------------------------------------------------------
+    // Private implementation
+    // -------------------------------------------------------------------------
+
     private function resolveClassKey(string $class): string
     {
-        $model = self::prototypeFor($class);
+        $model = self::prototype($class);
         $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
         return "{$connection}:{$model->getTable()}";
@@ -212,5 +254,12 @@ class CacheKeyBuilder
         usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
 
         return $classes;
+    }
+
+    private function sortKeys(array $keys): array
+    {
+        sort($keys, SORT_STRING);
+
+        return $keys;
     }
 }

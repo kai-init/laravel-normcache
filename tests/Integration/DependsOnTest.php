@@ -18,7 +18,7 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_depends_on_cache_hits_on_second_call(): void
@@ -36,6 +36,16 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
         $this->assertSame(0, $queryCount);
+    }
+
+    public function test_simple_depends_on_query_uses_normalized_query_cache(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::query()->dependsOn([Post::class])->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_depends_on_invalidates_on_primary_model_version_bump(): void
@@ -57,14 +67,14 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->get();
         $this->assertCount(1, $first);
 
         $post->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->get();
         $this->assertCount(0, $second);
@@ -98,8 +108,8 @@ class DependsOnTest extends TestCase
         $keysBA = $this->redisKeys('test:query:*');
 
         $this->assertSame(
-            array_map(fn ($k) => str_replace('test:', '', $k), $keysAB),
-            array_map(fn ($k) => str_replace('test:', '', $k), $keysBA)
+            array_map(fn($k) => str_replace('test:', '', $k), $keysAB),
+            array_map(fn($k) => str_replace('test:', '', $k), $keysBA)
         );
     }
 
@@ -202,14 +212,14 @@ class DependsOnTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->count();
         $this->assertSame(1, $first);
 
         Post::query()->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->count();
         $this->assertSame(0, $second);
@@ -254,7 +264,7 @@ class DependsOnTest extends TestCase
 
         $this->assertSame(3, $second);
         $this->assertEmpty($queries);
-        $this->assertNotEmpty($this->redisKeys('test:raw:*scalar:*'));
+        $this->assertNotEmpty($this->redisKeys('test:count:*'));
     }
 
     public function test_distinct_count_with_depends_on_caches_as_scalar_result(): void
@@ -325,7 +335,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_explain_shows_computed_blob_for_join_with_depends_on(): void
@@ -336,7 +346,7 @@ class DependsOnTest extends TestCase
             ->explain();
 
         $this->assertStringContainsString('cached', $result);
-        $this->assertStringContainsString('raw (dependsOn())', $result);
+        $this->assertStringContainsString('result (dependsOn())', $result);
     }
 
     public function test_from_subquery_with_depends_on_caches_as_blob(): void
@@ -347,7 +357,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_raw_order_with_depends_on_can_cache(): void
@@ -359,7 +369,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_where_in_subquery_requires_depends_on(): void
@@ -384,7 +394,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_behaviora_l_distinct_with_depends_on_preserves_distinct_semantics(): void
@@ -457,8 +467,8 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:raw:*:homepage:*'));
-        $this->assertEmpty($this->redisKeys('test:raw:*[^:]homepage*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*:homepage:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*[^:]homepage*'));
     }
 
     public function test_tagged_keys_are_isolated_from_untagged_keys(): void
@@ -469,8 +479,8 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class])->get();
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
 
-        $all = $this->redisKeys('test:raw:*');
-        $tagged = $this->redisKeys('test:raw:*:homepage:*');
+        $all = $this->redisKeys('test:result:*');
+        $tagged = $this->redisKeys('test:result:*:homepage:*');
 
         $this->assertCount(2, $all);
         $this->assertCount(1, $tagged);
@@ -487,8 +497,8 @@ class DependsOnTest extends TestCase
         $removed = NormCache::flushTag(Author::class, 'homepage');
 
         $this->assertSame(1, $removed);
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
-        $this->assertEmpty($this->redisKeys('test:raw:*:homepage:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*:homepage:*'));
     }
 
     public function test_flush_tag_across_models_removes_all_matching(): void
@@ -502,7 +512,7 @@ class DependsOnTest extends TestCase
         $removed = NormCache::flushTagAcrossModels('deploy');
 
         $this->assertSame(2, $removed);
-        $this->assertEmpty($this->redisKeys('test:raw:*:deploy:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*:deploy:*'));
     }
 
     public function test_flush_tag_removes_tagged_paginate_count_key(): void
@@ -520,12 +530,12 @@ class DependsOnTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:count:*:homepage:*'));
     }
 
-    public function test_tagged_raw_cache_invalidates_on_dep_version_bump(): void
+    public function test_tagged_result_cache_invalidates_on_dep_version_bump(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
 
-        $first = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $first = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->tag('homepage')
             ->get();
@@ -533,7 +543,7 @@ class DependsOnTest extends TestCase
 
         $post->update(['published' => false]);
 
-        $second = Author::whereHas('posts', fn ($q) => $q->where('published', true))
+        $second = Author::whereHas('posts', fn($q) => $q->where('published', true))
             ->dependsOn([Post::class])
             ->tag('homepage')
             ->get();
