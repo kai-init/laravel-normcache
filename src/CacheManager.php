@@ -388,7 +388,7 @@ class CacheManager
             json_encode($ids),
             $ttl ?? $this->queryTtl,
             $buildingKey,
-            $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null,
+            $this->keys->buildingToWakeKey($buildingKey),
             $buildingToken
         );
     }

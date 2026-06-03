@@ -25,7 +25,7 @@ trait CachesPivotRelation
     {
         $this->inEagerLoad = true;
         $this->eagerParentIds = $this->getKeys($models, $this->parentKey);
-        $this->preEagerWhereBindings = $this->query->toBase()->getRawBindings()['where'] ?? [];
+        $this->preEagerWhereBindings = $this->query->toBase()->getRawBindings()['where'];
         parent::addEagerConstraints($models);
     }
 
@@ -163,7 +163,7 @@ trait CachesPivotRelation
             }
         }
 
-        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : ($rawBindings['where'] ?? []);
+        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : $rawBindings['where'];
         if (!empty($whereBindings)) {
             $shape['bindings_where'] = $whereBindings;
         }
