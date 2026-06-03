@@ -1,0 +1,136 @@
+name: Compatibility Matrix
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── phpredis scenarios ──────────────────────────────────────────────
+          - label: "phpredis / Redis 7"
+            redis_client: phpredis
+            extensions: redis
+            redis_image: redis:7-alpine
+
+          - label: "phpredis / Redis 6"
+            redis_client: phpredis
+            extensions: redis
+            redis_image: redis:6-alpine
+
+          # ── predis scenarios ────────────────────────────────────────────────
+          - label: "predis / Redis 7"
+            redis_client: predis
+            extensions: ""
+            redis_image: redis:7-alpine
+
+          - label: "predis / Redis 6"
+            redis_client: predis
+            extensions: ""
+            redis_image: redis:6-alpine
+
+    name: Standalone / ${{ matrix.label }}
+
+    services:
+      redis:
+        image: ${{ matrix.redis_image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: ${{ matrix.extensions }}
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run standalone compatibility tests
+        env:
+          REDIS_CLIENT: ${{ matrix.redis_client }}
+          REDIS_CLUSTER: "false"
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+        run: vendor/bin/phpunit
+
+  cluster:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "phpredis / Redis 7 cluster"
+            redis_client: phpredis
+            extensions: redis
+
+          - label: "predis / Redis 7 cluster"
+            redis_client: predis
+            extensions: ""
+
+    name: Cluster / ${{ matrix.label }}
+
+    services:
+      redis-cluster:
+        image: grokzen/redis-cluster:7.0.15
+        ports:
+          - 7000:7000
+          - 7001:7001
+          - 7002:7002
+          - 7003:7003
+          - 7004:7004
+          - 7005:7005
+        env:
+          IP: 0.0.0.0
+        options: >-
+          --health-cmd "redis-cli -p 7000 ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: ${{ matrix.extensions }}
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Wait for Redis Cluster
+        run: |
+          for i in {1..30}; do
+            if redis-cli -p 7000 cluster info | grep -q "cluster_state:ok"; then
+              exit 0
+            fi
+
+            echo "Waiting for Redis Cluster..."
+            sleep 2
+          done
+
+          redis-cli -p 7000 cluster info
+          exit 1
+
+      - name: Run cluster compatibility tests
+        env:
+          REDIS_CLIENT: ${{ matrix.redis_client }}
+          REDIS_CLUSTER: "true"
+          REDIS_CLUSTER_NODES: "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005"
+        run: vendor/bin/phpunit

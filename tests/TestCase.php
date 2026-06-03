@@ -33,6 +33,7 @@ abstract class TestCase extends OrchestraTestCase
             'prefix' => '',
         ]);
 
+        $app['config']->set('database.redis.client', env('REDIS_CLIENT', 'phpredis'));
         $app['config']->set('database.redis.options.prefix', '');
 
         $app['config']->set('database.redis.model-cache-test', [
