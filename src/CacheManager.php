@@ -80,47 +80,6 @@ class CacheManager
         $this->enabled = false;
     }
 
-    public function fallback(\Throwable $e): void
-    {
-        if (!$this->fallbackEnabled) {
-            throw $e;
-        }
-
-        report($e);
-        $this->disable();
-    }
-
-    /**
-     * @template T
-     *
-     * @param  callable(): T  $operation
-     * @param  callable(): T  $fallback
-     * @return T
-     */
-    public function rescue(callable $operation, callable $fallback): mixed
-    {
-        try {
-            return $operation();
-        } catch (\Throwable $e) {
-            $this->fallback($e);
-        }
-
-        return $fallback();
-    }
-
-    public function attempt(callable $operation): bool
-    {
-        try {
-            $operation();
-
-            return true;
-        } catch (\Throwable $e) {
-            $this->fallback($e);
-
-            return false;
-        }
-    }
-
     // -------------------------------------------------------------------------
     // Accessors
     // -------------------------------------------------------------------------
@@ -497,6 +456,43 @@ class CacheManager
             $this->keys->verKey($classKey),
             $modelVersion
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Flow
+    // -------------------------------------------------------------------------
+    public function rescue(callable $operation, callable $fallback): mixed
+    {
+        try {
+            return $operation();
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+        }
+
+        return $fallback();
+    }
+
+    public function attempt(callable $operation): bool
+    {
+        try {
+            $operation();
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+
+            return false;
+        }
+    }
+
+    public function fallback(\Throwable $e): void
+    {
+        if (!$this->fallbackEnabled) {
+            throw $e;
+        }
+
+        report($e);
+        $this->disable();
     }
 
     // -------------------------------------------------------------------------

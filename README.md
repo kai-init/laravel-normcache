@@ -40,7 +40,7 @@ Version 2.0.0 expands Normcache from simple normalized model-query caching into 
 - `dependsOn()` caches cross-table queries when you declare the model classes that should invalidate the result.
 - Simple queries still use normalized ID + model-attribute caching, while complex dependency-aware queries use a versioned result cache.
 - Scalar reads, pagination counts, relation aggregates, pivot relations, through relations, and morph-to eager loads now share versioned invalidation paths.
-- Stampede protection, stale-version serving, tag flushing, Redis Cluster handling, event reporting, and Debugbar traces are built into the core cache paths.
+- Stampede protection, stale-version serving, tag flushing, Redis Cluster handling, event reporting are built into the core cache paths.
 - Debugbar integration shows cache hits, misses, bypasses, and timings on the request timeline when Debugbar is installed.
 
 ---
@@ -207,10 +207,10 @@ return [
 - **`ttl`** — Lifetime of individual model attribute keys. Default: 7 days.
 - **`query_ttl`** — Lifetime of query, raw, pivot, and through cache keys. Default: 1 hour.
 - **`slotting`** — When `false` (default), all NormCache keys are placed on one Redis Cluster slot using the `{nc}` slot prefix.
-- **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Consecutive writes within the window bump the version only once. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
+- **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
-- **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving. (`NORMCACHE_STALE_TTL_DEPTH` is accepted as a deprecated fallback.)
+- **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
 - **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.
 - **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
 - **`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event.

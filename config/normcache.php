@@ -15,5 +15,5 @@ return [
     'fallback' => (bool) env('NORMCACHE_FALLBACK', false),
     'fire_retrieved' => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
-    'stale_version_depth' => (int) env('NORMCACHE_STALE_VERSION_DEPTH', (int) env('NORMCACHE_STALE_TTL_DEPTH', 3)),
+    'stale_version_depth' => (int) env('NORMCACHE_STALE_VERSION_DEPTH', 3),
 ];
