@@ -291,4 +291,52 @@ class CacheManagerTest extends TestCase
         $this->assertNotNull($store->getRaw($queryKey), 'CAS writes when version still matches');
         $this->assertNull($store->getRaw($buildingKey), 'Building lock released after successful write');
     }
+
+    public function test_store_query_ids_does_not_write_or_release_when_building_token_mismatches(): void
+    {
+        $store = $this->cacheManager()->getStore();
+        $classKey = $this->cacheManager()->classKey(Author::class);
+
+        $versionKey = "ver:{{$classKey}}:";
+        $queryKey = "query:{{$classKey}}:v5:token-mismatch";
+        $buildingKey = "building:{{$classKey}}:token-mismatch";
+
+        $store->setNx($versionKey, '5');
+        $store->setNx($buildingKey, 'new-owner');
+
+        $this->cacheManager()->storeQueryIds($queryKey, [7, 8, 9], 3600, $buildingKey, [$versionKey], ['5'], 'old-owner');
+
+        $this->assertNull($store->getRaw($queryKey), 'Stale builder must not write when lock token changed');
+        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
+    }
+
+    public function test_store_versioned_result_does_not_write_or_release_when_building_token_mismatches(): void
+    {
+        $store = $this->cacheManager()->getStore();
+        $classKey = $this->cacheManager()->classKey(Author::class);
+
+        $versionKey = "ver:{{$classKey}}:";
+        $resultKey = "result:{{$classKey}}:v5:token-mismatch";
+        $buildingKey = "building:{{$classKey}}:v5:token-mismatch";
+        $wakeKey = "wake:{{$classKey}}:token-mismatch";
+
+        $store->setNx($versionKey, '5');
+        $store->setNx($buildingKey, 'new-owner');
+
+        $written = $this->cacheManager()->storeVersionedResult(
+            $resultKey,
+            [['id' => 1, 'name' => 'Stale']],
+            3600,
+            [$versionKey],
+            ['5'],
+            $buildingKey,
+            $wakeKey,
+            'old-owner'
+        );
+
+        $this->assertFalse($written);
+        $this->assertNull($store->getRaw($resultKey), 'Stale builder must not write when lock token changed');
+        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
+        $this->assertNull($store->getRaw($wakeKey), 'Stale builder must not wake waiters for a lock it no longer owns');
+    }
 }

@@ -5,10 +5,11 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\CacheableBuilder;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheMiss;
+use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
 
 trait CachesOneOrManyThrough
@@ -19,42 +20,44 @@ trait CachesOneOrManyThrough
             return parent::get($columns);
         }
 
-        $debugbarStart = NormCacheCollector::beginMeasure();
+        $debugbarStart = CacheReporter::beginMeasure();
 
         $shouldCacheModels = $columns === ['*'] && $this->query->toBase()->columns === null;
         $builder = $this->prepareQueryBuilder($columns);
-        $hash = QueryHasher::fromQuery($builder->toBase());
+        $hash = QueryHasher::forResultQuery($builder->toBase());
         $relatedClass = $this->related::class;
+        $throughClass = $this->throughParent::class;
 
         try {
-            $result = NormCache::getThroughCache($relatedClass, $this->throughParent::class, $hash);
+            $result = NormCache::getResultCache($relatedClass, [$throughClass], $hash, null, [], CacheKeyBuilder::K_THROUGH);
+
+            if ($result['status'] === 'building') {
+                $result = NormCache::waitForBuild('result', $relatedClass, $hash, null, [$throughClass], [], CacheKeyBuilder::K_THROUGH);
+
+                if ($result === null) {
+                    return parent::get($columns);
+                }
+            }
+
             $key = $result['key'];
 
-            if ($result['data'] !== null) {
-                if (NormCache::isEventsEnabled()) {
-                    event(new QueryCacheHit($relatedClass, $key));
-                }
-
-                NormCacheCollector::recordQuery('through hit', $relatedClass, $key, $debugbarStart, [
-                    'through' => $this->throughParent::class,
-                ]);
+            if ($result['status'] === 'hit') {
+                CacheReporter::queryHit($relatedClass, $key, $debugbarStart, [
+                    'through' => $throughClass,
+                ], 'through hit');
 
                 return $this->hydrateFromIds(
-                    $result['data']['ids'],
+                    $result['payload']['ids'],
                     $relatedClass,
                     $builder,
                     $this->projectionColumns($shouldCacheModels),
-                    $result['data']['throughKeys']
+                    $result['payload']['throughKeys']
                 );
             }
 
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryCacheMiss($relatedClass, $key));
-            }
-
-            NormCacheCollector::recordQuery('through miss', $relatedClass, $key, $debugbarStart, [
-                'through' => $this->throughParent::class,
-            ]);
+            CacheReporter::queryMiss($relatedClass, $key, $debugbarStart, [
+                'through' => $throughClass,
+            ], 'through miss');
 
             $models = parent::get($columns);
             $payload = $this->cachePayloadFromResult($models);
@@ -68,7 +71,7 @@ trait CachesOneOrManyThrough
                 }
             }
 
-            if (NormCache::storeVersionedResult($key, $payload, versionKeys: $result['versionKeys'], expectedVersions: $result['expectedVersions'])) {
+            if (NormCache::storeResultCache($key, $payload, $result['buildingKey'], null, $result['wakeKey'], $result['versionKeys'], $result['expectedVersions'], $result['buildingToken'] ?? null)) {
                 NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
             }
 
@@ -82,10 +85,17 @@ trait CachesOneOrManyThrough
 
     private function shouldUseCache(): bool
     {
-        return NormCache::isEnabled()
-            && $this->parent->getConnection()->transactionLevel() === 0
-            && !($this->query instanceof CacheableBuilder && $this->query->isCacheSkipped())
-            && $this->query->toBase()->lock === null;
+        if (!$this->query instanceof CacheableBuilder) {
+            return false;
+        }
+
+        $base = $this->query->toBase();
+        $plan = $this->query->cachePlan($base, CachePlanContext::through(
+            $this->projectionColumns(true) ?? [],
+            $this->query->inferAggregateDependencies()
+        ));
+
+        return $plan->mode === CacheMode::Result;
     }
 
     private function cachePayloadFromResult(Collection $result): array

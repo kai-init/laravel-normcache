@@ -42,7 +42,7 @@ composer require kai-init/laravel-normcache
 Add the `Cacheable` trait to any model you want cached:
 
 ```php
-use NormCache\Traits\Cacheable;
+use NormCache\Cacheable;
 
 class Post extends Model
 {
@@ -71,27 +71,31 @@ Post::withoutCache()->get();
 
 ### Cross-Table Queries
 
-Queries that span multiple tables are not cached by default — Normcache can't infer which model writes should invalidate them. `dependsOn()` lets you declare the dependency explicitly:
+Queries that span multiple tables or use complex features (JOIN, GROUP BY, DISTINCT, subqueries) are not cached by default — Normcache can't infer which model writes should invalidate them. `dependsOn()` lets you declare these dependencies explicitly:
 
 ```php
 Author::whereHas('posts', fn($q) => $q->where('published', true))
     ->dependsOn([Post::class])
     ->get();
 
-// Works for any query shape — JOIN, GROUP BY, DISTINCT, subquery WHERE, raw ORDER BY:
+// Works for JOIN, GROUP BY, calculated columns, etc.
 Author::join('posts', 'posts.author_id', '=', 'authors.id')->dependsOn([Post::class])->get();
 Post::select('author_id', DB::raw('SUM(views) as total'))
     ->groupBy('author_id')->dependsOn([Post::class])->get();
 ```
 
-All `dependsOn` queries are cached as versioned raw rows. When any declared model class is written, the versioned key becomes unreachable and the next read re-populates from the database. Pessimistic locks always bypass the cache.
+Normcache chooses the best caching strategy automatically:
+- **Normalized Cache**: Used for simple queries on the primary table. If you add `dependsOn()`, it stays normalized but becomes versioned against the extra models too.
+- **Result Cache**: Used for complex queries with `dependsOn()`. The entire result set is cached as a versioned blob.
 
-**List every table the query reads.** An under-declared dependency means silent staleness until TTL. Use `tag()` / `flushTag()` when you need manual invalidation for events the model version system cannot see.
+Pessimistic locks always bypass the cache.
 
 ### Per-Query TTL
 
+Use `ttl()` (or `remember()` for backward compatibility) to set a custom cache duration:
+
 ```php
-Post::query()->remember(600)->get();
+Post::where('active', true)->ttl(600)->get();
 ```
 
 ### Aggregates

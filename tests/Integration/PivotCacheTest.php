@@ -12,33 +12,29 @@ use ReflectionMethod;
 
 class PivotCacheTest extends TestCase
 {
-    public function test_belongs_to_many_attach_invalidates_both_sides(): void
+    public function test_belongs_to_many_attach_invalidates_pivot_table(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $tag = Tag::create(['name' => 'Fiction']);
 
-        $authorVersionBefore = NormCache::currentVersion(Author::class);
-        $tagVersionBefore = NormCache::currentVersion(Tag::class);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
 
         $author->tags()->attach($tag->id);
 
-        $this->assertGreaterThan($authorVersionBefore, NormCache::currentVersion(Author::class));
-        $this->assertGreaterThan($tagVersionBefore, NormCache::currentVersion(Tag::class));
+        $this->assertGreaterThan($versionBefore, NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag'));
     }
 
-    public function test_belongs_to_many_detach_invalidates_both_sides(): void
+    public function test_belongs_to_many_detach_invalidates_pivot_table(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);
 
-        $authorVersionBefore = NormCache::currentVersion(Author::class);
-        $tagVersionBefore = NormCache::currentVersion(Tag::class);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
 
         $author->tags()->detach($tag->id);
 
-        $this->assertGreaterThan($authorVersionBefore, NormCache::currentVersion(Author::class));
-        $this->assertGreaterThan($tagVersionBefore, NormCache::currentVersion(Tag::class));
+        $this->assertGreaterThan($versionBefore, NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag'));
     }
 
     public function test_belongs_to_many_sync_invalidates_once(): void
@@ -47,13 +43,13 @@ class PivotCacheTest extends TestCase
         $tag1 = Tag::create(['name' => 'Fiction']);
         $tag2 = Tag::create(['name' => 'Drama']);
 
-        $authorVersionBefore = NormCache::currentVersion(Author::class);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
 
         $author->tags()->sync([$tag1->id, $tag2->id]);
 
         $this->assertSame(
-            $authorVersionBefore + 1,
-            NormCache::currentVersion(Author::class)
+            $versionBefore + 1,
+            NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag')
         );
     }
 
@@ -63,26 +59,24 @@ class PivotCacheTest extends TestCase
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);
 
-        $authorVersionBefore = NormCache::currentVersion(Author::class);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
 
         $author->tags()->updateExistingPivot($tag->id, ['notes' => 'updated']);
 
-        $this->assertGreaterThan($authorVersionBefore, NormCache::currentVersion(Author::class));
+        $this->assertGreaterThan($versionBefore, NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag'));
     }
 
-    public function test_morph_to_many_attach_invalidates_both_sides(): void
+    public function test_morph_to_many_attach_invalidates_pivot_table(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
         $tag = Tag::create(['name' => 'Fiction']);
 
-        $postVersionBefore = NormCache::currentVersion(Post::class);
-        $tagVersionBefore = NormCache::currentVersion(Tag::class);
+        $versionBefore = NormCache::currentTableVersion($post->getConnection()->getName(), 'taggables');
 
         $post->tags()->attach($tag->id);
 
-        $this->assertGreaterThan($postVersionBefore, NormCache::currentVersion(Post::class));
-        $this->assertGreaterThan($tagVersionBefore, NormCache::currentVersion(Tag::class));
+        $this->assertGreaterThan($versionBefore, NormCache::currentTableVersion($post->getConnection()->getName(), 'taggables'));
     }
 
     public function test_eager_load_populates_pivot_cache(): void
@@ -200,25 +194,26 @@ class PivotCacheTest extends TestCase
         $this->assertArrayNotHasKey('pivot_tag_id', $fetched->getRawOriginal());
     }
 
-    public function test_stale_pivot_cache_entry_can_remain_after_parent_version_bump(): void
+    public function test_parent_version_bump_does_not_invalidate_pivot_membership_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);
 
-        Author::with('tags')->get();
+        $author->tags()->get();
 
-        $staleAuthorVersion = NormCache::currentVersion(Author::class);
-        $staleTagVersion = NormCache::currentVersion(Tag::class);
+        $keyCountAfterWarm = count($this->redisKeys('test:pivot:*'));
 
         $author->update(['name' => 'Alice Updated']);
 
-        $this->assertGreaterThan($staleAuthorVersion, NormCache::currentVersion(Author::class));
+        DB::enableQueryLog();
+        $tags = $author->tags()->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
 
-        $staleKeys = $this->redisKeys("test:pivot:*:v{$staleAuthorVersion}:v{$staleTagVersion}:*");
-
-        $this->assertNotEmpty($staleKeys);
-        $this->assertSame(['Fiction'], Author::with('tags')->first()->tags->pluck('name')->all());
+        $this->assertEmpty($queries);
+        $this->assertSame($keyCountAfterWarm, count($this->redisKeys('test:pivot:*')));
+        $this->assertSame(['Fiction'], $tags->pluck('name')->all());
     }
 
     public function test_pivot_warm_hit_runs_after_query_callbacks(): void
@@ -274,6 +269,21 @@ class PivotCacheTest extends TestCase
         $tags = Author::with('tags')->get()->first()->tags;
 
         $this->assertCount(2, $tags);
+    }
+
+    public function test_pivot_relation_with_extra_join_delegates_to_eloquent(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $author->tags()->attach($tag->id);
+
+        $tags = $author->tags()
+            ->join('posts', 'posts.author_id', '=', 'author_tag.author_id')
+            ->get();
+
+        $this->assertSame([$tag->id], $tags->modelKeys());
+        $this->assertEmpty($this->redisKeys('test:pivot:*'));
     }
 
     public function test_pivot_cache_ordered_eager_loads_do_not_collide(): void

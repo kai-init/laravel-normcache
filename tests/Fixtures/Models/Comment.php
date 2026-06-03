@@ -4,7 +4,7 @@ namespace NormCache\Tests\Fixtures\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use NormCache\Traits\Cacheable;
+use NormCache\Cacheable;
 
 class Comment extends Model
 {

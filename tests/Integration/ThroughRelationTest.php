@@ -127,6 +127,20 @@ class ThroughRelationTest extends TestCase
         $this->assertSame($post->id, $results->first()->getKey());
     }
 
+    public function test_through_relation_with_extra_join_delegates_to_eloquent(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $posts = $country->posts()
+            ->join('countries as c2', 'c2.id', '=', 'authors.country_id')
+            ->get();
+
+        $this->assertSame([$post->id], $posts->modelKeys());
+        $this->assertEmpty($this->redisKeys('test:through:*'));
+    }
+
     public function test_stale_through_cache_entry_can_remain_after_through_model_version_bump(): void
     {
         $country = Country::create(['name' => 'Australia']);

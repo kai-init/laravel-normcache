@@ -131,7 +131,7 @@ class CacheEventsTest extends TestCase
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
 
-    public function test_raw_depends_on_miss_fires_query_cache_miss(): void
+    public function test_result_depends_on_miss_fires_query_cache_miss(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -142,11 +142,11 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
         });
     }
 
-    public function test_raw_depends_on_miss_does_not_fire_model_cache_hit(): void
+    public function test_result_depends_on_miss_does_not_fire_model_cache_hit(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -194,7 +194,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -203,7 +203,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'raw:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
         });
     }
 }

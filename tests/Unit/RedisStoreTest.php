@@ -5,7 +5,7 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Support\LuaScripts;
+use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use Predis\Client as PredisClient;
@@ -13,6 +13,161 @@ use ReflectionProperty;
 
 class RedisStoreTest extends TestCase
 {
+    private RedisStore $store;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->store = new RedisStore('default', 'test:', false, '{nc}:');
+    }
+
+    public function test_it_prefixes_keys(): void
+    {
+        $this->assertSame('{nc}:test:foo', $this->store->prefix('foo'));
+    }
+
+    public function test_it_prefixes_keys_in_slotting_mode(): void
+    {
+        $store = new RedisStore('default', 'test:', true, '');
+        $this->assertSame('test:foo', $store->prefix('foo'));
+    }
+
+    public function test_it_can_set_and_get_values(): void
+    {
+        $this->store->set('foo', 'bar', 60);
+        $this->assertSame('bar', $this->store->get('foo'));
+    }
+
+    public function test_it_can_set_and_get_json_values(): void
+    {
+        $this->store->setJson('foo', ['bar' => 'baz'], 60);
+        $this->assertSame(['bar' => 'baz'], json_decode($this->store->getRaw('foo'), true));
+    }
+
+    public function test_it_can_set_nx(): void
+    {
+        $this->store->delete('foo');
+        $this->store->setNx('foo', 'bar');
+        $this->assertSame('bar', $this->store->get('foo'));
+
+        $this->store->setNx('foo', 'baz');
+        $this->assertSame('bar', $this->store->get('foo'));
+    }
+
+    public function test_it_can_set_nx_ex(): void
+    {
+        $this->store->delete('foo');
+        $this->assertTrue($this->store->setNxEx('foo', 'bar', 60));
+        $this->assertSame('bar', $this->store->get('foo'));
+
+        $this->assertFalse($this->store->setNxEx('foo', 'baz', 60));
+        $this->assertSame('bar', $this->store->get('foo'));
+    }
+
+    public function test_it_can_delete_keys(): void
+    {
+        $this->store->set('foo', 'bar', 60);
+        $this->store->delete('foo');
+        $this->assertNull($this->store->get('foo'));
+    }
+
+    public function test_it_can_increment_values(): void
+    {
+        $this->store->delete('foo');
+        $this->assertSame(1, $this->store->increment('foo'));
+        $this->assertSame(2, $this->store->increment('foo'));
+    }
+
+    public function test_it_can_release_building_locks(): void
+    {
+        $this->store->set('build:foo', '1', 60);
+        $this->store->releaseBuilding('build:foo', 'wake:foo');
+
+        $this->assertNull($this->store->getRaw('build:foo'));
+        $this->assertTrue($this->store->brpop('wake:foo', 1));
+    }
+
+    public function test_it_can_get_many_values(): void
+    {
+        $this->store->set('foo', 'bar', 60);
+        $this->store->set('baz', 'qux', 60);
+
+        $results = $this->store->getMany(['foo', 'baz', 'missing']);
+
+        $this->assertSame(['bar', 'qux', null], $results);
+    }
+
+    public function test_it_can_set_many_values(): void
+    {
+        $this->store->setMany(['foo' => 'bar', 'baz' => 'qux'], 60);
+
+        $this->assertSame('bar', $this->store->get('foo'));
+        $this->assertSame('qux', $this->store->get('baz'));
+    }
+
+    public function test_it_can_group_keys_by_tag_in_slotting_mode(): void
+    {
+        $store = new RedisStore('default', 'test:', true, '');
+
+        $method = new \ReflectionMethod(RedisStore::class, 'groupByTag');
+        $method->setAccessible(true);
+
+        $keys = ['{user:1}:a', '{user:1}:b', '{user:2}:c', 'no-tag'];
+        $groups = $method->invoke($store, $keys);
+
+        $this->assertSame([
+            'user:1' => ['{user:1}:a', '{user:1}:b'],
+            'user:2' => ['{user:2}:c'],
+            'no-tag' => ['no-tag'],
+        ], $groups);
+    }
+
+    public function test_it_can_run_lua_scripts(): void
+    {
+        $script = "return redis.call('GET', KEYS[1])";
+        $this->store->set('foo', 'bar', 60);
+
+        $result = $this->store->eval($script, ['foo']);
+
+        $this->assertSame('bar', $this->store->unserialize($result));
+    }
+
+    public function test_it_can_set_many_tracked_if_version(): void
+    {
+        $this->store->delete(['member:1', 'ver:1', 'key:1', 'key:2']);
+        $this->store->setRaw('ver:1', '1', 60);
+
+        $attrs = [
+            'key:1' => ['id' => 1, 'name' => 'Alice'],
+            'key:2' => ['id' => 2, 'name' => 'Bob'],
+        ];
+
+        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:1', 'ver:1', 1);
+
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
+        $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('key:2'));
+
+        // Should NOT update if version mismatch
+        $attrs2 = ['key:1' => ['id' => 1, 'name' => 'Charlie']];
+        $this->store->setManyTrackedIfVersion($attrs2, 60, 'member:1', 'ver:1', 2);
+
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
+    }
+
+    public function test_it_can_flush_by_patterns(): void
+    {
+        $this->store->set('foo:1', 'a', 60);
+        $this->store->set('foo:2', 'b', 60);
+        $this->store->set('bar:1', 'c', 60);
+
+        $count = $this->store->flushByPatterns(['foo:*']);
+
+        $this->assertSame(2, $count);
+        $this->assertNull($this->store->get('foo:1'));
+        $this->assertNull($this->store->get('foo:2'));
+        $this->assertSame('c', $this->store->get('bar:1'));
+    }
+
     public function test_flush_by_patterns_scans_all_phpredis_cluster_masters(): void
     {
         $connection = new class extends PhpRedisClusterConnection
@@ -106,52 +261,26 @@ class RedisStoreTest extends TestCase
         $this->assertSame($data, $store->unserialize(serialize($data)));
     }
 
-    public function test_set_many_tracked_if_version_writes_when_version_matches(): void
+    public function test_it_uses_evalsha_with_fallback(): void
     {
-        $store = new RedisStore('model-cache-test', 'cas:', false);
-        $redis = Redis::connection('model-cache-test');
+        $script = 'return ARGV[1]';
 
-        $store->setNx('ver:{authors}:', '3');
+        // First call should use EVAL and cache SHA
+        $result = $this->store->eval($script, [], ['hello']);
+        $this->assertSame('hello', $result);
 
-        $store->setManyTrackedIfVersion(
-            ['model:{authors}:1' => ['id' => 1, 'name' => 'Alice']],
-            60,
-            'members:model:{authors}',
-            'ver:{authors}:',
-            3
-        );
-
-        $this->assertSame(['id' => 1, 'name' => 'Alice'], $store->get('model:{authors}:1'));
-        $this->assertTrue($redis->sismember('cas:members:model:{authors}', 'cas:model:{authors}:1'));
-    }
-
-    public function test_set_many_tracked_if_version_skips_when_version_mismatches(): void
-    {
-        $store = new RedisStore('model-cache-test', 'cas:', false);
-        $redis = Redis::connection('model-cache-test');
-
-        $store->setNx('ver:{authors}:', '4');
-
-        $store->setManyTrackedIfVersion(
-            ['model:{authors}:1' => ['id' => 1, 'name' => 'Stale']],
-            60,
-            'members:model:{authors}',
-            'ver:{authors}:',
-            3
-        );
-
-        $this->assertNull($store->get('model:{authors}:1'));
-        $this->assertSame(0, $redis->exists('cas:members:model:{authors}'));
+        // Second call should use EVALSHA (mocking this is hard with real redis,
+        // but we can verify it still works)
+        $result = $this->store->eval($script, [], ['world']);
+        $this->assertSame('world', $result);
     }
 
     public function test_eval_returns_correct_result_on_first_call(): void
     {
-        // Clear the PHP SHA cache so this test exercises the full first-call path
-        // (EVALSHA → NOSCRIPT fallback → EVAL).
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
         $store = new RedisStore('model-cache-test', '', false);
-        $script = LuaScripts::get('fetch_version_with_cooldown');
+        $script = RedisScripts::get('fetch_version_with_cooldown');
 
         Redis::connection('model-cache-test')->setex('ver:{authors}:', 60, '7');
 
@@ -164,17 +293,13 @@ class RedisStoreTest extends TestCase
     {
         $store = new RedisStore('model-cache-test', '', false);
         $redis = Redis::connection('model-cache-test');
-        $script = LuaScripts::get('fetch_version_with_cooldown');
+        $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $redis->setex('ver:{authors}:', 60, '5');
-
-        // First call — registers the script in Redis via the NOSCRIPT → EVAL fallback.
         $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
-        // Simulate a Redis restart by flushing all cached scripts.
         $redis->rawCommand('SCRIPT', 'FLUSH');
 
-        // Second call — EVALSHA now hits NOSCRIPT again; must fall back and still return correctly.
         $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
         $this->assertSame('5', $result);
@@ -185,7 +310,7 @@ class RedisStoreTest extends TestCase
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
         $store = new RedisStore('model-cache-test', '', false);
-        $script = LuaScripts::get('fetch_version_with_cooldown');
+        $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
 

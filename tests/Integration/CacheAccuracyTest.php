@@ -7,17 +7,17 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
-use NormCache\CacheManager;
+use NormCache\Cacheable;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
+use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
-use NormCache\Traits\Cacheable;
 use ReflectionProperty;
 
 class CacheAccuracyTest extends TestCase
@@ -272,11 +272,11 @@ class CacheAccuracyTest extends TestCase
 
         app('normcache')->getModels([$post->id], Post::class);
 
-        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->getValue();
         $this->assertSame('deleted_at', $resolved[Post::class] ?? null);
 
         AltDeletedAtPost::resolveSoftDelete();
-        $resolved = (new ReflectionProperty(CacheManager::class, 'deletedAtColumns'))->getValue();
+        $resolved = (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->getValue();
 
         $this->assertSame('archived_at', $resolved[AltDeletedAtPost::class] ?? null);
     }
@@ -342,7 +342,7 @@ class AltDeletedAtPost extends Post
     {
         $prototype = new self;
         $col = $prototype->getDeletedAtColumn();
-        $prop = new ReflectionProperty(CacheManager::class, 'deletedAtColumns');
+        $prop = new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns');
         $current = $prop->getValue();
         $current[self::class] = $col;
         $prop->setValue(null, $current);

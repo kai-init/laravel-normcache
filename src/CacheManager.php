@@ -3,13 +3,10 @@
 namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
-use Illuminate\Database\Eloquent\Model;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Events\ModelCacheHit;
-use NormCache\Events\ModelCacheMiss;
+use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\LuaScripts;
-use NormCache\Support\QueryInspector;
+use NormCache\Support\CacheReporter;
+use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Traits\HandlesInvalidation;
 
@@ -18,8 +15,6 @@ class CacheManager
     use HandlesInvalidation;
 
     private static array $hydratorClosures = [];
-
-    private static array $deletedAtColumns = [];
 
     private RedisStore $store;
 
@@ -52,7 +47,7 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
-    // Lifecycle / configuration
+    // Configuration
     // -------------------------------------------------------------------------
 
     public function isEnabled(): bool
@@ -80,6 +75,20 @@ class CacheManager
         $this->enabled = false;
     }
 
+    public function fallback(\Throwable $e): void
+    {
+        if (!$this->fallbackEnabled) {
+            throw $e;
+        }
+
+        report($e);
+        $this->disable();
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
     public function getStore(): RedisStore
     {
         return $this->store;
@@ -90,90 +99,78 @@ class CacheManager
         return $this->keys->classKey($class);
     }
 
+    public function tableKey(string $connectionName, string $table): string
+    {
+        return $this->keys->tableKey($connectionName, $table);
+    }
+
     public function currentVersion(string $modelClass): int
     {
         return $this->normalizeVersion($this->resolveCurrentVersion($this->keys->classKey($modelClass)));
     }
 
+    public function currentTableVersion(string $connectionName, string $table): int
+    {
+        return $this->normalizeVersion($this->resolveCurrentVersion($this->keys->tableKey($connectionName, $table)));
+    }
+
     // -------------------------------------------------------------------------
-    // High-level cache reads
+    // Reads
     // -------------------------------------------------------------------------
 
-    public function getModelsFromQuery(string $modelClass, string $hash, ?string $tag = null): array
+    public function getModelsFromQuery(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): array
     {
         $classKey = $this->keys->classKey($modelClass);
 
-        $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag);
+        if (empty($depClasses) && empty($depTableKeys)) {
+            $lockToken = $this->buildLockToken();
+            $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag, $lockToken);
+
+            $luaStatus = $result[0] ?? null;
+            $version = $this->normalizeVersion($result[1]);
+            $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
+
+            $deserialize = fn($r) => $this->store->unserializeMany($r);
+
+            return match ($luaStatus) {
+                'hit' => $this->queryResult('hit', $queryKey, $result[2], $deserialize($result[3]), null),
+                'stale' => $this->queryResult('stale', null, $result[2], $deserialize($result[3]), null),
+                'empty' => $this->queryResult('empty', $queryKey, [], [], null),
+                'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $hash, [$this->keys->verKey($classKey)], [(string) $version], (string) ($result[2] ?? $lockToken)),
+                'building' => $this->queryResult('building', null, null, null, null),
+                default => $this->queryResult('miss', $queryKey, null, null, null),
+            };
+        }
+
+        // Multi-dependency path
+        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
+        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
+        $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
+
+        $lockToken = $this->buildLockToken();
+        $result = $this->luaFetchMultiVersionedQuery($versionKeys, $scheduledKeys, $queryPrefix, $this->keys->modelPrefix($classKey), $this->keys->buildingPrefix($classKey), $hash, (int) floor(microtime(true) * 1000), $lockToken);
 
         $luaStatus = $result[0] ?? null;
-        $version = $this->normalizeVersion($result[1]);
-        $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
+        $seg = (string) ($result[1] ?? '');
+        $queryKey = $queryPrefix . $seg . ':' . $hash;
 
         $deserialize = fn($r) => $this->store->unserializeMany($r);
 
         return match ($luaStatus) {
             'hit' => $this->queryResult('hit', $queryKey, $result[2], $deserialize($result[3]), null),
-            'stale' => $this->queryResult('stale', null, $result[2], $deserialize($result[3]), null),
             'empty' => $this->queryResult('empty', $queryKey, [], [], null),
-            'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $hash, [$this->keys->verKey($classKey)], [(string) $version]),
+            'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash, $versionKeys, $this->keys->versionsFromSegment($seg), (string) ($result[2] ?? $lockToken)),
             'building' => $this->queryResult('building', null, null, null, null),
             default => $this->queryResult('miss', $queryKey, null, null, null),
         };
     }
 
-    public function getNamespacedCache(string $namespace, string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): array
-    {
-        $classKey = $this->keys->classKey($modelClass);
-        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
-        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
-        $keyPrefix = $this->keys->namespacedPrefix($namespace, $classKey, $tag);
-
-        if ($this->slotting) {
-            [$seg, $data, $expectedVersions] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
-
-            return $this->versionedResult($this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash), $data, $versionKeys, $expectedVersions);
-        }
-
-        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
-
-        return $this->versionedResult(
-            $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash),
-            $blob !== false ? $this->store->unserialize($blob) : null,
-            $versionKeys,
-            $this->keys->versionsFromSegment($seg)
-        );
-    }
-
-    public function getThroughCache(string $relatedClass, string $throughClass, string $hash): array
-    {
-        $relatedKey = $this->keys->classKey($relatedClass);
-        $throughKey = $this->keys->classKey($throughClass);
-        $versionKeys = [$this->keys->verKey($relatedKey), $this->keys->verKey($throughKey)];
-        $scheduledKeys = [$this->keys->scheduledKey($relatedKey), $this->keys->scheduledKey($throughKey)];
-        $keyPrefix = $this->keys->throughPrefix($relatedKey, $throughKey);
-
-        if ($this->slotting) {
-            [$seg, $data, $expectedVersions] = $this->clusterFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
-
-            return $this->versionedResult($this->keys->throughKey($relatedKey, $throughKey, $seg, $hash), $data, $versionKeys, $expectedVersions);
-        }
-
-        [$seg, $blob] = $this->luaFetchVersionedCache($versionKeys, $scheduledKeys, $keyPrefix, $hash);
-
-        return $this->versionedResult(
-            $this->keys->throughKey($relatedKey, $throughKey, $seg, $hash),
-            $blob !== false ? $this->store->unserialize($blob) : null,
-            $versionKeys,
-            $this->keys->versionsFromSegment($seg)
-        );
-    }
-
-    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc'): array
+    public function getPivotCache(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash = 'nc', ?string $pivotTableKey = null): array
     {
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass);
-        $versionKeys = [$this->keys->verKey($parentKey), $this->keys->verKey($relatedKey)];
-        $scheduledKeys = [$this->keys->scheduledKey($parentKey), $this->keys->scheduledKey($relatedKey)];
+        $versionKeys = $this->keys->depVersionKeys($relatedKey, [], [$pivotTableKey ?? $parentKey]);
+        $scheduledKeys = $this->keys->depScheduledKeys($relatedKey, [], [$pivotTableKey ?? $parentKey]);
 
         if ($this->slotting) {
             $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
@@ -189,22 +186,22 @@ class CacheManager
             ];
         }
 
-        [$seg, $blobs] = $this->luaFetchVersionedPivotCache($parentKey, $relatedKey, $relation, $constraintHash, $parentIds);
+        [$seg, $payloads] = $this->luaFetchVersionedPivotCache($parentKey, $relatedKey, $relation, $constraintHash, $parentIds, $versionKeys, $scheduledKeys);
 
         return [
             'seg' => $seg,
-            'data' => array_combine($parentIds, $this->store->unserializeMany($blobs)),
+            'data' => array_combine($parentIds, $this->store->unserializeMany($payloads)),
             'versionKeys' => $versionKeys,
             'expectedVersions' => $this->keys->versionsFromSegment($seg),
         ];
     }
 
-    public function getRawCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null): array
+    public function getResultCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null, array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $lockSuffix = $this->keys->rawBuildIdentityHash($tag, $hash);
-        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses);
-        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses);
+        $lockSuffix = $this->keys->resultBuildIdentityHash($tag, $hash);
+        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
+        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
 
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
 
@@ -212,55 +209,60 @@ class CacheManager
             $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->expectedVersions($versionKeys, $resolvedVersions);
-            $rawKey = $this->keys->rawKey($classKey, $tag, $seg, $hash);
-            $buildingKey = $this->keys->rawBuildingKey($classKey, $seg, $lockSuffix);
+            $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
+            $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
+            $lockToken = $this->buildLockToken();
 
-            $blob = $this->store->get($rawKey);
-            if ($blob !== null) {
-                return $this->rawResult('hit', $rawKey, $blob, null, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
+            $payload = $this->store->get($resultKey);
+            if ($payload !== null) {
+                return $this->resultCacheResult('hit', $resultKey, $payload, null, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
             }
 
-            if (!$this->store->setNxEx($buildingKey, '1', $this->buildingLockTtl)) {
-                return $this->rawResult('building', null, null, null);
+            if (!$this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+                return $this->resultCacheResult('building', null, null, null);
             }
 
-            return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey, $versionKeys, $expectedVersions);
+            return $this->resultCacheResult('miss', $resultKey, null, $buildingKey, $wakeKey, $versionKeys, $expectedVersions, $lockToken);
         }
 
-        [$status, $seg, $blob] = $this->luaFetchVersionedRaw(
+        $lockToken = $this->buildLockToken();
+        [$status, $seg, $payload, $claimedToken] = $this->luaFetchVersionedResult(
             $versionKeys,
             $scheduledKeys,
-            $this->keys->rawPrefix($classKey) . $this->keys->tagSegment($tag),
+            $this->keys->namespacedPrefix($namespace, $classKey, $tag),
             $this->keys->buildingPrefix($classKey),
             $hash,
-            $lockSuffix
+            $lockSuffix,
+            $lockToken
         );
 
-        $rawKey = $this->keys->rawKey($classKey, $tag, $seg, $hash);
+        $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         if ($status === 'hit') {
-            return $this->rawResult('hit', $rawKey, $this->store->unserialize($blob), null, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
+            return $this->resultCacheResult('hit', $resultKey, $this->store->unserialize($payload), null, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
         }
 
         if ($status === 'building') {
-            return $this->rawResult('building', null, null, null);
+            return $this->resultCacheResult('building', null, null, null);
         }
 
-        $buildingKey = $this->keys->rawBuildingKey($classKey, $seg, $lockSuffix);
+        $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
 
-        return $this->rawResult('miss', $rawKey, null, $buildingKey, $wakeKey, $versionKeys, $expectedVersions);
+        return $this->resultCacheResult('miss', $resultKey, null, $buildingKey, $wakeKey, $versionKeys, $expectedVersions, (string) ($claimedToken ?? $lockToken));
     }
 
-    public function waitForBuild(string $modelClass, string $hash, array $depClasses = [], ?string $tag = null): ?array
+    public function waitForBuild(string $store, string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): ?array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $wakeHash = $depClasses !== [] ? $this->keys->rawBuildIdentityHash($tag, $hash) : $hash;
+        $isResult = $store === 'result';
+        $wakeHash = $isResult ? $this->keys->resultBuildIdentityHash($tag, $hash) : $hash;
+
         $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeHash, $this->stampedeWaitMs / 1000.0);
 
-        $result = $depClasses !== []
-            ? $this->getRawCache($modelClass, $depClasses, $hash, $tag)
-            : $this->getModelsFromQuery($modelClass, $hash, $tag);
+        $result = $isResult
+            ? $this->getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace)
+            : $this->getModelsFromQuery($modelClass, $hash, $tag, $depClasses, $depTableKeys);
 
         return match ($result['status']) {
             'building' => null,
@@ -269,41 +271,139 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
-    // High-level cache writes
+    // Loading
     // -------------------------------------------------------------------------
 
-    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): void
+    public function getModels(
+        array $ids,
+        string $modelClass,
+        ?array $columns = null,
+        ?array $raw = null,
+        ?EloquentBuilder $missedQuery = null,
+        bool $preserveQueryShape = true,
+    ): array {
+        if ($ids === []) {
+            return [];
+        }
+
+        $debugbarStart = CacheReporter::beginMeasure();
+
+        $containedInQueryHit = $raw !== null;
+
+        // arrays may come with sparse numeric keys, for example after array_unique().
+        $ids = array_values($ids);
+
+        $classKey = $this->keys->classKey($modelClass);
+
+        if ($raw === null) {
+            $keys = array_map(fn($id) => $this->keys->modelPrefix($classKey) . $id, $ids);
+            $raw = $this->store->getMany($keys);
+        }
+
+        $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
+        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection);
+
+        if ($hits !== []) {
+            CacheReporter::modelHit($modelClass, array_keys($hits), $debugbarStart, [
+                'suppress_collector' => $containedInQueryHit,
+                'ids' => $ids,
+            ]);
+        }
+
+        if ($missed === []) {
+            return array_values($hits);
+        }
+
+        CacheReporter::modelMiss($modelClass, $missed, $debugbarStart, [
+            'hits' => array_keys($hits),
+            'partial' => $hits !== [],
+        ]);
+
+        $fetched = $this->fetchFromDatabaseAndCache(
+            $missed,
+            $modelClass,
+            $classKey,
+            $projection,
+            $missedQuery,
+            $preserveQueryShape,
+        );
+
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($hits[$id]) || isset($fetched[$id])) {
+                $ordered[] = $hits[$id] ?? $fetched[$id];
+            }
+        }
+
+        return $ordered;
+    }
+
+    public function hydrateResult(array $payload, string $modelClass, bool $cached = true): array
+    {
+        $prototype = CacheKeyBuilder::prototype($modelClass);
+        $closure = self::hydratorClosure($modelClass);
+        $fire = $this->fireRetrieved;
+        $models = array_map(function ($attrs) use ($prototype, $closure, $fire) {
+            $instance = clone $prototype;
+            $closure($instance, $attrs, $fire);
+
+            return $instance;
+        }, $payload);
+
+        if ($cached && $models !== []) {
+            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
+            if ($keys !== []) {
+                CacheReporter::modelHit($modelClass, $keys, null);
+            }
+        }
+
+        return $models;
+    }
+
+    // -------------------------------------------------------------------------
+    // Storage
+    // -------------------------------------------------------------------------
+
+    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): void
     {
         $ids = array_map('strval', $ids);
 
         if (!empty($versionKeys)) {
-            $this->storeQueryIdsCAS($key, $ids, $ttl ?? $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions);
+            $this->storeQueryIdsCAS($key, $ids, $ttl ?? $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
             return;
         }
 
-        $this->store->setJson($key, $ids, $ttl ?? $this->queryTtl);
-
-        if ($buildingKey !== null) {
-            $this->store->delete($buildingKey);
-        }
+        $this->store->storeRawAndRelease(
+            $key,
+            json_encode($ids),
+            $ttl ?? $this->queryTtl,
+            $buildingKey,
+            $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null,
+            $buildingToken
+        );
     }
 
-    public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null): bool
+    public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
     {
         $ttl ??= $this->queryTtl;
 
         if ($versionKeys === []) {
-            $this->store->set($key, $payload, $ttl);
-
-            if ($buildingKey !== null) {
-                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey));
-            }
-
-            return true;
+            return $this->store->storeSerializedAndRelease(
+                $key,
+                $payload,
+                $ttl,
+                $buildingKey,
+                $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null),
+                $buildingToken
+            );
         }
 
         if ($this->slotting) {
+            if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
+                return false;
+            }
+
             $written = $this->versionsStillMatch($versionKeys, $expectedVersions);
 
             if ($written) {
@@ -311,32 +411,33 @@ class CacheManager
             }
 
             if ($buildingKey !== null) {
-                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey));
+                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey), $buildingToken);
             }
 
             return $written;
         }
 
         return (bool) $this->store->eval(
-            LuaScripts::get('store_versioned_cas'),
+            RedisScripts::get('store_if_versions_match_and_release'),
             array_merge($versionKeys, [$key, $buildingKey ?? '', $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '')]),
-            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [$this->store->serialize($payload)])
+            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [$this->store->serialize($payload), $buildingToken ?? ''])
         );
     }
 
-    public function storeRawResult(string $key, array $blob, ?string $buildingKey, ?int $ttl, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = []): bool
+    public function storeResultCache(string $key, array $payload, ?string $buildingKey, ?int $ttl, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): bool
     {
         if ($versionKeys !== []) {
-            return $this->storeVersionedResult($key, $blob, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey);
+            return $this->storeVersionedResult($key, $payload, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
         }
 
-        $this->store->set($key, $blob, $ttl ?? $this->queryTtl);
-
-        if ($buildingKey !== null) {
-            $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey));
-        }
-
-        return true;
+        return $this->store->storeSerializedAndRelease(
+            $key,
+            $payload,
+            $ttl ?? $this->queryTtl,
+            $buildingKey,
+            $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null),
+            $buildingToken
+        );
     }
 
     public function cacheModelAttrs(string $modelClass, array $modelAttrs): void
@@ -363,118 +464,85 @@ class CacheManager
     }
 
     // -------------------------------------------------------------------------
-    // Private — write internals
+    // Private
     // -------------------------------------------------------------------------
 
-    private function storeQueryIdsCAS(string $key, array $ids, int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions): void
+    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs, ?string $tag = null, string $lockToken = ''): mixed
     {
-        $this->store->eval(
-            LuaScripts::get('store_versioned_cas'),
-            array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '']),
-            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids)])
+        return $this->store->eval(RedisScripts::get('fetch_versioned_query'), [
+            $this->keys->verKey($classKey),
+            $this->keys->scheduledKey($classKey),
+            $this->keys->queryPrefix($classKey, $tag),
+            $this->keys->modelPrefix($classKey),
+            $this->keys->buildingPrefix($classKey),
+        ], [$hash, $nowMs, $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
+    }
+
+    private function luaFetchMultiVersionedQuery(array $versionKeys, array $scheduledKeys, string $queryPrefix, string $modelPrefix, string $buildingPrefix, string $hash, int $nowMs, string $lockToken): mixed
+    {
+        return $this->store->eval(RedisScripts::get('fetch_multi_versioned_query'), array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $modelPrefix, $buildingPrefix]), [$hash, $nowMs, $this->buildingLockTtl, $lockToken]);
+    }
+
+    private function luaFetchVersionedPivotCache(string $parentKey, string $relatedKey, string $relation, string $constraintHash, array $parentIds, array $versionKeys, array $scheduledKeys): array
+    {
+        $result = $this->store->eval(
+            RedisScripts::get('fetch_versioned_pivot'),
+            array_merge($versionKeys, $scheduledKeys, [$this->keys->pivotBasePrefix($parentKey, $relatedKey)]),
+            array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds)
+        );
+
+        return [(string) ($result[0] ?? ''), $result[1] ?? []];
+    }
+
+    private function luaFetchVersionWithCooldown(string $classKey, int $nowMs): mixed
+    {
+        return $this->store->eval(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
+            [$nowMs]
         );
     }
 
-    // -------------------------------------------------------------------------
-    // Model loading (cache → hydrate → DB fallback)
-    // -------------------------------------------------------------------------
-
-    public function getModels(
-        array $ids,
-        string $modelClass,
-        ?array $columns = null,
-        ?array $raw = null,
-        ?EloquentBuilder $missedQuery = null,
-        bool $preserveQueryShape = true,
-    ): array {
-        if ($ids === []) {
-            return [];
-        }
-
-        $debugbarStart = NormCacheCollector::beginMeasure();
-
-        $containedInQueryHit = $raw !== null;
-
-        // arrays may come with sparse numeric keys, for example after array_unique().
-        $ids = array_values($ids);
-
-        $classKey = $this->keys->classKey($modelClass);
-
-        if ($raw === null) {
-            $keys = array_map(fn($id) => $this->keys->modelPrefix($classKey) . $id, $ids);
-            $raw = $this->store->getMany($keys);
-        }
-
-        $projection = $columns !== null ? QueryInspector::normalizeProjection($columns) : null;
-        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection);
-
-        if ($this->dispatchEvents && $hits !== []) {
-            event(new ModelCacheHit($modelClass, array_keys($hits)));
-        }
-
-        if ($missed === []) {
-            if (!$containedInQueryHit) {
-                NormCacheCollector::recordModel('model hit', $modelClass, $ids, $debugbarStart);
-            }
-
-            return array_values($hits);
-        }
-
-        if ($this->dispatchEvents) {
-            event(new ModelCacheMiss($modelClass, $missed));
-        }
-
-        $fetched = $this->fetchFromDatabaseAndCache(
-            $missed,
-            $modelClass,
-            $classKey,
-            $projection,
-            $missedQuery,
-            $preserveQueryShape,
+    private function luaFetchVersionedResult(array $versionKeys, array $scheduledKeys, string $resultPrefix, string $buildingPrefix, string $hash, string $lockSuffix, string $lockToken): array
+    {
+        $result = $this->store->eval(
+            RedisScripts::get('fetch_versioned_result'),
+            array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix]),
+            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
         );
 
-        $ordered = [];
-        foreach ($ids as $id) {
-            if (isset($hits[$id]) || isset($fetched[$id])) {
-                $ordered[] = $hits[$id] ?? $fetched[$id];
-            }
-        }
-
-        NormCacheCollector::recordModel('model miss', $modelClass, $missed, $debugbarStart, [
-            'hits' => array_keys($hits),
-            'partial' => $hits !== [],
-        ]);
-
-        return $ordered;
+        return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
     }
 
-    public function hydrateRaw(array $blob, string $modelClass, bool $cached = true): array
+    private function resolveVersions(array $versionKeys, array $scheduledKeys, int $nowMs): array
     {
-        $prototype = self::prototype($modelClass);
-        $closure = self::hydratorClosure($modelClass);
-        $fire = $this->fireRetrieved;
-        $models = array_map(function ($attrs) use ($prototype, $closure, $fire) {
-            $instance = clone $prototype;
-            $closure($instance, $attrs, $fire);
-
-            return $instance;
-        }, $blob);
-
-        if ($cached && $this->dispatchEvents && $models !== []) {
-            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
-            if ($keys !== []) {
-                event(new ModelCacheHit($modelClass, $keys));
+        $script = RedisScripts::get('fetch_version_with_cooldown');
+        $map = [];
+        foreach ($versionKeys as $i => $verKey) {
+            if (!array_key_exists($verKey, $map)) {
+                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [(string) $nowMs]) ?? '0');
             }
         }
 
-        return $models;
+        return $map;
     }
 
-    // -------------------------------------------------------------------------
-    // Private — model hydration / DB fallback
-    // -------------------------------------------------------------------------
+    private function expectedVersions(array $versionKeys, array $resolvedVersions): array
+    {
+        return array_map(fn($key) => $resolvedVersions[$key], $versionKeys);
+    }
 
-    /** Returns (and lazily creates) the bound hydrator closure for $modelClass. */
+    private function versionsStillMatch(array $versionKeys, array $expectedVersions): bool
+    {
+        foreach ($this->store->getRawMany($versionKeys) as $i => $version) {
+            if ((string) ($version ?? '0') !== (string) $expectedVersions[$i]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static function hydratorClosure(string $modelClass): \Closure
     {
         return self::$hydratorClosures[$modelClass] ??= \Closure::bind(
@@ -498,10 +566,8 @@ class CacheManager
 
     private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection): array
     {
-        $prototype = self::prototype($modelClass);
-
+        $prototype = CacheKeyBuilder::prototype($modelClass);
         $closure = self::hydratorClosure($modelClass);
-
         $fireRetrieved = $this->fireRetrieved;
         $hits = [];
         $missed = [];
@@ -516,7 +582,7 @@ class CacheManager
             }
 
             if ($projection !== null) {
-                $attrs = QueryInspector::projectAttributes($attrs, $projection);
+                $attrs = AttributeProjector::projectAttributes($attrs, $projection);
             }
 
             $instance = clone $prototype;
@@ -536,7 +602,7 @@ class CacheManager
         bool $preserveQueryShape,
     ): array {
         $modelVersion = $this->currentVersion($modelClass);
-        $prototype = self::prototype($modelClass);
+        $prototype = CacheKeyBuilder::prototype($modelClass);
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
         $query = $this->prepareMissedQuery(
@@ -549,7 +615,7 @@ class CacheManager
             ->keyBy($pk);
 
         $attrsByKey = [];
-        $deletedAtCol = self::deletedAtColumn($modelClass);
+        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($modelClass);
 
         foreach ($loaded as $id => $model) {
             $attrs = $model->getRawOriginal();
@@ -560,7 +626,7 @@ class CacheManager
             }
 
             if ($projection !== null) {
-                $model->setRawAttributes(QueryInspector::projectAttributes($attrs, $projection), true);
+                $model->setRawAttributes(AttributeProjector::projectAttributes($attrs, $projection), true);
             }
         }
 
@@ -603,135 +669,18 @@ class CacheManager
         return $builder;
     }
 
-    // -------------------------------------------------------------------------
-    // Private — Lua scripts
-    // -------------------------------------------------------------------------
-
-    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs, ?string $tag = null): mixed
+    private function storeQueryIdsCAS(string $key, array $ids, int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
     {
-        return $this->store->eval(LuaScripts::get('fetch_versioned_query'), [
-            $this->keys->verKey($classKey),
-            $this->keys->scheduledKey($classKey),
-            $this->keys->queryPrefix($classKey, $tag),
-            $this->keys->modelPrefix($classKey),
-            $this->keys->buildingPrefix($classKey),
-        ], [$hash, $nowMs, $this->buildingLockTtl, $this->staleVersionDepth]);
-    }
-
-    private function luaFetchVersionedCache(array $versionKeys, array $scheduledKeys, string $keyPrefix, string $hash): array
-    {
-        $result = $this->store->eval(
-            LuaScripts::get('fetch_versioned_cache'),
-            array_merge($versionKeys, $scheduledKeys, [$keyPrefix]),
-            [$hash, (int) floor(microtime(true) * 1000)]
-        );
-
-        return [(string) ($result[0] ?? ''), $result[1] ?? false];
-    }
-
-    private function luaFetchVersionedPivotCache(string $parentKey, string $relatedKey, string $relation, string $constraintHash, array $parentIds): array
-    {
-        $result = $this->store->eval(LuaScripts::get('fetch_versioned_pivot'), [
-            $this->keys->verKey($parentKey),
-            $this->keys->verKey($relatedKey),
-            $this->keys->scheduledKey($parentKey),
-            $this->keys->scheduledKey($relatedKey),
-            $this->keys->pivotBasePrefix($parentKey, $relatedKey),
-        ], array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds));
-
-        return [(string) ($result[0] ?? ''), $result[1] ?? []];
-    }
-
-    private function luaFetchVersionWithCooldown(string $classKey, int $nowMs): mixed
-    {
-        return $this->store->eval(
-            LuaScripts::get('fetch_version_with_cooldown'),
-            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
-            [$nowMs]
+        $this->store->eval(
+            RedisScripts::get('store_if_versions_match_and_release'),
+            array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '']),
+            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids), $buildingToken ?? ''])
         );
     }
 
-    private function luaFetchVersionedRaw(array $versionKeys, array $scheduledKeys, string $rawPrefix, string $buildingPrefix, string $hash, string $lockSuffix): array
+    private function buildLockToken(): string
     {
-        $result = $this->store->eval(
-            LuaScripts::get('fetch_versioned_raw'),
-            array_merge($versionKeys, $scheduledKeys, [$rawPrefix, $buildingPrefix]),
-            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000)]
-        );
-
-        return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null];
-    }
-
-    // -------------------------------------------------------------------------
-    // Cluster-safe version resolution
-    // -------------------------------------------------------------------------
-
-    // One Lua call per unique key — each touches a single slot, safe in cluster.
-    private function resolveVersions(array $versionKeys, array $scheduledKeys, int $nowMs): array
-    {
-        $script = LuaScripts::get('fetch_version_with_cooldown');
-        $map = [];
-        foreach ($versionKeys as $i => $verKey) {
-            if (!array_key_exists($verKey, $map)) {
-                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [(string) $nowMs]) ?? '0');
-            }
-        }
-
-        return $map;
-    }
-
-    private function expectedVersions(array $versionKeys, array $resolvedVersions): array
-    {
-        return array_map(fn($key) => $resolvedVersions[$key], $versionKeys);
-    }
-
-    private function versionsStillMatch(array $versionKeys, array $expectedVersions): bool
-    {
-        foreach ($versionKeys as $i => $key) {
-            if ((string) ($this->store->getRaw($key) ?? '0') !== (string) $expectedVersions[$i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private function clusterFetchVersionedCache(array $versionKeys, array $scheduledKeys, string $keyPrefix, string $hash): array
-    {
-        $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
-        $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
-
-        return [$seg, $this->store->get($this->keys->versionedKey($keyPrefix, $seg, $hash)), $this->expectedVersions($versionKeys, $resolvedVersions)];
-    }
-
-    // -------------------------------------------------------------------------
-    // Private — model metadata
-    // -------------------------------------------------------------------------
-
-    private static function prototype(string $modelClass): Model
-    {
-        return CacheKeyBuilder::prototypeFor($modelClass);
-    }
-
-    private static function deletedAtColumn(string $modelClass): ?string
-    {
-        return self::$deletedAtColumns[$modelClass] ??= method_exists(self::prototype($modelClass), 'getDeletedAtColumn')
-            ? self::prototype($modelClass)->getDeletedAtColumn()
-            : null;
-    }
-
-    // -------------------------------------------------------------------------
-    // Infrastructure
-    // -------------------------------------------------------------------------
-
-    public function fallback(\Throwable $e): void
-    {
-        if (!$this->fallbackEnabled) {
-            throw $e;
-        }
-
-        report($e);
-        $this->disable();
+        return bin2hex(random_bytes(16));
     }
 
     protected function handle(callable $operation): void
@@ -752,31 +701,21 @@ class CacheManager
         return $value !== null ? (int) $value : 0;
     }
 
-    private function rawResult(string $status, ?string $key, mixed $blob, ?string $buildingKey, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = []): array
+    private function resultCacheResult(string $status, ?string $key, mixed $payload, ?string $buildingKey, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
     {
         return [
             'status' => $status,
             'key' => $key,
-            'blob' => $blob,
+            'payload' => $payload,
             'buildingKey' => $buildingKey,
+            'buildingToken' => $buildingToken,
             'wakeKey' => $wakeKey,
             'versionKeys' => $versionKeys,
             'expectedVersions' => $expectedVersions,
         ];
     }
 
-    private function versionedResult(string $key, mixed $data, array $versionKeys, array $expectedVersions): array
-    {
-        return [
-            'key' => $key,
-            'data' => $data,
-            'status' => $data === null ? 'miss' : 'hit',
-            'versionKeys' => $versionKeys,
-            'expectedVersions' => $expectedVersions,
-        ];
-    }
-
-    private function queryResult(string $status, ?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = []): array
+    private function queryResult(string $status, ?string $key, ?array $ids, ?array $models, ?string $buildingKey, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
     {
         return [
             'status' => $status,
@@ -784,6 +723,7 @@ class CacheManager
             'ids' => $ids,
             'models' => $models,
             'buildingKey' => $buildingKey,
+            'buildingToken' => $buildingToken,
             'versionKeys' => $versionKeys,
             'expectedVersions' => $expectedVersions,
         ];

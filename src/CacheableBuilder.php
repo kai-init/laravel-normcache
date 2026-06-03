@@ -9,21 +9,22 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\LazyCollection;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Events\QueryBypassed;
-use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheMiss;
+use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\BypassReasons;
+use NormCache\Planning\CachePlan;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Planning\CachePlanner;
+use NormCache\Planning\QueryAnalyzer;
+use NormCache\Relations\CachesRelationAggregates;
+use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
-use NormCache\Support\QueryInspector;
-use NormCache\Traits\Cacheable;
-use NormCache\Traits\CachesRelationAggregates;
 use NormCache\Traits\CachesScalarResults;
-use NormCache\Traits\HandlesCacheInvalidation;
+use NormCache\Traits\HandlesBuilderInvalidation;
 
 class CacheableBuilder extends Builder
 {
-    use CachesRelationAggregates, CachesScalarResults, HandlesCacheInvalidation;
+    use CachesRelationAggregates, CachesScalarResults, HandlesBuilderInvalidation;
 
     private static array $validatedModelClasses = [];
 
@@ -34,6 +35,10 @@ class CacheableBuilder extends Builder
     private ?array $dependsOn = null;
 
     private ?string $cacheTag = null;
+
+    // -------------------------------------------------------------------------
+    // Configuration
+    // -------------------------------------------------------------------------
 
     public function withoutCache(): static
     {
@@ -56,6 +61,11 @@ class CacheableBuilder extends Builder
         $this->queryTtl = $ttl;
 
         return $this;
+    }
+
+    public function ttl(int $ttl): static
+    {
+        return $this->remember($ttl);
     }
 
     public function tag(string $tag): static
@@ -90,7 +100,7 @@ class CacheableBuilder extends Builder
 
             if (!in_array(Cacheable::class, class_uses_recursive($class), true)) {
                 throw new \InvalidArgumentException(
-                    "dependsOn() class [{$class}] must use the NormCache\\Traits\\Cacheable trait."
+                    "dependsOn() class [{$class}] must use the NormCache\\Cacheable trait."
                 );
             }
 
@@ -102,27 +112,42 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
+    public function explicitDependencies(): ?array
+    {
+        return $this->dependsOn;
+    }
+
+    public function getQueryTtl(): ?int
+    {
+        return $this->queryTtl;
+    }
+
+    public function getCacheTag(): ?string
+    {
+        return $this->cacheTag;
+    }
+
     // -------------------------------------------------------------------------
-    // Public overrides
+    // Execution
     // -------------------------------------------------------------------------
 
     public function explain(): string
     {
         $base = $this->toBase();
-        $resolvedCols = QueryInspector::resolveSelectedColumns($base, ['*']);
-        $grouped = $this->computeBypassReasons($base, $resolvedCols);
+        $resolvedCols = QueryAnalyzer::resolveSelectedColumns($base, ['*']);
+        $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 
-        if (empty($grouped)) {
-            return $this->dependsOn !== null ? 'cached: dependsOn() opt-in' : 'cached';
+        if ($plan->mode === CacheMode::Normalized) {
+            return $plan->primaryKeys !== null ? 'cached: direct (primary key)' : 'cached';
         }
 
-        if ($this->dependsOn !== null && !isset($grouped['safety']) && !isset($grouped['opted_out'])) {
-            return 'cached: raw (dependsOn())';
+        if ($plan->mode === CacheMode::Result) {
+            return $this->dependsOn !== null ? 'cached: result (dependsOn())' : 'cached: result';
         }
 
-        $labels = QueryInspector::categoryLabels();
+        $labels = BypassReasons::labels();
         $parts = [];
-        foreach ($grouped as $category => $reasons) {
+        foreach ($plan->bypassReasons as $category => $reasons) {
             $parts[] = ($labels[$category] ?? $category) . ': ' . implode(', ', $reasons);
         }
 
@@ -135,50 +160,37 @@ class CacheableBuilder extends Builder
             return $this->getWithoutCache($columns);
         }
 
-        $debugbarStart = NormCacheCollector::beginMeasure();
+        $debugbarStart = CacheReporter::beginMeasure();
 
         $base = $this->toBase();
-        $resolvedCols = QueryInspector::resolveSelectedColumns($base, (array) $columns);
+        $resolvedCols = QueryAnalyzer::resolveSelectedColumns($base, (array) $columns);
         $model = $this->model::class;
+        $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 
         try {
-            if ($this->shouldUseCache($base, $resolvedCols)) {
-                if (!empty($this->pendingAggregates)) {
-                    if ($this->queryReferencesPendingAggregateAlias($base)) {
-                        return $this->getWithoutCache($columns);
-                    }
-
-                    return $this->getFromAggregateCache($base, $model, $columns);
-                }
-
-                return $this->getFromCacheableQuery($base, $model, $resolvedCols);
+            if ($plan->mode === CacheMode::Normalized) {
+                return $this->getFromCacheableQuery($base, $model, $resolvedCols, $plan);
             }
 
-            if ($this->shouldUseRawCache($base)) {
-                if (!empty($base->joins) && empty($base->columns)) {
-                    if (config('app.debug')) {
-                        logger()->warning('NormCache: dependsOn() JOIN without explicit select — added ' . $this->model->getTable() . '.* automatically.');
-                    }
-
-                    $base->select($this->model->getTable() . '.*');
-                }
-
-                // Replay into $base before hashing so aggregate subqueries are part of the blob key.
-                if (!empty($this->pendingAggregates)) {
-                    $this->replayPendingAggregates();
-                }
-
-                return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
+            if ($plan->mode === CacheMode::Result) {
+                return (new VersionedCache)->rememberCollection(
+                    $this,
+                    $base,
+                    $plan,
+                    $columns,
+                    $this->queryTtl,
+                    $this->cacheTag
+                );
             }
 
-            $bypassReasons = $this->computeBypassReasons($base, $resolvedCols);
-            $result = $this->getDependencyOnlyBypassResult($base, $model, $resolvedCols, $bypassReasons);
+            $bypassReasons = $plan->bypassReasons;
+            $result = $this->getDependencyOnlyBypassResult($base, $model, $resolvedCols, $plan);
 
             if ($result !== null) {
                 return $result;
             }
 
-            $this->recordBypass($model, $bypassReasons, $debugbarStart);
+            CacheReporter::queryBypassed($model, $bypassReasons, $debugbarStart);
 
             return $this->getWithoutCache($columns);
         } catch (\Throwable $e) {
@@ -194,21 +206,24 @@ class CacheableBuilder extends Builder
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
-        $debugbarStart = NormCacheCollector::beginMeasure();
+        $debugbarStart = CacheReporter::beginMeasure();
 
         $base = $this->toBase();
+        $plan = $this->cachePlan($base, CachePlanContext::paginationCount($this->inferAggregateDependencies()));
+        $depClasses = $plan->dependencies->depClassesFor($this->model::class);
+        $depTableKeys = $plan->dependencies->tables;
 
-        if ($this->shouldUseCache($base)) {
-            return $this->paginateWithCountCache($base, 'count', $perPage, $columns, $pageName, $page, $total);
+        if ($plan->mode === CacheMode::Normalized) {
+            return $this->paginateWithCountCache($base, $plan, 'count', $depClasses, $depTableKeys, $perPage, $columns, $pageName, $page, $total);
         }
 
-        if ($this->shouldUseRawCache($base)) {
-            return $this->paginateWithCountCache($base, 'raw count', $perPage, $columns, $pageName, $page, $total);
+        if ($plan->mode === CacheMode::Result) {
+            return $this->paginateWithCountCache($base, $plan, 'result count', $depClasses, $depTableKeys, $perPage, $columns, $pageName, $page, $total);
         }
 
-        $bypassReasons = $this->computeBypassReasons($base);
+        $bypassReasons = $plan->bypassReasons;
 
-        $this->recordBypass($this->model::class, $bypassReasons, $debugbarStart);
+        CacheReporter::queryBypassed($this->model::class, $bypassReasons, $debugbarStart);
 
         return parent::paginate($perPage, $columns, $pageName, $page, $total);
     }
@@ -232,222 +247,29 @@ class CacheableBuilder extends Builder
 
     public function cursor(): LazyCollection
     {
-        if (!empty($this->pendingAggregates)) {
-            $this->replayPendingAggregates();
-        }
-
         return parent::cursor();
     }
 
     public function lazy($chunkSize = 1000): LazyCollection
     {
-        if (!empty($this->pendingAggregates)) {
-            $this->replayPendingAggregates();
-        }
-
         return parent::lazy($chunkSize);
     }
 
     // -------------------------------------------------------------------------
-    // Private — query execution
+    // Infrastructure
     // -------------------------------------------------------------------------
 
-    private function paginateWithCountCache(QueryBuilder $base, string $kind, $perPage, $columns, string $pageName, $page, $fallbackTotal): LengthAwarePaginator
+    public function buildResultPayloadFromQuery(QueryBuilder $base): array
     {
-        try {
-            return parent::paginate($perPage, $columns, $pageName, $page, $this->resolvePaginationTotal($base, $kind));
-        } catch (\Throwable $e) {
-            NormCache::fallback($e);
-
-            return parent::paginate($perPage, $columns, $pageName, $page, $fallbackTotal);
-        }
+        return $base->get()->map(fn($r) => (array) $r)->all();
     }
 
-    private function resolvePaginationTotal(QueryBuilder $base, string $kind): int
+    public function hydrateResultPayload(array $payload, string $model, bool $cached): Collection
     {
-        $queryStart = NormCacheCollector::beginMeasure();
-
-        $result = NormCache::getNamespacedCache(
-            'count',
-            $this->model::class,
-            $this->queryCacheKey($base),
-            $this->dependsOn ?? [],
-            $this->cacheTag
-        );
-
-        $cachedTotal = $result['data'][0] ?? null;
-
-        if (NormCache::isEventsEnabled()) {
-            event($cachedTotal !== null
-                ? new QueryCacheHit($this->model::class, $result['key'])
-                : new QueryCacheMiss($this->model::class, $result['key'])
-            );
-        }
-
-        NormCacheCollector::recordQuery(
-            $cachedTotal !== null ? 'query hit' : 'query miss',
-            $this->model::class,
-            $result['key'],
-            $queryStart,
-            ['kind' => $kind]
-        );
-
-        if ($cachedTotal === null) {
-            $cachedTotal = $base->getCountForPagination();
-            NormCache::storeVersionedResult($result['key'], [$cachedTotal], $this->queryTtl, $result['versionKeys'], $result['expectedVersions']);
-        }
-
-        return (int) $cachedTotal;
+        return $this->finalizeResult(NormCache::hydrateResult($payload, $model, $cached));
     }
 
-    private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
-    {
-        $debugbarStart = NormCacheCollector::beginMeasure();
-
-        if ($this->dependsOn !== null) {
-            return $this->getFromRawCache($base, $model, $this->rawCacheKey($base), $this->cacheTag);
-        }
-
-        $hash = $this->queryCacheKey($base);
-
-        $result = NormCache::getModelsFromQuery($model, $hash, $this->cacheTag);
-
-        if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild($model, $hash, tag: $this->cacheTag);
-
-            if ($result === null) {
-                if (NormCache::isEventsEnabled()) {
-                    event(new QueryCacheMiss($model, 'building:budget-exhausted'));
-                }
-
-                NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
-
-                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
-            }
-        }
-
-        if ($result['status'] === 'miss') {
-            NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'ids']);
-
-            $ids = $this->resolveIds($result['key'], $base, $result['buildingKey'], $result['versionKeys'], $result['expectedVersions']);
-
-            return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
-        }
-
-        $key = $result['status'] === 'stale' ? "stale:{$hash}" : $result['key'];
-
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryCacheHit($model, $key));
-        }
-
-        NormCacheCollector::recordQuery('query hit', $model, $key, $debugbarStart, [
-            'kind' => 'ids + models',
-            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result['ids']) . ' ids)',
-            'contains_model' => $result['ids'],
-        ]);
-
-        return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this));
-    }
-
-    private function getFromRawCache(QueryBuilder $base, string $model, string $hash, ?string $tag = null): Collection
-    {
-        $debugbarStart = NormCacheCollector::beginMeasure();
-
-        $result = NormCache::getRawCache($model, $this->dependsOn, $hash, $tag);
-
-        if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild($model, $hash, depClasses: $this->dependsOn, tag: $tag);
-
-            if ($result === null) {
-                if (NormCache::isEventsEnabled()) {
-                    event(new QueryCacheMiss($model, 'building:budget-exhausted'));
-                }
-
-                NormCacheCollector::recordQuery('query miss', $model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'deps']);
-
-                $blob = array_map(fn($r) => (array) $r, $base->get()->all());
-
-                return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
-            }
-        }
-
-        if ($result['status'] === 'miss') {
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryCacheMiss($model, $result['key']));
-            }
-
-            NormCacheCollector::recordQuery('query miss', $model, $result['key'], $debugbarStart, ['kind' => 'deps']);
-
-            $blob = array_map(fn($r) => (array) $r, $base->get()->all());
-            NormCache::storeRawResult($result['key'], $blob, $result['buildingKey'], $this->queryTtl, $result['wakeKey'] ?? null, $result['versionKeys'], $result['expectedVersions']);
-
-            return $this->finalizeResult(NormCache::hydrateRaw($blob, $model, false));
-        }
-
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryCacheHit($model, $result['key']));
-        }
-
-        NormCacheCollector::recordQuery('query hit', $model, $result['key'], $debugbarStart, [
-            'kind' => 'raw',
-            'contains' => class_basename($model) . ' (' . count($result['blob']) . ' models)',
-        ]);
-
-        return $this->finalizeResult(NormCache::hydrateRaw($result['blob'], $model));
-    }
-
-    private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols): Collection
-    {
-        $ids = $this->extractPrimaryKeys($base);
-
-        if ($ids !== null) {
-            return $this->getModelsByIds($ids, $model, $selectedCols);
-        }
-
-        return $this->getByQuery($base, $model, $selectedCols);
-    }
-
-    /** @param array<string, list<string>> $bypassReasons */
-    private function getDependencyOnlyBypassResult(QueryBuilder $base, string $model, ?array $selectedCols, array $bypassReasons): ?Collection
-    {
-        if (!$this->hasOnlyDependencyBypass($bypassReasons)) {
-            return null;
-        }
-
-        $ids = $this->extractPrimaryKeys($base);
-
-        return $ids === null ? null : $this->getModelsByIds($ids, $model, $selectedCols);
-    }
-
-    /** @param array<int, mixed> $ids */
-    private function getModelsByIds(array $ids, string $model, ?array $selectedCols): Collection
-    {
-        return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false));
-    }
-
-    private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = []): array
-    {
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryCacheMiss($this->model::class, $key));
-        }
-
-        $ids = $this->buildIds($base);
-        NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions);
-
-        return $ids;
-    }
-
-    private function buildIds(QueryBuilder $base): array
-    {
-        return $base
-            ->cloneWithout(['columns'])
-            ->cloneWithoutBindings(['select'])
-            ->select($this->model->getKeyName())
-            ->pluck($this->model->getKeyName())
-            ->all();
-    }
-
-    private function finalizeResult(array $models): Collection
+    public function finalizeResult(array $models): Collection
     {
         if ($models && $this->eagerLoad) {
             $models = $this->eagerLoadRelations($models);
@@ -456,78 +278,9 @@ class CacheableBuilder extends Builder
         return $this->applyAfterQueryCallbacks($this->model->newCollection($models));
     }
 
-    private function getWithoutCache($columns): Collection
+    public function getWithoutCache($columns): Collection
     {
-        $this->replayPendingAggregates();
-
         return parent::get($columns);
-    }
-
-    // -------------------------------------------------------------------------
-    // Private — guards and key helpers
-    // -------------------------------------------------------------------------
-
-    /** @return array<string, list<string>> */
-    private function computeBypassReasons(QueryBuilder $base, ?array $resolvedColumns = null): array
-    {
-        if ($this->skipCache) {
-            return ['opted_out' => ['withoutCache() was called explicitly']];
-        }
-
-        if (!NormCache::isEnabled()) {
-            return ['opted_out' => ['cache is globally disabled']];
-        }
-
-        if ($this->insideTransaction()) {
-            return ['safety' => ['inside a database transaction']];
-        }
-
-        $reasons = QueryInspector::bypassReasons($base, $this->model->getTable(), $resolvedColumns);
-
-        if ($this->dependsOn !== null) {
-            unset($reasons['dependency']);
-        }
-
-        return $reasons;
-    }
-
-    private function shouldUseCache(QueryBuilder $base, ?array $resolvedColumns = null): bool
-    {
-        return !$this->insideTransaction()
-            && QueryInspector::isStructurallyCacheable($base, $this->model->getTable(), $resolvedColumns)
-            && ($this->dependsOn !== null || !QueryInspector::hasDependencyBypass($base));
-    }
-
-    private function shouldUseRawCache(QueryBuilder $base): bool
-    {
-        return $this->dependsOn !== null
-            && !$this->insideTransaction()
-            && !QueryInspector::hasSafetyBypass($base);
-    }
-
-    /** @param array<string, list<string>> $bypassReasons */
-    private function hasOnlyDependencyBypass(array $bypassReasons): bool
-    {
-        return count($bypassReasons) === 1 && isset($bypassReasons['dependency']);
-    }
-
-    private function extractPrimaryKeys(QueryBuilder $base): ?array
-    {
-        return QueryInspector::extractPrimaryKeys($base, $this->model->getKeyName(), $this->model->getQualifiedKeyName());
-    }
-
-    private function recordBypass(string $modelClass, array $bypassReasons, ?float $debugbarStart): void
-    {
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryBypassed($modelClass, $bypassReasons));
-        }
-
-        NormCacheCollector::recordBypass($modelClass, $bypassReasons, $debugbarStart);
-    }
-
-    private function insideTransaction(): bool
-    {
-        return $this->model->getConnection()->transactionLevel() > 0;
     }
 
     public function applyRemovedScopesTo(self $target): void
@@ -542,19 +295,139 @@ class CacheableBuilder extends Builder
         return !empty($this->removedScopes);
     }
 
-    private function queryCacheKey(QueryBuilder $base): string
+    // -------------------------------------------------------------------------
+    // Internal
+    // -------------------------------------------------------------------------
+
+    public function cachePlan(QueryBuilder $base, CachePlanContext $context): CachePlan
     {
-        $cols = $base->columns;
-        $base->columns = null;
-        try {
-            return QueryHasher::fromQuery($base);
-        } finally {
-            $base->columns = $cols;
+        return (new CachePlanner)->plan($this, $base, $context);
+    }
+
+    public function prepareResultCacheQuery(QueryBuilder $base): void
+    {
+        if (!empty($base->joins) && empty($base->columns)) {
+            if (config('app.debug')) {
+                logger()->warning('NormCache: dependsOn() JOIN without explicit select — added ' . $this->model->getTable() . '.* automatically.');
+            }
+
+            $base->select($this->model->getTable() . '.*');
         }
     }
 
-    private function rawCacheKey(QueryBuilder $base): string
+    private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan): Collection
     {
-        return QueryHasher::fromQuery($base);
+        $debugbarStart = CacheReporter::beginMeasure();
+
+        $hash = QueryHasher::forNormalizedQuery($base);
+
+        $depClasses = $plan->dependencies->depClassesFor($model);
+        $depTableKeys = $plan->dependencies->tables;
+
+        // 1. Resolve Query -> IDs
+        $result = NormCache::getModelsFromQuery($model, $hash, $this->cacheTag, $depClasses, $depTableKeys);
+
+        if ($result['status'] === 'building') {
+            $result = NormCache::waitForBuild('query_ids', $model, $hash, $this->cacheTag, $depClasses, $depTableKeys);
+
+            if ($result === null) {
+                CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
+
+                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+            }
+        }
+
+        // 2. Fetch/Store IDs if miss
+        if ($result['status'] === 'miss') {
+            CacheReporter::queryMiss($model, $result['key'], $debugbarStart, ['kind' => 'ids']);
+
+            $ids = $this->resolveIds($result['key'], $base, $result['buildingKey'], $result['versionKeys'], $result['expectedVersions'], $result['buildingToken'] ?? null);
+
+            return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
+        }
+
+        $key = $result['status'] === 'stale' ? "stale:{$hash}" : $result['key'];
+
+        CacheReporter::queryHit($model, $key, $debugbarStart, [
+            'kind' => 'ids + models',
+            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result['ids']) . ' ids)',
+            'contains_model' => $result['ids'],
+        ]);
+
+        // 3. Resolve IDs -> Models (normalized path)
+        return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this));
+    }
+
+    private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan): Collection
+    {
+        if ($plan->primaryKeys !== null
+            && $plan->dependencies->depClassesFor($model) === []
+            && $plan->dependencies->tables === []) {
+            return $this->getModelsByIds($plan->primaryKeys, $model, $selectedCols);
+        }
+
+        return $this->getByQuery($base, $model, $selectedCols, $plan);
+    }
+
+    private function getDependencyOnlyBypassResult(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan): ?Collection
+    {
+        if (!$this->hasOnlyDependencyBypass($plan->bypassReasons)) {
+            return null;
+        }
+
+        return $plan->primaryKeys !== null ? $this->getModelsByIds($plan->primaryKeys, $model, $selectedCols) : null;
+    }
+
+    private function getModelsByIds(array $ids, string $model, ?array $selectedCols): Collection
+    {
+        return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false));
+    }
+
+    private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
+    {
+        CacheReporter::queryMiss($this->model::class, $key, null);
+
+        $ids = $this->buildIds($base);
+        NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+
+        return $ids;
+    }
+
+    private function buildIds(QueryBuilder $base): array
+    {
+        return $base
+            ->cloneWithout(['columns'])
+            ->cloneWithoutBindings(['select'])
+            ->select($this->model->getKeyName())
+            ->pluck($this->model->getKeyName())
+            ->all();
+    }
+
+    private function paginateWithCountCache(QueryBuilder $base, CachePlan $plan, string $kind, array $depClasses, array $depTableKeys, $perPage, $columns, string $pageName, $page, $fallbackTotal): LengthAwarePaginator
+    {
+        try {
+            return parent::paginate($perPage, $columns, $pageName, $page, $this->resolvePaginationTotal($base, $plan, $kind, $depClasses, $depTableKeys));
+        } catch (\Throwable $e) {
+            NormCache::fallback($e);
+
+            return parent::paginate($perPage, $columns, $pageName, $page, $fallbackTotal);
+        }
+    }
+
+    private function resolvePaginationTotal(QueryBuilder $base, CachePlan $plan, string $kind, array $depClasses, array $depTableKeys): int
+    {
+        return (new VersionedCache)->rememberPaginationCount(
+            $this,
+            $base,
+            $plan,
+            $this->queryTtl,
+            $this->cacheTag
+        );
+    }
+
+    /** @param array<string, list<string>> $bypassReasons */
+    private function hasOnlyDependencyBypass(array $bypassReasons): bool
+    {
+        return count($bypassReasons) === 1 && isset($bypassReasons['dependency']);
     }
 }

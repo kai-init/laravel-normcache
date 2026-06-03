@@ -34,6 +34,7 @@ final class RedisStore
 
     public function prefix(string $key): string
     {
+        // Follow the expected order: slotPrefix then keyPrefix
         return $this->slotPrefix . $this->keyPrefix . $key;
     }
 
@@ -52,9 +53,43 @@ final class RedisStore
         return ($value !== null && $value !== false) ? $value : null;
     }
 
+    /** @return list<?string> */
+    public function getRawMany(array $keys): array
+    {
+        if (empty($keys)) {
+            return [];
+        }
+
+        if (!$this->slotting) {
+            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $keys));
+
+            return array_map(fn($v) => ($v !== null && $v !== false) ? $v : null, $raw);
+        }
+
+        $results = [];
+
+        foreach ($this->groupByTag($keys) as $groupKeys) {
+            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $groupKeys));
+
+            $idx = 0;
+            foreach ($groupKeys as $key) {
+                $value = $raw[$idx++];
+                $results[$key] = ($value !== null && $value !== false) ? $value : null;
+            }
+        }
+
+        return array_map(fn($k) => $results[$k], $keys);
+    }
+
     public function set(string $key, mixed $value, int $ttl): void
     {
         $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
+    }
+
+    /** Set a raw string value without serialization. */
+    public function setRaw(string $key, string $value, int $ttl): void
+    {
+        $this->connection->setex($this->prefix($key), $ttl, $value);
     }
 
     public function setJson(string $key, array $value, int $ttl): void
@@ -79,19 +114,45 @@ final class RedisStore
         return $result !== null && $result !== false;
     }
 
-    public function delete(string $key): void
+    public function delete(string|array $keys): void
     {
-        $this->connection->del($this->prefix($key));
+        $keys = (array) $keys;
+        if (empty($keys)) {
+            return;
+        }
+
+        $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
+        $this->connection->del(...$prefixed);
     }
 
-    /** DEL building key + LPUSH/EXPIRE wake key in one pipeline. */
-    public function releaseBuilding(string $buildingKey, string $wakeKey): void
+    /** DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock. */
+    public function releaseBuilding(string $buildingKey, string $wakeKey, ?string $token = null): bool
     {
-        $this->connection->pipeline(function ($pipe) use ($buildingKey, $wakeKey) {
-            $pipe->del($this->prefix($buildingKey));
-            $pipe->lpush($this->prefix($wakeKey), '1');
-            $pipe->expire($this->prefix($wakeKey), 10);
-        });
+        return (bool) $this->eval(
+            RedisScripts::get('release_building'),
+            [$buildingKey, $wakeKey],
+            [$token ?? '']
+        );
+    }
+
+    public function storeSerializedAndRelease(string $key, mixed $value, int $ttl, ?string $buildingKey = null, ?string $wakeKey = null, ?string $token = null): bool
+    {
+        return $this->storeRawAndRelease($key, $this->serialize($value), $ttl, $buildingKey, $wakeKey, $token);
+    }
+
+    public function storeRawAndRelease(string $key, string $value, int $ttl, ?string $buildingKey = null, ?string $wakeKey = null, ?string $token = null): bool
+    {
+        if ($buildingKey === null) {
+            $this->connection->setex($this->prefix($key), $ttl, $value);
+
+            return true;
+        }
+
+        return (bool) $this->eval(
+            RedisScripts::get('store_if_versions_match_and_release'),
+            [$key, $buildingKey, $wakeKey ?? ''],
+            ['0', (string) $ttl, $value, $token ?? '']
+        );
     }
 
     public function increment(string $key): int
@@ -174,7 +235,7 @@ final class RedisStore
             return;
         }
 
-        $script = LuaScripts::get('set_many_tracked_if_version');
+        $script = RedisScripts::get('set_many_tracked_if_version');
 
         foreach (array_chunk($attrsByKey, 500, true) as $chunk) {
             $this->eval(
@@ -211,7 +272,7 @@ final class RedisStore
             [$cursor, $members] = $result;
 
             if (!empty($members)) {
-                $this->del($members);
+                $this->asyncDel($members);
             }
         } while ((int) $cursor !== 0);
 
@@ -280,7 +341,7 @@ final class RedisStore
     /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
     public function eval(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = array_map(fn($k) => $this->prefix($k), $keys);
+        $prefixedKeys = array_map(fn($k) => $k === '' ? '' : $this->prefix($k), $keys);
         $n = count($prefixedKeys);
         $allArgs = array_merge($prefixedKeys, $args);
 
@@ -332,11 +393,21 @@ final class RedisStore
             return str_contains($value, '.') ? (float) $value : (int) $value;
         }
 
-        if (isset($value[0]) && $value[0] === "\x00") {
+        if (is_string($value) && isset($value[0]) && $value[0] === "\x00") {
             return $this->igbinary ? igbinary_unserialize($value) : null;
         }
 
-        return unserialize($value);
+        // Check if it's a serialized string. PHP serialized strings start with
+        // s:, i:, d:, b:, a:, O:, C:, R:, r:, N;
+        if (is_string($value) && preg_match('/^[sidbaOCRrN]:|^[sidbaOCRrN];/', $value)) {
+            try {
+                return unserialize($value);
+            } catch (\Throwable) {
+                return $value;
+            }
+        }
+
+        return $value;
     }
 
     public function unserializeMany(array $raw): array

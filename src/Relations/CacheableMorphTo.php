@@ -6,7 +6,10 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
+use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Planning\QueryAnalyzer;
 
 class CacheableMorphTo extends MorphTo
 {
@@ -59,11 +62,7 @@ class CacheableMorphTo extends MorphTo
 
     private function shouldUseCacheForType(string $type): bool
     {
-        if (!NormCache::isEnabled() || !empty($this->macroBuffer)) {
-            return false;
-        }
-
-        if ($this->parent->getConnection()->transactionLevel() > 0) {
+        if (!empty($this->macroBuffer)) {
             return false;
         }
 
@@ -74,12 +73,19 @@ class CacheableMorphTo extends MorphTo
         }
 
         $instance = $this->createModelByType($type);
+        $query = $instance->newQuery();
 
         if ($this->ownerKey !== null && $this->ownerKey !== $instance->getKeyName()) {
             return false;
         }
 
-        return $instance->newQuery() instanceof CacheableBuilder;
+        if (!$query instanceof CacheableBuilder) {
+            return false;
+        }
+
+        $plan = $query->cachePlan($query->toBase(), CachePlanContext::morphToEagerLoad($type));
+
+        return $plan->mode === CacheMode::Normalized;
     }
 
     private function getResultsFromCache(string $type): EloquentCollection
@@ -88,7 +94,9 @@ class CacheableMorphTo extends MorphTo
         $instance = $this->createModelByType($type);
         $ids = array_values($this->gatherKeysByType($type, $instance->getKeyType()));
 
-        $models = NormCache::getModels($ids, $class);
+        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
+
+        $models = NormCache::getModels($ids, $class, $columns, null, $this->query, false);
         $collection = $instance->newCollection($models);
 
         $eagerLoads = $this->morphableEagerLoads[$class] ?? [];

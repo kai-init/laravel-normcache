@@ -6,10 +6,10 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheMiss;
+use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\CachePlanContext;
+use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
 
 /** @mixin BelongsToMany */
@@ -35,7 +35,7 @@ trait CachesPivotRelation
             return parent::get($columns);
         }
 
-        $debugbarStart = NormCacheCollector::beginMeasure();
+        $debugbarStart = CacheReporter::beginMeasure();
 
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
@@ -50,7 +50,8 @@ trait CachesPivotRelation
                 $relatedClass,
                 $this->relationName,
                 $cacheParentIds,
-                $constraintHash
+                $constraintHash,
+                $this->pivotTableKey()
             );
 
             $seg = $cache['seg'];
@@ -58,30 +59,18 @@ trait CachesPivotRelation
             $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
 
             if (empty($missedIds)) {
-                if (NormCache::isEventsEnabled()) {
-                    event(new QueryCacheHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
-                }
-                NormCacheCollector::recordQuery(
-                    'pivot hit',
-                    $parentClass,
-                    "pivot:{$parentClassKey}:{$this->relationName}",
-                    $debugbarStart,
-                    ['parents' => $cacheParentIds, 'related' => $relatedClass]
-                );
+                CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
+                    'parents' => $cacheParentIds,
+                    'related' => $relatedClass,
+                ], 'pivot hit');
 
                 return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
             }
 
-            if (NormCache::isEventsEnabled()) {
-                event(new QueryCacheMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}"));
-            }
-            NormCacheCollector::recordQuery(
-                'pivot miss',
-                $parentClass,
-                "pivot:{$parentClassKey}:{$this->relationName}",
-                $debugbarStart,
-                ['parents' => $cacheParentIds, 'related' => $relatedClass]
-            );
+            CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
+                'parents' => $cacheParentIds,
+                'related' => $relatedClass,
+            ], 'pivot miss');
 
             $results = parent::get($columns);
 
@@ -102,7 +91,7 @@ trait CachesPivotRelation
 
             return $results;
         } catch (\Exception $e) {
-            NormCache::Throwable($e);
+            NormCache::fallback($e);
 
             return parent::get($columns);
         }
@@ -149,10 +138,10 @@ trait CachesPivotRelation
             }
         }
 
-        // WHERE bindings intentionally excluded — they contain the FK constraint's parent IDs,
-        // which must not vary the per-query constraint hash.
+        // Bindings included for order, having, join AND where.
+        // Redundant parent IDs in where bindings are safe as the pivot key already differentiates by parent.
         $rawBindings = $base->getRawBindings();
-        foreach (['order', 'having', 'join'] as $group) {
+        foreach (['order', 'having', 'join', 'where'] as $group) {
             if (!empty($rawBindings[$group])) {
                 $shape['bindings_' . $group] = $rawBindings[$group];
             }
@@ -167,24 +156,36 @@ trait CachesPivotRelation
 
     private function shouldUsePivotCache(array $cacheParentIds): bool
     {
-        if (!NormCache::isEnabled()
-            || empty($cacheParentIds)
-            || !$this->query instanceof CacheableBuilder
-            || $this->query->isCacheSkipped()
-            || $this->query->hasRemovedScopes()
-            || $this->parent->getConnection()->transactionLevel() !== 0
-            || $this->query->toBase()->lock !== null) {
+        if (empty($cacheParentIds) || !$this->query instanceof CacheableBuilder) {
+            return false;
+        }
+
+        $base = $this->query->toBase();
+        $plan = $this->query->cachePlan($base, CachePlanContext::pivot(
+            $this->selectedRelatedColumns(['*']) ?? [],
+            $this->query->inferAggregateDependencies()
+        ));
+
+        if ($plan->mode !== CacheMode::Result) {
             return false;
         }
 
         // whereRaw with ? params can't be separated from FK bindings — same SQL, different values would collide.
-        foreach ($this->query->toBase()->wheres as $where) {
+        foreach ($base->wheres as $where) {
             if (($where['type'] ?? null) === 'raw' && str_contains(($where['sql'] ?? ''), '?')) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private function pivotTableKey(): string
+    {
+        return NormCache::tableKey(
+            $this->parent->getConnection()->getName(),
+            $this->table
+        );
     }
 
     private function getCacheParentIds(): array

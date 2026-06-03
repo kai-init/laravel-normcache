@@ -186,7 +186,7 @@ class LuaScriptConsistencyTest extends TestCase
     // Cooldown invalidation across cache families
     // -------------------------------------------------------------------------
 
-    public function test_cooldown_due_invalidation_applies_to_raw_depends_on_cache(): void
+    public function test_cooldown_due_invalidation_applies_to_result_depends_on_cache(): void
     {
         $this->setCooldown(1);
 
@@ -199,7 +199,7 @@ class LuaScriptConsistencyTest extends TestCase
             ->get();
 
         $this->assertCount(1, $query());
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
 
         $post->update(['published' => false]);
 
@@ -215,18 +215,18 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
     }
 
-    public function test_raw_result_write_is_skipped_when_dependency_version_changes_during_build(): void
+    public function test_result_cache_write_is_skipped_when_dependency_version_changes_during_build(): void
     {
         $manager = $this->cacheManager();
-        $hash = 'manual-raw-build';
+        $hash = 'manual-result-build';
 
-        $miss = $manager->getRawCache(Author::class, [Post::class], $hash);
+        $miss = $manager->getResultCache(Author::class, [Post::class], $hash);
 
         $this->assertSame('miss', $miss['status']);
 
         $this->bumpVersionInRedis(NormCache::classKey(Post::class));
 
-        $manager->storeRawResult(
+        $manager->storeResultCache(
             $miss['key'],
             [['id' => 1, 'name' => 'Stale']],
             $miss['buildingKey'],
@@ -243,7 +243,7 @@ class LuaScriptConsistencyTest extends TestCase
     public function test_namespaced_result_write_is_skipped_when_dependency_version_changes_during_build(): void
     {
         $manager = $this->cacheManager();
-        $cache = $manager->getNamespacedCache('count', Author::class, 'manual-count-build', [Post::class]);
+        $cache = $manager->getResultCache(Author::class, [Post::class], 'manual-count-build', null, [], 'count');
 
         $this->bumpVersionInRedis(NormCache::classKey(Post::class));
 
@@ -261,7 +261,7 @@ class LuaScriptConsistencyTest extends TestCase
     public function test_through_result_write_is_skipped_when_dependency_version_changes_during_build(): void
     {
         $manager = $this->cacheManager();
-        $cache = $manager->getThroughCache(Post::class, Country::class, 'manual-through-build');
+        $cache = $manager->getResultCache(Post::class, [Country::class], 'manual-through-build', null, [], 'through');
 
         $this->bumpVersionInRedis(NormCache::classKey(Country::class));
 
@@ -279,7 +279,7 @@ class LuaScriptConsistencyTest extends TestCase
     public function test_related_model_payload_is_not_cached_when_through_result_write_is_skipped(): void
     {
         $manager = $this->cacheManager();
-        $cache = $manager->getThroughCache(Post::class, Country::class, 'manual-through-build');
+        $cache = $manager->getResultCache(Post::class, [Country::class], 'manual-through-build', null, [], 'through');
 
         $this->bumpVersionInRedis(NormCache::classKey(Country::class));
 
@@ -299,12 +299,13 @@ class LuaScriptConsistencyTest extends TestCase
     public function test_pivot_result_write_is_skipped_when_dependency_version_changes_during_build(): void
     {
         $manager = $this->cacheManager();
-        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build');
+        $pivotTableKey = $manager->tableKey(DB::getDefaultConnection(), 'author_tag');
+        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
         $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
 
-        $this->bumpVersionInRedis($tagKey);
+        $this->bumpVersionInRedis($pivotTableKey);
 
         $manager->storeVersionedResult(
             $pivotKey,
@@ -320,7 +321,8 @@ class LuaScriptConsistencyTest extends TestCase
     public function test_related_model_payload_is_not_cached_when_pivot_result_write_is_skipped(): void
     {
         $manager = $this->cacheManager();
-        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build');
+        $pivotTableKey = $manager->tableKey(DB::getDefaultConnection(), 'author_tag');
+        $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
         $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
@@ -353,8 +355,8 @@ class LuaScriptConsistencyTest extends TestCase
             ->count();
 
         $this->assertSame(1, $query());
-        $this->assertNotEmpty($this->redisKeys('test:raw:*'));
-        $this->assertEmpty($this->redisKeys('test:scalar:*'));
+        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*'));
 
         $post->update(['published' => false]);
 
@@ -383,11 +385,9 @@ class LuaScriptConsistencyTest extends TestCase
         $author->tags()->detach($old->id);
         $author->tags()->attach($new->id);
 
-        $authorClassKey = NormCache::classKey(Author::class);
-        $tagClassKey = NormCache::classKey(Tag::class);
+        $pivotTableKey = NormCache::tableKey($author->getConnection()->getName(), 'author_tag');
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$authorClassKey}}:", (string) $pastMs);
-        $this->setKey("scheduled:{{$tagClassKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{{$pivotTableKey}}:", (string) $pastMs);
 
         $this->assertSame(['new'], $author->tags()->get()->pluck('name')->all());
     }

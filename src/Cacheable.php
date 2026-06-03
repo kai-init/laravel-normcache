@@ -1,11 +1,11 @@
 <?php
 
-namespace NormCache\Traits;
+namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
+use NormCache\Relations\CachesRelationships;
 
 /**
  * @mixin Model
@@ -204,7 +204,7 @@ trait Cacheable
         NormCache::evictModelKey(static::class, $originalKey ?? $this->getKey());
     }
 
-    private function flushAfterCounterMutation(int|bool $result): int
+    private function flushAfterCounterMutation(int|bool $result): int|bool
     {
         if ($result) {
             $this->exists
@@ -212,7 +212,7 @@ trait Cacheable
                 : NormCache::flushModel($this);
         }
 
-        return (int) $result;
+        return $result;
     }
 
     private function isRestoreSave(bool $existsBefore): bool

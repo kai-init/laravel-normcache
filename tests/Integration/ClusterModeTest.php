@@ -30,7 +30,7 @@ class ClusterModeTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // dependsOn raw cache
+    // dependsOn result cache
     // -------------------------------------------------------------------------
 
     public function test_depends_on_returns_correct_results_in_cluster_mode(): void

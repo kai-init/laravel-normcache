@@ -194,7 +194,7 @@ class CacheableBuilderTest extends TestCase
         $result = Author::withCount('uncachedPosts')->get()->firstWhere('id', $author->id);
 
         $this->assertSame(2, (int) $result->uncached_posts_count);
-        $this->assertEmpty($this->redisKeys('test:raw:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_belongs_to_warm_hit_runs_after_query_callbacks(): void
