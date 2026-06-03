@@ -33,6 +33,20 @@ model:{posts}:12      →  { id:12, title:..., body:... }
 
 ---
 
+## What's New in v2.0.0
+
+Version 2.0.0 expands Normcache from simple normalized model-query caching into a planner-driven cache layer for common Eloquent read patterns:
+
+- `dependsOn()` caches cross-table queries when you declare the model classes that should invalidate the result.
+- Simple queries still use normalized ID + model-attribute caching, while complex dependency-aware queries use a versioned result cache.
+- Scalar reads, pagination counts, relation aggregates, pivot relations, through relations, and morph-to eager loads now share versioned invalidation paths.
+- Stampede protection, stale-version serving, tag flushing, Redis Cluster handling, event reporting, and Debugbar traces are built into the core cache paths.
+- Debugbar integration shows cache hits, misses, bypasses, and timings on the request timeline when Debugbar is installed.
+
+The `Cacheable` trait now imports from `NormCache\Cacheable`.
+
+---
+
 ## Installation
 
 ```bash
@@ -85,6 +99,7 @@ Post::select('author_id', DB::raw('SUM(views) as total'))
 ```
 
 Normcache chooses the best caching strategy automatically:
+
 - **Normalized Cache**: Used for simple queries on the primary table. If you add `dependsOn()`, it stays normalized but becomes versioned against the extra models too.
 - **Result Cache**: Used for complex queries with `dependsOn()`. The entire result set is cached as a versioned blob.
 

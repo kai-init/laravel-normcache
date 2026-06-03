@@ -7,20 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.1.0] — 2026-05-31
+## [2.0.0] — 2026-06-03
 
 ### Added
 
-- **Cooldown invalidation across all cache families:** raw, scalar, and pivot scripts now apply scheduled invalidations before reading, matching the query cache behaviour.
+- **Planner-driven caching:** query safety, dependency inference, bypass reasons, and cache-mode selection now flow through explicit planning classes.
+- **`dependsOn(array $modelClasses)`:** cache cross-table queries by declaring which model classes can invalidate them. Simple dependency-aware queries stay normalized; complex query shapes use a versioned result cache.
+- **Versioned result cache:** complex dependency-aware queries, relation aggregates, scalar values, pagination counts, pivot reads, and through-relation reads share versioned invalidation and stampede handling.
+- **Scalar result caching:** `count`, `sum`, `avg`, `min`, and `max` are cached under versioned keys and invalidated with their parent and declared dependency models.
+- **Relation aggregate caching:** `withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached as versioned result payloads and invalidated by inferred or explicit dependencies.
+- **`MorphTo` eager-load caching:** each morph type is served from the model cache when the relation can be safely cached.
+- **`Builder::explain()`:** returns a string describing why a query is cached or bypassed.
+- **Debugbar integration:** hits, misses, timeouts, and bypasses appear on the Debugbar timeline when Debugbar is installed.
+- **Manual invalidation tags:** `tag()`, `flushTag()`, and `flushTagAcrossModels()` group query entries for manual flushing.
+- **Stampede protection:** cache builders coordinate with build locks and wake channels; waiters can serve configured stale versions or take over orphaned builds.
 - **`stale_version_depth` config:** controls how many stale versions to serve during stampede protection. Default: `3`, set to `0` to disable.
+- **Queue worker and Octane recovery:** cache state is reset between jobs, Octane requests, and Octane tasks.
 
 ### Changed
 
+- **`Cacheable` namespace:** import the trait from `NormCache\Cacheable` instead of `NormCache\Traits\Cacheable`.
+- **Cache-mode selection:** normalized cache is kept for simple primary-table queries, including simple queries with declared dependencies; result cache is used for dependency-aware complex queries and result-style operations.
 - **Redis Cluster support:** cross-model paths (`dependsOn`, pivot, through, `withCount`) resolve each model's version key individually per slot. Single-instance behaviour is unchanged. Enable with `NORMCACHE_CLUSTER=true`.
-- **Aggregate caching simplified:** `withCount`, `withSum`, `withAvg`, `withMin`, `withMax`, and `withExists` are cached as a versioned blob per query. Invalidation and API are unchanged; the per-parent-ID key structure and `RelationAggregateLoader` have been removed.
+- **Aggregate caching simplified:** relation aggregates are cached as a versioned blob per query. The per-parent-ID aggregate key structure and old aggregate loader path have been removed.
+- **Invalidation coordination:** distributed write locks have been replaced by version and CAS-based coordination.
+- **Internal structure:** relationship helpers, cache reporting, Redis scripts, query hashing, result payload projection, and builder invalidation code have been reorganized around the new planner and versioned cache flow.
 
 ### Fixed
 
+- **CAS-protected writes:** prevent stale query, result, scalar, pivot, and model data after concurrent invalidation.
+- **Cooldown invalidation across all cache families:** scalar, result, and pivot scripts now apply scheduled invalidations before reading, matching the query cache behaviour.
+- **Redis flush paths:** `flushAll()` and model flushes use `SCAN` / `SSCAN` instead of loading full key/member sets.
 - **Mutable primary keys:** changing a model's PK via `save()` now evicts the old `model:{table}:id` cache key.
 - **Raw build lock tag-segmented:** different tagged queries no longer share the same stampede lock.
 - **`where`/`whereRaw` on aggregate alias falls back correctly:** these patterns now trigger the native Eloquent path instead of running a broken ID query.
@@ -29,33 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`flushModel()` bypasses cooldown:** manual flushes always invalidate immediately.
 - **Scalar cache skips expression columns:** `sum`, `avg`, `min`, `max`, `value`, and `pluck` fall through to Eloquent for `DB::raw()` arguments.
 - **Raw cache waiter takes over orphaned locks:** a waiter that wakes to a dead builder now populates the cache itself.
-
----
-
-## [2.0.0] — 2026-05-29
-
-### Added
-
-- **`dependsOn(array $modelClasses)`:** cache cross-table queries by declaring which model classes can invalidate them. Normalization and safety checks still apply.
-- **Scalar result caching:** `count`, `sum`, `avg`, `min`, and `max` are cached under a versioned key and invalidated with their parent model. Works with `dependsOn()`.
-- **Relation aggregate caching:** `withCount` / `withSum` / other Eloquent relation aggregates are cached per parent and invalidated with related model versions. Non-`Cacheable` related models fall through to Eloquent's computed path and are never cached.
-- **`MorphTo` eager-load caching:** each morph type is served from the model cache. Falls back per type when constraints, `morphWithCount`, macros, or a non-`Cacheable` related type are present.
-- **`Builder::explain()`:** returns a string describing why a query is cached or bypassed.
-- **Debugbar integration:** hits, misses, and bypasses appear on the Debugbar timeline. Absent when Debugbar is not installed.
-- **Manual invalidation:** query grouping with `tag()`, `flushTag()`, and `flushTagAcrossModels()`. Tag keys are embedded in `raw`, `query`, `count`, and `scalar` namespaces and flushed atomically.
-- **Stampede protection:** cache waiters `BRPOP` a wake channel instead of storming the database. The waiter timeout and build-lock TTL are configurable. Requires Redis 6.0+ for sub-second precision.
-- **Queue worker cache recovery:** cache is automatically re-enabled between jobs via `JobProcessed` and `Looping` hooks. Octane requests and tasks reset the same way via `RequestReceived` / `TaskReceived`.
-
-### Fixed
-
-- **CAS-protected writes:** prevent stale query/model data after concurrent invalidation.
-- **Redis flush paths:** `flushAll()` and model flushes now use `SCAN` / `SSCAN` instead of loading full key/member sets.
-- **Cache correctness:** fixed transaction, Octane, pivot, through, stale-hit, create/flush, and mixed igbinary/PHP behavior.
-- **Event and Debugbar instrumentation:** cache hit/miss events and Debugbar coverage now include raw, relation, aggregate, and timeout paths.
-
-### Changed
-
-- **Invalidation coordination:** distributed write lock removed; invalidation is version/CAS based.
 
 ---
 
