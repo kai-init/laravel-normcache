@@ -29,6 +29,10 @@ class CacheableBuilder extends Builder
 
     private static array $validatedModelClasses = [];
 
+    private static ?CachePlanner $sharedPlanner = null;
+
+    private static ?VersionedCache $sharedVersionedCache = null;
+
     private bool $skipCache = false;
 
     private ?int $queryTtl = null;
@@ -143,6 +147,10 @@ class CacheableBuilder extends Builder
         }
 
         if ($plan->mode === CacheMode::Result) {
+            if (!empty($base->joins) && empty($base->columns)) {
+                return 'not cached — ' . BypassReasons::labels()['normalization'] . ': join_result_requires_explicit_select';
+            }
+
             return $this->dependsOn !== null ? 'cached: result (dependsOn())' : 'cached: result';
         }
 
@@ -177,7 +185,7 @@ class CacheableBuilder extends Builder
 
         if ($plan->mode === CacheMode::Result) {
             return NormCache::rescue(
-                fn() => (new VersionedCache)->rememberCollection(
+                fn() => $this->versionedCache()->rememberCollection(
                     $this,
                     $base,
                     $plan,
@@ -309,18 +317,17 @@ class CacheableBuilder extends Builder
 
     public function cachePlan(QueryBuilder $base, CachePlanContext $context): CachePlan
     {
-        return (new CachePlanner)->plan($this, $base, $context);
+        return $this->planner()->plan($this, $base, $context);
     }
 
-    public function prepareResultCacheQuery(QueryBuilder $base): void
+    private function planner(): CachePlanner
     {
-        if (!empty($base->joins) && empty($base->columns)) {
-            if (config('app.debug')) {
-                logger()->warning('NormCache: dependsOn() JOIN without explicit select — added ' . $this->model->getTable() . '.* automatically.');
-            }
+        return self::$sharedPlanner ??= new CachePlanner;
+    }
 
-            $base->select($this->model->getTable() . '.*');
-        }
+    private function versionedCache(): VersionedCache
+    {
+        return self::$sharedVersionedCache ??= new VersionedCache;
     }
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan): Collection
@@ -413,7 +420,7 @@ class CacheableBuilder extends Builder
 
     private function rememberPaginationTotal(QueryBuilder $base, CachePlan $plan): int
     {
-        return (new VersionedCache)->rememberPaginationCount(
+        return $this->versionedCache()->rememberPaginationCount(
             $this,
             $base,
             $plan,

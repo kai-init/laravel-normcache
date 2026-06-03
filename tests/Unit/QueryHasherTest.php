@@ -52,4 +52,47 @@ class QueryHasherTest extends TestCase
         $this->assertEquals(16, strlen($hash));
         $this->assertSame(hash('xxh3', 'some data'), $hash);
     }
+
+    public function test_pagination_count_hash_differs_from_normalized_query_hash(): void
+    {
+        $query = $this->makeBuilder()->from('authors')->where('id', 1);
+
+        $this->assertNotSame(
+            QueryHasher::forNormalizedQuery($query),
+            QueryHasher::forPaginationCountQuery($query)
+        );
+    }
+
+    public function test_pagination_count_hash_is_stable_for_identical_queries(): void
+    {
+        $a = $this->makeBuilder()->from('authors')->where('id', 1);
+        $b = $this->makeBuilder()->from('authors')->where('id', 1);
+
+        $this->assertSame(
+            QueryHasher::forPaginationCountQuery($a),
+            QueryHasher::forPaginationCountQuery($b)
+        );
+    }
+
+    public function test_pagination_count_hash_strips_column_selection(): void
+    {
+        $a = $this->makeBuilder()->from('authors')->where('id', 1)->select('id');
+        $b = $this->makeBuilder()->from('authors')->where('id', 1)->select('name');
+
+        $this->assertSame(
+            QueryHasher::forPaginationCountQuery($a),
+            QueryHasher::forPaginationCountQuery($b)
+        );
+    }
+
+    public function test_pagination_count_hash_differs_when_where_clause_differs(): void
+    {
+        $a = $this->makeBuilder()->from('authors')->where('id', 1);
+        $b = $this->makeBuilder()->from('authors')->where('id', 2);
+
+        $this->assertNotSame(
+            QueryHasher::forPaginationCountQuery($a),
+            QueryHasher::forPaginationCountQuery($b)
+        );
+    }
 }

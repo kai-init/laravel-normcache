@@ -189,6 +189,7 @@ class DependsOnTest extends TestCase
 
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->paginate(10);
 
@@ -198,6 +199,7 @@ class DependsOnTest extends TestCase
 
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->paginate(10);
 
@@ -325,7 +327,21 @@ class DependsOnTest extends TestCase
         $this->assertStringContainsString('dependsOn()', $result);
     }
 
-    public function test_join_with_depends_on_caches_as_blob(): void
+    public function test_join_with_depends_on_and_explicit_select_caches_as_blob(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->dependsOn([Post::class])
+            ->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_join_with_depends_on_and_no_explicit_select_bypasses(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -335,18 +351,30 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_explain_shows_computed_blob_for_join_with_depends_on(): void
     {
         $result = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->explain();
 
         $this->assertStringContainsString('cached', $result);
         $this->assertStringContainsString('result (dependsOn())', $result);
+    }
+
+    public function test_explain_shows_bypass_for_join_with_depends_on_and_no_explicit_select(): void
+    {
+        $result = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->explain();
+
+        $this->assertStringContainsString('not cached', $result);
+        $this->assertStringContainsString('join_result_requires_explicit_select', $result);
     }
 
     public function test_from_subquery_with_depends_on_caches_as_blob(): void
@@ -592,14 +620,15 @@ class DependsOnTest extends TestCase
         Post::create(['title' => 'p3', 'author_id' => $b->id, 'views' => 30, 'published' => true]);
     }
 
-    public function test_join_with_depends_on_select_star_does_not_overwrite_base_model_id(): void
+    public function test_join_with_depends_on_and_explicit_select_does_not_collide_with_joined_id(): void
     {
         $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Earlier', 'author_id' => $author->id]); // makes post IDs differ from author ID so the JOIN `id` collision is detectable
+        Post::create(['title' => 'Earlier', 'author_id' => $author->id]);
         $post = Post::create(['title' => 'Target', 'author_id' => $author->id]);
 
         $result = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->first();
 

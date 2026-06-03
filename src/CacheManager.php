@@ -133,6 +133,7 @@ class CacheManager
                 'empty' => $this->queryResult('empty', $queryKey, [], [], null),
                 'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $hash, [$this->keys->verKey($classKey)], [(string) $version], (string) ($result[2] ?? $lockToken)),
                 'building' => $this->queryResult('building', null, null, null, null),
+                'corrupt' => $this->queryResult('miss', $queryKey, null, null, null, [$this->keys->verKey($classKey)], [(string) $version], null),
                 default => $this->queryResult('miss', $queryKey, null, null, null),
             };
         }
@@ -156,6 +157,7 @@ class CacheManager
             'empty' => $this->queryResult('empty', $queryKey, [], [], null),
             'miss' => $this->queryResult('miss', $queryKey, null, null, $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash, $versionKeys, $this->keys->versionsFromSegment($seg), (string) ($result[2] ?? $lockToken)),
             'building' => $this->queryResult('building', null, null, null, null),
+            'corrupt' => $this->queryResult('miss', $queryKey, null, null, null, $versionKeys, $this->keys->versionsFromSegment($seg), null),
             default => $this->queryResult('miss', $queryKey, null, null, null),
         };
     }
@@ -171,7 +173,8 @@ class CacheManager
             $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->expectedVersions($versionKeys, $resolvedVersions);
-            $pivotKeys = array_map(fn($id) => $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id), $parentIds);
+            $pivotKeyBuilder = $this->keys;
+            $pivotKeys = array_map(static fn($id) => $pivotKeyBuilder->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id), $parentIds);
 
             return [
                 'seg' => $seg,
@@ -291,7 +294,8 @@ class CacheManager
         $classKey = $this->keys->classKey($modelClass);
 
         if ($raw === null) {
-            $keys = array_map(fn($id) => $this->keys->modelPrefix($classKey) . $id, $ids);
+            $prefix = $this->keys->modelPrefix($classKey);
+            $keys = array_map(static fn($id) => $prefix . $id, $ids);
             $raw = $this->store->getMany($keys);
         }
 
@@ -338,7 +342,7 @@ class CacheManager
         $prototype = CacheKeyBuilder::prototype($modelClass);
         $closure = self::hydratorClosure($modelClass);
         $fire = $this->fireRetrieved;
-        $models = array_map(function ($attrs) use ($prototype, $closure, $fire) {
+        $models = array_map(static function ($attrs) use ($prototype, $closure, $fire) {
             $instance = clone $prototype;
             $closure($instance, $attrs, $fire);
 
@@ -346,7 +350,13 @@ class CacheManager
         }, $payload);
 
         if ($cached && $models !== []) {
-            $keys = array_values(array_filter(array_map(fn($m) => $m->getKey(), $models)));
+            $keys = [];
+            foreach ($models as $m) {
+                $key = $m->getKey();
+                if ($key !== null) {
+                    $keys[] = $key;
+                }
+            }
             if ($keys !== []) {
                 CacheReporter::modelHit($modelClass, $keys, null);
             }
@@ -366,6 +376,10 @@ class CacheManager
         if (!empty($versionKeys)) {
             $this->storeQueryIdsCAS($key, $ids, $ttl ?? $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
+            return;
+        }
+
+        if ($buildingKey === null) {
             return;
         }
 
@@ -551,7 +565,7 @@ class CacheManager
         $script = RedisScripts::get('fetch_version_with_cooldown');
         $map = [];
         foreach ($versionKeys as $i => $verKey) {
-            if (!array_key_exists($verKey, $map)) {
+            if (!isset($map[$verKey])) {
                 $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [(string) $nowMs]) ?? '0');
             }
         }
@@ -561,7 +575,7 @@ class CacheManager
 
     private function expectedVersions(array $versionKeys, array $resolvedVersions): array
     {
-        return array_map(fn($key) => $resolvedVersions[$key], $versionKeys);
+        return array_map(static fn($key) => $resolvedVersions[$key], $versionKeys);
     }
 
     private function versionsStillMatch(array $versionKeys, array $expectedVersions): bool

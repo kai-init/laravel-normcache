@@ -16,8 +16,6 @@ trait CachesRelationAggregates
 {
     private bool $cacheAggregates = true;
 
-    private bool $aggregateDependenciesComplete = true;
-
     private array $aggregateDependencies = [];
 
     private array $aggregateTableDependencies = [];
@@ -26,11 +24,7 @@ trait CachesRelationAggregates
 
     public function withoutAggregateCache(): static
     {
-        $this->cacheAggregates = false;
-        $this->aggregateDependenciesComplete = false;
-        $this->aggregateDependencies = [];
-        $this->aggregateTableDependencies = [];
-        $this->aggregateAliases = [];
+        $this->clearAggregateTracking();
 
         return $this;
     }
@@ -49,7 +43,6 @@ trait CachesRelationAggregates
         $dependencies = [];
         $tableDependencies = [];
         $aliases = [];
-        $complete = true;
 
         foreach (Arr::wrap($relations) as $name => $constraint) {
             if (is_numeric($name)) {
@@ -72,9 +65,10 @@ trait CachesRelationAggregates
             $entry = $this->classifyAggregate($name, $constraint);
 
             if ($entry === null) {
-                $complete = false;
+                $result = parent::withAggregate($relations, $column, $function);
+                $this->clearAggregateTracking();
 
-                continue;
+                return $result;
             }
 
             $dependencies[] = $entry['relatedClass'];
@@ -90,31 +84,19 @@ trait CachesRelationAggregates
 
         $result = parent::withAggregate($relations, $column, $function);
 
-        if (!$complete) {
-            $this->aggregateDependenciesComplete = false;
-            $this->aggregateDependencies = [];
-            $this->aggregateTableDependencies = [];
-            $this->aggregateAliases = [];
-
-            return $result;
-        }
-
-        if ($this->aggregateDependenciesComplete) {
-            $this->aggregateDependencies = array_values(array_unique([
-                ...$this->aggregateDependencies,
-                ...$dependencies,
-            ]));
-            $this->aggregateTableDependencies = array_values(array_unique([
-                ...$this->aggregateTableDependencies,
-                ...$tableDependencies,
-            ]));
-            $this->aggregateAliases = array_values(array_unique([
-                ...$this->aggregateAliases,
-                ...$aliases,
-            ]));
-        }
+        $this->aggregateDependencies = array_values(array_unique([...$this->aggregateDependencies, ...$dependencies]));
+        $this->aggregateTableDependencies = array_values(array_unique([...$this->aggregateTableDependencies, ...$tableDependencies]));
+        $this->aggregateAliases = array_values(array_unique([...$this->aggregateAliases, ...$aliases]));
 
         return $result;
+    }
+
+    private function clearAggregateTracking(): void
+    {
+        $this->cacheAggregates = false;
+        $this->aggregateDependencies = [];
+        $this->aggregateTableDependencies = [];
+        $this->aggregateAliases = [];
     }
 
     private function classifyAggregate(
@@ -171,7 +153,7 @@ trait CachesRelationAggregates
 
     public function inferAggregateDependencies(): DependencySet
     {
-        if (!$this->aggregateDependenciesComplete) {
+        if (!$this->cacheAggregates) {
             return DependencySet::unsafe('Aggregate dependencies could not be inferred.');
         }
 
@@ -197,13 +179,15 @@ trait CachesRelationAggregates
     {
         $aliases = $this->aggregateAliases;
 
-        return $models->map(function ($model) use ($aliases) {
+        $payload = [];
+        foreach ($models as $model) {
             $attributes = $model->getRawOriginal();
             foreach ($aliases as $alias) {
                 $attributes[$alias] = $model->getAttribute($alias);
             }
+            $payload[] = $attributes;
+        }
 
-            return $attributes;
-        })->all();
+        return $payload;
     }
 }

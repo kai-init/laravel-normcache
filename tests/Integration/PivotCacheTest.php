@@ -345,6 +345,62 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_pivot_eager_load_different_batch_sizes_reuse_same_parent_cache(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        $fiction = Tag::create(['name' => 'Fiction']);
+        $alice->tags()->attach($fiction->id);
+        $bob->tags()->attach($fiction->id);
+
+        // Warm pivot cache for batch [alice, bob]
+        Author::with('tags')->get();
+
+        // Second load for batch [alice] only should be a full cache hit (zero queries)
+        DB::enableQueryLog();
+        Author::with('tags')->whereKey($alice->id)->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($queries);
+    }
+
+    public function test_pivot_user_where_constraints_with_different_bindings_hash_differently(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $phpRelation = $author->tags();
+        $phpRelation->getQuery()->where('tags.name', 'php');
+
+        $laravelRelation = $author->tags();
+        $laravelRelation->getQuery()->where('tags.name', 'laravel');
+
+        $this->assertNotSame(
+            $this->callConstraintHash($phpRelation),
+            $this->callConstraintHash($laravelRelation)
+        );
+    }
+
+    public function test_pivot_constraint_hash_is_stable_across_eager_batch_sizes(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        // Simulate constraint hash as seen in batch [1, 2] vs batch [1]
+        $relationBatchTwo = $author->tags();
+        $relationBatchTwo->addEagerConstraints([
+            Author::create(['name' => 'Bob']),
+            $author,
+        ]);
+
+        $relationBatchOne = $author->tags();
+        $relationBatchOne->addEagerConstraints([$author]);
+
+        $this->assertSame(
+            $this->callConstraintHash($relationBatchOne),
+            $this->callConstraintHash($relationBatchTwo)
+        );
+    }
+
     private function callConstraintHash(object $relation): string
     {
         $method = new ReflectionMethod($relation, 'currentConstraintHash');

@@ -184,6 +184,36 @@ class TransactionInvalidationTest extends TestCase
         $this->assertSame('Alicia', $result->name);
     }
 
+    public function test_insert_in_transaction_preserves_existing_model_payloads_on_commit(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        Author::all();
+
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
+
+        DB::transaction(function () {
+            Author::create(['name' => 'Carol']);
+        });
+
+        // Insert only needs a version bump — existing payloads should not be flushed.
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
+    }
+
+    public function test_insert_in_transaction_still_invalidates_query_cache_on_commit(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        DB::transaction(function () {
+            Author::create(['name' => 'Bob']);
+        });
+
+        $this->assertCount(2, Author::all());
+    }
+
     public function test_rolled_back_transaction_leaves_cache_consistent(): void
     {
         $author = Author::create(['name' => 'Alice']);

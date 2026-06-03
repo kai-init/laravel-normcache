@@ -19,10 +19,13 @@ trait CachesPivotRelation
 
     private bool $inEagerLoad = false;
 
+    private ?array $preEagerWhereBindings = null;
+
     public function addEagerConstraints(array $models): void
     {
         $this->inEagerLoad = true;
         $this->eagerParentIds = $this->getKeys($models, $this->parentKey);
+        $this->preEagerWhereBindings = $this->query->toBase()->getRawBindings()['where'] ?? [];
         parent::addEagerConstraints($models);
     }
 
@@ -62,7 +65,12 @@ trait CachesPivotRelation
 
         $seg = $cache['seg'];
         $cachedByParentId = $cache['data'];
-        $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
+        $missedIds = [];
+        foreach ($cachedByParentId as $parentId => $payload) {
+            if (!is_array($payload)) {
+                $missedIds[] = $parentId;
+            }
+        }
 
         if (empty($missedIds)) {
             return NormCache::rescue(
@@ -146,13 +154,18 @@ trait CachesPivotRelation
             }
         }
 
-        // Bindings included for order, having, join AND where.
-        // Redundant parent IDs in where bindings are safe as the pivot key already differentiates by parent.
+        // For order/having/join bindings use the live query state.
+        // For where bindings in eager-load mode, use the snapshot taken before addEagerConstraints()
         $rawBindings = $base->getRawBindings();
-        foreach (['order', 'having', 'join', 'where'] as $group) {
+        foreach (['order', 'having', 'join'] as $group) {
             if (!empty($rawBindings[$group])) {
                 $shape['bindings_' . $group] = $rawBindings[$group];
             }
+        }
+
+        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : ($rawBindings['where'] ?? []);
+        if (!empty($whereBindings)) {
+            $shape['bindings_where'] = $whereBindings;
         }
 
         if (empty($shape)) {
@@ -235,7 +248,7 @@ trait CachesPivotRelation
             $pivotModel = $model->getRelation($this->accessor);
             $parentId = $pivotModel->getAttribute($this->foreignPivotKey);
 
-            if (array_key_exists($parentId, $pivotMap)) {
+            if (isset($pivotMap[$parentId])) {
                 $pivotMap[$parentId][] = [
                     'id' => $model->getKey(),
                     'pivot' => $pivotModel->getRawOriginal(),

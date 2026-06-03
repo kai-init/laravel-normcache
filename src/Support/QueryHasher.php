@@ -22,6 +22,17 @@ final class QueryHasher
         return self::fromQuery($query);
     }
 
+    public static function forPaginationCountQuery(QueryBuilder $query): string
+    {
+        $cols = $query->columns;
+        $query->columns = null;
+        try {
+            return self::hash(self::fromQuery($query) . ':pagination_count');
+        } finally {
+            $query->columns = $cols;
+        }
+    }
+
     public static function forScalarQuery(QueryBuilder $query, string $kind, array $columns): string
     {
         // Clear columns because the scalar operation will replace them anyway.

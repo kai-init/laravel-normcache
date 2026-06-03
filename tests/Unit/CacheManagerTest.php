@@ -310,6 +310,76 @@ class CacheManagerTest extends TestCase
         $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
     }
 
+    // -------------------------------------------------------------------------
+    // storeQueryIds — corrupt/default path (Issue 3)
+    // -------------------------------------------------------------------------
+
+    public function test_store_query_ids_skips_write_without_building_key_and_version_keys(): void
+    {
+        $store = $this->manager->getStore();
+        $key = 'query:corrupt_default_path:abc';
+
+        $this->manager->storeQueryIds($key, ['1', '2', '3'], 60, null, [], [], null);
+
+        $this->assertNull($store->getRaw($key), 'Corrupt/default path must not write unprotected query IDs');
+    }
+
+    public function test_store_query_ids_writes_normally_with_building_key_only(): void
+    {
+        $store = $this->manager->getStore();
+        $buildingKey = 'building:test:write_with_building_key';
+        $key = 'query:test:write_with_building_key';
+
+        $store->setNx($buildingKey, 'token');
+
+        $this->manager->storeQueryIds($key, ['1', '2'], 60, $buildingKey, [], [], 'token');
+
+        $this->assertNotNull($store->getRaw($key), 'Non-CAS write should proceed when buildingKey is set');
+    }
+
+    // -------------------------------------------------------------------------
+    // invalidateMultipleVersions (Issue 5)
+    // -------------------------------------------------------------------------
+
+    public function test_invalidate_multiple_versions_bumps_version_for_each_class(): void
+    {
+        $this->manager->invalidateMultipleVersions([Author::class, Post::class]);
+
+        $this->assertSame(1, $this->manager->currentVersion(Author::class));
+        $this->assertSame(1, $this->manager->currentVersion(Post::class));
+    }
+
+    public function test_invalidate_multiple_versions_does_nothing_when_disabled(): void
+    {
+        $this->manager->disable();
+        $this->manager->invalidateMultipleVersions([Author::class]);
+
+        $this->assertSame(0, $this->manager->currentVersion(Author::class));
+    }
+
+    public function test_invalidate_multiple_versions_inside_transaction_queues_version_bumps(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        Author::all();
+        Post::all();
+
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
+
+        $versionBefore = $this->manager->currentVersion(Author::class);
+
+        DB::transaction(function () {
+            $this->manager->invalidateMultipleVersions([Author::class, Post::class], 'testing');
+        });
+
+        // Version bumped after commit
+        $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Author::class));
+        // Model payloads preserved (version bump only, not full flush)
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
+    }
+
     public function test_store_versioned_result_does_not_write_or_release_when_building_token_mismatches(): void
     {
         $store = $this->cacheManager()->getStore();

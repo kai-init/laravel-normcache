@@ -1389,15 +1389,14 @@ class EloquentContractTest extends TestCase
         $this->assertCount(1, $warm);
     }
 
-    public function test_depends_on_join_auto_qualifies_select(): void
+    public function test_depends_on_join_with_explicit_select_caches_and_matches_native(): void
     {
-        // When dependsOn() is used with a JOIN and no explicit select, NormCache automatically
-        // qualifies the select to `table.*` to avoid duplicate-column ambiguity during hydration.
-        // This is intentional and documented behavior.
+        // JOIN + dependsOn + explicit select caches as result and matches native behavior.
         $this->fixtures();
         $this->contract(
             fn() => Author::query()
                 ->join('posts', 'posts.author_id', '=', 'authors.id')
+                ->select('authors.*')
                 ->dependsOn([Post::class])
                 ->orderBy('authors.name')
                 ->get(),

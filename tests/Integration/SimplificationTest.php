@@ -81,27 +81,41 @@ class SimplificationTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
-    public function test_join_with_depends_on_caches_result(): void
+    public function test_join_with_depends_on_and_explicit_select_caches_result(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
-        // First call
+        // First call — explicit select required
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'JOIN with dependsOn should use result cache');
+        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'JOIN with explicit select + dependsOn should use result cache');
 
         // Second call - hit
         DB::enableQueryLog();
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->dependsOn([Post::class])
             ->get();
         $this->assertEmpty(DB::getQueryLog(), 'Should hit result cache');
         DB::disableQueryLog();
+    }
+
+    public function test_join_with_depends_on_and_no_explicit_select_bypasses(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->get();
+
+        $this->assertEmpty($this->redisKeys('test:result:*'), 'JOIN without explicit select must bypass result cache');
     }
 
     public function test_simple_aggregate_uses_result_with_inferred_dependencies(): void

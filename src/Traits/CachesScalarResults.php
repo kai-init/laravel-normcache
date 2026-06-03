@@ -87,7 +87,7 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        return (new VersionedCache)->rememberScalar(
+        return $this->versionedCache()->rememberScalar(
             $this,
             $base,
             $plan,

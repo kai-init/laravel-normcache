@@ -27,8 +27,14 @@ final class VersionedCache
         $depTableKeys = $plan->dependencies->tables;
         $usesEloquentResult = $builder->hasAggregateColumns();
 
-        if (!$usesEloquentResult) {
-            $builder->prepareResultCacheQuery($base);
+        if (!$usesEloquentResult && !empty($base->joins) && empty($base->columns)) {
+            if ($columns === ['*']) {
+                CacheReporter::queryBypassed($modelClass, ['normalization' => ['join_result_requires_explicit_select']], $debugbarStart);
+
+                return $builder->getWithoutCache($columns);
+            }
+
+            $base->columns = (array) $columns;
         }
 
         $hash = QueryHasher::forResultQuery($base);
@@ -87,12 +93,55 @@ final class VersionedCache
         ?string $tag,
         string $namespace = CacheKeyBuilder::K_SCALAR,
     ): mixed {
-        $debugbarStart = CacheReporter::beginMeasure();
         $modelClass = $builder->getModel()::class;
-        $depClasses = $plan->dependencies->depClassesFor($modelClass);
-        $depTableKeys = $plan->dependencies->tables;
 
-        $hash = QueryHasher::forScalarQuery($base, $kind, $plan->columns ?? []);
+        return $this->rememberSingleValue(
+            $modelClass,
+            $plan->dependencies->depClassesFor($modelClass),
+            $plan->dependencies->tables,
+            QueryHasher::forScalarQuery($base, $kind, $plan->columns ?? []),
+            $kind,
+            $fallback,
+            $ttl,
+            $tag,
+            $namespace,
+        );
+    }
+
+    public function rememberPaginationCount(
+        CacheableBuilder $builder,
+        QueryBuilder $base,
+        CachePlan $plan,
+        ?int $ttl,
+        ?string $tag,
+    ): int {
+        $modelClass = $builder->getModel()::class;
+
+        return (int) $this->rememberSingleValue(
+            $modelClass,
+            $plan->dependencies->depClassesFor($modelClass),
+            $plan->dependencies->tables,
+            QueryHasher::forPaginationCountQuery($base),
+            'pagination count',
+            fn() => $base->getCountForPagination(),
+            $ttl,
+            $tag,
+            CacheKeyBuilder::K_COUNT,
+        );
+    }
+
+    private function rememberSingleValue(
+        string $modelClass,
+        array $depClasses,
+        array $depTableKeys,
+        string $hash,
+        string $kind,
+        callable $compute,
+        ?int $ttl,
+        ?string $tag,
+        string $namespace,
+    ): mixed {
+        $debugbarStart = CacheReporter::beginMeasure();
 
         $result = NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
 
@@ -100,12 +149,12 @@ final class VersionedCache
             $result = NormCache::waitForBuild('result', $modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace);
 
             if ($result === null) {
-                return $fallback();
+                return $compute();
             }
         }
 
         if ($result['status'] === 'miss') {
-            $value = $fallback();
+            $value = $compute();
 
             CacheReporter::queryMiss($modelClass, $result['key'], $debugbarStart, ['kind' => $kind]);
 
@@ -126,52 +175,5 @@ final class VersionedCache
         CacheReporter::queryHit($modelClass, $result['key'], $debugbarStart, ['kind' => $kind]);
 
         return $result['payload'][0] ?? null;
-    }
-
-    public function rememberPaginationCount(
-        CacheableBuilder $builder,
-        QueryBuilder $base,
-        CachePlan $plan,
-        ?int $ttl,
-        ?string $tag,
-    ): int {
-        $debugbarStart = CacheReporter::beginMeasure();
-        $modelClass = $builder->getModel()::class;
-        $depClasses = $plan->dependencies->depClassesFor($modelClass);
-        $depTableKeys = $plan->dependencies->tables;
-
-        $hash = QueryHasher::forNormalizedQuery($base);
-
-        $result = NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, CacheKeyBuilder::K_COUNT);
-
-        if ($result['status'] === 'building') {
-            $result = NormCache::waitForBuild('result', $modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: CacheKeyBuilder::K_COUNT);
-
-            if ($result === null) {
-                return $base->getCountForPagination();
-            }
-        }
-
-        if ($result['status'] === 'miss') {
-            CacheReporter::queryMiss($modelClass, $result['key'], $debugbarStart, ['kind' => 'pagination count']);
-
-            $total = $base->getCountForPagination();
-            NormCache::storeResultCache(
-                $result['key'],
-                [$total],
-                $result['buildingKey'],
-                $ttl,
-                $result['wakeKey'],
-                $result['versionKeys'],
-                $result['expectedVersions'],
-                $result['buildingToken'] ?? null
-            );
-
-            return $total;
-        }
-
-        CacheReporter::queryHit($modelClass, $result['key'], $debugbarStart, ['kind' => 'pagination count']);
-
-        return (int) ($result['payload'][0] ?? 0);
     }
 }

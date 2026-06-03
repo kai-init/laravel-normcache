@@ -31,7 +31,7 @@ trait HandlesInvalidation
         $conn = $model->getConnection()->getName();
 
         if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
+            $this->queueVersionFlush($conn, $this->keys->classKey($model::class));
 
             return;
         }
@@ -179,17 +179,23 @@ trait HandlesInvalidation
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
     {
+        if (!$this->enabled) {
+            return;
+        }
+
         if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
             foreach ($modelClasses as $modelClass) {
-                $this->queueModelFlush($connectionName, $modelClass);
+                $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass));
             }
 
             return;
         }
 
-        foreach ($modelClasses as $modelClass) {
-            $this->doInvalidateVersion($modelClass);
-        }
+        $this->attempt(function () use ($modelClasses) {
+            foreach ($modelClasses as $modelClass) {
+                $this->doInvalidateVersion($modelClass);
+            }
+        });
     }
 
     public function commitPending(string $connectionName): void
