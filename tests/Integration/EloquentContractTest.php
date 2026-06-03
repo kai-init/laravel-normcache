@@ -1032,6 +1032,19 @@ class EloquentContractTest extends TestCase
         );
     }
 
+    public function test_with_belongs_to_computed_select_matches_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Post::with([
+                'author' => fn($query) => $query->selectRaw('id, upper(name) as upper_name'),
+            ])->orderBy('title')->get(),
+            fn() => Post::withoutCache()->with([
+                'author' => fn($query) => $query->selectRaw('id, upper(name) as upper_name'),
+            ])->orderBy('title')->get(),
+        );
+    }
+
     public function test_with_belongs_to_many(): void
     {
         $this->fixtures();

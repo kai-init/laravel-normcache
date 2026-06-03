@@ -19,7 +19,7 @@ final class CachePlanner
         QueryBuilder $base,
         CachePlanContext $context,
     ): CachePlan {
-        $slotting = NormCache::isCluster();
+        $slotting = NormCache::isSlotting();
         $contextReasons = $this->resolveContextReasons($builder, $context);
 
         $analysis = $this->analyzer->forBuilder(

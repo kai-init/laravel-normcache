@@ -33,6 +33,30 @@ class ClusterModeTest extends TestCase
     // dependsOn result cache
     // -------------------------------------------------------------------------
 
+    public function test_multi_dependency_normalized_query_routes_to_result_when_slotting_is_enabled(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::query()->dependsOn([Post::class, Tag::class])->get();
+
+        $this->assertEmpty($this->redisKeys('test:query:*'), 'Slotting mode should avoid multi-dependency normalized query keys');
+        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Slotting mode should use result cache for multi-dependency queries');
+    }
+
+    public function test_multi_dependency_normalized_query_stays_normalized_when_cluster_uses_fixed_hash_tag(): void
+    {
+        $this->app->forgetInstance(CacheManager::class);
+        $this->app->forgetInstance('normcache');
+        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
+
+        Author::create(['name' => 'Alice']);
+
+        Author::query()->dependsOn([Post::class, Tag::class])->get();
+
+        $this->assertNotEmpty($this->redisKeys('{nc}:test:query:*'), 'Fixed hash tag cluster mode should allow normalized query keys');
+        $this->assertEmpty($this->redisKeys('{nc}:test:result:*'), 'Fixed hash tag cluster mode should not force result cache');
+    }
+
     public function test_depends_on_returns_correct_results_in_cluster_mode(): void
     {
         $alice = Author::create(['name' => 'Alice']);

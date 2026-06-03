@@ -65,6 +65,11 @@ class CacheManager
         return $this->cluster;
     }
 
+    public function isSlotting(): bool
+    {
+        return $this->slotting;
+    }
+
     public function enable(): void
     {
         $this->enabled = true;
@@ -83,6 +88,37 @@ class CacheManager
 
         report($e);
         $this->disable();
+    }
+
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $operation
+     * @param  callable(): T  $fallback
+     * @return T
+     */
+    public function rescue(callable $operation, callable $fallback): mixed
+    {
+        try {
+            return $operation();
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+        }
+
+        return $fallback();
+    }
+
+    public function attempt(callable $operation): bool
+    {
+        try {
+            $operation();
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+
+            return false;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -681,19 +717,6 @@ class CacheManager
     private function buildLockToken(): string
     {
         return bin2hex(random_bytes(16));
-    }
-
-    protected function handle(callable $operation): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        try {
-            $operation();
-        } catch (\Throwable $e) {
-            $this->fallback($e);
-        }
     }
 
     private function normalizeVersion(mixed $value = null): int

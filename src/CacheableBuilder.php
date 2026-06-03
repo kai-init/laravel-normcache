@@ -167,37 +167,44 @@ class CacheableBuilder extends Builder
         $model = $this->model::class;
         $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 
-        try {
-            if ($plan->mode === CacheMode::Normalized) {
-                return $this->getFromCacheableQuery($base, $model, $resolvedCols, $plan);
-            }
+        if ($plan->mode === CacheMode::Normalized) {
+            return NormCache::rescue(
+                fn() => $this->getFromCacheableQuery($base, $model, $resolvedCols, $plan),
+                fn() => $this->getWithoutCache($columns)
+            );
+        }
 
-            if ($plan->mode === CacheMode::Result) {
-                return (new VersionedCache)->rememberCollection(
+        if ($plan->mode === CacheMode::Result) {
+            return NormCache::rescue(
+                fn() => (new VersionedCache)->rememberCollection(
                     $this,
                     $base,
                     $plan,
                     $columns,
                     $this->queryTtl,
                     $this->cacheTag
-                );
-            }
+                ),
+                fn() => $this->getWithoutCache($columns)
+            );
+        }
 
-            $bypassReasons = $plan->bypassReasons;
+        $bypassReasons = $plan->bypassReasons;
+
+        try {
             $result = $this->getDependencyOnlyBypassResult($base, $model, $resolvedCols, $plan);
-
-            if ($result !== null) {
-                return $result;
-            }
-
-            CacheReporter::queryBypassed($model, $bypassReasons, $debugbarStart);
-
-            return $this->getWithoutCache($columns);
         } catch (\Throwable $e) {
             NormCache::fallback($e);
 
-            return $this->getWithoutCache($columns);
+            $result = null;
         }
+
+        if ($result !== null) {
+            return $result;
+        }
+
+        CacheReporter::queryBypassed($model, $bypassReasons, $debugbarStart);
+
+        return $this->getWithoutCache($columns);
     }
 
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
@@ -210,22 +217,22 @@ class CacheableBuilder extends Builder
 
         $base = $this->toBase();
         $plan = $this->cachePlan($base, CachePlanContext::paginationCount($this->inferAggregateDependencies()));
-        $depClasses = $plan->dependencies->depClassesFor($this->model::class);
-        $depTableKeys = $plan->dependencies->tables;
 
-        if ($plan->mode === CacheMode::Normalized) {
-            return $this->paginateWithCountCache($base, $plan, 'count', $depClasses, $depTableKeys, $perPage, $columns, $pageName, $page, $total);
+        if ($plan->mode === CacheMode::Bypass) {
+            CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons, $debugbarStart);
+
+            return parent::paginate($perPage, $columns, $pageName, $page);
         }
 
-        if ($plan->mode === CacheMode::Result) {
-            return $this->paginateWithCountCache($base, $plan, 'result count', $depClasses, $depTableKeys, $perPage, $columns, $pageName, $page, $total);
+        try {
+            $cachedTotal = $this->rememberPaginationTotal($base, $plan);
+        } catch (\Throwable $e) {
+            NormCache::fallback($e);
+
+            $cachedTotal = null;
         }
 
-        $bypassReasons = $plan->bypassReasons;
-
-        CacheReporter::queryBypassed($this->model::class, $bypassReasons, $debugbarStart);
-
-        return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        return parent::paginate($perPage, $columns, $pageName, $page, $cachedTotal);
     }
 
     public function eagerLoadRelations(array $models): array
@@ -403,18 +410,7 @@ class CacheableBuilder extends Builder
             ->all();
     }
 
-    private function paginateWithCountCache(QueryBuilder $base, CachePlan $plan, string $kind, array $depClasses, array $depTableKeys, $perPage, $columns, string $pageName, $page, $fallbackTotal): LengthAwarePaginator
-    {
-        try {
-            return parent::paginate($perPage, $columns, $pageName, $page, $this->resolvePaginationTotal($base, $plan, $kind, $depClasses, $depTableKeys));
-        } catch (\Throwable $e) {
-            NormCache::fallback($e);
-
-            return parent::paginate($perPage, $columns, $pageName, $page, $fallbackTotal);
-        }
-    }
-
-    private function resolvePaginationTotal(QueryBuilder $base, CachePlan $plan, string $kind, array $depClasses, array $depTableKeys): int
+    private function rememberPaginationTotal(QueryBuilder $base, CachePlan $plan): int
     {
         return (new VersionedCache)->rememberPaginationCount(
             $this,

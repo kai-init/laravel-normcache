@@ -28,40 +28,59 @@ trait CachesOneOrManyThrough
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
 
-        try {
-            $result = NormCache::getResultCache($relatedClass, [$throughClass], $hash, null, [], CacheKeyBuilder::K_THROUGH);
+        $result = NormCache::rescue(
+            fn() => NormCache::getResultCache($relatedClass, [$throughClass], $hash, null, [], CacheKeyBuilder::K_THROUGH),
+            fn() => parent::get($columns)
+        );
 
-            if ($result['status'] === 'building') {
-                $result = NormCache::waitForBuild('result', $relatedClass, $hash, null, [$throughClass], [], CacheKeyBuilder::K_THROUGH);
+        if ($result instanceof Collection) {
+            return $result;
+        }
 
-                if ($result === null) {
-                    return parent::get($columns);
-                }
+        if ($result['status'] === 'building') {
+            $result = NormCache::rescue(
+                fn() => NormCache::waitForBuild('result', $relatedClass, $hash, null, [$throughClass], [], CacheKeyBuilder::K_THROUGH),
+                fn() => parent::get($columns)
+            );
+
+            if ($result instanceof Collection) {
+                return $result;
             }
 
-            $key = $result['key'];
-
-            if ($result['status'] === 'hit') {
-                CacheReporter::queryHit($relatedClass, $key, $debugbarStart, [
-                    'through' => $throughClass,
-                ], 'through hit');
-
-                return $this->hydrateFromIds(
-                    $result['payload']['ids'],
-                    $relatedClass,
-                    $builder,
-                    $this->projectionColumns($shouldCacheModels),
-                    $result['payload']['throughKeys']
-                );
+            if ($result === null) {
+                return parent::get($columns);
             }
+        }
 
-            CacheReporter::queryMiss($relatedClass, $key, $debugbarStart, [
-                'through' => $throughClass,
-            ], 'through miss');
+        $key = $result['key'];
 
-            $models = parent::get($columns);
-            $payload = $this->cachePayloadFromResult($models);
+        if ($result['status'] === 'hit') {
+            return NormCache::rescue(
+                function () use ($result, $relatedClass, $builder, $shouldCacheModels, $throughClass, $key, $debugbarStart) {
+                    CacheReporter::queryHit($relatedClass, $key, $debugbarStart, [
+                        'through' => $throughClass,
+                    ], 'through hit');
 
+                    return $this->hydrateFromIds(
+                        $result['payload']['ids'],
+                        $relatedClass,
+                        $builder,
+                        $this->projectionColumns($shouldCacheModels),
+                        $result['payload']['throughKeys']
+                    );
+                },
+                fn() => parent::get($columns)
+            );
+        }
+
+        CacheReporter::queryMiss($relatedClass, $key, $debugbarStart, [
+            'through' => $throughClass,
+        ], 'through miss');
+
+        $models = parent::get($columns);
+        $payload = $this->cachePayloadFromResult($models);
+
+        NormCache::attempt(function () use ($models, $shouldCacheModels, $relatedClass, $key, $payload, $result) {
             $modelAttrs = [];
             if ($shouldCacheModels) {
                 foreach ($models as $model) {
@@ -74,13 +93,9 @@ trait CachesOneOrManyThrough
             if (NormCache::storeResultCache($key, $payload, $result['buildingKey'], null, $result['wakeKey'], $result['versionKeys'], $result['expectedVersions'], $result['buildingToken'] ?? null)) {
                 NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
             }
+        });
 
-            return $models;
-        } catch (\Throwable $e) {
-            NormCache::fallback($e);
-
-            return parent::get($columns);
-        }
+        return $models;
     }
 
     private function shouldUseCache(): bool

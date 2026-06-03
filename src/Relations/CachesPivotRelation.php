@@ -44,36 +44,48 @@ trait CachesPivotRelation
         $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
         $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
 
-        try {
-            $cache = NormCache::getPivotCache(
+        $cache = NormCache::rescue(
+            fn() => NormCache::getPivotCache(
                 $parentClass,
                 $relatedClass,
                 $this->relationName,
                 $cacheParentIds,
                 $constraintHash,
                 $this->pivotTableKey()
+            ),
+            fn() => parent::get($columns)
+        );
+
+        if ($cache instanceof Collection) {
+            return $cache;
+        }
+
+        $seg = $cache['seg'];
+        $cachedByParentId = $cache['data'];
+        $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
+
+        if (empty($missedIds)) {
+            return NormCache::rescue(
+                function () use ($cachedByParentId, $relatedClass, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart) {
+                    CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
+                        'parents' => $cacheParentIds,
+                        'related' => $relatedClass,
+                    ], 'pivot hit');
+
+                    return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
+                },
+                fn() => parent::get($columns)
             );
+        }
 
-            $seg = $cache['seg'];
-            $cachedByParentId = $cache['data'];
-            $missedIds = array_keys(array_filter($cachedByParentId, fn($v) => !is_array($v)));
+        CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
+            'parents' => $cacheParentIds,
+            'related' => $relatedClass,
+        ], 'pivot miss');
 
-            if (empty($missedIds)) {
-                CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
-                    'parents' => $cacheParentIds,
-                    'related' => $relatedClass,
-                ], 'pivot hit');
+        $results = parent::get($columns);
 
-                return $this->hydrateFromPivotCache($cachedByParentId, $relatedClass, $selectedRelatedColumns);
-            }
-
-            CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
-                'parents' => $cacheParentIds,
-                'related' => $relatedClass,
-            ], 'pivot miss');
-
-            $results = parent::get($columns);
-
+        NormCache::attempt(function () use ($results, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $seg, $shouldCacheRelatedModels, $cache) {
             $relatedKey = NormCache::classKey($relatedClass);
             $keyMap = [];
             foreach ($cacheParentIds as $parentId) {
@@ -88,13 +100,9 @@ trait CachesPivotRelation
                 $cache['versionKeys'],
                 $cache['expectedVersions']
             );
+        });
 
-            return $results;
-        } catch (\Exception $e) {
-            NormCache::fallback($e);
-
-            return parent::get($columns);
-        }
+        return $results;
     }
 
     private function currentConstraintHash(array $columns): string

@@ -22,11 +22,11 @@ class CacheableBelongsTo extends BelongsTo
 
     public function getEager()
     {
-        if (!$this->shouldUseCacheForEagerLoad()) {
+        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
+
+        if (!$this->shouldUseCacheForEagerLoad($columns)) {
             return parent::getEager();
         }
-
-        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
 
         return $this->query->applyAfterQueryCallbacks(
             $this->related->newCollection(
@@ -35,7 +35,7 @@ class CacheableBelongsTo extends BelongsTo
         );
     }
 
-    private function shouldUseCacheForEagerLoad(): bool
+    private function shouldUseCacheForEagerLoad(?array $columns): bool
     {
         if ($this->eagerKeys === []
             || !$this->query instanceof CacheableBuilder
@@ -45,7 +45,7 @@ class CacheableBelongsTo extends BelongsTo
         }
 
         $base = $this->query->toBase();
-        $plan = $this->query->cachePlan($base, CachePlanContext::belongsToEagerLoad());
+        $plan = $this->query->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
 
         return $plan->mode === CacheMode::Normalized;
     }

@@ -18,8 +18,6 @@ trait HandlesInvalidation
     /** @var array<string, array<string, true>> */
     private array $versionQueue = [];
 
-    abstract protected function handle(callable $operation): void;
-
     // -------------------------------------------------------------------------
     // Invalidation
     // -------------------------------------------------------------------------
@@ -38,7 +36,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(fn() => $this->doInvalidateVersion($model::class));
+        $this->attempt(fn() => $this->doInvalidateVersion($model::class));
     }
 
     public function flushModel(Model|string $model): void
@@ -48,7 +46,7 @@ trait HandlesInvalidation
         }
 
         if (is_string($model)) {
-            $this->handle(fn() => $this->forceFlushModel($model));
+            $this->attempt(fn() => $this->forceFlushModel($model));
 
             return;
         }
@@ -61,7 +59,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(fn() => $this->forceFlushModel($model::class));
+        $this->attempt(fn() => $this->forceFlushModel($model::class));
     }
 
     public function flushInstance(Model $model): void
@@ -80,7 +78,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(function () use ($class, $key) {
+        $this->attempt(function () use ($class, $key) {
             $classKey = $this->keys->classKey($class);
             $this->doInvalidateVersion($class);
             $this->store->deleteFromSet(
@@ -104,7 +102,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(fn() => $this->doInvalidateKey($classKey));
+        $this->attempt(fn() => $this->doInvalidateKey($classKey));
     }
 
     public function evictModelKey(string $modelClass, mixed $id): void
@@ -113,7 +111,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(function () use ($modelClass, $id) {
+        $this->attempt(function () use ($modelClass, $id) {
             $classKey = $this->keys->classKey($modelClass);
             $key = $this->keys->modelPrefix($classKey) . $id;
             $this->store->deleteFromSet(
@@ -206,7 +204,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->handle(function () use ($flushes, $versions) {
+        $this->attempt(function () use ($flushes, $versions) {
             foreach ($flushes as $modelClass) {
                 $this->forceFlushModel($modelClass);
             }
