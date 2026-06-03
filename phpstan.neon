@@ -19,7 +19,7 @@ parameters:
             path: src/Support/RedisStore.php
         -
             identifier: trait.unused
-            path: src/Cacheable.php
+            path: src/Traits/Cacheable.php
         -
             identifier: trait.unused
             path: src/Relations/*
