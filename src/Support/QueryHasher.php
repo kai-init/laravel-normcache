@@ -40,7 +40,7 @@ final class QueryHasher
         $cols = $query->columns;
         $query->columns = null;
         try {
-            return self::hash(self::fromQuery($query) . ':' . $kind . ':' . json_encode($columns));
+            return self::hash(self::fromQuery($query) . ':' . $kind . ':' . json_encode($columns, JSON_THROW_ON_ERROR));
         } finally {
             $query->columns = $cols;
         }

@@ -232,9 +232,9 @@ class CacheKeyBuilder
         return $tag !== null ? $tag . ':' : '';
     }
 
-    public function resultBuildIdentityHash(?string $tag, string $hash): string
+    public function resultBuildIdentityHash(string $namespace, ?string $tag, string $hash): string
     {
-        return sha1($this->tagSegment($tag) . $hash);
+        return sha1($namespace . ':' . $this->tagSegment($tag) . $hash);
     }
 
     // -------------------------------------------------------------------------

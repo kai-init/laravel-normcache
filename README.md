@@ -35,7 +35,7 @@ model:{posts}:12      →  { id:12, title:..., body:... }
 
 ## What's New in v2.0.0
 
-Version 2.0.0 expands Normcache from simple normalized model-query caching into a planner-driven cache layer for common Eloquent read patterns:
+Version 2.0.0 extends Normcache's normalized model-query caching into a planner-driven cache layer for common Eloquent read patterns:
 
 - `dependsOn()` caches cross-table queries when you declare the model classes that should invalidate the result.
 - Simple queries still use normalized ID + model-attribute caching, while complex dependency-aware queries use a versioned result cache.

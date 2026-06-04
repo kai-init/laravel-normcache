@@ -197,7 +197,7 @@ class CacheManager
     public function getResultCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null, array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): array
     {
         $classKey = $this->keys->classKey($modelClass);
-        $lockSuffix = $this->keys->resultBuildIdentityHash($tag, $hash);
+        $lockSuffix = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
 
@@ -254,7 +254,7 @@ class CacheManager
     {
         $classKey = $this->keys->classKey($modelClass);
         $isResult = $store === 'result';
-        $wakeHash = $isResult ? $this->keys->resultBuildIdentityHash($tag, $hash) : $hash;
+        $wakeHash = $isResult ? $this->keys->resultBuildIdentityHash($namespace, $tag, $hash) : $hash;
 
         $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeHash, $this->stampedeWaitMs / 1000.0);
 
@@ -385,7 +385,7 @@ class CacheManager
 
         $this->store->storeRawAndRelease(
             $key,
-            json_encode($ids),
+            json_encode($ids, JSON_THROW_ON_ERROR),
             $ttl ?? $this->queryTtl,
             $buildingKey,
             $this->keys->buildingToWakeKey($buildingKey),
@@ -720,7 +720,7 @@ class CacheManager
         $this->store->eval(
             RedisScripts::get('store_if_versions_match_and_release'),
             array_merge($versionKeys, [$key, $buildingKey ?? '', $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '']),
-            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids), $buildingToken ?? ''])
+            array_merge([(string) count($versionKeys), (string) $ttl], $expectedVersions, [json_encode($ids, JSON_THROW_ON_ERROR), $buildingToken ?? ''])
         );
     }
 

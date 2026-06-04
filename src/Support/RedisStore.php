@@ -95,7 +95,7 @@ final class RedisStore
 
     public function setJson(string $key, array $value, int $ttl): void
     {
-        $this->connection->setex($this->prefix($key), $ttl, json_encode($value));
+        $this->connection->setex($this->prefix($key), $ttl, json_encode($value, JSON_THROW_ON_ERROR));
     }
 
     public function setNx(string $key, string $value): void
@@ -544,43 +544,39 @@ final class RedisStore
                 },
                 function ($chunk) use (&$keys) {
                     array_push($keys, ...$chunk);
-                },
-                null
+                }
             );
         }
 
         return $keys;
     }
 
-    /**
-     * Executes a SCAN-like operation in a client-agnostic way.
-     */
-    private function executeScan(\Closure $scanner, \Closure $processor, mixed $initialCursor = '0'): void
+    private function executeScan(\Closure $scanner, \Closure $processor): void
     {
-        // phpredis 6.x SCAN/SSCAN require null to start; predis uses '0'
-        $cursor = $this->isPhpRedis() ? null : $initialCursor;
-        $isPhpRedis = $this->isPhpRedis();
-
-        while (true) {
-            $result = $scanner($cursor);
-
-            if ($isPhpRedis) {
-                $chunk = $result ?: [];
-            } else {
-                if (!is_array($result) || !isset($result[1])) {
-                    break;
+        if ($this->isPhpRedis()) {
+            // phpredis 6.x SCAN/SSCAN require null to start; predis uses '0'
+            $cursor = null;
+            do {
+                $chunk = $scanner($cursor);
+                if (!empty($chunk)) {
+                    $processor($chunk);
                 }
-                $cursor = $result[0];
-                $chunk = $result[1];
-            }
+            } while ($cursor);
 
+            return;
+        }
+
+        // Predis returns [$cursor, $keys]; '0' signals completion.
+        $cursor = '0';
+        do {
+            $result = $scanner($cursor);
+            if (!is_array($result) || !isset($result[1])) {
+                break;
+            }
+            [$cursor, $chunk] = $result;
             if (!empty($chunk)) {
                 $processor($chunk);
             }
-
-            if ((string) $cursor === '0' || $cursor === 0 || $cursor === null) {
-                break;
-            }
-        }
+        } while ($cursor !== '0');
     }
 }

@@ -37,6 +37,11 @@ final class VersionedCache
             $base->columns = (array) $columns;
         }
 
+        // Apply non-star columns so hash and payload reflect the actual projection.
+        if ($base->columns === null && $columns !== ['*']) {
+            $base->columns = (array) $columns;
+        }
+
         $hash = QueryHasher::forResultQuery($base);
         $result = NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys);
 

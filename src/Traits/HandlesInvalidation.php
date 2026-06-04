@@ -18,6 +18,9 @@ trait HandlesInvalidation
     /** @var array<string, array<string, true>> */
     private array $versionQueue = [];
 
+    /** @var array<string, list<array{string, string, string}>> model class, model key, members key */
+    private array $instanceEvictQueue = [];
+
     // -------------------------------------------------------------------------
     // Invalidation
     // -------------------------------------------------------------------------
@@ -73,7 +76,9 @@ trait HandlesInvalidation
         $key = $this->keys->modelKey($class, $model->getKey());
 
         if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $class);
+            $classKey = $this->keys->classKey($class);
+            $this->queueVersionFlush($conn, $classKey);
+            $this->queueInstanceEvict($conn, $class, $key, $this->keys->membersKey($classKey));
 
             return;
         }
@@ -202,15 +207,15 @@ trait HandlesInvalidation
     {
         $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
         $versions = array_keys($this->versionQueue[$connectionName] ?? []);
+        $evicts = $this->instanceEvictQueue[$connectionName] ?? [];
 
-        unset($this->flushQueue[$connectionName]);
-        unset($this->versionQueue[$connectionName]);
+        unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName], $this->instanceEvictQueue[$connectionName]);
 
-        if ((empty($flushes) && empty($versions)) || !$this->enabled) {
+        if ((empty($flushes) && empty($versions) && empty($evicts)) || !$this->enabled) {
             return;
         }
 
-        $this->attempt(function () use ($flushes, $versions) {
+        $this->attempt(function () use ($flushes, $versions, $evicts) {
             foreach ($flushes as $modelClass) {
                 $this->forceFlushModel($modelClass);
             }
@@ -218,19 +223,28 @@ trait HandlesInvalidation
             foreach ($versions as $classKey) {
                 $this->doInvalidateKey($classKey);
             }
+
+            // Bump version once per unique class, then evict the specific keys.
+            foreach (array_unique(array_column($evicts, 0)) as $class) {
+                $this->doInvalidateVersion($class);
+            }
+
+            foreach ($evicts as [, $key, $membersKey]) {
+                $this->store->deleteFromSet($key, $membersKey);
+            }
         });
     }
 
     public function discardPending(string $connectionName): void
     {
-        unset($this->flushQueue[$connectionName]);
-        unset($this->versionQueue[$connectionName]);
+        unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName], $this->instanceEvictQueue[$connectionName]);
     }
 
     public function discardAllPending(): void
     {
         $this->flushQueue = [];
         $this->versionQueue = [];
+        $this->instanceEvictQueue = [];
     }
 
     // -------------------------------------------------------------------------
@@ -278,5 +292,10 @@ trait HandlesInvalidation
     private function queueVersionFlush(string $connectionName, string $classKey): void
     {
         $this->versionQueue[$connectionName][$classKey] = true;
+    }
+
+    private function queueInstanceEvict(string $connectionName, string $modelClass, string $key, string $membersKey): void
+    {
+        $this->instanceEvictQueue[$connectionName][] = [$modelClass, $key, $membersKey];
     }
 }

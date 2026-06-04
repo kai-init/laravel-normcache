@@ -172,7 +172,7 @@ trait CachesPivotRelation
             return 'nc';
         }
 
-        return QueryHasher::hash(json_encode($shape));
+        return QueryHasher::hash(json_encode($shape, JSON_THROW_ON_ERROR));
     }
 
     private function shouldUsePivotCache(array $cacheParentIds): bool
