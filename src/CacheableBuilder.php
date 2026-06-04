@@ -268,14 +268,31 @@ class CacheableBuilder extends Builder
         }
     }
 
-    public function cursor(): LazyCollection
+    public function chunk($count, callable $callback): bool
     {
-        return parent::cursor();
+        $this->skipCache = true;
+
+        return parent::chunk($count, $callback);
+    }
+
+    public function each(callable $callback, $count = 1000): bool
+    {
+        $this->skipCache = true;
+
+        return parent::each($callback, $count);
     }
 
     public function lazy($chunkSize = 1000): LazyCollection
     {
+        $this->skipCache = true;
+
         return parent::lazy($chunkSize);
+    }
+
+    public function cursor(): LazyCollection
+    {
+        // Streams via QueryBuilder::cursor() — never reaches CacheableBuilder::get().
+        return parent::cursor();
     }
 
     // -------------------------------------------------------------------------

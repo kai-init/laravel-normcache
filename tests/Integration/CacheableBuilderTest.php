@@ -604,6 +604,64 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(2, $count);
     }
 
+    // -------------------------------------------------------------------------
+    // Streaming methods — must bypass the cache entirely
+    // -------------------------------------------------------------------------
+
+    public function test_chunk_does_not_write_query_cache_keys(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        Author::orderBy('id')->chunk(1, fn() => null);
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_chunk_sees_fresh_data_after_version_bump(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all(); // warm
+        Author::create(['name' => 'Bob']);
+
+        $names = [];
+        Author::orderBy('name')->chunk(10, function ($batch) use (&$names) {
+            $names = array_merge($names, $batch->pluck('name')->all());
+        });
+
+        $this->assertContains('Bob', $names);
+    }
+
+    public function test_each_does_not_write_query_cache_keys(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::orderBy('id')->each(fn() => null);
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_lazy_does_not_write_query_cache_keys(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        Author::orderBy('id')->lazy(1)->all();
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_cursor_does_not_write_query_cache_keys(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::orderBy('id')->cursor()->all();
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    // -------------------------------------------------------------------------
+    // sole()
+    // -------------------------------------------------------------------------
+
     public function test_sole_throws_when_row_is_deleted_after_warm_hit(): void
     {
         $author = Author::create(['name' => 'Alice']);
