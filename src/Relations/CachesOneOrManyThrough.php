@@ -23,6 +23,11 @@ trait CachesOneOrManyThrough
         $debugbarStart = CacheReporter::beginMeasure();
 
         $shouldCacheModels = $columns === ['*'] && $this->query->toBase()->columns === null;
+
+        if (!$shouldCacheModels && !$this->relatedKeyInProjection($columns)) {
+            return parent::get($columns);
+        }
+
         $builder = $this->prepareQueryBuilder($columns);
         $hash = QueryHasher::forResultQuery($builder->toBase());
         $relatedClass = $this->related::class;
@@ -96,6 +101,17 @@ trait CachesOneOrManyThrough
         });
 
         return $models;
+    }
+
+    private function relatedKeyInProjection(mixed $columns): bool
+    {
+        $cols = $this->query->toBase()->columns ?? (array) $columns;
+        if ($cols === ['*']) {
+            return true;
+        }
+        $key = $this->related->getKeyName();
+        $qualified = $this->related->getTable() . '.' . $key;
+        return in_array($key, $cols, true) || in_array($qualified, $cols, true);
     }
 
     private function shouldUseCache(): bool

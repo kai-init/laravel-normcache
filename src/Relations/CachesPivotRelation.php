@@ -47,6 +47,11 @@ trait CachesPivotRelation
         $shouldCacheRelatedModels = $this->shouldCacheRelatedModels($columns);
         $selectedRelatedColumns = $this->selectedRelatedColumns($columns);
 
+        // Pivot cache payload stores related model IDs; bypass when the PK isn't in the projection.
+        if (!$shouldCacheRelatedModels && !$this->relatedKeyInProjection($columns)) {
+            return parent::get($columns);
+        }
+
         $cache = NormCache::rescue(
             fn() => NormCache::getPivotCache(
                 $parentClass,
@@ -220,6 +225,17 @@ trait CachesPivotRelation
         }
 
         return [];
+    }
+
+    private function relatedKeyInProjection(array $columns): bool
+    {
+        $cols = $this->query->toBase()->columns ?? $columns;
+        if ($cols === ['*']) {
+            return true;
+        }
+        $key = $this->related->getKeyName();
+        $qualified = $this->related->getTable() . '.' . $key;
+        return in_array($key, $cols, true) || in_array($qualified, $cols, true);
     }
 
     private function shouldCacheRelatedModels(array $columns): bool

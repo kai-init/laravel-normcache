@@ -80,6 +80,9 @@ trait CachesRelationAggregates
             if ($entry['tableKey'] ?? null) {
                 $tableDependencies[] = $entry['tableKey'];
             }
+
+            array_push($dependencies, ...$entry['constraintModels']);
+            array_push($tableDependencies, ...$entry['constraintTables']);
         }
 
         $result = parent::withAggregate($relations, $column, $function);
@@ -114,6 +117,9 @@ trait CachesRelationAggregates
             return null;
         }
 
+        $constraintModels = [];
+        $constraintTables = [];
+
         if ($constraint !== null) {
             try {
                 $testBuilder = ($relatedClass)::query();
@@ -127,6 +133,9 @@ trait CachesRelationAggregates
                 ) {
                     return null;
                 }
+
+                $constraintModels = $plan->dependencies->models;
+                $constraintTables = $plan->dependencies->tables;
             } catch (\Throwable) {
                 return null;
             }
@@ -152,6 +161,8 @@ trait CachesRelationAggregates
             'relatedClass' => $relatedClass,
             'throughClass' => $throughClass,
             'tableKey' => $tableKey,
+            'constraintModels' => $constraintModels,
+            'constraintTables' => $constraintTables,
         ];
     }
 

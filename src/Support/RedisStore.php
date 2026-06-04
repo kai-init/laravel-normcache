@@ -551,17 +551,24 @@ final class RedisStore
         return $keys;
     }
 
+    /**
+     * @param \Closure(mixed &): mixed $scanner
+     * @param \Closure(array<mixed>): void $processor
+     */
     private function executeScan(\Closure $scanner, \Closure $processor): void
     {
         if ($this->isPhpRedis()) {
-            // phpredis 6.x SCAN/SSCAN require null to start; predis uses '0'
+            // phpredis 6.x SCAN/SSCAN require null to start; updates cursor by reference.
             $cursor = null;
-            do {
+            while (true) {
                 $chunk = $scanner($cursor);
                 if (!empty($chunk)) {
                     $processor($chunk);
                 }
-            } while ($cursor);
+                if (!$cursor) {
+                    break;
+                }
+            }
 
             return;
         }

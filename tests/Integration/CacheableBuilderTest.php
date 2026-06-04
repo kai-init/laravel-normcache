@@ -45,10 +45,10 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(['id'], array_keys($authors->first()->getAttributes()));
     }
 
-    public function test_remember_uses_custom_ttl(): void
+    public function test_ttl_uses_custom_ttl(): void
     {
         Author::create(['name' => 'Alice']);
-        Author::query()->remember(9999)->get();
+        Author::query()->ttl(9999)->get();
 
         $queryKey = collect($this->redisKeys('test:query:*'))->first();
 

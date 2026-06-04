@@ -16,7 +16,7 @@ model:{posts}:7       →  { id:7, title:..., body:... }
 model:{posts}:12      →  { id:12, title:..., body:... }
 ```
 
-**Requirements:** PHP 8.2+, Laravel 11/12/13, Redis 4.0+
+**Requirements:** PHP 8.2+, Laravel 12/13, Redis 4.0+
 
 ## Table of Contents
 
@@ -91,7 +91,11 @@ Author::whereHas('posts', fn($q) => $q->where('published', true))
     ->get();
 
 // Works for JOIN, GROUP BY, calculated columns, etc.
-Author::join('posts', 'posts.author_id', '=', 'authors.id')->dependsOn([Post::class])->get();
+// For JOINs, select the columns you want explicitly to avoid joined-column collisions.
+Author::join('posts', 'posts.author_id', '=', 'authors.id')
+    ->select('authors.*')
+    ->dependsOn([Post::class])
+    ->get();
 Post::select('author_id', DB::raw('SUM(views) as total'))
     ->groupBy('author_id')->dependsOn([Post::class])->get();
 ```
@@ -267,7 +271,7 @@ Works out of the box. State is reset between Octane requests and queue jobs — 
 
 - **Single round trip on cache hit** — version check + ID fetch + model `MGET` in one Lua `EVAL`.
 - **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
-- **No scanning on invalidation** — version bump makes stale keys unreachable; TTL handles eviction.
+- **No scanning on invalidation** — version bump makes stale keys unreachable; TTL handles eviction. (Manual operations like `flushAll()` and tag flushing do use `SCAN`).
 - **Stampede protection** — waiters `BRPOP` a wake channel (200ms) instead of storming the DB. Requires Redis 6.0+ for sub-second precision; both PhpRedis and Predis support this.
 - **igbinary support** — smaller payloads and faster serialization when the extension is installed.
 

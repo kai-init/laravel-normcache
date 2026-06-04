@@ -57,7 +57,7 @@ class CacheableBuilder extends Builder
         return $this->skipCache;
     }
 
-    public function remember(int $ttl): static
+    public function ttl(int $ttl): static
     {
         if ($ttl <= 0) {
             throw new \InvalidArgumentException('NormCache TTL must be greater than zero.');
@@ -66,11 +66,6 @@ class CacheableBuilder extends Builder
         $this->queryTtl = $ttl;
 
         return $this;
-    }
-
-    public function ttl(int $ttl): static
-    {
-        return $this->remember($ttl);
     }
 
     public function tag(string $tag): static
