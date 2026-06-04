@@ -8,6 +8,7 @@ use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Support\AttributeProjector;
 
 class CacheableBelongsTo extends BelongsTo
 {
@@ -42,6 +43,16 @@ class CacheableBelongsTo extends BelongsTo
             || $this->getOwnerKeyName() !== $this->related->getKeyName()
             || $this->query->getEagerLoads() !== []) {
             return false;
+        }
+
+        if ($columns !== null) {
+            $allStrings = true;
+            foreach ($columns as $col) {
+                if (!is_string($col)) { $allStrings = false; break; }
+            }
+            if ($allStrings && !isset(AttributeProjector::normalizeProjection($columns)[$this->getOwnerKeyName()])) {
+                return false;
+            }
         }
 
         $base = $this->query->toBase();

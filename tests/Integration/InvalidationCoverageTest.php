@@ -440,6 +440,49 @@ class InvalidationCoverageTest extends TestCase
         );
     }
 
+    public function test_model_save_inside_without_events_still_invalidates_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        Author::withoutEvents(function () use ($author) {
+            $author->name = 'Alicia';
+            $author->save();
+        });
+
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
+    public function test_model_create_inside_without_events_still_bumps_version(): void
+    {
+        Author::all();
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        Author::withoutEvents(fn() => Author::create(['name' => 'Alice']));
+
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+        $this->assertSame(['Alice'], Author::all()->pluck('name')->all());
+    }
+
+    public function test_touching_belongs_to_relation_invalidates_related_model_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::all();
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        $post->author()->touch();
+
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
     public function test_model_restore_invalidates_once(): void
     {
         config()->set('normcache.cooldown', 0);

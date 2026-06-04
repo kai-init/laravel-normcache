@@ -256,6 +256,18 @@ class CacheableBuilder extends Builder
         return parent::eagerLoadRelations($models);
     }
 
+    public function sole($columns = ['*']): Model
+    {
+        // sole() must verify row count against live DB state, not a cached snapshot.
+        $previous = $this->skipCache;
+        $this->skipCache = true;
+        try {
+            return parent::sole($columns);
+        } finally {
+            $this->skipCache = $previous;
+        }
+    }
+
     public function cursor(): LazyCollection
     {
         return parent::cursor();

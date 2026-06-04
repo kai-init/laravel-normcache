@@ -161,7 +161,6 @@ final class RedisStore
         return (int) $this->connection->incr($this->prefix($key));
     }
 
-    /** Atomically INCR a key and set its TTL in one round trip. */
     public function incrementAndExpire(string $key, int $ttl): int
     {
         return (int) $this->eval(
@@ -267,13 +266,24 @@ final class RedisStore
 
     public function sscanAndFlushSet(string $prefixedMemberKey): void
     {
+        // SSCAN members already include the connection prefix; strip it before asyncDel adds it again.
+        $connectionPrefix = $this->connectionPrefix();
+
         $this->executeScan(
             function (&$cursor) use ($prefixedMemberKey) {
                 return $this->isPhpRedis()
                     ? $this->connection->client()->sscan($prefixedMemberKey, $cursor, '*', 1000)
                     : $this->connection->sscan($prefixedMemberKey, $cursor, ['match' => '*', 'count' => 1000]);
             },
-            fn($members) => $this->asyncDel($members)
+            function ($members) use ($connectionPrefix) {
+                if ($connectionPrefix !== '') {
+                    $members = array_map(
+                        static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
+                        $members
+                    );
+                }
+                $this->asyncDel($members);
+            }
         );
 
         $this->connection->del($prefixedMemberKey);

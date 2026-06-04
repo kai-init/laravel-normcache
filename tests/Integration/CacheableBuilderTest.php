@@ -3,6 +3,8 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\MultipleRecordsFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
@@ -600,6 +602,104 @@ class CacheableBuilderTest extends TestCase
         })->get();
 
         $this->assertSame(2, $count);
+    }
+
+    public function test_sole_throws_when_row_is_deleted_after_warm_hit(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::where('name', 'Alice')->sole();
+        $author->delete();
+
+        $this->expectException(ModelNotFoundException::class);
+        Author::where('name', 'Alice')->sole();
+    }
+
+    public function test_sole_throws_when_second_row_is_inserted_after_warm_hit(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::where('name', 'Alice')->sole();
+        Author::create(['name' => 'Alice']);
+
+        $this->expectException(MultipleRecordsFoundException::class);
+        Author::where('name', 'Alice')->sole();
+    }
+
+    public function test_sole_does_not_populate_the_query_cache(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::where('name', 'Alice')->sole();
+
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_belongs_to_constrained_select_with_pk_serves_from_cache_correctly(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        Post::with('author')->get();
+
+        DB::enableQueryLog();
+        $posts = Post::with(['author' => fn($q) => $q->select('id', 'name')])->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $authorQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"authors"'));
+        $this->assertEmpty($authorQueries, 'PK in projection → fast path, no DB round-trip');
+        $this->assertNotNull($posts->first()->author);
+        $this->assertSame('Alice', $posts->first()->author->name);
+    }
+
+    public function test_belongs_to_constrained_select_with_raw_expression_does_not_crash(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        Post::with('author')->get();
+
+        $posts = Post::with(['author' => fn($q) => $q->select('id', DB::raw('name'))])->get();
+
+        $this->assertNotNull($posts->first()->author);
+        $this->assertSame('Alice', $posts->first()->author->name);
+    }
+
+    public function test_model_hydrated_from_cache_has_exists_true(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $this->assertTrue(Author::first()->exists);
+    }
+
+    public function test_model_hydrated_from_cache_has_was_recently_created_false(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all();
+
+        // Retrieved from cache, not just created — wasRecentlyCreated must be false.
+        $this->assertFalse(Author::first()->wasRecentlyCreated);
+    }
+
+    public function test_exists_and_count_do_not_share_a_cache_entry(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        $this->assertTrue(Author::where('name', 'Alice')->exists());
+        $this->assertSame(1, Author::where('name', 'Alice')->count());
+        $this->assertTrue(Author::where('name', 'Alice')->exists());
+        $this->assertSame(1, Author::where('name', 'Alice')->count());
+    }
+
+    public function test_doesnt_exist_is_consistent_with_exists(): void
+    {
+        $this->assertFalse(Author::where('name', 'Alice')->exists());
+        $this->assertTrue(Author::where('name', 'Alice')->doesntExist());
+
+        Author::create(['name' => 'Alice']);
+
+        $this->assertTrue(Author::where('name', 'Alice')->exists());
+        $this->assertFalse(Author::where('name', 'Alice')->doesntExist());
+
+        Author::where('name', 'Alice')->exists(); // warm
+        $this->assertFalse(Author::where('name', 'Alice')->doesntExist());
     }
 
     public function test_tag_rejects_reserved_characters(): void

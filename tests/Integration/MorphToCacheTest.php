@@ -78,6 +78,26 @@ class MorphToCacheTest extends TestCase
         $this->assertInstanceOf(Post::class, $comments->first()->commentable);
     }
 
+    public function test_morph_to_any_constraint_forces_db_fallback_via_macro_buffer(): void
+    {
+        $post = Post::create(['title' => 'Hello', 'author_id' => Author::create(['name' => 'Alice'])->id]);
+        Comment::create(['body' => 'Nice', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
+
+        Comment::with('commentable')->get();
+
+        DB::enableQueryLog();
+        $comments = Comment::with(['commentable' => fn($q) => $q->select('id', 'title')])->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        // MorphTo buffers every method call into macroBuffer; shouldUseCacheForType() returns
+        // false immediately when macroBuffer is non-empty, so any constraint hits the DB.
+        $postQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'));
+        $this->assertNotEmpty($postQueries);
+        $this->assertNotNull($comments->first()->commentable);
+        $this->assertSame('Hello', $comments->first()->commentable->title);
+    }
+
     public function test_morph_to_deduplicates_ids_when_multiple_comments_share_morphable(): void
     {
         $post = Post::create(['title' => 'Shared', 'author_id' => Author::create(['name' => 'Alice'])->id]);
