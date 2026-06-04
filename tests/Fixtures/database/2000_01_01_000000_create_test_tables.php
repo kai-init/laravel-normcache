@@ -57,10 +57,17 @@ return new class extends Migration
             $table->morphs('commentable');
             $table->timestamps();
         });
+
+        Schema::create('uuid_items', function (Blueprint $table) {
+            $table->string('id', 36)->primary();
+            $table->string('name');
+            $table->timestamps();
+        });
     }
 
     public function down(): void
     {
+        Schema::dropIfExists('uuid_items');
         Schema::dropIfExists('comments');
         Schema::dropIfExists('taggables');
         Schema::dropIfExists('author_tag');

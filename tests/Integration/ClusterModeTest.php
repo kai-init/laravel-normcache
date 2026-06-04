@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration;
 
+use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -242,6 +243,49 @@ class ClusterModeTest extends TestCase
 
         $after = Author::get()->count();
         $this->assertSame(2, $after);
+    }
+
+    // -------------------------------------------------------------------------
+    // Version key TTL — incrementAndExpire cluster-safety
+    //
+    // incrementAndExpire issues a single Lua EVAL (INCR + EXPIRE in one script).
+    // With a single KEYS[1] that carries a hash tag, Redis Cluster routes the
+    // entire script to the owning node atomically. These tests assert:
+    //   - slotting=true  (per-class hash tag)  → key lives under test:ver:{classKey}:
+    //   - slotting=false (fixed {nc} hash tag) → key lives under {nc}:test:ver:{classKey}:
+    // -------------------------------------------------------------------------
+
+    public function test_version_key_has_ttl_in_slotting_cluster_mode(): void
+    {
+        // setUp() already called enableClusterMode() which sets cluster=true, slotting=true.
+        Author::create(['name' => 'Alice']);
+
+        $redis = Redis::connection('model-cache-test');
+        $classKey = $this->cacheManager()->classKey(Author::class);
+        // slotting=true → slotPrefix='', full key = keyPrefix + verKey = 'test:ver:{classKey}:'
+        $verKey = 'test:ver:{' . $classKey . '}:';
+
+        $ttl = $redis->ttl($verKey);
+
+        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in slotting cluster mode');
+    }
+
+    public function test_version_key_has_ttl_in_fixed_hashtag_cluster_mode(): void
+    {
+        $this->app->forgetInstance(CacheManager::class);
+        $this->app->forgetInstance('normcache');
+        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
+
+        Author::create(['name' => 'Alice']);
+
+        $redis = Redis::connection('model-cache-test');
+        $classKey = $this->cacheManager()->classKey(Author::class);
+        // slotting=false → slotPrefix='{nc}:', full key = '{nc}:test:ver:{classKey}:'
+        $verKey = '{nc}:test:ver:{' . $classKey . '}:';
+
+        $ttl = $redis->ttl($verKey);
+
+        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in fixed-hashtag cluster mode');
     }
 
     // -------------------------------------------------------------------------

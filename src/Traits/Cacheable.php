@@ -71,14 +71,6 @@ trait Cacheable
         return $result;
     }
 
-    public function deleteQuietly(): bool
-    {
-        $result = parent::deleteQuietly();
-        $this->flushIfDeleted($result);
-
-        return $result;
-    }
-
     public function increment($column, $amount = 1, array $extra = []): int
     {
         return $this->flushAfterCounterMutation(parent::increment($column, $amount, $extra));

@@ -161,6 +161,16 @@ final class RedisStore
         return (int) $this->connection->incr($this->prefix($key));
     }
 
+    /** Atomically INCR a key and set its TTL in one round trip. */
+    public function incrementAndExpire(string $key, int $ttl): int
+    {
+        return (int) $this->eval(
+            "local v = redis.call('INCR', KEYS[1]); redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])); return v",
+            [$key],
+            [(string) $ttl]
+        );
+    }
+
     /** Blocks until an item appears on the list key or the timeout expires. Returns true if woken.
      *  Requires Redis 6.0+ for sub-second precision; older Redis rounds the timeout up to 1s. */
     public function brpop(string $key, float $timeoutSeconds): bool

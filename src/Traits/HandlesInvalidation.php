@@ -129,7 +129,7 @@ trait HandlesInvalidation
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->keys->classKey($modelClass);
-        $this->store->increment($this->keys->verKey($classKey)); // bypass cooldown
+        $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl()); // bypass cooldown
 
         $this->store->sscanAndFlushSet($this->store->prefix($this->keys->membersKey($classKey)));
     }
@@ -259,13 +259,18 @@ trait HandlesInvalidation
     private function doInvalidateKey(string $classKey): void
     {
         if ($this->cooldown <= 0) {
-            $this->store->increment($this->keys->verKey($classKey));
+            $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl());
 
             return;
         }
 
         $this->resolveCurrentVersion($classKey);
         $this->scheduleInvalidation($classKey);
+    }
+
+    private function versionTtl(): int
+    {
+        return max($this->ttl, $this->queryTtl) * 2;
     }
 
     private function resolveCurrentVersion(string $classKey): string|int|null
