@@ -13,8 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Cross-slot violations:** optional keys (building, wake) now share the primary hash tag so Lua scripts stay within a single slot.
 - **Predis cluster script loading:** Predis cluster raises `NotSupportedException` instead of a NOSCRIPT error when a script isn't cached on a node; this is now caught and falls back to `EVAL`.
-- **Scan cursor handling:** unified `SCAN`/`SSCAN` across phpredis and Predis, fixing cursor format differences and lost results from incorrect closure captures.
 - **Connection prefix detection:** correctly reads the configured prefix for both standalone and cluster clients.
+- **Transaction instance eviction:** a single-row save inside a transaction now evicts only that model's payload on commit instead of flushing the entire model class.
+- **Result cache projection:** `get(['col'])` on a result-cached query now hashes and fetches with the correct column set instead of silently using `select *`.
+- **Aggregate constraint dependencies:** extra model and table dependencies declared inside a `withCount`/`withSum` constraint are now merged into the aggregate dependency set.
+- **Through/pivot projection guard:** `HasManyThrough`, `HasOneThrough`, and pivot relations now bypass cache when the related primary key is not in the selected columns.
+
+### Removed
+
+- **`remember()`** — replaced by `ttl()`. Use `->ttl(300)` to set a custom cache duration.
 
 ---
 
