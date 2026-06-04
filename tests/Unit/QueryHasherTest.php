@@ -3,7 +3,9 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Database\Query\Builder;
+use NormCache\CacheableBuilder;
 use NormCache\Support\QueryHasher;
+use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
 class QueryHasherTest extends TestCase
@@ -11,6 +13,11 @@ class QueryHasherTest extends TestCase
     private function makeBuilder(): Builder
     {
         return $this->app['db']->query();
+    }
+
+    private function makeEloquentBuilder(): CacheableBuilder
+    {
+        return Author::query();
     }
 
     public function test_same_query_produces_identical_hash(): void
@@ -55,18 +62,18 @@ class QueryHasherTest extends TestCase
 
     public function test_pagination_count_hash_differs_from_normalized_query_hash(): void
     {
-        $query = $this->makeBuilder()->from('authors')->where('id', 1);
+        $builder = $this->makeEloquentBuilder()->where('id', 1);
 
         $this->assertNotSame(
-            QueryHasher::forNormalizedQuery($query),
-            QueryHasher::forPaginationCountQuery($query)
+            QueryHasher::forNormalizedQuery($builder),
+            QueryHasher::forPaginationCountQuery($builder)
         );
     }
 
     public function test_pagination_count_hash_is_stable_for_identical_queries(): void
     {
-        $a = $this->makeBuilder()->from('authors')->where('id', 1);
-        $b = $this->makeBuilder()->from('authors')->where('id', 1);
+        $a = $this->makeEloquentBuilder()->where('id', 1);
+        $b = $this->makeEloquentBuilder()->where('id', 1);
 
         $this->assertSame(
             QueryHasher::forPaginationCountQuery($a),
@@ -76,8 +83,8 @@ class QueryHasherTest extends TestCase
 
     public function test_pagination_count_hash_strips_column_selection(): void
     {
-        $a = $this->makeBuilder()->from('authors')->where('id', 1)->select('id');
-        $b = $this->makeBuilder()->from('authors')->where('id', 1)->select('name');
+        $a = $this->makeEloquentBuilder()->where('id', 1)->select('id');
+        $b = $this->makeEloquentBuilder()->where('id', 1)->select('name');
 
         $this->assertSame(
             QueryHasher::forPaginationCountQuery($a),
@@ -87,8 +94,8 @@ class QueryHasherTest extends TestCase
 
     public function test_pagination_count_hash_differs_when_where_clause_differs(): void
     {
-        $a = $this->makeBuilder()->from('authors')->where('id', 1);
-        $b = $this->makeBuilder()->from('authors')->where('id', 2);
+        $a = $this->makeEloquentBuilder()->where('id', 1);
+        $b = $this->makeEloquentBuilder()->where('id', 2);
 
         $this->assertNotSame(
             QueryHasher::forPaginationCountQuery($a),

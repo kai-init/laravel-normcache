@@ -412,9 +412,7 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:count:*'), 'Scalar count with dependsOn should use count namespace');
     }
 
-    // -------------------------------------------------------------------------
     // tag() — manual flush grouping
-    // -------------------------------------------------------------------------
 
     public function test_tag_is_embedded_in_computed_key(): void
     {
@@ -506,9 +504,7 @@ class DependsOnTest extends TestCase
         $this->assertCount(0, $second);
     }
 
-    // -------------------------------------------------------------------------
     // Projection isolation
-    // -------------------------------------------------------------------------
 
     public function test_depends_on_queries_differing_only_in_select_use_separate_cache_keys(): void
     {
@@ -535,9 +531,7 @@ class DependsOnTest extends TestCase
         $this->assertArrayNotHasKey('name', $cached->first()->getAttributes());
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private function seedAuthorsWithPosts(): void
     {

@@ -473,9 +473,7 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame($versionBefore, NormCache::currentVersion(Author::class));
     }
 
-    // -------------------------------------------------------------------------
     // explain() + QueryBypassed event
-    // -------------------------------------------------------------------------
 
     public function test_explain_returns_cached_for_simple_query(): void
     {

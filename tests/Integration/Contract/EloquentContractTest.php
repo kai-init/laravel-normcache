@@ -26,9 +26,7 @@ use ReflectionProperty;
  */
 class EloquentContractTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     // contract() and normalize() are inherited from TestCase
 
@@ -66,9 +64,7 @@ class EloquentContractTest extends TestCase
         $prop->setValue(null, $scopes);
     }
 
-    // -------------------------------------------------------------------------
     // get() — collection shapes
-    // -------------------------------------------------------------------------
 
     public function test_get_all_models(): void
     {
@@ -174,9 +170,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Single model (first, find, sole, soleValue, firstWhere, findOrFail, firstOrFail, first/firstWhere on relation instance)
-    // -------------------------------------------------------------------------
 
     public function test_first_returns_first_model(): void
     {
@@ -294,9 +288,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // withAggregate
-    // -------------------------------------------------------------------------
 
     public function test_aggregate_blob_key_includes_selected_columns(): void
     {
@@ -496,8 +488,7 @@ class EloquentContractTest extends TestCase
 
     public function test_with_aggregate_expression_column_produces_same_attribute(): void
     {
-        // grammar->getValue() unwraps DB::raw so the alias is posts_sum_views,
-        // not posts_sum_select_views_from (which would happen with raw toString).
+        // grammar->getValue() unwraps DB::raw so the alias matches native behavior (e.g. posts_sum_views).
         $this->fixtures();
         $this->contract(
             fn() => Author::withSum('posts', DB::raw('views'))->orderBy('name')->get(),
@@ -507,8 +498,7 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_non_cacheable_related_model_falls_through_to_eloquent(): void
     {
-        // When the related model has no Cacheable trait, NormCache routes to
-        // parent::withAggregate (native Eloquent subselect). Result must match.
+        // Models without Cacheable trait route to native Eloquent subselects (parent::withAggregate).
         $author = Author::create(['name' => 'Alice']);
         UncachedPost::create(['title' => 'P1', 'author_id' => $author->id]);
         UncachedPost::create(['title' => 'P2', 'author_id' => $author->id]);
@@ -594,9 +584,7 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_order_by_raw_aggregate_alias_matches_native(): void
     {
-        // orderByRaw referencing an aggregate alias cannot be executed on the ID-fetch query
-        // (the alias column doesn't exist in SQL). NormCache must detect this and fall back
-        // to native Eloquent, which computes the aggregate as a subselect in the same query.
+        // orderByRaw referencing an aggregate alias falls back to native Eloquent subselects.
         $this->fixtures();
         $this->contract(
             fn() => Author::withCount('posts')->orderByRaw('posts_count desc')->get(),
@@ -624,9 +612,7 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_alias_with_extra_whitespace_behaves_same_as_native(): void
     {
-        // NormCache uses Eloquent's own 3-segment explode(' ') parsing — multiple spaces
-        // are NOT supported by Eloquent and NormCache must fail identically, not silently
-        // handle what native Eloquent rejects.
+        // Eloquent fails on multiple spaces in aliases; NormCache must fail identically.
         $this->fixtures();
 
         $nativeException = null;
@@ -649,9 +635,7 @@ class EloquentContractTest extends TestCase
     public function test_with_count_nested_relation_name_throws_same_as_native(): void
     {
         $this->fixtures();
-        // Eloquent itself does not support nested dot-notation in a single withCount call.
-        // NormCache must pass it through to the parent (not crash earlier on its own
-        // model->{name}() call), so the exception is the same type as native Eloquent.
+        // Native Eloquent does not support nested dot-notation in a single withCount; NormCache must throw the same exception.
         $nativeException = null;
         try {
             Author::withoutCache()->withoutAggregateCache()->withCount('posts.comments')->get();
@@ -670,9 +654,7 @@ class EloquentContractTest extends TestCase
         $this->assertSame($nativeException, $normcacheException, 'NormCache must throw the same exception type as native Eloquent');
     }
 
-    // -------------------------------------------------------------------------
     // dependsOn — result cache
-    // -------------------------------------------------------------------------
 
     public function test_depends_on_get(): void
     {
@@ -706,8 +688,7 @@ class EloquentContractTest extends TestCase
 
     public function test_result_depends_on_with_group_by_and_withcount_skips_aggregate_on_null_pk_models(): void
     {
-        // GROUP BY result dependsOn results lack primary keys — RelationAggregateLoader must
-        // skip aggregate loading rather than cache null-keyed entries or mismatch the query.
+        // GROUP BY result dependsOn results lack primary keys — RelationAggregateLoader must skip aggregate loading.
         $alice = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'P1', 'author_id' => $alice->id]);
         Comment::create(['body' => 'Hi', 'commentable_type' => Post::class, 'commentable_id' => $post->id]);
@@ -744,9 +725,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Complex paths (join, groupBy, lockForUpdate)
-    // -------------------------------------------------------------------------
 
     public function test_join_without_depends_on_falls_through(): void
     {
@@ -815,9 +794,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // whereHas variants
-    // -------------------------------------------------------------------------
 
     public function test_doesnt_have_returns_correct_models(): void
     {
@@ -964,9 +941,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Global scopes
-    // -------------------------------------------------------------------------
 
     public function test_global_scope_applies_consistently_cold_and_warm(): void
     {
@@ -1085,10 +1060,7 @@ class EloquentContractTest extends TestCase
 
     public function test_with_count_honours_removed_scope_on_parent_builder(): void
     {
-        // Add a scope that excludes Carol (no country_id) from fresh Author queries.
-        // The outer query explicitly removes it so Carol IS in the result.
-        // The aggregate miss-fetch must also remove the scope; otherwise Carol's
-        // posts_count comes back null instead of 0.
+        // Aggregate miss-fetch must honour removed scopes so excluded rows receive 0 instead of null.
         Author::addGlobalScope('has_country', fn($q) => $q->whereNotNull('country_id'));
 
         try {
@@ -1103,9 +1075,7 @@ class EloquentContractTest extends TestCase
         }
     }
 
-    // -------------------------------------------------------------------------
     // Write operations (insert, update, delete, insertOrIgnore, upsert, forceDelete)
-    // -------------------------------------------------------------------------
 
     public function test_insert_returns_bool(): void
     {
@@ -1247,9 +1217,7 @@ class EloquentContractTest extends TestCase
         $this->assertSame($native, $cached, 'cursor on aggregate alias must match native Eloquent');
     }
 
-    // -------------------------------------------------------------------------
     // flushTag validation
-    // -------------------------------------------------------------------------
 
     public function test_flush_tag_clears_aggregate_cache_for_tagged_query(): void
     {
@@ -1282,9 +1250,7 @@ class EloquentContractTest extends TestCase
         $this->cacheManager()->flushTagAcrossModels('tag*with*stars');
     }
 
-    // -------------------------------------------------------------------------
     // Scalar expression guard
-    // -------------------------------------------------------------------------
 
     public function test_sum_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
     {
@@ -1306,9 +1272,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Expression primary key guard
-    // -------------------------------------------------------------------------
 
     public function test_where_id_with_expression_falls_through_to_normal_query_cache(): void
     {
@@ -1320,9 +1284,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Pivot constraint hash — raw order bindings
-    // -------------------------------------------------------------------------
 
     public function test_pivot_orderby_raw_with_different_bindings_returns_distinct_results(): void
     {

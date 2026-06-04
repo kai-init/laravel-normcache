@@ -29,7 +29,7 @@ trait CachesOneOrManyThrough
         }
 
         $builder = $this->prepareQueryBuilder($columns);
-        $hash = QueryHasher::forResultQuery($builder->toBase());
+        $hash = QueryHasher::forResultQuery($builder);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
 
@@ -159,7 +159,7 @@ trait CachesOneOrManyThrough
 
     private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection
     {
-        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, null, $builder, false);
+        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, null, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
             foreach ($models as $model) {

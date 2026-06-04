@@ -42,9 +42,7 @@ class ScalarContractTest extends TestCase
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
 
-    // -------------------------------------------------------------------------
     // count
-    // -------------------------------------------------------------------------
 
     public function test_count_all(): void
     {
@@ -90,9 +88,7 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // sum, avg, min, max
-    // -------------------------------------------------------------------------
 
     public function test_sum(): void
     {
@@ -139,9 +135,7 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // exists, doesntExist
-    // -------------------------------------------------------------------------
 
     public function test_exists_true(): void
     {
@@ -177,9 +171,7 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // value, pluck
-    // -------------------------------------------------------------------------
 
     public function test_value(): void
     {
@@ -216,9 +208,7 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // Edge cases: empty sets and nullable columns
-    // -------------------------------------------------------------------------
 
     public function test_sum_on_empty_set_returns_consistent_type(): void
     {

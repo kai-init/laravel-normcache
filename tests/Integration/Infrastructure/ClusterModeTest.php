@@ -30,9 +30,7 @@ class ClusterModeTest extends TestCase
         config(['normcache.cluster' => true]);
     }
 
-    // -------------------------------------------------------------------------
     // dependsOn result cache
-    // -------------------------------------------------------------------------
 
     public function test_multi_dependency_normalized_query_routes_to_result_when_slotting_is_enabled(): void
     {
@@ -109,9 +107,7 @@ class ClusterModeTest extends TestCase
         $this->assertCount(0, $second);
     }
 
-    // -------------------------------------------------------------------------
     // Aggregate cache (withCount)
-    // -------------------------------------------------------------------------
 
     public function test_with_count_returns_correct_results_in_cluster_mode(): void
     {
@@ -147,9 +143,7 @@ class ClusterModeTest extends TestCase
         $this->assertSame(2, $second->posts_count);
     }
 
-    // -------------------------------------------------------------------------
     // Pivot cache (BelongsToMany)
-    // -------------------------------------------------------------------------
 
     public function test_belongs_to_many_returns_correct_results_in_cluster_mode(): void
     {
@@ -181,9 +175,7 @@ class ClusterModeTest extends TestCase
         $this->assertSame(1, $after);
     }
 
-    // -------------------------------------------------------------------------
     // Through cache (HasManyThrough)
-    // -------------------------------------------------------------------------
 
     public function test_has_many_through_returns_correct_results_in_cluster_mode(): void
     {
@@ -215,9 +207,7 @@ class ClusterModeTest extends TestCase
         $this->assertSame(2, $after);
     }
 
-    // -------------------------------------------------------------------------
     // Standard single-model query cache (should be unaffected by cluster flag)
-    // -------------------------------------------------------------------------
 
     public function test_single_model_query_cache_still_works_in_cluster_mode(): void
     {
@@ -245,24 +235,14 @@ class ClusterModeTest extends TestCase
         $this->assertSame(2, $after);
     }
 
-    // -------------------------------------------------------------------------
-    // Version key TTL — incrementAndExpire cluster-safety
-    //
-    // incrementAndExpire issues a single Lua EVAL (INCR + EXPIRE in one script).
-    // With a single KEYS[1] that carries a hash tag, Redis Cluster routes the
-    // entire script to the owning node atomically. These tests assert:
-    //   - slotting=true  (per-class hash tag)  → key lives under test:ver:{classKey}:
-    //   - slotting=false (fixed {nc} hash tag) → key lives under {nc}:test:ver:{classKey}:
-    // -------------------------------------------------------------------------
+    // Version key TTL — incrementAndExpire cluster-safety (ensures hash tags route EVAL to owning node)
 
     public function test_version_key_has_ttl_in_slotting_cluster_mode(): void
     {
-        // setUp() already called enableClusterMode() which sets cluster=true, slotting=true.
         Author::create(['name' => 'Alice']);
 
         $redis = Redis::connection('model-cache-test');
         $classKey = $this->cacheManager()->classKey(Author::class);
-        // slotting=true → slotPrefix='', full key = keyPrefix + verKey = 'test:ver:{classKey}:'
         $verKey = 'test:ver:{' . $classKey . '}:';
 
         $ttl = $redis->ttl($verKey);
@@ -280,7 +260,6 @@ class ClusterModeTest extends TestCase
 
         $redis = Redis::connection('model-cache-test');
         $classKey = $this->cacheManager()->classKey(Author::class);
-        // slotting=false → slotPrefix='{nc}:', full key = '{nc}:test:ver:{classKey}:'
         $verKey = '{nc}:test:ver:{' . $classKey . '}:';
 
         $ttl = $redis->ttl($verKey);
@@ -288,9 +267,7 @@ class ClusterModeTest extends TestCase
         $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in fixed-hashtag cluster mode');
     }
 
-    // -------------------------------------------------------------------------
     // count() pagination total (getNamespacedCache)
-    // -------------------------------------------------------------------------
 
     public function test_paginate_count_cache_works_in_cluster_mode(): void
     {

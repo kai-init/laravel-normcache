@@ -13,9 +13,7 @@ use NormCache\Tests\TestCase;
  */
 class StringPrimaryKeyTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // String / UUID primary keys
-    // -------------------------------------------------------------------------
 
     public function test_find_by_string_pk_hits_model_cache_on_second_call(): void
     {
@@ -113,9 +111,7 @@ class StringPrimaryKeyTest extends TestCase
         $this->assertSame($names, $namesCached);
     }
 
-    // -------------------------------------------------------------------------
     // Version key TTL
-    // -------------------------------------------------------------------------
 
     public function test_version_key_has_ttl_after_invalidation(): void
     {

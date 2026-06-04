@@ -3,6 +3,7 @@
 namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Eloquent\Model;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -279,6 +280,7 @@ class CacheManager
         ?array $raw = null,
         ?EloquentBuilder $missedQuery = null,
         bool $preserveQueryShape = true,
+        ?Model $prototype = null,
     ): array {
         if ($ids === []) {
             return [];
@@ -300,7 +302,7 @@ class CacheManager
         }
 
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
-        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection);
+        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
 
         if ($hits !== []) {
             CacheReporter::modelHit($modelClass, array_keys($hits), $debugbarStart, [
@@ -337,9 +339,11 @@ class CacheManager
         return $ordered;
     }
 
-    public function hydrateResult(array $payload, string $modelClass, bool $cached = true): array
+    public function hydrateResult(array $payload, string|Model $model, bool $cached = true): array
     {
-        $prototype = CacheKeyBuilder::prototype($modelClass);
+        $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($model);
+        $modelClass = $model instanceof Model ? $model::class : $model;
+
         $closure = self::hydratorClosure($modelClass);
         $fire = $this->fireRetrieved;
         $models = array_map(static function ($attrs) use ($prototype, $closure, $fire) {
@@ -610,9 +614,9 @@ class CacheManager
         );
     }
 
-    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection): array
+    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
     {
-        $prototype = CacheKeyBuilder::prototype($modelClass);
+        $prototype ??= CacheKeyBuilder::prototype($modelClass);
         $closure = self::hydratorClosure($modelClass);
         $fireRetrieved = $this->fireRetrieved;
         $hits = [];

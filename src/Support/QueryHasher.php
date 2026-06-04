@@ -3,60 +3,56 @@
 namespace NormCache\Support;
 
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\CacheableBuilder;
 
 final class QueryHasher
 {
-    public static function forNormalizedQuery(QueryBuilder $query): string
+    public static function forNormalizedQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
     {
-        $cols = $query->columns;
-        $query->columns = null;
-        try {
-            return self::fromQuery($query);
-        } finally {
-            $query->columns = $cols;
-        }
+        return self::fromBuilder($builder, ($query ?? $builder->toBase())->cloneWithout(['columns']));
     }
 
-    public static function forResultQuery(QueryBuilder $query): string
+    public static function forResultQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
     {
-        return self::fromQuery($query);
+        return self::fromBuilder($builder, $query);
     }
 
-    public static function forPaginationCountQuery(QueryBuilder $query): string
+    public static function forPaginationCountQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
     {
-        $cols = $query->columns;
-        $query->columns = null;
-        try {
-            return self::hash(self::fromQuery($query) . ':pagination_count');
-        } finally {
-            $query->columns = $cols;
-        }
+        return self::hash(self::forNormalizedQuery($builder, $query) . ':pagination_count');
     }
 
-    public static function forScalarQuery(QueryBuilder $query, string $kind, array $columns): string
+    public static function forScalarQuery(CacheableBuilder $builder, ?QueryBuilder $query, string $kind, array $columns): string
     {
-        // Clear columns because the scalar operation will replace them anyway.
-        // This ensures select('foo')->count() and select('bar')->count() hash identically.
-        $cols = $query->columns;
-        $query->columns = null;
-        try {
-            return self::hash(self::fromQuery($query) . ':' . $kind . ':' . json_encode($columns, JSON_THROW_ON_ERROR));
-        } finally {
-            $query->columns = $cols;
-        }
+        return self::hash(
+            self::forNormalizedQuery($builder, $query) . ':' . $kind . ':' . json_encode($columns, JSON_THROW_ON_ERROR)
+        );
     }
 
+    public static function fromBuilder(CacheableBuilder $builder, ?QueryBuilder $query = null): string
+    {
+        return self::hashWith($query ?? $builder->toBase(), [
+            'casts' => $builder->getModel()->getCasts(),
+        ]);
+    }
+
+    /** Low-level query hash (no model state). Primarily for tests. */
     public static function fromQuery(QueryBuilder $query): string
     {
-        return self::hash($query->toSql() . json_encode([
-            'bindings' => array_map([self::class, 'normalizeBinding'], $query->getBindings()),
-            'useWritePdo' => $query->useWritePdo,
-        ], JSON_THROW_ON_ERROR));
+        return self::hashWith($query);
     }
 
     public static function hash(string $data): string
     {
         return hash('xxh3', $data);
+    }
+
+    private static function hashWith(QueryBuilder $query, array $extra = []): string
+    {
+        return self::hash($query->toSql() . json_encode(array_merge([
+            'bindings' => array_map([self::class, 'normalizeBinding'], $query->getBindings()),
+            'useWritePdo' => $query->useWritePdo,
+        ], $extra), JSON_THROW_ON_ERROR));
     }
 
     private static function normalizeBinding(mixed $binding): mixed

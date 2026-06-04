@@ -95,8 +95,7 @@ class MorphToCacheTest extends TestCase
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
-        // MorphTo buffers every method call into macroBuffer; shouldUseCacheForType() returns
-        // false immediately when macroBuffer is non-empty, so any constraint hits the DB.
+        // Any constraint triggers the macroBuffer, which disables the MorphTo fast-path cache.
         $postQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'));
         $this->assertNotEmpty($postQueries);
         $this->assertNotNull($comments->first()->commentable);

@@ -85,18 +85,22 @@ class ResultCacheContractTest extends TestCase
         $this->assertIsInt($warm->views);
     }
 
-    public function test_with_casts_not_applied_on_result_cache_warm_hit(): void
+    public function test_with_casts_applied_on_result_cache_warm_hit(): void
     {
-        // withCasts() adds casts to the builder's model; warm hits use a
-        // prototype (new Post()) with no knowledge of those temporary casts.
-        // This intentionally documents that warm != native for withCasts().
+        // Passes the builder's model instance as a prototype to ensure stateful hydration of runtime casts.
         $author = $this->author();
         Post::create(['title' => 'T', 'views' => 42, 'author_id' => $author->id]);
+
+        $this->contract(
+            fn() => Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get()->first(),
+            fn() => Post::withoutCache()->withCasts(['views' => 'string'])->where('author_id', $author->id)->get()->first(),
+        );
 
         Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get();
         $warm = Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get()->first();
 
-        $this->assertIsInt($warm->views);
+        $this->assertIsString($warm->views);
+        $this->assertSame('42', $warm->views);
     }
 
     public function test_add_select_column_accessible_on_result_cache_hit(): void

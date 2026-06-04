@@ -16,9 +16,7 @@ use NormCache\Tests\TestCase;
  */
 class LuaScriptBehaviorTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private function redis()
     {
@@ -40,12 +38,8 @@ class LuaScriptBehaviorTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::fromQuery(Author::query()->toBase());
+        return QueryHasher::forNormalizedQuery(Author::query());
     }
-
-    // -------------------------------------------------------------------------
-    // luaFetchVersionedQuery — corrupt entry
-    // -------------------------------------------------------------------------
 
     public function test_corrupt_query_entry_is_deleted_and_treated_as_miss(): void
     {
@@ -68,13 +62,8 @@ class LuaScriptBehaviorTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
-        // Lua deletes the corrupt entry and the fresh DB result is written back in its place.
         $this->assertIsArray(json_decode($this->getKey("query:{{$ck}}:v{$version}:{$hash}"), true));
     }
-
-    // -------------------------------------------------------------------------
-    // luaFetchVersionedQuery — stale serving
-    // -------------------------------------------------------------------------
 
     public function test_stale_result_served_when_building_key_is_active(): void
     {
@@ -85,10 +74,7 @@ class LuaScriptBehaviorTest extends TestCase
 
         Author::get();
 
-        // Simulates another process bumping the version after the cache was populated.
         $this->redis()->incr("test:ver:{{$ck}}:");
-
-        // Simulate a concurrent request having already claimed the building lock.
         $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
 
         $queryCount = 0;
@@ -103,9 +89,7 @@ class LuaScriptBehaviorTest extends TestCase
         $this->assertSame('Alice', $results->first()->name);
     }
 
-    // -------------------------------------------------------------------------
     // luaFetchVersionedQuery — cooldown firing
-    // -------------------------------------------------------------------------
 
     public function test_pending_cooldown_fires_version_bump_on_read(): void
     {
@@ -126,9 +110,7 @@ class LuaScriptBehaviorTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 
-    // -------------------------------------------------------------------------
     // luaFetchVersionedQuery — cooldown guard (fix 2)
-    // -------------------------------------------------------------------------
 
     public function test_non_numeric_scheduled_key_is_cleaned_up_without_version_bump(): void
     {

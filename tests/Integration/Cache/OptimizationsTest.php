@@ -79,9 +79,7 @@ class OptimizationsTest extends TestCase
         Author::where('name', 'Payload Author')->get();
 
         $query = Author::where('name', 'Payload Author');
-        $base = $query->toBase();
-        $base->columns = null;
-        $hash = QueryHasher::fromQuery($base);
+        $hash = QueryHasher::forNormalizedQuery($query);
         $result = app('normcache')->getModelsFromQuery(Author::class, $hash);
 
         $this->assertSame('hit', $result['status']);
@@ -98,9 +96,7 @@ class OptimizationsTest extends TestCase
         $query = Author::where('name', 'Corruptible Author');
         $query->get();
 
-        $base = $query->toBase();
-        $base->columns = null;
-        $hash = QueryHasher::fromQuery($base);
+        $hash = QueryHasher::forNormalizedQuery($query);
         $classKey = app('normcache')->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 

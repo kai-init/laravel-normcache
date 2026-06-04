@@ -21,9 +21,7 @@ use ReflectionProperty;
  */
 class LuaScriptConsistencyTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private function redis()
     {
@@ -58,15 +56,10 @@ class LuaScriptConsistencyTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::fromQuery(Author::query()->toBase());
+        return QueryHasher::forNormalizedQuery(Author::query());
     }
 
-    // -------------------------------------------------------------------------
-    // luaFetchVersionWithCooldown — cooldown fires on version resolution
-    //
-    // Used by CacheManager::resolveCurrentVersion() when cooldown > 0.
-    // Distinct from the cooldown check inside luaFetchVersionedQuery (per-read).
-    // -------------------------------------------------------------------------
+    // luaFetchVersionWithCooldown — cooldown fires on version resolution (used by CacheManager::resolveCurrentVersion() when cooldown > 0)
 
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
     {
@@ -99,12 +92,7 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 
-    // -------------------------------------------------------------------------
-    // dependsOn blob — building key causes DB fallthrough
-    //
-    // luaFetchVersionedQuery serves stale when the building lock is held.
-    // luaFetchQueryWithDeps has no stale path, so 'building' falls through to DB.
-    // -------------------------------------------------------------------------
+    // dependsOn blob — building key causes DB fallthrough (luaFetchQueryWithDeps has no stale path)
 
     public function test_building_key_in_deps_query_causes_db_fallthrough(): void
     {
@@ -128,12 +116,7 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertCount(1, $results);
     }
 
-    // -------------------------------------------------------------------------
-    // luaFetchVersionedQuery — stale serving depth boundary
-    //
-    // serve_stale() walks back at most 3 versions (v-1, v-2, v-3). A cache
-    // entry exactly 3 versions old must be served; one 4 versions old must not.
-    // -------------------------------------------------------------------------
+    // luaFetchVersionedQuery — stale serving depth boundary (walks back at most 3 versions)
 
     public function test_stale_serve_reaches_three_versions_back(): void
     {
@@ -187,9 +170,7 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertCount(1, $results);
     }
 
-    // -------------------------------------------------------------------------
     // Cooldown invalidation across cache families
-    // -------------------------------------------------------------------------
 
     public function test_cooldown_due_invalidation_applies_to_result_depends_on_cache(): void
     {

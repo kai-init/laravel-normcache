@@ -37,12 +37,12 @@ final class VersionedCache
             $base->columns = (array) $columns;
         }
 
-        // Apply non-star columns so hash and payload reflect the actual projection.
+        // Apply non-star columns so payload reflects the actual projection.
         if ($base->columns === null && $columns !== ['*']) {
             $base->columns = (array) $columns;
         }
 
-        $hash = QueryHasher::forResultQuery($base);
+        $hash = QueryHasher::forResultQuery($builder, $base);
         $result = NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys);
 
         if ($result['status'] === 'building') {
@@ -85,7 +85,7 @@ final class VersionedCache
             'contains' => class_basename($modelClass) . ' (' . count($result['payload']) . ' models)',
         ]);
 
-        return $builder->finalizeResult(NormCache::hydrateResult($result['payload'], $modelClass));
+        return $builder->finalizeResult(NormCache::hydrateResult($result['payload'], $builder->getModel()));
     }
 
     public function rememberScalar(
@@ -104,7 +104,7 @@ final class VersionedCache
             $modelClass,
             $plan->dependencies->depClassesFor($modelClass),
             $plan->dependencies->tables,
-            QueryHasher::forScalarQuery($base, $kind, $plan->columns ?? []),
+            QueryHasher::forScalarQuery($builder, $base, $kind, $plan->columns ?? []),
             $kind,
             $fallback,
             $ttl,
@@ -126,7 +126,7 @@ final class VersionedCache
             $modelClass,
             $plan->dependencies->depClassesFor($modelClass),
             $plan->dependencies->tables,
-            QueryHasher::forPaginationCountQuery($base),
+            QueryHasher::forPaginationCountQuery($builder, $base),
             'pagination count',
             fn() => $base->getCountForPagination(),
             $ttl,

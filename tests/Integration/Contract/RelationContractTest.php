@@ -41,9 +41,7 @@ class RelationContractTest extends TestCase
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
 
-    // -------------------------------------------------------------------------
     // Eager loading
-    // -------------------------------------------------------------------------
 
     public function test_with_has_many(): void
     {
@@ -244,9 +242,7 @@ class RelationContractTest extends TestCase
     {
         $this->fixtures(); // Alice: A1(views=10), A2(views=20); Bob: B1(views=30)
 
-        // latestOfMany adds a synthetic id_aggregate JOIN column that differs between
-        // the native and cached paths due to prepareMissedQuery dropping beforeQuery hooks.
-        // Test the semantically correct part: which Post was selected.
+        // latestOfMany adds a synthetic id_aggregate JOIN column that differs from native; test semantic correctness instead.
         $check = fn($c) => $c->map(fn($a) => [
             'author' => $a->name,
             'latest_title' => $a->latestPost?->title,
@@ -278,9 +274,7 @@ class RelationContractTest extends TestCase
         $this->assertSame($cold, $warm, 'warm != cold');
     }
 
-    // -------------------------------------------------------------------------
     // Collection loading (load, loadMissing, loadCount, loadSum, loadMax, loadMin)
-    // -------------------------------------------------------------------------
 
     public function test_load_on_collection_returns_same_relations(): void
     {

@@ -16,9 +16,7 @@ use NormCache\Tests\TestCase;
  */
 class PaginationContractTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // Standard paginate()
-    // -------------------------------------------------------------------------
 
     public function test_paginate_contract(): void
     {
@@ -72,9 +70,7 @@ class PaginationContractTest extends TestCase
         );
     }
 
-    // -------------------------------------------------------------------------
     // simplePaginate()
-    // -------------------------------------------------------------------------
 
     public function test_simple_paginate_contract(): void
     {
@@ -117,9 +113,7 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheMiss::class);
     }
 
-    // -------------------------------------------------------------------------
     // cursorPaginate()
-    // -------------------------------------------------------------------------
 
     public function test_cursor_paginate_contract(): void
     {
@@ -165,9 +159,7 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheMiss::class);
     }
 
-    // -------------------------------------------------------------------------
     // Complex / Dependencies
-    // -------------------------------------------------------------------------
 
     public function test_complex_simple_paginate_with_dependencies(): void
     {

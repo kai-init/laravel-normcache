@@ -12,9 +12,7 @@ use NormCache\Tests\TestCase;
  */
 class CrossTableDependencySafetyTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // P1 — scalar/count/paginate without dependsOn bypass when cross-table
-    // -------------------------------------------------------------------------
 
     public function test_join_count_without_depends_on_bypasses_count_cache(): void
     {
@@ -102,9 +100,7 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:count:*'));
     }
 
-    // -------------------------------------------------------------------------
     // P2 — aggregate constraint with JOIN disables aggregate tracking
-    // -------------------------------------------------------------------------
 
     public function test_aggregate_constraint_with_join_disables_tracking_and_bypasses(): void
     {
@@ -140,9 +136,7 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
-    // -------------------------------------------------------------------------
     // P3 — aliased FROM bypasses normalized cache
-    // -------------------------------------------------------------------------
 
     public function test_aliased_from_query_bypasses_normalized_cache(): void
     {
@@ -174,9 +168,7 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:query:*'));
     }
 
-    // -------------------------------------------------------------------------
     // P5 — pluck() falsey key
-    // -------------------------------------------------------------------------
 
     public function test_pluck_with_falsey_key_hashes_differently_from_no_key(): void
     {

@@ -37,7 +37,7 @@ class StampedeProtectionTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::fromQuery(Author::query()->toBase());
+        return QueryHasher::forNormalizedQuery(Author::query());
     }
 
     public function test_waiter_serves_from_cache_after_build_completes(): void
@@ -54,7 +54,7 @@ class StampedeProtectionTest extends TestCase
 
         $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
         $this->redis()->lpush("test:wake:{{$ck}}:{$hash}", '1');
-        $this->setKey("query:{{$ck}}:v{$newVersion}:{$hash}", json_encode([1]), 60);
+        $this->setKey("query:{{$ck}}:v{$newVersion}:{$hash}", json_encode([(string) Author::first()->id], JSON_THROW_ON_ERROR), 60);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {

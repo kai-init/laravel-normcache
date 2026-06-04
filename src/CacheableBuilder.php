@@ -306,8 +306,9 @@ class CacheableBuilder extends Builder
 
     public function hydrateResultPayload(array $payload, string $model, bool $cached): Collection
     {
-        return $this->finalizeResult(NormCache::hydrateResult($payload, $model, $cached));
+        return $this->finalizeResult(NormCache::hydrateResult($payload, $this->model, $cached));
     }
+
 
     public function finalizeResult(array $models): Collection
     {
@@ -358,7 +359,7 @@ class CacheableBuilder extends Builder
     {
         $debugbarStart = CacheReporter::beginMeasure();
 
-        $hash = QueryHasher::forNormalizedQuery($base);
+        $hash = QueryHasher::forNormalizedQuery($this);
 
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
@@ -372,7 +373,7 @@ class CacheableBuilder extends Builder
             if ($result === null) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
-                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this));
+                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $this, true, $this->model));
             }
         }
 
@@ -382,7 +383,7 @@ class CacheableBuilder extends Builder
 
             $ids = $this->resolveIds($result['key'], $base, $result['buildingKey'], $result['versionKeys'], $result['expectedVersions'], $result['buildingToken'] ?? null);
 
-            return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this));
+            return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, true, $this->model));
         }
 
         $key = $result['status'] === 'stale' ? "stale:{$hash}" : $result['key'];
@@ -394,7 +395,7 @@ class CacheableBuilder extends Builder
         ]);
 
         // 3. Resolve IDs -> Models (normalized path)
-        return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this));
+        return $this->finalizeResult(NormCache::getModels($result['ids'], $model, $selectedCols, $result['models'], $this, true, $this->model));
     }
 
     private function getFromCacheableQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan): Collection
@@ -419,8 +420,9 @@ class CacheableBuilder extends Builder
 
     private function getModelsByIds(array $ids, string $model, ?array $selectedCols): Collection
     {
-        return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false));
+        return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false, $this->model));
     }
+
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
     {

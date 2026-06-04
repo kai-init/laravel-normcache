@@ -13,9 +13,7 @@ use NormCache\Tests\TestCase;
  */
 class StreamingOperationsTest extends TestCase
 {
-    // -------------------------------------------------------------------------
     // Streaming methods — must bypass the cache entirely
-    // -------------------------------------------------------------------------
 
     public function test_chunk_does_not_write_query_cache_keys(): void
     {
@@ -41,9 +39,7 @@ class StreamingOperationsTest extends TestCase
         $this->assertContains('Bob', $names);
     }
 
-    // -------------------------------------------------------------------------
     // sole()
-    // -------------------------------------------------------------------------
 
     public function test_sole_throws_when_row_is_deleted_after_warm_hit(): void
     {
