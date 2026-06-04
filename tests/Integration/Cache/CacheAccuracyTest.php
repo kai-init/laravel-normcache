@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;

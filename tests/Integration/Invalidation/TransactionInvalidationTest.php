@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Invalidation;
 
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;

@@ -2,6 +2,11 @@
 
 namespace NormCache\Tests;
 
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Pagination\CursorPaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
@@ -133,5 +138,44 @@ abstract class TestCase extends OrchestraTestCase
     protected function cacheManager(): CacheManager
     {
         return $this->app->make('normcache');
+    }
+
+    /** Assert native == cold == warm for a given query. */
+    protected function contract(callable $cached, callable $native): void
+    {
+        $expected = $this->normalize($native());
+        $cold = $this->normalize($cached());
+        $warm = $this->normalize($cached());
+
+        $this->assertSame($expected, $cold, 'cold cache result differs from native Eloquent');
+        $this->assertSame($cold, $warm, 'warm cache result differs from cold');
+    }
+
+    protected function normalize(mixed $value): mixed
+    {
+        if ($value instanceof LengthAwarePaginator) {
+            return [
+                'data' => collect($value->items())->map->toArray()->values()->all(),
+                'total' => $value->total(),
+            ];
+        }
+
+        if ($value instanceof CursorPaginator) {
+            return collect($value->items())->map->toArray()->values()->all();
+        }
+
+        if ($value instanceof EloquentCollection) {
+            return $value->map->toArray()->values()->all();
+        }
+
+        if ($value instanceof Collection) {
+            return $value->all(); // preserve keys (e.g. keyed pluck)
+        }
+
+        if ($value instanceof Model) {
+            return $value->toArray();
+        }
+
+        return $value;
     }
 }

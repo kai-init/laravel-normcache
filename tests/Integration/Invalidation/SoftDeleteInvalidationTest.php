@@ -1,78 +1,19 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Invalidation;
 
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
-use stdClass;
 
-class ModelCachingTest extends TestCase
+/**
+ * Behavioral tests: soft-delete lifecycle (delete, restore, forceDelete) must
+ * correctly invalidate model cache entries and version counters.
+ */
+class SoftDeleteInvalidationTest extends TestCase
 {
-    public function test_querying_models_populates_cache(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        Author::all();
-
-        $this->assertNotEmpty($this->redisKeys('test:*'));
-    }
-
-    public function test_get_returns_same_results_as_uncached_baseline(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::create(['name' => 'Bob']);
-
-        $cached = Author::all()->pluck('name')->sort()->values();
-        $live = UncachedAuthor::all()->pluck('name')->sort()->values();
-
-        $this->assertEquals($live, $cached);
-    }
-
-    public function test_creating_model_invalidates_version(): void
-    {
-        $versionBefore = NormCache::currentVersion(Author::class);
-
-        Author::create(['name' => 'Alice']);
-
-        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
-    }
-
-    public function test_updating_model_flushes_model_key_and_increments_version(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $versionBefore = NormCache::currentVersion(Author::class);
-
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
-
-        $author->update(['name' => 'Alicia']);
-
-        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
-        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
-    }
-
-    public function test_deleting_model_flushes_model_key_and_increments_version(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $versionBefore = NormCache::currentVersion(Author::class);
-
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
-
-        $author->delete();
-
-        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
-        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
-    }
-
     public function test_soft_deleting_post_invalidates_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -133,55 +74,6 @@ class ModelCachingTest extends TestCase
 
         $this->assertEquals($fromDb, $fromCache);
         $this->assertContains($post->id, $fromCache);
-    }
-
-    public function test_cache_disabled_globally_skips_caching(): void
-    {
-        $this->app['config']->set('normcache.enabled', false);
-
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_flush_command_without_model_flushes_all_keys(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $this->assertNotEmpty($this->redisKeys('test:*'));
-
-        $this->artisan('normcache:flush')->assertSuccessful();
-
-        $this->assertEmpty($this->redisKeys('test:*'));
-    }
-
-    public function test_flush_command_with_model_flushes_only_that_model(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Author::all();
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-        Post::all();
-
-        $this->artisan('normcache:flush', ['--model' => Author::class])->assertSuccessful();
-
-        $default = DB::getDefaultConnection();
-
-        $this->assertEmpty($this->redisKeys('test:model:{' . $default . ':authors}:*'));
-        $this->assertNotEmpty($this->redisKeys('test:model:{' . $default . ':posts}:*'));
-    }
-
-    public function test_flush_command_rejects_nonexistent_class(): void
-    {
-        $this->artisan('normcache:flush', ['--model' => 'App\\Models\\DoesNotExist'])
-            ->assertFailed();
-    }
-
-    public function test_flush_command_rejects_class_without_cacheable_trait(): void
-    {
-        $this->artisan('normcache:flush', ['--model' => stdClass::class])
-            ->assertFailed();
     }
 
     public function test_soft_deleted_model_is_not_written_to_model_cache_on_miss(): void
@@ -270,33 +162,39 @@ class ModelCachingTest extends TestCase
         $this->assertNotContains($post->id, $fromCache);
     }
 
-    public function test_members_set_has_ttl_matching_model_ttl(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $classKey = NormCache::classKey(Author::class);
-        $memberKey = 'test:members:model:{' . $classKey . '}';
-        $redis = Redis::connection('model-cache-test');
-
-        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members:model: set must have a TTL');
-    }
-
-    public function test_members_set_dead_keys_are_bounded_by_ttl(): void
+    public function test_quiet_restore_invalidates_query_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
-        Author::all();
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $post->delete();
+        Post::all();
 
-        $classKey = NormCache::classKey(Author::class);
-        $memberKey = 'test:members:model:{' . $classKey . '}';
-        $modelKey = $this->prefixedModelKey(Author::class, $author->id);
-        $redis = Redis::connection('model-cache-test');
+        $versionBefore = NormCache::currentVersion(Post::class);
 
-        // Simulate model key expiry by deleting it directly.
-        $redis->del($modelKey);
-        $this->assertFalse((bool) $redis->exists($modelKey));
+        $post->restoreQuietly();
 
-        // Dead keys can accumulate in the members set, but the set's own TTL bounds that growth.
-        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members set must expire, bounding dead-key accumulation');
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Post::class));
+        $this->assertSame([$post->id], Post::all()->pluck('id')->all());
+    }
+
+    public function test_bulk_restore_and_force_delete_invalidate_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $post->delete();
+        Post::all();
+
+        $versionBeforeRestore = NormCache::currentVersion(Post::class);
+
+        Post::onlyTrashed()->whereKey($post->id)->restore();
+
+        $this->assertGreaterThan($versionBeforeRestore, NormCache::currentVersion(Post::class));
+
+        $versionBeforeForceDelete = NormCache::currentVersion(Post::class);
+
+        Post::whereKey($post->id)->forceDelete();
+
+        $this->assertGreaterThan($versionBeforeForceDelete, NormCache::currentVersion(Post::class));
+        $this->assertCount(0, Post::withTrashed()->get());
     }
 }

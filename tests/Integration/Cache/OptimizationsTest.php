@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
