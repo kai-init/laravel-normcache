@@ -63,7 +63,7 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
-    public function test_transaction_commit_flushes_other_model_keys_for_the_same_class(): void
+    public function test_transaction_commit_evicts_only_the_updated_model_key(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         $bob = Author::create(['name' => 'Bob']);
@@ -77,7 +77,7 @@ class TransactionInvalidationTest extends TestCase
         });
 
         $this->assertNull($this->modelCacheEntry(Author::class, $alice->id));
-        $this->assertNull($this->modelCacheEntry(Author::class, $bob->id));
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
     }
 
     public function test_model_key_preserved_after_transaction_rollback(): void
