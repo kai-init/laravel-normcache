@@ -295,63 +295,6 @@ class EloquentContractTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // paginate()
-    // -------------------------------------------------------------------------
-
-    public function test_paginate_first_page(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::orderBy('name')->paginate(2),
-            fn() => Author::withoutCache()->orderBy('name')->paginate(2),
-        );
-    }
-
-    public function test_paginate_second_page(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::orderBy('name')->paginate(2, ['*'], 'page', 2),
-            fn() => Author::withoutCache()->orderBy('name')->paginate(2, ['*'], 'page', 2),
-        );
-    }
-
-    public function test_paginate_empty(): void
-    {
-        $this->contract(
-            fn() => Author::where('name', 'nobody')->paginate(10),
-            fn() => Author::withoutCache()->where('name', 'nobody')->paginate(10),
-        );
-    }
-
-    public function test_paginate_with_column_selection(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::orderBy('name')->paginate(10, ['id', 'name']),
-            fn() => Author::withoutCache()->orderBy('name')->paginate(10, ['id', 'name']),
-        );
-    }
-
-    public function test_paginate_with_distinct_returns_correct_total(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::distinct()->orderBy('name')->paginate(2),
-            fn() => Author::withoutCache()->distinct()->orderBy('name')->paginate(2),
-        );
-    }
-
-    public function test_paginate_with_distinct_and_column_selection(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::select('name')->distinct()->orderBy('name')->paginate(2),
-            fn() => Author::withoutCache()->select('name')->distinct()->orderBy('name')->paginate(2),
-        );
-    }
-
-    // -------------------------------------------------------------------------
     // withAggregate
     // -------------------------------------------------------------------------
 
@@ -802,7 +745,7 @@ class EloquentContractTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Bypass paths (join, groupBy, lockForUpdate, simplePaginate, cursorPaginate)
+    // Complex paths (join, groupBy, lockForUpdate)
     // -------------------------------------------------------------------------
 
     public function test_join_without_depends_on_falls_through(): void

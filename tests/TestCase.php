@@ -6,6 +6,7 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\CursorPaginator;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
@@ -157,11 +158,25 @@ abstract class TestCase extends OrchestraTestCase
             return [
                 'data' => collect($value->items())->map->toArray()->values()->all(),
                 'total' => $value->total(),
+                'current_page' => $value->currentPage(),
+                'has_more' => $value->hasMorePages(),
+            ];
+        }
+
+        if ($value instanceof Paginator) {
+            return [
+                'data' => collect($value->items())->map->toArray()->values()->all(),
+                'current_page' => $value->currentPage(),
+                'has_more' => $value->hasMorePages(),
             ];
         }
 
         if ($value instanceof CursorPaginator) {
-            return collect($value->items())->map->toArray()->values()->all();
+            return [
+                'data' => collect($value->items())->map->toArray()->values()->all(),
+                'has_more' => $value->hasMorePages(),
+                'cursor' => $value->cursor()?->toArray(),
+            ];
         }
 
         if ($value instanceof EloquentCollection) {
