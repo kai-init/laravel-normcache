@@ -572,8 +572,8 @@ final class RedisStore
     }
 
     /**
-     * @param \Closure(mixed &): mixed $scanner
-     * @param \Closure(array<mixed>): void $processor
+     * @param  \Closure(mixed &): mixed  $scanner
+     * @param  \Closure(array<mixed>): void  $processor
      */
     private function executeScan(\Closure $scanner, \Closure $processor): void
     {

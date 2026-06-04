@@ -7,6 +7,11 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: JOIN queries must bypass the cache without an explicit column
+ * selection; with dependsOn() and an explicit root-table select they are stored and
+ * served as result-cache entries.
+ */
 class JoinResultCacheTest extends TestCase
 {
     public function test_join_with_depends_on_and_no_explicit_select_bypasses_cache(): void

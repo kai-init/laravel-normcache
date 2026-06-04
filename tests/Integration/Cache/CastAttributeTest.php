@@ -7,6 +7,10 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: Eloquent model casts (array, boolean) must round-trip correctly
+ * through query-cache, model-cache, and through-relation-cache paths.
+ */
 class CastAttributeTest extends TestCase
 {
     private array $metadata = ['section' => 'tech', 'tags' => ['php', 'redis'], 'views' => 0];

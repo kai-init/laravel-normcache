@@ -9,6 +9,11 @@ use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: concurrent misses queue behind a build lock and serve from cache
+ * when the leader populates it; exhausted waiters and crashed lock holders fall through
+ * to the database.
+ */
 class StampedeProtectionTest extends TestCase
 {
     protected function defineEnvironment($app): void

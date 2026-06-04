@@ -48,7 +48,10 @@ class CacheableBelongsTo extends BelongsTo
         if ($columns !== null) {
             $allStrings = true;
             foreach ($columns as $col) {
-                if (!is_string($col)) { $allStrings = false; break; }
+                if (!is_string($col)) {
+                    $allStrings = false;
+                    break;
+                }
             }
             if ($allStrings && !isset(AttributeProjector::normalizeProjection($columns)[$this->getOwnerKeyName()])) {
                 return false;

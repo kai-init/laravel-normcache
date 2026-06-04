@@ -10,6 +10,11 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: hasManyThrough results are cached and invalidated correctly;
+ * join columns must not contaminate the model cache, and queries with extra joins
+ * delegate to Eloquent.
+ */
 class ThroughRelationTest extends TestCase
 {
     public function test_through_load_does_not_store_join_artifact_in_model_cache(): void

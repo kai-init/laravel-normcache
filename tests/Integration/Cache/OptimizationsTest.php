@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Events\QueryBypassed;
@@ -9,8 +10,14 @@ use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: primary-key lookups use a fast path that skips query-ID resolution;
+ * model payloads are fetched in a single Lua round trip; corrupt or empty cache entries
+ * degrade gracefully to a miss.
+ */
 class OptimizationsTest extends TestCase
 {
     public function test_fast_path_is_used_for_primary_key_lookup()
@@ -162,5 +169,25 @@ class OptimizationsTest extends TestCase
         Author::whereIn('id', [1, 2])->orderBy('id')->get();
 
         Event::assertDispatched(QueryCacheMiss::class);
+    }
+
+    public function test_belongs_to_remains_fast_path(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        // Eager load belongsTo
+        $p = Post::with('author')->first();
+        $this->assertTrue($p->relationLoaded('author'));
+
+        // Verify no query for author on second load
+        DB::enableQueryLog();
+        Post::with('author')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        // One query for posts, none for authors (because of fast path + cache)
+        $this->assertCount(1, $queries);
+        $this->assertStringContainsString('from "posts"', $queries[0]['query']);
     }
 }

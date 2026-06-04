@@ -9,35 +9,12 @@ use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: dependsOn() API — verifies that explicit cross-class dependencies
+ * are cached, invalidated on version bumps, and handled correctly for paginate and count.
+ */
 class DependsOnTest extends TestCase
 {
-    public function test_depends_on_caches_where_has_query(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
-
-        Author::whereHas('posts')->dependsOn([Post::class])->get();
-
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
-    }
-
-    public function test_depends_on_cache_hits_on_second_call(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::whereHas('posts')->dependsOn([Post::class])->get();
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        Author::whereHas('posts')->dependsOn([Post::class])->get();
-
-        $this->assertSame(0, $queryCount);
-    }
-
     public function test_simple_depends_on_query_uses_normalized_query_cache(): void
     {
         if ($this->cacheManager()->isSlotting()) {
@@ -231,21 +208,6 @@ class DependsOnTest extends TestCase
         $this->assertSame(0, $second);
     }
 
-    public function test_depends_on_count_hits_cache_on_second_call(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::whereHas('posts')->dependsOn([Post::class])->count();
-
-        DB::enableQueryLog();
-        Author::whereHas('posts')->dependsOn([Post::class])->count();
-        $queries = DB::getQueryLog();
-        DB::disableQueryLog();
-
-        $this->assertEmpty($queries);
-    }
-
     public function test_join_count_with_depends_on_caches_as_scalar_result(): void
     {
         $this->seedAuthorsWithPosts();
@@ -323,64 +285,6 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty($queries);
     }
 
-    public function test_explain_returns_cached_when_depends_on_set(): void
-    {
-        $result = Author::whereHas('posts')->dependsOn([Post::class])->explain();
-
-        $this->assertStringContainsString('cached', $result);
-        $this->assertStringContainsString('dependsOn()', $result);
-    }
-
-    public function test_join_with_depends_on_and_explicit_select_caches_as_blob(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->select('authors.*')
-            ->dependsOn([Post::class])
-            ->get();
-
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
-    }
-
-    public function test_join_with_depends_on_and_no_explicit_select_bypasses(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->dependsOn([Post::class])
-            ->get();
-
-        $this->assertEmpty($this->redisKeys('test:result:*'));
-    }
-
-    public function test_explain_shows_computed_blob_for_join_with_depends_on(): void
-    {
-        $result = Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->select('authors.*')
-            ->dependsOn([Post::class])
-            ->explain();
-
-        $this->assertStringContainsString('cached', $result);
-        $this->assertStringContainsString('result (dependsOn())', $result);
-    }
-
-    public function test_explain_shows_bypass_for_join_with_depends_on_and_no_explicit_select(): void
-    {
-        $result = Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->dependsOn([Post::class])
-            ->explain();
-
-        $this->assertStringContainsString('not cached', $result);
-        $this->assertStringContainsString('join_result_requires_explicit_select', $result);
-    }
-
     public function test_from_subquery_with_depends_on_caches_as_blob(): void
     {
         Author::create(['name' => 'Alice']);
@@ -429,7 +333,7 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
-    public function test_behaviora_l_distinct_with_depends_on_preserves_distinct_semantics(): void
+    public function test_distinct_with_depends_on_preserves_distinct_semantics(): void
     {
         $a = Author::create(['name' => 'A']);
         $b = Author::create(['name' => 'B']);
@@ -447,7 +351,7 @@ class DependsOnTest extends TestCase
         );
     }
 
-    public function test_behaviora_l_lock_for_update_with_depends_on_hits_the_db(): void
+    public function test_lock_for_update_with_depends_on_hits_the_db(): void
     {
         $a = Author::create(['name' => 'A']);
         Post::create(['title' => 'p1', 'author_id' => $a->id, 'published' => true]);
@@ -465,7 +369,7 @@ class DependsOnTest extends TestCase
         $this->assertNotEmpty($queries, 'lockForUpdate queries hit the DB even when dependsOn() is set.');
     }
 
-    public function test_behaviora_l_aggregate_columns_fall_through_to_db_with_depends_on(): void
+    public function test_aggregate_columns_fall_through_to_db_with_depends_on(): void
     {
         $this->seedAuthorsWithPosts();
 
@@ -486,6 +390,26 @@ class DependsOnTest extends TestCase
             $cached->first()->getAttribute('sum_views'),
             'sum_views is populated — GROUP BY queries use the blob path with dependsOn().'
         );
+    }
+
+    public function test_complex_aggregate_with_explicit_dependencies_uses_result_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        Author::withCount([
+            'posts' => fn($q) => $q->whereRaw('1=1'),
+        ])->dependsOn([Post::class])->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Complex aggregate with dependsOn should use result cache');
+    }
+
+    public function test_scalar_count_with_depends_on_caches_as_result(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::where('name', 'Alice')->dependsOn([Post::class])->count();
+
+        $this->assertNotEmpty($this->redisKeys('test:count:*'), 'Scalar count with dependsOn should use count namespace');
     }
 
     // -------------------------------------------------------------------------

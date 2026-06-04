@@ -172,5 +172,4 @@ class BuilderInvalidationTest extends TestCase
 
         $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
-
 }

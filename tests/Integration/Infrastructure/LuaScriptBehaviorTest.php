@@ -9,6 +9,11 @@ use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: Lua script edge cases — corrupt query entries are deleted and
+ * re-queried, stale results are served while a build lock is active, and
+ * cooldown-deferred version bumps fire on the next read.
+ */
 class LuaScriptBehaviorTest extends TestCase
 {
     // -------------------------------------------------------------------------

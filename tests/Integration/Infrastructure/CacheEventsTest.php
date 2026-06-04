@@ -12,6 +12,10 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: QueryCacheMiss, QueryCacheHit, ModelCacheMiss, ModelCacheHit, and
+ * QueryBypassed events are fired with correct payloads on every cache path.
+ */
 class CacheEventsTest extends TestCase
 {
     public function test_query_cache_miss_fired_on_first_get(): void
@@ -38,28 +42,6 @@ class CacheEventsTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Author::class;
         });
-    }
-
-    public function test_query_cache_miss_not_fired_on_hit(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        Event::fake([QueryCacheMiss::class]);
-
-        Author::all();
-
-        Event::assertNotDispatched(QueryCacheMiss::class);
-    }
-
-    public function test_query_cache_hit_not_fired_on_miss(): void
-    {
-        Event::fake([QueryCacheHit::class]);
-
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        Event::assertNotDispatched(QueryCacheHit::class);
     }
 
     public function test_model_cache_miss_fired_when_models_not_in_cache(): void

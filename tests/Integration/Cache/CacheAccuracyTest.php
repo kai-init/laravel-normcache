@@ -20,6 +20,10 @@ use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
 use ReflectionProperty;
 
+/**
+ * Behavioral tests: verifies that column aliasing, subclass hydration, join artifacts from
+ * through/pivot relations, and mixed-PK bulk updates never serve stale or mismatched data.
+ */
 class CacheAccuracyTest extends TestCase
 {
     public function test_assoc_array_select_does_not_act_like_an_alias(): void

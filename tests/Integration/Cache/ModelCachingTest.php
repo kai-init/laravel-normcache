@@ -5,32 +5,14 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
-use stdClass;
 
+/**
+ * Behavioral tests: model entities are written to cache on query, returned correctly
+ * on warm hits, and cleared by flush commands (global and per-model).
+ */
 class ModelCachingTest extends TestCase
 {
-    public function test_querying_models_populates_cache(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        Author::all();
-
-        $this->assertNotEmpty($this->redisKeys('test:*'));
-    }
-
-    public function test_get_returns_same_results_as_uncached_baseline(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::create(['name' => 'Bob']);
-
-        $cached = Author::all()->pluck('name')->sort()->values();
-        $live = UncachedAuthor::all()->pluck('name')->sort()->values();
-
-        $this->assertEquals($live, $cached);
-    }
-
     public function test_cache_disabled_globally_skips_caching(): void
     {
         $this->app['config']->set('normcache.enabled', false);

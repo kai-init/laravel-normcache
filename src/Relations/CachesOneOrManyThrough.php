@@ -111,6 +111,7 @@ trait CachesOneOrManyThrough
         }
         $key = $this->related->getKeyName();
         $qualified = $this->related->getTable() . '.' . $key;
+
         return in_array($key, $cols, true) || in_array($qualified, $cols, true);
     }
 

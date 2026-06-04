@@ -93,7 +93,7 @@ class StringPrimaryKeyTest extends TestCase
         $this->assertSame(['Alpha', 'Beta'], $second);
     }
 
-    public function test_whereIn_with_multiple_string_pks_returns_correct_models(): void
+    public function test_where_in_with_multiple_string_pks_returns_correct_models(): void
     {
         $id1 = 'aaaaaaaa-0000-0000-0000-000000000001';
         $id2 = 'bbbbbbbb-0000-0000-0000-000000000002';

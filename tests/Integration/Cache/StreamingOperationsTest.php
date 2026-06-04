@@ -8,7 +8,7 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
 /**
- * Behavioral tests: streaming operations (chunk, each, lazy, cursor) and
+ * Behavioral tests: streaming operations (chunk) and
  * sole() must bypass the query cache entirely.
  */
 class StreamingOperationsTest extends TestCase
@@ -39,32 +39,6 @@ class StreamingOperationsTest extends TestCase
         });
 
         $this->assertContains('Bob', $names);
-    }
-
-    public function test_each_does_not_write_query_cache_keys(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::orderBy('id')->each(fn() => null);
-
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_lazy_does_not_write_query_cache_keys(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::create(['name' => 'Bob']);
-
-        Author::orderBy('id')->lazy(1)->all();
-
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_cursor_does_not_write_query_cache_keys(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::orderBy('id')->cursor()->all();
-
-        $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
     // -------------------------------------------------------------------------

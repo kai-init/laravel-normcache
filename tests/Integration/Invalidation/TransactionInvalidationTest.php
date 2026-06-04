@@ -7,6 +7,10 @@ use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: version bumps and model-key evictions are deferred inside database
+ * transactions and applied on commit, or discarded on rollback.
+ */
 class TransactionInvalidationTest extends TestCase
 {
     public function test_version_is_not_bumped_mid_transaction(): void

@@ -6,6 +6,10 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: queries touching multiple tables must bypass caching when
+ * cross-table dependencies are not declared, and cache correctly when dependsOn is used.
+ */
 class CrossTableDependencySafetyTest extends TestCase
 {
     // -------------------------------------------------------------------------

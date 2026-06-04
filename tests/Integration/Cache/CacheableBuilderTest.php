@@ -17,6 +17,11 @@ use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
+/**
+ * Behavioral tests: CacheableBuilder cache-read/write paths — verifies key creation,
+ * bypass conditions (join, GROUP BY, raw expression, subquery), aggregate result caching,
+ * and builder-triggered invalidation.
+ */
 class CacheableBuilderTest extends TestCase
 {
     public function test_get_writes_query_cache_key(): void
@@ -685,5 +690,32 @@ class CacheableBuilderTest extends TestCase
         $scopes = $prop->getValue();
         unset($scopes[$modelClass][$name]);
         $prop->setValue(null, $scopes);
+    }
+
+    public function test_complex_query_without_depends_on_bypasses(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Event::fake([QueryBypassed::class]);
+
+        Author::whereHas('posts')->get();
+
+        Event::assertDispatched(QueryBypassed::class);
+        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_complex_aggregate_without_explicit_dependencies_bypasses(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        Event::fake([QueryBypassed::class]);
+
+        Author::withCount([
+            'posts' => fn($q) => $q->whereRaw('1=1'), // complex/unsafe
+        ])->get();
+
+        Event::assertDispatched(QueryBypassed::class);
     }
 }

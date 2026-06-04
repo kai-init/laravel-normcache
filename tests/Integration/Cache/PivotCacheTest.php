@@ -10,6 +10,11 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 use ReflectionMethod;
 
+/**
+ * Behavioral tests: belongsToMany and morphToMany pivot caches are invalidated on
+ * attach/detach/sync, served on warm hits with zero SQL, and preserve pivot attributes
+ * without leaking FK columns into the related-model cache.
+ */
 class PivotCacheTest extends TestCase
 {
     public function test_belongs_to_many_attach_invalidates_pivot_table(): void
@@ -406,5 +411,24 @@ class PivotCacheTest extends TestCase
         $method = new ReflectionMethod($relation, 'currentConstraintHash');
 
         return $method->invoke($relation, ['*']);
+    }
+
+    public function test_belongs_to_many_remains_fast_path(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $tag = Tag::create(['name' => 'PHP']);
+        $post->tags()->attach($tag);
+
+        // Eager load belongsToMany - first call warms cache
+        Post::with('tags')->get();
+
+        // Verify total cache hit on second load
+        DB::enableQueryLog();
+        Post::with('tags')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($queries, 'Should hit total query cache');
     }
 }

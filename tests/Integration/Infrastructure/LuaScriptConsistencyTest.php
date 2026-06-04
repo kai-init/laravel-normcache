@@ -14,6 +14,11 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
+/**
+ * Behavioral tests: Lua script consistency under concurrent writes — result and pivot
+ * cache writes are skipped when a dependency version changes during the build window;
+ * stale serving reaches the configured depth but no further.
+ */
 class LuaScriptConsistencyTest extends TestCase
 {
     // -------------------------------------------------------------------------

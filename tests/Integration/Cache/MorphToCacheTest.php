@@ -9,6 +9,11 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\TestCase;
 
+/**
+ * Behavioral tests: morphTo() eager loads serve related models from cache when the
+ * related type uses Cacheable, and fall back to Eloquent when it does not or when
+ * per-type constraints are present.
+ */
 class MorphToCacheTest extends TestCase
 {
     public function test_morph_to_uses_cache_on_warm_hit(): void

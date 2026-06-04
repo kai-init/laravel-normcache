@@ -2,12 +2,11 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
-use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
-use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\TestCase;
 
 /**
