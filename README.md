@@ -86,19 +86,22 @@ Post::withoutCache()->get();
 Queries that span multiple tables or use complex features (JOIN, GROUP BY, DISTINCT, subqueries) are not cached by default — Normcache can't infer which model writes should invalidate them. `dependsOn()` lets you declare these dependencies explicitly:
 
 ```php
+// Also works with JOIN, GROUP BY, DISTINCT, subqueries, calculated columns, etc.
 Author::whereHas('posts', fn($q) => $q->where('published', true))
     ->dependsOn([Post::class])
     ->get();
-
-// Works for JOIN, GROUP BY, calculated columns, etc.
-// For JOINs, select the columns you want explicitly to avoid joined-column collisions.
-Author::join('posts', 'posts.author_id', '=', 'authors.id')
-    ->select('authors.*')
-    ->dependsOn([Post::class])
-    ->get();
-Post::select('author_id', DB::raw('SUM(views) as total'))
-    ->groupBy('author_id')->dependsOn([Post::class])->get();
 ```
+
+Use `dependsOnTables()` when the dependency is a table with no Cacheable model:
+
+```php
+Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
+    ->select('authors.*', 'legacy_stats.score')
+    ->dependsOnTables(['legacy_stats'])
+    ->get();
+```
+
+> **Note:** This declares a read dependency only. Normcache does not bump the version automatically — call `NormCache::invalidateTableVersion('mysql', 'legacy_stats')` after any external write to that table.
 
 Normcache chooses the best caching strategy automatically:
 
@@ -179,6 +182,7 @@ Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, raw `ORDER
 - Normcache only hooks Eloquent models that use the `Cacheable` trait. Query builder calls such as `DB::table(...)`, `DB::select()`, and `DB::statement()` are never cached.
 - Writes outside Eloquent are invisible to the model version system. Flush the affected model or tag manually after imports, raw updates, maintenance jobs, or external syncs.
 - Dynamic connection switching (`Post::on('replica')`) is not supported. Use separate model classes with fixed `$connection` values when the same table is read through multiple connections.
+- Normcache caches each model's connection name and table in static properties for performance. Apps that switch a model's connection at runtime (e.g. per-tenant `setConnection()`) will get stale Redis key paths. Call `CacheKeyBuilder::reset()` after switching tenants to clear the metadata cache.
 - `dependsOn()` is explicit by design. If a query reads another table, include that model class or manually flush a tag that covers the query.
 - Models are expected to use standard single-column primary keys.
 - Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.

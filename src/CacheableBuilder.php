@@ -175,6 +175,7 @@ class CacheableBuilder extends Builder
             }
 
             $hasExplicit = $this->dependsOn !== null || $this->dependsOnTables !== [];
+
             return $hasExplicit ? 'cached: result (dependsOn())' : 'cached: result';
         }
 
@@ -288,22 +289,22 @@ class CacheableBuilder extends Builder
     public function sole($columns = ['*']): Model
     {
         // sole() must verify row count against live DB state, not a cached snapshot.
-        return $this->bypassingCache(fn () => parent::sole($columns));
+        return $this->bypassingCache(fn() => parent::sole($columns));
     }
 
     public function chunk($count, callable $callback): bool
     {
-        return $this->bypassingCache(fn () => parent::chunk($count, $callback));
+        return $this->bypassingCache(fn() => parent::chunk($count, $callback));
     }
 
     public function each(callable $callback, $count = 1000): bool
     {
-        return $this->bypassingCache(fn () => parent::each($callback, $count));
+        return $this->bypassingCache(fn() => parent::each($callback, $count));
     }
 
     public function lazy($chunkSize = 1000): LazyCollection
     {
-        return $this->bypassingCache(fn () => parent::lazy($chunkSize));
+        return $this->bypassingCache(fn() => parent::lazy($chunkSize));
     }
 
     private function bypassingCache(callable $fn): mixed
@@ -336,7 +337,6 @@ class CacheableBuilder extends Builder
     {
         return $this->finalizeResult(NormCache::hydrateResult($payload, $this->model, $cached));
     }
-
 
     public function finalizeResult(array $models): Collection
     {
@@ -450,7 +450,6 @@ class CacheableBuilder extends Builder
     {
         return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $this, false, $this->model));
     }
-
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
     {

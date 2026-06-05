@@ -97,6 +97,14 @@ class CacheKeyBuilder
         return self::$classKeys[$class] ??= $this->resolveClassKey($class);
     }
 
+    /** Clear all static metadata caches. Call this after switching tenant connections. */
+    public static function reset(): void
+    {
+        self::$classKeys = [];
+        self::$prototypes = [];
+        self::$deletedAtColumns = [];
+    }
+
     public static function prototype(string $class): Model
     {
         return self::$prototypes[$class] ??= new $class;

@@ -148,16 +148,16 @@ trait CachesPivotRelation
 
         // JoinClause and union QueryBuilder objects are not safely JSON-encodable; normalize to scalars.
         if (!empty($base->joins)) {
-            $shape['joins'] = array_map(static fn ($join) => [
-                'type'     => $join->type ?? null,
-                'table'    => is_string($join->table) ? $join->table : (string) $join->table,
-                'sql'      => $join->toSql(),
+            $shape['joins'] = array_map(static fn($join) => [
+                'type' => $join->type ?? null,
+                'table' => is_string($join->table) ? $join->table : (string) $join->table,
+                'sql' => $join->toSql(),
                 'bindings' => $join->getBindings(),
             ], $base->joins);
         }
 
         if (!empty($base->unions)) {
-            $shape['unions'] = array_map(static fn ($union) => [
+            $shape['unions'] = array_map(static fn($union) => [
                 'all' => $union['all'] ?? false,
                 'sql' => $union['query']->toSql(),
             ], $base->unions);

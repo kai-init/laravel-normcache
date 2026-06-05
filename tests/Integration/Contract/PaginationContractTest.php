@@ -100,7 +100,7 @@ class PaginationContractTest extends TestCase
         $this->createAuthors(3);
 
         Author::orderBy('id')->simplePaginate(2); // Warm cache
-        
+
         Event::fake([QueryCacheHit::class]);
         Author::orderBy('id')->simplePaginate(2);
         Event::assertDispatched(QueryCacheHit::class);
@@ -131,7 +131,7 @@ class PaginationContractTest extends TestCase
         // Next page via cursor
         $p1 = Author::withoutCache()->orderBy('id')->cursorPaginate(2);
         $cursor = $p1->nextCursor();
-        
+
         Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->cursorPaginate(2, ['*'], 'cursor', $cursor),
@@ -146,7 +146,7 @@ class PaginationContractTest extends TestCase
         $this->createAuthors(3);
 
         Author::orderBy('id')->cursorPaginate(2); // Warm cache
-        
+
         Event::fake([QueryCacheHit::class]);
         Author::orderBy('id')->cursorPaginate(2);
         Event::assertDispatched(QueryCacheHit::class);
