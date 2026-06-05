@@ -20,9 +20,7 @@ trait HandlesBuilderInvalidation
         }
     }
 
-    // -------------------------------------------------------------------------
     // Inserts — version bump only, model cache unaffected
-    // -------------------------------------------------------------------------
 
     public function insert(array $values): bool
     {
@@ -54,9 +52,7 @@ trait HandlesBuilderInvalidation
         return (int) $this->coordinateInvalidation(false, fn() => parent::insertGetId($values, $sequence));
     }
 
-    // -------------------------------------------------------------------------
     // Updates / deletes — flush model cache and bump version
-    // -------------------------------------------------------------------------
 
     public function update(array $values): int
     {
@@ -119,9 +115,7 @@ trait HandlesBuilderInvalidation
         NormCache::flushModel($this->model);
     }
 
-    // -------------------------------------------------------------------------
     // Private
-    // -------------------------------------------------------------------------
 
     private function coordinateInvalidation(bool $isUpdate, callable $callback): mixed
     {

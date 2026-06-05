@@ -76,12 +76,14 @@ class EloquentEdgeCasesTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
-    public function test_dynamic_appends_are_preserved(): void
+    public function test_make_hidden_on_warm_cache_hit_hides_attribute(): void
     {
-        $author = Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Alice']);
 
-        Event::fake([QueryCacheMiss::class]);
-        $a1 = Author::where('name', 'Alice')->get()->each->setAppends(['custom_attr'])->first();
-        $this->assertTrue(true);
+        $cold = Author::where('name', 'Alice')->get()->first();
+        $this->assertArrayHasKey('name', $cold->toArray());
+
+        $warm = Author::where('name', 'Alice')->get()->first()->makeHidden('name');
+        $this->assertArrayNotHasKey('name', $warm->toArray(), 'makeHidden() must work on warm-cache hydrated models');
     }
 }

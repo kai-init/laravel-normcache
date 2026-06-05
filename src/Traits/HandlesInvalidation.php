@@ -21,9 +21,7 @@ trait HandlesInvalidation
     /** @var array<string, list<array{string, string, string}>> model class, model key, members key */
     private array $instanceEvictQueue = [];
 
-    // -------------------------------------------------------------------------
     // Invalidation
-    // -------------------------------------------------------------------------
 
     public function invalidateVersion(Model $model): void
     {
@@ -247,9 +245,7 @@ trait HandlesInvalidation
         $this->instanceEvictQueue = [];
     }
 
-    // -------------------------------------------------------------------------
     // Private — invalidation internals
-    // -------------------------------------------------------------------------
 
     private function doInvalidateVersion(string $modelClass): void
     {

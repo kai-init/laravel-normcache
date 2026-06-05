@@ -12,7 +12,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── phpredis scenarios ──────────────────────────────────────────────
           - label: "phpredis / Redis 7"
             redis_client: phpredis
             extensions: redis
@@ -23,7 +22,6 @@ jobs:
             extensions: redis
             redis_image: redis:6-alpine
 
-          # ── predis scenarios ────────────────────────────────────────────────
           - label: "predis / Redis 7"
             redis_client: predis
             extensions: ""
@@ -34,7 +32,6 @@ jobs:
             extensions: ""
             redis_image: redis:6-alpine
 
-          # ── igbinary serialization ──────────────────────────────────────────
           - label: "phpredis / Redis 7 / igbinary"
             redis_client: phpredis
             extensions: redis, igbinary
