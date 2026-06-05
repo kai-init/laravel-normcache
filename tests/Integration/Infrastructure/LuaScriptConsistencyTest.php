@@ -25,7 +25,7 @@ class LuaScriptConsistencyTest extends TestCase
 
     private function redis()
     {
-        return Redis::connection('model-cache-test');
+        return Redis::connection('normcache-test');
     }
 
     private function setKey(string $key, string $value, ?int $ttl = null): void

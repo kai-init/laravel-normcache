@@ -60,14 +60,14 @@ class CacheManagerTest extends TestCase
     public function test_invalidate_version_schedules_once_with_cooldown(): void
     {
         $manager = new CacheManager(
-            'model-cache-test',
+            'normcache-test',
             config('normcache.ttl'),
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
             60,
             slotting: true,
         );
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $classKey = $manager->classKey(Author::class);
         $scheduledKey = "test:scheduled:{{$classKey}}:";
 
@@ -85,7 +85,7 @@ class CacheManagerTest extends TestCase
     public function test_current_version_applies_due_scheduled_invalidation(): void
     {
         $manager = new CacheManager(
-            'model-cache-test',
+            'normcache-test',
             config('normcache.ttl'),
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
@@ -94,7 +94,7 @@ class CacheManagerTest extends TestCase
         );
 
         $classKey = $manager->classKey(Author::class);
-        Redis::connection('model-cache-test')->set(
+        Redis::connection('normcache-test')->set(
             "test:scheduled:{{$classKey}}:",
             (string) ((int) floor(microtime(true) * 1000) - 1000)
         );
@@ -104,7 +104,7 @@ class CacheManagerTest extends TestCase
 
     public function test_current_version_always_reads_from_redis(): void
     {
-        Redis::connection('model-cache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
+        Redis::connection('normcache-test')->set('test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
 
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
@@ -112,7 +112,7 @@ class CacheManagerTest extends TestCase
     public function test_default_non_slotting_prefixes_all_keys_and_preserves_existing_prefix(): void
     {
         $manager = new CacheManager(
-            'model-cache-test',
+            'normcache-test',
             config('normcache.ttl'),
             config('normcache.query_ttl'),
             'test:',
@@ -127,7 +127,7 @@ class CacheManagerTest extends TestCase
         $store->set("ver:{{$classKey}}:", 7, 60);
 
         $this->assertSame("{nc}:test:ver:{{$classKey}}:", $store->prefix("ver:{{$classKey}}:"));
-        $this->assertSame('7', Redis::connection('model-cache-test')->get("{nc}:test:ver:{{$classKey}}:"));
+        $this->assertSame('7', Redis::connection('normcache-test')->get("{nc}:test:ver:{{$classKey}}:"));
         $this->assertSame(7, $manager->currentVersion(Author::class));
     }
 
@@ -137,7 +137,7 @@ class CacheManagerTest extends TestCase
 
     public function test_flush_model_bumps_version_and_clears_related_keys(): void
     {
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $store = $this->manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
         $authorsKey = DB::getDefaultConnection() . ':authors';
@@ -171,7 +171,7 @@ class CacheManagerTest extends TestCase
         $store->set("through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
         $store->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
         $store->set("building:query:{{$postsKey}}:v1:abc", 1, 3600);
-        Redis::connection('model-cache-test')->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1");
+        Redis::connection('normcache-test')->sadd("test:members:model:{{$postsKey}}", "test:model:{{$postsKey}}:1");
 
         $deleted = $this->manager->flushAll();
 
@@ -187,10 +187,10 @@ class CacheManagerTest extends TestCase
     public function test_flush_all_removes_keys_when_redis_connection_prefix_is_enabled(): void
     {
         config()->set('database.redis.options.prefix', 'laravel:');
-        Redis::purge('model-cache-test');
+        Redis::purge('normcache-test');
 
         $manager = new CacheManager(
-            'model-cache-test',
+            'normcache-test',
             config('normcache.ttl'),
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
@@ -208,9 +208,9 @@ class CacheManagerTest extends TestCase
         $deleted = $manager->flushAll();
 
         $this->assertSame(3, $deleted);
-        $this->assertSame([], Redis::connection('model-cache-test')->keys('*'));
+        $this->assertSame([], Redis::connection('normcache-test')->keys('*'));
 
-        Redis::purge('model-cache-test');
+        Redis::purge('normcache-test');
         config()->set('database.redis.options.prefix', '');
     }
 
@@ -222,7 +222,7 @@ class CacheManagerTest extends TestCase
         $classKey = $this->manager->classKey(Author::class);
         $memberKey = "test:members:model:{{$classKey}}";
         $modelKey = "test:model:{{$classKey}}:{$author->id}";
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
 
         $this->assertTrue((bool) $redis->sismember($memberKey, $modelKey));
 
@@ -234,7 +234,7 @@ class CacheManagerTest extends TestCase
     public function test_scheduled_invalidation_key_persists_until_processed(): void
     {
         $manager = new CacheManager(
-            'model-cache-test',
+            'normcache-test',
             config('normcache.ttl'),
             config('normcache.query_ttl'),
             config('normcache.key_prefix'),
@@ -245,7 +245,7 @@ class CacheManagerTest extends TestCase
         $model = new Author;
         $classKey = $manager->classKey(Author::class);
         $scheduledKey = "test:scheduled:{{$classKey}}:";
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
 
         $manager->invalidateVersion($model);
         $firstDueAt = $redis->get($scheduledKey);

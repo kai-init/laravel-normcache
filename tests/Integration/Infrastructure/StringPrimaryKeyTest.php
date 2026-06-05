@@ -117,7 +117,7 @@ class StringPrimaryKeyTest extends TestCase
     {
         UuidItem::create(['id' => 'aaaaaaaa-0000-0000-0000-000000000001', 'name' => 'Alpha']);
 
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $classKey = $this->cacheManager()->classKey(UuidItem::class);
         $verKey = 'test:ver:{' . $classKey . '}:';
 
@@ -131,7 +131,7 @@ class StringPrimaryKeyTest extends TestCase
     {
         UuidItem::create(['id' => 'aaaaaaaa-0000-0000-0000-000000000001', 'name' => 'Alpha']);
 
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $classKey = $this->cacheManager()->classKey(UuidItem::class);
         $verKey = 'test:ver:{' . $classKey . '}:';
 

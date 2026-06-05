@@ -100,7 +100,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        Redis::connection('model-cache-test')
+        Redis::connection('normcache-test')
             ->del($this->prefixedModelKey(Post::class, $post->id));
 
         $country->posts()->get();
@@ -123,7 +123,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        Redis::connection('model-cache-test')
+        Redis::connection('normcache-test')
             ->del($this->prefixedModelKey(Post::class, $post->id));
 
         $results = $country->posts()->get();

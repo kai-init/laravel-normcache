@@ -18,7 +18,7 @@ class RedisStoreTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->store = new RedisStore('default', 'test:', false, '{nc}:');
+        $this->store = new RedisStore('normcache-test', 'test:', false, '{nc}:');
     }
 
     public function test_it_prefixes_keys(): void
@@ -28,7 +28,7 @@ class RedisStoreTest extends TestCase
 
     public function test_it_prefixes_keys_in_slotting_mode(): void
     {
-        $store = new RedisStore('default', 'test:', true, '');
+        $store = new RedisStore('normcache-test', 'test:', true, '');
         $this->assertSame('test:foo', $store->prefix('foo'));
     }
 
@@ -107,7 +107,7 @@ class RedisStoreTest extends TestCase
 
     public function test_it_can_group_keys_by_tag_in_slotting_mode(): void
     {
-        $store = new RedisStore('default', 'test:', true, '');
+        $store = new RedisStore('normcache-test', 'test:', true, '');
 
         $method = new \ReflectionMethod(RedisStore::class, 'groupByTag');
         $method->setAccessible(true);
@@ -217,7 +217,7 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('model-cache-test', 'test:', true);
+        $store = new RedisStore('normcache-test', 'test:', true);
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $deleted = $store->flushByPatterns(['model:*', 'query:*']);
@@ -231,12 +231,22 @@ class RedisStoreTest extends TestCase
 
     public function test_flush_by_patterns_scans_all_nodes_on_predis_cluster(): void
     {
-        // Write keys directly to standalone redis (where the fake predis cluster will scan).
-        // Using model-cache-test would write to a real cluster in cluster mode, which the
-        // fake single-node predis client below cannot reach.
-        $directClient = new PredisClient(
-            ['scheme' => 'tcp', 'host' => '127.0.0.1', 'port' => 6379, 'database' => 15]
-        );
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            $this->markTestSkipped('Client-side Predis sharding test requires a standalone node; cluster SCAN path is covered by ClusterModeTest flush tests.');
+        }
+
+        // Target a standalone node for both seeding and the fake cluster.
+        // Derived from config so local dev environments with non-default ports are respected.
+        $cfg = $this->app['config']['database.redis.normcache-test']
+            ?? ['host' => '127.0.0.1', 'port' => 6379, 'database' => 15];
+        $standaloneConn = [
+            'scheme'   => 'tcp',
+            'host'     => $cfg['host'] ?? '127.0.0.1',
+            'port'     => (int) ($cfg['port'] ?? 6379),
+            'database' => (int) ($cfg['database'] ?? 15),
+        ];
+
+        $directClient = new PredisClient($standaloneConn);
 
         for ($i = 0; $i < 2500; $i++) {
             $directClient->setex("testscan:model:{posts}:{$i}", 60, 'x');
@@ -246,13 +256,10 @@ class RedisStoreTest extends TestCase
 
         // Use 'predis' cluster type so the client iterates over configured nodes
         // without requiring CLUSTER SLOTS (which standalone Redis doesn't support).
-        $predisClient = new PredisClient(
-            [['scheme' => 'tcp', 'host' => '127.0.0.1', 'port' => 6379, 'database' => 15]],
-            ['cluster' => 'predis']
-        );
+        $predisClient = new PredisClient([$standaloneConn], ['cluster' => 'predis']);
         $clusterConnection = new PredisClusterConnection($predisClient);
 
-        $store = new RedisStore('model-cache-test', 'testscan:', false);
+        $store = new RedisStore('normcache-test', 'testscan:', false);
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $clusterConnection);
 
         $deleted = $store->flushByPatterns(['model:{posts}:*']);
@@ -267,7 +274,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('model-cache-test', '', false);
+        $store = new RedisStore('normcache-test', '', false);
         $data = ['x' => 1];
 
         $this->assertSame($data, $store->unserialize(igbinary_serialize($data)));
@@ -292,10 +299,10 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('model-cache-test', '', false);
+        $store = new RedisStore('normcache-test', '', false);
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
-        Redis::connection('model-cache-test')->setex('ver:{authors}:', 60, '7');
+        Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
 
         $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
@@ -306,12 +313,12 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('model-cache-test', '', false);
+        $store = new RedisStore('normcache-test', '', false);
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
 
-        Redis::connection('model-cache-test')->setex('ver:{authors}:', 60, '2');
+        Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '2');
         $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
         $shas = (new ReflectionProperty(RedisStore::class, 'shas'))->getValue();
@@ -325,7 +332,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('model-cache-test', '', false);
+        $store = new RedisStore('normcache-test', '', false);
         (new ReflectionProperty($store, 'igbinary'))->setValue($store, false);
 
         $this->assertNull($store->unserialize(igbinary_serialize(['id' => 42])));

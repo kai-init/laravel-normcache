@@ -291,7 +291,7 @@ class ClusterModeTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $classKey = $this->cacheManager()->classKey(Author::class);
         $verKey = 'test:ver:{' . $classKey . '}:';
 
@@ -308,7 +308,7 @@ class ClusterModeTest extends TestCase
 
         Author::create(['name' => 'Alice']);
 
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $classKey = $this->cacheManager()->classKey(Author::class);
         $verKey = '{nc}:test:ver:{' . $classKey . '}:';
 

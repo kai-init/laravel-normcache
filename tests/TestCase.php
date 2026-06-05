@@ -22,7 +22,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         parent::setUp();
 
-        $redis = Redis::connection('model-cache-test');
+        $redis = Redis::connection('normcache-test');
         $client = $redis->client();
 
         if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
@@ -70,7 +70,7 @@ abstract class TestCase extends OrchestraTestCase
             }
 
             $nodes = explode(',', env('REDIS_CLUSTER_NODES', '127.0.0.1:6379'));
-            $app['config']->set('database.redis.clusters.model-cache-test', array_map(function ($node) {
+            $app['config']->set('database.redis.clusters.normcache-test', array_map(function ($node) {
                 [$host, $port] = explode(':', $node);
 
                 return [
@@ -82,7 +82,7 @@ abstract class TestCase extends OrchestraTestCase
             }, $nodes));
             $app['config']->set('normcache.cluster', true);
         } else {
-            $app['config']->set('database.redis.model-cache-test', [
+            $app['config']->set('database.redis.normcache-test', [
                 'host' => env('REDIS_HOST', '127.0.0.1'),
                 'port' => env('REDIS_PORT', 6379),
                 'database' => 15,
@@ -90,7 +90,7 @@ abstract class TestCase extends OrchestraTestCase
             ]);
         }
 
-        $app['config']->set('normcache.connection', 'model-cache-test');
+        $app['config']->set('normcache.connection', 'normcache-test');
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.key_prefix', 'test:');
         $app['config']->set('normcache.slotting', true);

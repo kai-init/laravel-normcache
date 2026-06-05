@@ -58,7 +58,7 @@ class CacheableBuilderTest extends TestCase
         $queryKey = collect($this->redisKeys('test:query:*'))->first();
 
         $this->assertNotNull($queryKey);
-        $this->assertGreaterThan(9000, Redis::connection('model-cache-test')->ttl($queryKey));
+        $this->assertGreaterThan(9000, Redis::connection('normcache-test')->ttl($queryKey));
     }
 
     public function test_query_with_join_bypasses_cache(): void

@@ -170,7 +170,7 @@ trait CachesPivotRelation
         $rawBindings = $base->getRawBindings();
 
         // For where bindings in eager-load mode, use the snapshot taken before addEagerConstraints().
-        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : ($rawBindings['where'] ?? []);
+        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : $rawBindings['where'];
         if (!empty($whereBindings)) {
             $shape['bindings_where'] = $whereBindings;
         }
