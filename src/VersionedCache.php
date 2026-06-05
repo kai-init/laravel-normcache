@@ -177,8 +177,12 @@ final class VersionedCache
             return $value;
         }
 
+        if (!is_array($result['payload']) || !array_key_exists(0, $result['payload'])) {
+            return $compute();
+        }
+
         CacheReporter::queryHit($modelClass, $result['key'], $debugbarStart, ['kind' => $kind]);
 
-        return $result['payload'][0] ?? null;
+        return $result['payload'][0];
     }
 }

@@ -288,34 +288,33 @@ class CacheableBuilder extends Builder
     public function sole($columns = ['*']): Model
     {
         // sole() must verify row count against live DB state, not a cached snapshot.
-        $previous = $this->skipCache;
-        $this->skipCache = true;
-        try {
-            return parent::sole($columns);
-        } finally {
-            $this->skipCache = $previous;
-        }
+        return $this->bypassingCache(fn () => parent::sole($columns));
     }
 
     public function chunk($count, callable $callback): bool
     {
-        $this->skipCache = true;
-
-        return parent::chunk($count, $callback);
+        return $this->bypassingCache(fn () => parent::chunk($count, $callback));
     }
 
     public function each(callable $callback, $count = 1000): bool
     {
-        $this->skipCache = true;
-
-        return parent::each($callback, $count);
+        return $this->bypassingCache(fn () => parent::each($callback, $count));
     }
 
     public function lazy($chunkSize = 1000): LazyCollection
     {
-        $this->skipCache = true;
+        return $this->bypassingCache(fn () => parent::lazy($chunkSize));
+    }
 
-        return parent::lazy($chunkSize);
+    private function bypassingCache(callable $fn): mixed
+    {
+        $previous = $this->skipCache;
+        $this->skipCache = true;
+        try {
+            return $fn();
+        } finally {
+            $this->skipCache = $previous;
+        }
     }
 
     public function cursor(): LazyCollection

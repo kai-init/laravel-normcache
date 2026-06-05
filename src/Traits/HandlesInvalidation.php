@@ -279,14 +279,14 @@ trait HandlesInvalidation
             return $this->store->getRaw($this->keys->verKey($classKey));
         }
 
-        return $this->luaFetchVersionWithCooldown($classKey, (int) floor(microtime(true) * 1000));
+        return $this->luaFetchVersionWithCooldown($classKey);
     }
 
     private function scheduleInvalidation(string $classKey): void
     {
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->cooldown * 1000);
 
-        $this->store->setNx($this->keys->scheduledKey($classKey), (string) $dueAtMs);
+        $this->store->setNxEx($this->keys->scheduledKey($classKey), (string) $dueAtMs, $this->cooldown + $this->versionTtl());
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void

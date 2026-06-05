@@ -140,37 +140,44 @@ trait CachesPivotRelation
             $shape['wheres'] = $wheres;
         }
 
-        foreach ([
-            'orders',
-            'limit',
-            'offset',
-            'groups',
-            'havings',
-            'joins',
-            'distinct',
-            'unions',
-            'unionOrders',
-            'unionLimit',
-            'unionOffset',
-            'lock',
-        ] as $property) {
-            if ($base->{$property} !== null && $base->{$property} !== []) {
+        foreach (['orders', 'limit', 'offset', 'groups', 'havings', 'distinct', 'unionLimit', 'unionOffset', 'lock'] as $property) {
+            if ($base->{$property} !== null && $base->{$property} !== [] && $base->{$property} !== false) {
                 $shape[$property] = $base->{$property};
             }
         }
 
-        // For order/having/join bindings use the live query state.
-        // For where bindings in eager-load mode, use the snapshot taken before addEagerConstraints()
+        // JoinClause and union QueryBuilder objects are not safely JSON-encodable; normalize to scalars.
+        if (!empty($base->joins)) {
+            $shape['joins'] = array_map(static fn ($join) => [
+                'type'     => $join->type ?? null,
+                'table'    => is_string($join->table) ? $join->table : (string) $join->table,
+                'sql'      => $join->toSql(),
+                'bindings' => $join->getBindings(),
+            ], $base->joins);
+        }
+
+        if (!empty($base->unions)) {
+            $shape['unions'] = array_map(static fn ($union) => [
+                'all' => $union['all'] ?? false,
+                'sql' => $union['query']->toSql(),
+            ], $base->unions);
+        }
+
+        if (!empty($base->unionOrders)) {
+            $shape['unionOrders'] = $base->unionOrders;
+        }
+
         $rawBindings = $base->getRawBindings();
+
+        // For where bindings in eager-load mode, use the snapshot taken before addEagerConstraints().
+        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : ($rawBindings['where'] ?? []);
+        if (!empty($whereBindings)) {
+            $shape['bindings_where'] = $whereBindings;
+        }
         foreach (['order', 'having', 'join'] as $group) {
             if (!empty($rawBindings[$group])) {
                 $shape['bindings_' . $group] = $rawBindings[$group];
             }
-        }
-
-        $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : $rawBindings['where'];
-        if (!empty($whereBindings)) {
-            $shape['bindings_where'] = $whereBindings;
         }
 
         if (empty($shape)) {

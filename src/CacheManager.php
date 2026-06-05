@@ -120,7 +120,7 @@ class CacheManager
 
         if (empty($depClasses) && empty($depTableKeys)) {
             $lockToken = $this->buildLockToken();
-            $result = $this->luaFetchVersionedQuery($classKey, $hash, (int) floor(microtime(true) * 1000), $tag, $lockToken);
+            $result = $this->luaFetchVersionedQuery($classKey, $hash, $tag, $lockToken);
 
             $luaStatus = $result[0] ?? null;
             $version = $this->normalizeVersion($result[1]);
@@ -145,7 +145,7 @@ class CacheManager
         $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
 
         $lockToken = $this->buildLockToken();
-        $result = $this->luaFetchMultiVersionedQuery($versionKeys, $scheduledKeys, $queryPrefix, $this->keys->modelPrefix($classKey), $this->keys->buildingPrefix($classKey), $hash, (int) floor(microtime(true) * 1000), $lockToken);
+        $result = $this->luaFetchMultiVersionedQuery($versionKeys, $scheduledKeys, $queryPrefix, $this->keys->modelPrefix($classKey), $this->keys->buildingPrefix($classKey), $hash, $lockToken);
 
         $luaStatus = $result[0] ?? null;
         $seg = (string) ($result[1] ?? '');
@@ -171,7 +171,7 @@ class CacheManager
         $scheduledKeys = $this->keys->depScheduledKeys($relatedKey, [], [$pivotTableKey ?? $parentKey]);
 
         if ($this->slotting) {
-            $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
+            $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->expectedVersions($versionKeys, $resolvedVersions);
             $pivotKeyBuilder = $this->keys;
@@ -205,7 +205,7 @@ class CacheManager
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
 
         if ($this->slotting) {
-            $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys, (int) floor(microtime(true) * 1000));
+            $resolvedVersions = $this->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->expectedVersions($versionKeys, $resolvedVersions);
             $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
@@ -517,7 +517,7 @@ class CacheManager
     // Private
     // -------------------------------------------------------------------------
 
-    private function luaFetchVersionedQuery(string $classKey, string $hash, int $nowMs, ?string $tag = null, string $lockToken = ''): mixed
+    private function luaFetchVersionedQuery(string $classKey, string $hash, ?string $tag = null, string $lockToken = ''): mixed
     {
         return $this->store->eval(RedisScripts::get('fetch_versioned_query'), [
             $this->keys->verKey($classKey),
@@ -525,12 +525,12 @@ class CacheManager
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->modelPrefix($classKey),
             $this->keys->buildingPrefix($classKey),
-        ], [$hash, $nowMs, $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
+        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
     }
 
-    private function luaFetchMultiVersionedQuery(array $versionKeys, array $scheduledKeys, string $queryPrefix, string $modelPrefix, string $buildingPrefix, string $hash, int $nowMs, string $lockToken): mixed
+    private function luaFetchMultiVersionedQuery(array $versionKeys, array $scheduledKeys, string $queryPrefix, string $modelPrefix, string $buildingPrefix, string $hash, string $lockToken): mixed
     {
-        return $this->store->eval(RedisScripts::get('fetch_multi_versioned_query'), array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $modelPrefix, $buildingPrefix]), [$hash, $nowMs, $this->buildingLockTtl, $lockToken]);
+        return $this->store->eval(RedisScripts::get('fetch_multi_versioned_query'), array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $modelPrefix, $buildingPrefix]), [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]);
     }
 
     private function luaFetchVersionedPivotCache(string $parentKey, string $relatedKey, string $relation, string $constraintHash, array $parentIds, array $versionKeys, array $scheduledKeys): array
@@ -544,12 +544,12 @@ class CacheManager
         return [(string) ($result[0] ?? ''), $result[1] ?? []];
     }
 
-    private function luaFetchVersionWithCooldown(string $classKey, int $nowMs): mixed
+    private function luaFetchVersionWithCooldown(string $classKey): mixed
     {
         return $this->store->eval(
             RedisScripts::get('fetch_version_with_cooldown'),
             [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
-            [$nowMs]
+            [(int) floor(microtime(true) * 1000)]
         );
     }
 
@@ -564,13 +564,14 @@ class CacheManager
         return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
     }
 
-    private function resolveVersions(array $versionKeys, array $scheduledKeys, int $nowMs): array
+    private function resolveVersions(array $versionKeys, array $scheduledKeys): array
     {
         $script = RedisScripts::get('fetch_version_with_cooldown');
+        $nowMs = (string) (int) floor(microtime(true) * 1000);
         $map = [];
         foreach ($versionKeys as $i => $verKey) {
             if (!isset($map[$verKey])) {
-                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [(string) $nowMs]) ?? '0');
+                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [$nowMs]) ?? '0');
             }
         }
 
