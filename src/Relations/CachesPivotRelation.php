@@ -132,21 +132,19 @@ trait CachesPivotRelation
         $wheres = [];
         foreach ($base->wheres as $where) {
             if (($where['column'] ?? null) !== $qualifiedKey) {
-                $wheres[] = $where;
+                $wheres[] = $this->normalizeWhereForHash($where);
             }
         }
-
         if ($wheres !== []) {
             $shape['wheres'] = $wheres;
         }
 
-        foreach (['orders', 'limit', 'offset', 'groups', 'havings', 'distinct', 'unionLimit', 'unionOffset', 'lock'] as $property) {
+        foreach (['orders', 'limit', 'offset', 'groups', 'havings', 'distinct', 'unionLimit', 'unionOffset', 'unionOrders', 'lock'] as $property) {
             if ($base->{$property} !== null && $base->{$property} !== [] && $base->{$property} !== false) {
                 $shape[$property] = $base->{$property};
             }
         }
 
-        // JoinClause and union QueryBuilder objects are not safely JSON-encodable; normalize to scalars.
         if (!empty($base->joins)) {
             $shape['joins'] = array_map(static fn($join) => [
                 'type' => $join->type ?? null,
@@ -163,13 +161,7 @@ trait CachesPivotRelation
             ], $base->unions);
         }
 
-        if (!empty($base->unionOrders)) {
-            $shape['unionOrders'] = $base->unionOrders;
-        }
-
         $rawBindings = $base->getRawBindings();
-
-        // For where bindings in eager-load mode, use the snapshot taken before addEagerConstraints().
         $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : $rawBindings['where'];
         if (!empty($whereBindings)) {
             $shape['bindings_where'] = $whereBindings;
@@ -185,6 +177,45 @@ trait CachesPivotRelation
         }
 
         return QueryHasher::hash(json_encode($shape, JSON_THROW_ON_ERROR));
+    }
+
+    private function normalizeWhereForHash(array $where): array
+    {
+        $type = $where['type'] ?? null;
+
+        if ($type === 'Nested' && isset($where['query'])) {
+            return [
+                'type' => 'Nested',
+                'boolean' => $where['boolean'] ?? 'and',
+                'wheres' => array_map(
+                    fn($nested) => $this->normalizeWhereForHash($nested),
+                    $where['query']->wheres ?? []
+                ),
+            ];
+        }
+
+        if (in_array($type, ['Exists', 'NotExists', 'Sub'], true) && isset($where['query'])) {
+            return [
+                'type' => $type,
+                'boolean' => $where['boolean'] ?? 'and',
+                'sql' => $where['query']->toSql(),
+            ];
+        }
+
+        if ($type === 'Raw') {
+            return [
+                'type' => 'Raw',
+                'sql' => $where['sql'] ?? null,
+                'boolean' => $where['boolean'] ?? 'and',
+            ];
+        }
+
+        return [
+            'type' => $type,
+            'column' => is_string($where['column'] ?? null) ? $where['column'] : null,
+            'operator' => $where['operator'] ?? null,
+            'boolean' => $where['boolean'] ?? 'and',
+        ];
     }
 
     private function shouldUsePivotCache(array $cacheParentIds): bool
