@@ -33,12 +33,14 @@ final class CachePlanner
         // 1. Resolve Dependencies
         $modelClass = $builder->getModel()::class;
         $explicit = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
         $inferred = $context->inferredDependencies;
+        $hasExplicit = $explicit !== null || $explicitTables !== [];
 
-        $dependencies = $explicit !== null
+        $dependencies = $hasExplicit
             ? new DependencySet(
-                models: array_keys(array_flip([$modelClass, ...$inferred->models, ...$explicit])),
-                tables: $inferred->tables,
+                models: array_keys(array_flip([$modelClass, ...$inferred->models, ...($explicit ?? [])])),
+                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
             )
             : ($analysis->hasDependencyBypass() || !$inferred->safe
                 ? DependencySet::unsafe(array_values(array_unique([
@@ -67,7 +69,7 @@ final class CachePlanner
         }
 
         // 3. Resolve Cache Mode
-        $hasResultDependencies = $explicit !== null || $inferred->models !== [] || $inferred->tables !== [];
+        $hasResultDependencies = $hasExplicit || $inferred->models !== [] || $inferred->tables !== [];
         $isResultStyleOperation = in_array($context->operation, [
             CacheOperation::Scalar,
             CacheOperation::PaginationCount,
@@ -145,7 +147,7 @@ final class CachePlanner
 
         if (
             $isScalarLikeOperation
-            && $explicit === null
+            && !$hasExplicit
             && $inferred->models === []
             && $inferred->tables === []
             && $dependencies->safe

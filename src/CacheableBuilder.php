@@ -39,6 +39,8 @@ class CacheableBuilder extends Builder
 
     private ?array $dependsOn = null;
 
+    private array $dependsOnTables = [];
+
     private ?string $cacheTag = null;
 
     // -------------------------------------------------------------------------
@@ -112,9 +114,35 @@ class CacheableBuilder extends Builder
         return $this;
     }
 
+    public function dependsOnTables(array $tables): static
+    {
+        if (empty($tables)) {
+            throw new \InvalidArgumentException('dependsOnTables() requires at least one table name.');
+        }
+
+        foreach ($tables as $table) {
+            if (!is_string($table) || $table === '') {
+                throw new \InvalidArgumentException('dependsOnTables() expects non-empty table name strings.');
+            }
+        }
+
+        $conn = $this->model->getConnection()->getName();
+        $this->dependsOnTables = array_values(array_unique(array_merge(
+            $this->dependsOnTables,
+            array_map(fn($table) => "{$conn}:{$table}", $tables),
+        )));
+
+        return $this;
+    }
+
     public function explicitDependencies(): ?array
     {
         return $this->dependsOn;
+    }
+
+    public function explicitTableDependencies(): array
+    {
+        return $this->dependsOnTables;
     }
 
     public function getQueryTtl(): ?int
@@ -146,7 +174,8 @@ class CacheableBuilder extends Builder
                 return 'not cached — ' . BypassReasons::labels()['normalization'] . ': join_result_requires_explicit_select';
             }
 
-            return $this->dependsOn !== null ? 'cached: result (dependsOn())' : 'cached: result';
+            $hasExplicit = $this->dependsOn !== null || $this->dependsOnTables !== [];
+            return $hasExplicit ? 'cached: result (dependsOn())' : 'cached: result';
         }
 
         $labels = BypassReasons::labels();

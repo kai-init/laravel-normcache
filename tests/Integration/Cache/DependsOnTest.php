@@ -7,6 +7,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
 /**
@@ -593,5 +594,72 @@ class DependsOnTest extends TestCase
         $second = Post::whereRaw($sql, [Post::class])->get();
 
         $this->assertCount(0, $second);
+    }
+
+    // -------------------------------------------------------------------------
+    // dependsOnTables() — explicit pivot/intermediate table dependencies
+    // -------------------------------------------------------------------------
+
+    public function test_depends_on_tables_caches_query(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Tag::create(['name' => 'php']);
+
+        Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_depends_on_tables_invalidates_when_pivot_table_version_bumps(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+
+        $first = Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
+        $this->assertCount(0, $first);
+
+        $author->tags()->attach($tag->id); // bumps author_tag table version
+
+        $second = Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
+        $this->assertCount(1, $second);
+    }
+
+    public function test_depends_on_tables_can_be_combined_with_depends_on(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+        $author->tags()->attach($tag->id);
+
+        $first = Author::whereHas('tags')->dependsOn([Tag::class])->dependsOnTables(['author_tag'])->get();
+        $this->assertCount(1, $first);
+
+        $author->tags()->detach($tag->id); // bumps author_tag version; Tag version unchanged
+
+        $second = Author::whereHas('tags')->dependsOn([Tag::class])->dependsOnTables(['author_tag'])->get();
+        $this->assertCount(0, $second);
+    }
+
+    public function test_depends_on_tables_alone_without_depends_on(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+        $author->tags()->attach($tag->id);
+
+        // No dependsOn() — just table dep. Should still use result cache.
+        Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'dependsOnTables() alone should trigger result cache');
+    }
+
+    public function test_depends_on_tables_rejects_empty_array(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        Author::query()->dependsOnTables([]);
+    }
+
+    public function test_depends_on_tables_rejects_non_string_entries(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        Author::query()->dependsOnTables([123]);
     }
 }
