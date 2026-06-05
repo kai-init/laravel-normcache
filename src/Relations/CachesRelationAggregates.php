@@ -16,6 +16,8 @@ trait CachesRelationAggregates
 {
     private bool $cacheAggregates = true;
 
+    private bool $aggregateInferenceFailed = false;
+
     private array $aggregateDependencies = [];
 
     private array $aggregateTableDependencies = [];
@@ -66,7 +68,7 @@ trait CachesRelationAggregates
 
             if ($entry === null) {
                 $result = parent::withAggregate($relations, $column, $function);
-                $this->clearAggregateTracking();
+                $this->clearAggregateTracking(true);
 
                 return $result;
             }
@@ -94,9 +96,10 @@ trait CachesRelationAggregates
         return $result;
     }
 
-    private function clearAggregateTracking(): void
+    private function clearAggregateTracking(bool $failed = false): void
     {
         $this->cacheAggregates = false;
+        $this->aggregateInferenceFailed = $failed;
         $this->aggregateDependencies = [];
         $this->aggregateTableDependencies = [];
         $this->aggregateAliases = [];
@@ -169,7 +172,9 @@ trait CachesRelationAggregates
     public function inferAggregateDependencies(): DependencySet
     {
         if (!$this->cacheAggregates) {
-            return DependencySet::unsafe('Aggregate dependencies could not be inferred.');
+            return $this->aggregateInferenceFailed
+                ? DependencySet::unsafe('Aggregate dependencies could not be inferred.')
+                : new DependencySet(models: [], tables: []);
         }
 
         return new DependencySet(

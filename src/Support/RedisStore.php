@@ -498,10 +498,8 @@ final class RedisStore
         return '';
     }
 
-    private function keysForPattern(string $pattern): array
+    public function scanPattern(string $pattern): array
     {
-        $pattern = $this->prefix($pattern);
-
         if ($this->connection instanceof PhpRedisClusterConnection) {
             return $this->scanPhpRedisClusterKeys($pattern);
         }
@@ -511,6 +509,11 @@ final class RedisStore
         }
 
         return $this->scanKeys($pattern);
+    }
+
+    private function keysForPattern(string $pattern): array
+    {
+        return $this->scanPattern($this->prefix($pattern));
     }
 
     private function scanKeys(string $pattern): array

@@ -207,6 +207,56 @@ class ClusterModeTest extends TestCase
         $this->assertSame(2, $after);
     }
 
+    // Flush operations — verify keys are cleared across all nodes
+
+    public function test_flush_all_clears_all_cache_keys_in_cluster_mode(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        Author::get();
+        Author::orderBy('name')->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:*'));
+
+        $this->cacheManager()->flushAll();
+
+        $this->assertEmpty($this->redisKeys('test:*'));
+    }
+
+    public function test_flush_tag_clears_only_tagged_keys_in_cluster_mode(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        Author::tag('homepage')->get();
+        Author::get();
+
+        $taggedKeys = $this->redisKeys('test:query:*:homepage:*');
+        $this->assertNotEmpty($taggedKeys, 'tagged query keys must exist before flush');
+
+        $this->cacheManager()->flushTag(Author::class, 'homepage');
+
+        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must be gone after flushTag');
+        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive flushTag');
+    }
+
+    public function test_flush_tag_across_models_clears_tagged_keys_for_all_models_in_cluster_mode(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => 1]);
+
+        Author::tag('homepage')->get();
+        Post::tag('homepage')->get();
+        Author::get();
+
+        $this->assertNotEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must exist before flush');
+
+        $this->cacheManager()->flushTagAcrossModels('homepage');
+
+        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'all tagged keys must be gone after flushTagAcrossModels');
+        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive');
+    }
+
     // Standard single-model query cache (should be unaffected by cluster flag)
 
     public function test_single_model_query_cache_still_works_in_cluster_mode(): void

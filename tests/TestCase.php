@@ -133,7 +133,7 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function redisKeys(string $pattern = '*'): array
     {
-        return Redis::connection('model-cache-test')->keys($pattern);
+        return $this->cacheManager()->getStore()->scanPattern($pattern);
     }
 
     protected function cacheManager(): CacheManager
