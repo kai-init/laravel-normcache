@@ -240,9 +240,9 @@ class RedisStoreTest extends TestCase
         $cfg = $this->app['config']['database.redis.normcache-test']
             ?? ['host' => '127.0.0.1', 'port' => 6379, 'database' => 15];
         $standaloneConn = [
-            'scheme'   => 'tcp',
-            'host'     => $cfg['host'] ?? '127.0.0.1',
-            'port'     => (int) ($cfg['port'] ?? 6379),
+            'scheme' => 'tcp',
+            'host' => $cfg['host'] ?? '127.0.0.1',
+            'port' => (int) ($cfg['port'] ?? 6379),
             'database' => (int) ($cfg['database'] ?? 15),
         ];
 
@@ -285,13 +285,12 @@ class RedisStoreTest extends TestCase
     {
         $script = 'return ARGV[1]';
 
-        // First call should use EVAL and cache SHA
-        $result = $this->store->eval($script, [], ['hello']);
+        // Pass a dummy key so Predis cluster can route the command to a slot.
+        // The script ignores KEYS and only reads ARGV[1].
+        $result = $this->store->eval($script, ['foo'], ['hello']);
         $this->assertSame('hello', $result);
 
-        // Second call should use EVALSHA (mocking this is hard with real redis,
-        // but we can verify it still works)
-        $result = $this->store->eval($script, [], ['world']);
+        $result = $this->store->eval($script, ['foo'], ['world']);
         $this->assertSame('world', $result);
     }
 
