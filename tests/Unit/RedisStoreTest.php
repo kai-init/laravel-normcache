@@ -170,45 +170,57 @@ class RedisStoreTest extends TestCase
 
     public function test_scan_pattern_strips_connection_prefix_from_returned_keys(): void
     {
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            $this->markTestSkipped('Connection prefix reconfiguration not supported in cluster mode.');
+        }
+
         config()->set('database.redis.options.prefix', 'laravel:');
         Redis::purge('normcache-test');
 
-        $store = new RedisStore('normcache-test', 'test:', false);
-        $store->set('query:abc', [1], 60);
-        $store->set('query:def', [2], 60);
-        $store->set('model:1', ['id' => 1], 60);
+        try {
+            $store = new RedisStore('normcache-test', 'test:', false);
+            $store->set('query:abc', [1], 60);
+            $store->set('query:def', [2], 60);
+            $store->set('model:1', ['id' => 1], 60);
 
-        $keys = $store->scanPattern('test:query:*');
+            $keys = $store->scanPattern('test:query:*');
 
-        $this->assertNotEmpty($keys);
-        foreach ($keys as $key) {
-            $this->assertStringNotContainsString('laravel:', $key, 'scanPattern should strip connection prefix');
-            $this->assertStringStartsWith('test:query:', $key);
+            $this->assertNotEmpty($keys);
+            foreach ($keys as $key) {
+                $this->assertStringNotContainsString('laravel:', $key, 'scanPattern should strip connection prefix');
+                $this->assertStringStartsWith('test:query:', $key);
+            }
+        } finally {
+            Redis::purge('normcache-test');
+            config()->set('database.redis.options.prefix', '');
         }
-
-        Redis::purge('normcache-test');
-        config()->set('database.redis.options.prefix', '');
     }
 
     public function test_flush_by_patterns_works_with_connection_prefix(): void
     {
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            $this->markTestSkipped('Connection prefix reconfiguration not supported in cluster mode.');
+        }
+
         config()->set('database.redis.options.prefix', 'laravel:');
         Redis::purge('normcache-test');
 
-        $store = new RedisStore('normcache-test', 'test:', false);
-        $store->set('query:1', 'a', 60);
-        $store->set('query:2', 'b', 60);
-        $store->set('model:1', 'c', 60);
+        try {
+            $store = new RedisStore('normcache-test', 'test:', false);
+            $store->set('query:1', 'a', 60);
+            $store->set('query:2', 'b', 60);
+            $store->set('model:1', 'c', 60);
 
-        $count = $store->flushByPatterns(['query:*']);
+            $count = $store->flushByPatterns(['query:*']);
 
-        $this->assertSame(2, $count);
-        $this->assertNull($store->get('query:1'));
-        $this->assertNull($store->get('query:2'));
-        $this->assertSame('c', $store->get('model:1'));
-
-        Redis::purge('normcache-test');
-        config()->set('database.redis.options.prefix', '');
+            $this->assertSame(2, $count);
+            $this->assertNull($store->get('query:1'));
+            $this->assertNull($store->get('query:2'));
+            $this->assertSame('c', $store->get('model:1'));
+        } finally {
+            Redis::purge('normcache-test');
+            config()->set('database.redis.options.prefix', '');
+        }
     }
 
     public function test_flush_by_patterns_scans_all_phpredis_cluster_masters(): void
