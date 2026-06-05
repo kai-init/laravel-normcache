@@ -325,19 +325,9 @@ final class RedisStore
     public function flushByPatterns(array $patterns): int
     {
         $total = 0;
-        $connectionPrefix = $this->connectionPrefix();
 
         foreach ($patterns as $pattern) {
             $keys = $this->keysForPattern($pattern);
-
-            if ($connectionPrefix !== '') {
-                $keys = array_map(
-                    fn($key) => str_starts_with($key, $connectionPrefix)
-                        ? substr($key, strlen($connectionPrefix))
-                        : $key,
-                    $keys
-                );
-            }
 
             if (!empty($keys)) {
                 $total += count($keys);
@@ -501,14 +491,23 @@ final class RedisStore
     public function scanPattern(string $pattern): array
     {
         if ($this->connection instanceof PhpRedisClusterConnection) {
-            return $this->scanPhpRedisClusterKeys($pattern);
+            $keys = $this->scanPhpRedisClusterKeys($pattern);
+        } elseif ($this->connection instanceof PredisClusterConnection) {
+            $keys = $this->scanPredisClusterKeys($pattern);
+        } else {
+            $keys = $this->scanKeys($pattern);
         }
 
-        if ($this->connection instanceof PredisClusterConnection) {
-            return $this->scanPredisClusterKeys($pattern);
+        $connectionPrefix = $this->connectionPrefix();
+
+        if ($connectionPrefix === '') {
+            return $keys;
         }
 
-        return $this->scanKeys($pattern);
+        return array_map(
+            static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
+            $keys
+        );
     }
 
     private function keysForPattern(string $pattern): array

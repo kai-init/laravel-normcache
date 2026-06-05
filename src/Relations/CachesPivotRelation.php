@@ -271,6 +271,11 @@ trait CachesPivotRelation
         if ($cols === ['*']) {
             return true;
         }
+
+        if (array_filter($cols, static fn($c) => is_string($c) && str_ends_with($c, '*'))) {
+            return true;
+        }
+
         $key = $this->related->getKeyName();
         $qualified = $this->related->getTable() . '.' . $key;
 
@@ -279,7 +284,13 @@ trait CachesPivotRelation
 
     private function shouldCacheRelatedModels(array $columns): bool
     {
-        return $columns === ['*'] && $this->query->toBase()->columns === null;
+        $queryColumns = $this->query->toBase()->columns;
+
+        if ($queryColumns !== null) {
+            return (bool) array_filter($queryColumns, static fn($c) => is_string($c) && str_ends_with($c, '*'));
+        }
+
+        return $columns === ['*'];
     }
 
     private function selectedRelatedColumns(array $columns): ?array
@@ -287,7 +298,9 @@ trait CachesPivotRelation
         $queryColumns = $this->query->toBase()->columns;
 
         if ($queryColumns !== null) {
-            return $queryColumns;
+            $hasWildcard = (bool) array_filter($queryColumns, static fn($c) => is_string($c) && str_ends_with($c, '*'));
+
+            return $hasWildcard ? null : $queryColumns;
         }
 
         return $columns === ['*'] ? null : $columns;

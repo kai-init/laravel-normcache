@@ -413,6 +413,24 @@ class PivotCacheTest extends TestCase
         return $method->invoke($relation, ['*']);
     }
 
+    public function test_pivot_cache_used_when_projection_is_table_wildcard(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with(['tags' => fn($q) => $q->select('tags.*')])->get();
+
+        DB::enableQueryLog();
+        $tags = Author::with(['tags' => fn($q) => $q->select('tags.*')])->get()->first()->tags;
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame([$tag->id], $tags->modelKeys());
+        $this->assertNotEmpty($this->redisKeys('test:pivot:*'), 'pivot cache should be used for table.* projection');
+        $this->assertEmpty(array_filter($queries, fn($q) => str_contains($q['query'], 'author_tag')), 'pivot query should be cached');
+    }
+
     public function test_belongs_to_many_remains_fast_path(): void
     {
         $author = Author::create(['name' => 'Alice']);

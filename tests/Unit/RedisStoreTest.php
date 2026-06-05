@@ -168,6 +168,49 @@ class RedisStoreTest extends TestCase
         $this->assertSame('c', $this->store->get('bar:1'));
     }
 
+    public function test_scan_pattern_strips_connection_prefix_from_returned_keys(): void
+    {
+        config()->set('database.redis.options.prefix', 'laravel:');
+        Redis::purge('normcache-test');
+
+        $store = new RedisStore('normcache-test', 'test:', false);
+        $store->set('query:abc', [1], 60);
+        $store->set('query:def', [2], 60);
+        $store->set('model:1', ['id' => 1], 60);
+
+        $keys = $store->scanPattern('test:query:*');
+
+        $this->assertNotEmpty($keys);
+        foreach ($keys as $key) {
+            $this->assertStringNotContainsString('laravel:', $key, 'scanPattern should strip connection prefix');
+            $this->assertStringStartsWith('test:query:', $key);
+        }
+
+        Redis::purge('normcache-test');
+        config()->set('database.redis.options.prefix', '');
+    }
+
+    public function test_flush_by_patterns_works_with_connection_prefix(): void
+    {
+        config()->set('database.redis.options.prefix', 'laravel:');
+        Redis::purge('normcache-test');
+
+        $store = new RedisStore('normcache-test', 'test:', false);
+        $store->set('query:1', 'a', 60);
+        $store->set('query:2', 'b', 60);
+        $store->set('model:1', 'c', 60);
+
+        $count = $store->flushByPatterns(['query:*']);
+
+        $this->assertSame(2, $count);
+        $this->assertNull($store->get('query:1'));
+        $this->assertNull($store->get('query:2'));
+        $this->assertSame('c', $store->get('model:1'));
+
+        Redis::purge('normcache-test');
+        config()->set('database.redis.options.prefix', '');
+    }
+
     public function test_flush_by_patterns_scans_all_phpredis_cluster_masters(): void
     {
         $connection = new class extends PhpRedisClusterConnection
