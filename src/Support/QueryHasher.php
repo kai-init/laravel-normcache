@@ -2,6 +2,7 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 
@@ -12,7 +13,7 @@ final class QueryHasher
         return self::fromBuilder($builder, ($query ?? $builder->toBase())->cloneWithout(['columns']));
     }
 
-    public static function forResultQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
+    public static function forResultQuery(EloquentBuilder $builder, ?QueryBuilder $query = null): string
     {
         return self::fromBuilder($builder, $query);
     }
@@ -29,7 +30,7 @@ final class QueryHasher
         );
     }
 
-    public static function fromBuilder(CacheableBuilder $builder, ?QueryBuilder $query = null): string
+    public static function fromBuilder(EloquentBuilder $builder, ?QueryBuilder $query = null): string
     {
         return self::hashWith($query ?? $builder->toBase(), [
             'casts' => $builder->getModel()->getCasts(),
