@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
+use Illuminate\Database\Eloquent\Relations\Relation;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -144,6 +145,25 @@ class RelationContractTest extends TestCase
             fn() => Comment::with('commentable')->orderBy('id')->get(),
             fn() => Comment::withoutCache()->with('commentable')->orderBy('id')->get(),
         );
+    }
+
+    public function test_with_morph_to_alias_and_fqcn_types_in_same_collection(): void
+    {
+        Relation::morphMap(['post' => Post::class]);
+
+        try {
+            $alice = Author::create(['name' => 'Alice']);
+            $post = Post::create(['title' => 'P', 'author_id' => $alice->id]);
+            Comment::create(['body' => 'A', 'commentable_id' => $post->id, 'commentable_type' => 'post']);
+            Comment::create(['body' => 'B', 'commentable_id' => $alice->id, 'commentable_type' => Author::class]);
+
+            $this->contract(
+                fn() => Comment::with('commentable')->orderBy('id')->get(),
+                fn() => Comment::withoutCache()->with('commentable')->orderBy('id')->get(),
+            );
+        } finally {
+            Relation::morphMap([], false);
+        }
     }
 
     public function test_with_belongs_to_null_foreign_key(): void

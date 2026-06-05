@@ -34,6 +34,17 @@ jobs:
             extensions: ""
             redis_image: redis:6-alpine
 
+          # ── igbinary serialization ──────────────────────────────────────────
+          - label: "phpredis / Redis 7 / igbinary"
+            redis_client: phpredis
+            extensions: redis, igbinary
+            redis_image: redis:7-alpine
+
+          - label: "predis / Redis 7 / igbinary"
+            redis_client: predis
+            extensions: igbinary
+            redis_image: redis:7-alpine
+
     name: Standalone / ${{ matrix.label }}
 
     services:
@@ -84,6 +95,10 @@ jobs:
           - label: "predis / Redis 7 cluster"
             redis_client: predis
             extensions: ""
+
+          - label: "phpredis / Redis 7 cluster / igbinary"
+            redis_client: phpredis
+            extensions: redis, igbinary
 
     name: Cluster / ${{ matrix.label }}
 

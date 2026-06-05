@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
@@ -100,6 +101,58 @@ class MorphToCacheTest extends TestCase
         $this->assertNotEmpty($postQueries);
         $this->assertNotNull($comments->first()->commentable);
         $this->assertSame('Hello', $comments->first()->commentable->title);
+    }
+
+    // -------------------------------------------------------------------------
+    // Morph map aliases
+    // -------------------------------------------------------------------------
+
+    public function test_morph_alias_uses_cache_fast_path(): void
+    {
+        // DB stores the alias ('post'), not the FQCN. The fast path must resolve
+        // it to Post::class via getActualClassNameForMorph() and serve from cache.
+        Relation::morphMap(['post' => Post::class]);
+
+        try {
+            $post = Post::create(['title' => 'Hello', 'author_id' => Author::create(['name' => 'Alice'])->id]);
+            Comment::create(['body' => 'Hi', 'commentable_id' => $post->id, 'commentable_type' => 'post']);
+
+            Comment::with('commentable')->get(); // cold — model payload stored under Post classKey
+
+            DB::enableQueryLog();
+            $comments = Comment::with('commentable')->get(); // warm
+            $queries = DB::getQueryLog();
+            DB::disableQueryLog();
+
+            $this->assertNotNull($comments->first()->commentable);
+            $this->assertSame('Hello', $comments->first()->commentable->title);
+
+            $postQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'));
+            $this->assertEmpty($postQueries, 'Morph alias should resolve to Post::class and serve from model cache');
+        } finally {
+            Relation::morphMap([], false); // clear the morph map
+        }
+    }
+
+    public function test_morph_alias_invalidation_is_consistent_with_fqcn(): void
+    {
+        // When stored as an alias, invalidation still bumps the correct version key
+        // because the model's class drives invalidation, not the DB-stored type string.
+        Relation::morphMap(['post' => Post::class]);
+
+        try {
+            $post = Post::create(['title' => 'Hello', 'author_id' => Author::create(['name' => 'Alice'])->id]);
+            Comment::create(['body' => 'Hi', 'commentable_id' => $post->id, 'commentable_type' => 'post']);
+
+            Comment::with('commentable')->get(); // warm
+
+            $post->update(['title' => 'Updated']); // triggers flushInstance(Post) — same key as FQCN path
+
+            $comments = Comment::with('commentable')->get();
+            $this->assertSame('Updated', $comments->first()->commentable->title);
+        } finally {
+            Relation::morphMap([], false);
+        }
     }
 
     public function test_morph_to_deduplicates_ids_when_multiple_comments_share_morphable(): void
