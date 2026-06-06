@@ -8,9 +8,17 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use NormCache\Cache\CacheFlowGuard;
+use NormCache\Cache\ModelHydrator;
+use NormCache\Cache\NormalizedCacheReader;
+use NormCache\Cache\CacheExecutor;
+use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\VersionTracker;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
+use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisStore;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -18,22 +26,46 @@ class CacheServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
 
-        $this->app->singleton(CacheManager::class, fn() => new CacheManager(
-            config('normcache.connection'),
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            config('normcache.key_prefix'),
-            config('normcache.cooldown'),
-            config('normcache.cluster', false),
-            config('normcache.enabled', true),
-            config('normcache.events', true),
-            config('normcache.fallback', false),
-            config('normcache.fire_retrieved', false),
-            config('normcache.building_lock_ttl', 5),
-            config('normcache.stampede_wait_ms', 200),
-            config('normcache.stale_version_depth', 3),
-            config('normcache.slotting', false),
-        ));
+        $this->app->singleton(CacheManager::class, function () {
+            $connection = config('normcache.connection');
+            $ttl = (int) config('normcache.ttl');
+            $queryTtl = (int) config('normcache.query_ttl');
+            $keyPrefix = config('normcache.key_prefix');
+            $cooldown = (int) config('normcache.cooldown');
+            $cluster = (bool) config('normcache.cluster', false);
+            $enabled = (bool) config('normcache.enabled', true);
+            $events = (bool) config('normcache.events', true);
+            $fallback = (bool) config('normcache.fallback', false);
+            $fireRetrieved = (bool) config('normcache.fire_retrieved', false);
+            $buildingLockTtl = (int) config('normcache.building_lock_ttl', 5);
+            $stampedeWaitMs = (int) config('normcache.stampede_wait_ms', 200);
+            $staleDepth = (int) config('normcache.stale_version_depth', 3);
+            $slotting = (bool) config('normcache.slotting', false);
+
+            $slottingActive = $cluster && $slotting;
+            $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
+            $keys = new CacheKeyBuilder;
+            $versions = new VersionTracker($store, $keys);
+            $guard = new CacheFlowGuard($fallback);
+
+            return new CacheManager(
+                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
+                resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+                hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
+                versions: $versions,
+                guard: $guard,
+                executor: new CacheExecutor,
+                store: $store,
+                keys: $keys,
+                ttl: $ttl,
+                queryTtl: $queryTtl,
+                cooldown: $cooldown,
+                enabled: $enabled,
+                dispatchEvents: $events,
+                cluster: $cluster,
+                slotting: $slottingActive,
+            );
+        });
 
         $this->app->alias(CacheManager::class, 'normcache');
     }

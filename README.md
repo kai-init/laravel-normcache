@@ -33,15 +33,16 @@ model:{posts}:12      →  { id:12, title:..., body:... }
 
 ---
 
-## What's New in v2.0.0
+## What's New in v2
 
-Version 2.0.0 extends Normcache's normalized model-query caching into a planner-driven cache layer for common Eloquent read patterns:
+Version 2 extends Normcache beyond normalized caching into a full read-path cache layer:
 
-- `dependsOn()` caches cross-table queries when you declare the model classes that should invalidate the result.
-- Simple queries still use normalized ID + model-attribute caching, while complex dependency-aware queries use a versioned result cache.
-- Scalar reads, pagination counts, relation aggregates, pivot relations, through relations, and morph-to eager loads now share versioned invalidation paths.
-- Stampede protection, stale-version serving, tag flushing, Redis Cluster handling, event reporting are built into the core cache paths.
-- Debugbar integration shows cache hits, misses, bypasses, and timings on the request timeline when Debugbar is installed.
+- **`dependsOn([Model::class])`** and **`dependsOnTables(['table'])`** — cache cross-table queries by declaring what should invalidate them. Simple cases stay normalized; complex shapes use a versioned result cache.
+- **Scalar and aggregate caching** — `count`, `sum`, `avg`, `withCount`, `withSum`, and friends are cached automatically under versioned keys.
+- **Stampede protection** — waiters serve stale data or block on a wake channel instead of storming the database during a rebuild.
+- **Redis Cluster support** — single-slot mode by default; opt into per-model slot sharding with `slotting`.
+- **Tag-based flushing** — group query entries under a tag and flush them together on deploy or config change.
+- **Debugbar integration** — hits, misses, and bypasses appear on the request timeline when Debugbar is installed.
 
 ---
 
@@ -175,7 +176,9 @@ To prevent data corruption, NormCache will automatically bypass caching and fall
 | Inside a database transaction                        | None — must hit DB    |
 | Raw SQL / `DB::table(...)`                           | None — flush manually |
 | Raw `WHERE` or `ORDER BY` clauses                    | Use `dependsOn()`     |
-| Aggregate and scalar queries                         | Use `dependsOn()`     |
+| Cross-table aggregate and scalar queries             | Use `dependsOn()`     |
+| `chunk()`, `each()`, `lazy()`                        | None — always hits DB |
+| `sole()`                                             | None — always hits DB |
 
 Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, and calculated columns — is also cacheable with `dependsOn()`.
 
@@ -290,7 +293,7 @@ NormCache guarantees hydration parity (results identical to native Eloquent) for
 
 ### Requires `dependsOn()`
 
-Queries that join other tables or use cross-table subqueries (e.g., `whereHas`) **must** declare their dependencies using `dependsOn([OtherModel::class])`. 
+Queries that join other tables or use cross-table subqueries (e.g., `whereHas`) **must** declare their dependencies using `dependsOn([OtherModel::class])`.
 
 - **Debug Warning:** If `app.debug` is true, NormCache will log a warning if it detects a query touching a table not declared in `dependsOn()`.
 

@@ -58,7 +58,7 @@ final class QueryHasher
         if (!empty($base->joins)) {
             $shape['joins'] = array_map(fn($join) => [
                 'type' => $join->type ?? null,
-                'table' => is_string($join->table) ? $join->table : (string) $join->table,
+                'table' => self::normalizeValueForHash($join->table, $base),
                 'sql' => $join->toSql(),
                 'bindings' => self::normalizeValueForHash($join->getBindings(), $base),
             ], $base->joins);

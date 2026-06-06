@@ -59,8 +59,6 @@ class LuaScriptConsistencyTest extends TestCase
         return QueryHasher::forNormalizedQuery(Author::query());
     }
 
-    // luaFetchVersionWithCooldown — cooldown fires on version resolution (used by CacheManager::resolveCurrentVersion() when cooldown > 0)
-
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
     {
         $ck = NormCache::classKey(Author::class);
@@ -208,22 +206,22 @@ class LuaScriptConsistencyTest extends TestCase
 
         $miss = $manager->getResultCache(Author::class, [Post::class], $hash);
 
-        $this->assertSame('miss', $miss['status']);
+        $this->assertSame('miss', $miss->status->value);
 
         $this->bumpVersionInRedis(NormCache::classKey(Post::class));
 
         $manager->storeResultCache(
-            $miss['key'],
+            $miss->key,
             [['id' => 1, 'name' => 'Stale']],
-            $miss['buildingKey'],
+            $miss->buildingKey,
             60,
-            $miss['wakeKey'],
-            $miss['versionKeys'],
-            $miss['expectedVersions'],
+            $miss->wakeKey,
+            $miss->versionKeys,
+            $miss->expectedVersions,
         );
 
-        $this->assertNull($manager->getStore()->get($miss['key']));
-        $this->assertNull($manager->getStore()->getRaw($miss['buildingKey']));
+        $this->assertNull($manager->getStore()->get($miss->key));
+        $this->assertNull($manager->getStore()->getRaw($miss->buildingKey));
     }
 
     public function test_namespaced_result_write_is_skipped_when_dependency_version_changes_during_build(): void
@@ -234,14 +232,14 @@ class LuaScriptConsistencyTest extends TestCase
         $this->bumpVersionInRedis(NormCache::classKey(Post::class));
 
         $manager->storeVersionedResult(
-            $cache['key'],
+            $cache->key,
             [10],
             60,
-            $cache['versionKeys'],
-            $cache['expectedVersions'],
+            $cache->versionKeys,
+            $cache->expectedVersions,
         );
 
-        $this->assertNull($manager->getStore()->get($cache['key']));
+        $this->assertNull($manager->getStore()->get($cache->key));
     }
 
     public function test_through_result_write_is_skipped_when_dependency_version_changes_during_build(): void
@@ -252,14 +250,14 @@ class LuaScriptConsistencyTest extends TestCase
         $this->bumpVersionInRedis(NormCache::classKey(Country::class));
 
         $manager->storeVersionedResult(
-            $cache['key'],
+            $cache->key,
             ['ids' => [1], 'throughKeys' => [1 => 1]],
             60,
-            $cache['versionKeys'],
-            $cache['expectedVersions'],
+            $cache->versionKeys,
+            $cache->expectedVersions,
         );
 
-        $this->assertNull($manager->getStore()->get($cache['key']));
+        $this->assertNull($manager->getStore()->get($cache->key));
     }
 
     public function test_related_model_payload_is_not_cached_when_through_result_write_is_skipped(): void
@@ -270,11 +268,11 @@ class LuaScriptConsistencyTest extends TestCase
         $this->bumpVersionInRedis(NormCache::classKey(Country::class));
 
         if ($manager->storeVersionedResult(
-            $cache['key'],
+            $cache->key,
             ['ids' => [1], 'throughKeys' => [1 => 1]],
             60,
-            $cache['versionKeys'],
-            $cache['expectedVersions'],
+            $cache->versionKeys,
+            $cache->expectedVersions,
         )) {
             $manager->cacheModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Stale']]);
         }
@@ -289,7 +287,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
+        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
 
         $this->bumpVersionInRedis($pivotTableKey);
 
@@ -297,8 +295,8 @@ class LuaScriptConsistencyTest extends TestCase
             $pivotKey,
             [['id' => 1, 'pivot' => []]],
             60,
-            $cache['versionKeys'],
-            $cache['expectedVersions'],
+            $cache->versionKeys,
+            $cache->expectedVersions,
         );
 
         $this->assertNull($manager->getStore()->get($pivotKey));
@@ -311,7 +309,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache['seg']}:1";
+        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
 
         $this->bumpVersionInRedis($tagKey);
 
@@ -319,8 +317,8 @@ class LuaScriptConsistencyTest extends TestCase
             $pivotKey,
             [['id' => 1, 'pivot' => []]],
             60,
-            $cache['versionKeys'],
-            $cache['expectedVersions'],
+            $cache->versionKeys,
+            $cache->expectedVersions,
         )) {
             $manager->cacheModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Stale']]);
         }
@@ -408,21 +406,21 @@ class LuaScriptConsistencyTest extends TestCase
         $initialVersion = NormCache::currentVersion(Author::class);
 
         $buildLock = NormCache::getResultCache(Author::class, [], 'test-hash');
-        $this->assertSame('miss', $buildLock['status']);
+        $this->assertSame('miss', $buildLock->status->value);
 
         $author->update(['name' => 'Bob']);
         $bumpedVersion = NormCache::currentVersion(Author::class);
         $this->assertGreaterThan($initialVersion, $bumpedVersion);
 
         $committed = NormCache::storeResultCache(
-            $buildLock['key'],
+            $buildLock->key,
             ['data' => 'stale'],
-            $buildLock['buildingKey'],
+            $buildLock->buildingKey,
             null,
-            $buildLock['wakeKey'],
-            $buildLock['versionKeys'],
-            $buildLock['expectedVersions'], // Worker A thinks this is still current
-            $buildLock['buildingToken']
+            $buildLock->wakeKey,
+            $buildLock->versionKeys,
+            $buildLock->expectedVersions, // Worker A thinks this is still current
+            $buildLock->buildingToken
         );
 
         $this->assertFalse($committed, 'Late writer should have its commit rejected');
@@ -433,6 +431,6 @@ class LuaScriptConsistencyTest extends TestCase
             'test-hash'
         );
 
-        $this->assertNotSame(['data' => 'stale'], $freshRead['payload'] ?? null, 'Late writer must not poison the current fresh cache');
+        $this->assertNotSame(['data' => 'stale'], $freshRead->payload ?? null, 'Late writer must not poison the current fresh cache');
     }
 }

@@ -14,7 +14,7 @@ final class RedisStore
 {
     private Connection $connection;
 
-    private bool $igbinary;
+    private CacheSerializer $serializer;
 
     /** @var array<string, string> SHA1 cache — populated on first use of each script */
     private static array $shas = [];
@@ -25,7 +25,7 @@ final class RedisStore
         private bool $slotting,
         private string $slotPrefix = '',
     ) {
-        $this->igbinary = extension_loaded('igbinary');
+        $this->serializer = new CacheSerializer;
         $this->connection = Redis::connection($redisConnection);
     }
 
@@ -405,42 +405,17 @@ final class RedisStore
 
     public function serialize(mixed $value): mixed
     {
-        if ((is_int($value) || is_float($value)) && is_finite((float) $value)) {
-            return $value;
-        }
-
-        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
+        return $this->serializer->serialize($value);
     }
 
     public function unserialize(mixed $value): mixed
     {
-        if (is_numeric($value)) {
-            return str_contains($value, '.') ? (float) $value : (int) $value;
-        }
-
-        if (is_string($value) && isset($value[0]) && $value[0] === "\x00") {
-            return $this->igbinary ? igbinary_unserialize($value) : null;
-        }
-
-        // Check if it's a serialized string. PHP serialized strings start with
-        // s:, i:, d:, b:, a:, O:, C:, R:, r:, N;
-        if (is_string($value) && preg_match('/^[sidbaOCRrN]:|^[sidbaOCRrN];/', $value)) {
-            try {
-                return unserialize($value);
-            } catch (\Throwable) {
-                return $value;
-            }
-        }
-
-        return $value;
+        return $this->serializer->unserialize($value);
     }
 
     public function unserializeMany(array $raw): array
     {
-        return array_map(
-            fn($value) => $value !== null && $value !== false ? $this->unserialize($value) : null,
-            $raw
-        );
+        return $this->serializer->unserializeMany($raw);
     }
 
     // -------------------------------------------------------------------------

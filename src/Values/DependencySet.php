@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Planning;
+namespace NormCache\Values;
 
 final readonly class DependencySet
 {

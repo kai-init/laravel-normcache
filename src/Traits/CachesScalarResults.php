@@ -3,10 +3,12 @@
 namespace NormCache\Traits;
 
 use NormCache\Enums\CacheMode;
-use NormCache\Planning\CachePlanContext;
+use NormCache\Facades\NormCache;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Support\QueryHasher;
+use NormCache\Values\CachePlanContext;
 
 /**
  * @mixin CacheableBuilder
@@ -91,15 +93,42 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        return $this->versionedCache()->rememberScalar(
-            $this,
-            $base,
-            $plan,
-            $fallback,
-            $kind,
-            $this->getQueryTtl(),
-            $this->getCacheTag(),
-            str_starts_with($kind, 'count') ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_SCALAR
+        $modelClass = $this->model::class;
+        $depClasses = $plan->dependencies->depClassesFor($modelClass);
+        $depTableKeys = $plan->dependencies->tables;
+        $namespace = str_starts_with($kind, 'count') ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_SCALAR;
+        $hash = QueryHasher::forScalarQuery($this, $base, $kind, $plan->columns ?? []);
+        $ttl = $this->getQueryTtl();
+        $tag = $this->getCacheTag();
+        $debugbarStart = CacheReporter::beginMeasure();
+
+        return NormCache::executor()->runScalar(
+            fetch: fn() => NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+            waitForBuild: fn() => NormCache::waitForBuild('result', $modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
+            compute: $fallback,
+            onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
+                CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind]);
+
+                NormCache::storeResultCache(
+                    $result->key,
+                    [$value],
+                    $result->buildingKey,
+                    $ttl,
+                    $result->wakeKey,
+                    $result->versionKeys,
+                    $result->expectedVersions,
+                    $result->buildingToken
+                );
+            },
+            onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $fallback) {
+                if (!is_array($result->payload) || !array_key_exists(0, $result->payload)) {
+                    return $fallback();
+                }
+
+                CacheReporter::queryHit($modelClass, $result->key, $debugbarStart, ['kind' => $kind]);
+
+                return $result->payload[0];
+            },
         );
     }
 }

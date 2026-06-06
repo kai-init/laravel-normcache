@@ -5,6 +5,7 @@ parameters:
     level: 5
     paths:
         - src
+    reportUnmatchedIgnoredErrors: false
     bootstrapFiles:
         - stubs/DebugBar.stub.php
     ignoreErrors:
@@ -20,3 +21,6 @@ parameters:
         -
             identifier: trait.unused
             path: src/Relations/*
+        -
+            message: '#class_exists\(\) with .+ will always evaluate to false#'
+            path: src/CacheServiceProvider.php

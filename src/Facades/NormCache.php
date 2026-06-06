@@ -7,6 +7,8 @@ use NormCache\CacheManager;
 
 /**
  * @mixin CacheManager
+ *
+ * @method static \NormCache\Cache\CacheExecutor executor()
  */
 class NormCache extends Facade
 {

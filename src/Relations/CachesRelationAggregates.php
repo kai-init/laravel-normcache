@@ -8,9 +8,9 @@ use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\CachePlanContext;
-use NormCache\Planning\DependencySet;
 use NormCache\Traits\Cacheable;
+use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 
 trait CachesRelationAggregates
 {
