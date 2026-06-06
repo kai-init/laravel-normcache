@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisScripts;
 
 /**
  * @phpstan-require-extends CacheManager
@@ -25,7 +26,7 @@ trait HandlesInvalidation
 
     public function invalidateVersion(Model $model): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -42,7 +43,7 @@ trait HandlesInvalidation
 
     public function flushModel(Model|string $model): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -65,7 +66,7 @@ trait HandlesInvalidation
 
     public function flushInstance(Model $model): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -93,7 +94,7 @@ trait HandlesInvalidation
 
     public function invalidateTableVersion(string $connectionName, string $table): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -110,7 +111,7 @@ trait HandlesInvalidation
 
     public function evictModelKey(string $modelClass, mixed $id): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -182,7 +183,7 @@ trait HandlesInvalidation
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
     {
-        if (!$this->enabled) {
+        if (!$this->isEnabled()) {
             return;
         }
 
@@ -209,7 +210,7 @@ trait HandlesInvalidation
 
         unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName], $this->instanceEvictQueue[$connectionName]);
 
-        if ((empty($flushes) && empty($versions) && empty($evicts)) || !$this->enabled) {
+        if ((empty($flushes) && empty($versions) && empty($evicts)) || !$this->isEnabled()) {
             return;
         }
 
@@ -275,7 +276,11 @@ trait HandlesInvalidation
             return $this->store->getRaw($this->keys->verKey($classKey));
         }
 
-        return $this->luaFetchVersionWithCooldown($classKey);
+        return $this->store->eval(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
+            [(string) (int) floor(microtime(true) * 1000)]
+        );
     }
 
     private function scheduleInvalidation(string $classKey): void

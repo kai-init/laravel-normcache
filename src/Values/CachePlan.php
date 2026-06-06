@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Planning;
+namespace NormCache\Values;
 
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;

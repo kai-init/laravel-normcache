@@ -4,6 +4,7 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\Values\QueryAnalysis;
 
 final class QueryAnalyzer
 {

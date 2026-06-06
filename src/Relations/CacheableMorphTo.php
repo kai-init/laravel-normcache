@@ -8,8 +8,8 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\CachePlanContext;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Values\CachePlanContext;
 
 class CacheableMorphTo extends MorphTo
 {

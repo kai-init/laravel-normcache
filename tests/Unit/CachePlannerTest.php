@@ -4,9 +4,9 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\Log;
 use NormCache\Planning\CachePlanner;
-use NormCache\Planning\DependencySet;
-use NormCache\Planning\QueryAnalysis;
 use NormCache\Tests\TestCase;
+use NormCache\Values\DependencySet;
+use NormCache\Values\QueryAnalysis;
 
 class CachePlannerTest extends TestCase
 {

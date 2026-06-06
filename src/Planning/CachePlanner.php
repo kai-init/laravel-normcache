@@ -9,6 +9,10 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
+use NormCache\Values\CachePlan;
+use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
+use NormCache\Values\QueryAnalysis;
 
 final class CachePlanner
 {
@@ -125,8 +129,6 @@ final class CachePlanner
         }
 
         if ($normalizable && $dependencies->safe && empty($bypassReasons['normalization'])) {
-            // Issue 6: Multi-dependency normalized queries in cluster mode risk cross-slot errors.
-            // Route them to Result mode which is slotting-aware.
             $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
 
             if (!$slotting || !$isMultiDependency) {

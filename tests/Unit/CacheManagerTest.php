@@ -59,14 +59,7 @@ class CacheManagerTest extends TestCase
 
     public function test_invalidate_version_schedules_once_with_cooldown(): void
     {
-        $manager = new CacheManager(
-            'normcache-test',
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            config('normcache.key_prefix'),
-            60,
-            slotting: true,
-        );
+        $manager = $this->buildManager(cooldown: 60, cluster: true, slotting: true);
         $redis = Redis::connection('normcache-test');
         $classKey = $manager->classKey(Author::class);
         $scheduledKey = "test:scheduled:{{$classKey}}:";
@@ -84,14 +77,7 @@ class CacheManagerTest extends TestCase
 
     public function test_current_version_applies_due_scheduled_invalidation(): void
     {
-        $manager = new CacheManager(
-            'normcache-test',
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            config('normcache.key_prefix'),
-            60,
-            slotting: true,
-        );
+        $manager = $this->buildManager(cooldown: 60, cluster: true, slotting: true);
 
         $classKey = $manager->classKey(Author::class);
         Redis::connection('normcache-test')->set(
@@ -111,15 +97,7 @@ class CacheManagerTest extends TestCase
 
     public function test_default_non_slotting_prefixes_all_keys_and_preserves_existing_prefix(): void
     {
-        $manager = new CacheManager(
-            'normcache-test',
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            'test:',
-            config('normcache.cooldown'),
-            true,
-            slotting: false,
-        );
+        $manager = $this->buildManager(cluster: true, slotting: false);
 
         $classKey = $manager->classKey(Author::class);
         $store = $manager->getStore();
@@ -189,14 +167,7 @@ class CacheManagerTest extends TestCase
         config()->set('database.redis.options.prefix', 'laravel:');
         Redis::purge('normcache-test');
 
-        $manager = new CacheManager(
-            'normcache-test',
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            config('normcache.key_prefix'),
-            config('normcache.cooldown'),
-            slotting: true,
-        );
+        $manager = $this->buildManager(cluster: true, slotting: true);
 
         $store = $manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
@@ -233,14 +204,7 @@ class CacheManagerTest extends TestCase
 
     public function test_scheduled_invalidation_key_persists_until_processed(): void
     {
-        $manager = new CacheManager(
-            'normcache-test',
-            config('normcache.ttl'),
-            config('normcache.query_ttl'),
-            config('normcache.key_prefix'),
-            1,
-            slotting: true,
-        );
+        $manager = $this->buildManager(cooldown: 1, cluster: true, slotting: true);
 
         $model = new Author;
         $classKey = $manager->classKey(Author::class);
@@ -311,7 +275,7 @@ class CacheManagerTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // storeQueryIds — corrupt/default path (Issue 3)
+    // storeQueryIds — corrupt/default path
     // -------------------------------------------------------------------------
 
     public function test_store_query_ids_skips_write_without_building_key_and_version_keys(): void
@@ -339,7 +303,7 @@ class CacheManagerTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // invalidateMultipleVersions (Issue 5)
+    // invalidateMultipleVersions
     // -------------------------------------------------------------------------
 
     public function test_invalidate_multiple_versions_bumps_version_for_each_class(): void

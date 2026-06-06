@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Enums\CacheStatus;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
@@ -82,11 +83,11 @@ class OptimizationsTest extends TestCase
         $hash = QueryHasher::forNormalizedQuery($query);
         $result = app('normcache')->getModelsFromQuery(Author::class, $hash);
 
-        $this->assertSame('hit', $result['status']);
-        $this->assertSame([(string) $author->id], $result['ids']);
-        $this->assertIsArray($result['models']);
-        $this->assertIsArray($result['models'][0]);
-        $this->assertSame('Payload Author', $result['models'][0]['name']);
+        $this->assertSame(CacheStatus::Hit, $result->status);
+        $this->assertSame([(string) $author->id], $result->ids);
+        $this->assertIsArray($result->models);
+        $this->assertIsArray($result->models[0]);
+        $this->assertSame('Payload Author', $result->models[0]['name']);
     }
 
     public function test_corrupt_query_cache_payload_degrades_to_miss_and_repairs(): void

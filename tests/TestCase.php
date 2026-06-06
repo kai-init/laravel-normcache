@@ -9,9 +9,16 @@ use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\CacheFlowGuard;
+use NormCache\Cache\ModelHydrator;
+use NormCache\Cache\NormalizedCacheReader;
+use NormCache\Cache\CacheExecutor;
+use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisStore;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
 use ReflectionProperty;
@@ -139,6 +146,54 @@ abstract class TestCase extends OrchestraTestCase
     protected function cacheManager(): CacheManager
     {
         return $this->app->make('normcache');
+    }
+
+    /**
+     * Build a standalone CacheManager (not bound in the container) for tests
+     * that need specific construction parameters like cooldown or slotting.
+     */
+    protected function buildManager(
+        string $connection = 'normcache-test',
+        ?int $ttl = null,
+        ?int $queryTtl = null,
+        string $keyPrefix = 'test:',
+        int $cooldown = 0,
+        bool $cluster = false,
+        bool $enabled = true,
+        bool $dispatchEvents = true,
+        bool $fallback = false,
+        bool $fireRetrieved = false,
+        int $buildingLockTtl = 5,
+        int $stampedeWaitMs = 200,
+        int $staleDepth = 3,
+        bool $slotting = false,
+    ): CacheManager {
+        $ttl ??= (int) config('normcache.ttl');
+        $queryTtl ??= (int) config('normcache.query_ttl');
+
+        $slottingActive = $cluster && $slotting;
+        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slottingActive ? '' : '{nc}:');
+        $keys = new CacheKeyBuilder;
+        $versions = new VersionTracker($store, $keys);
+        $guard = new CacheFlowGuard($fallback);
+
+        return new CacheManager(
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
+            resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+            hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
+            versions: $versions,
+            guard: $guard,
+            executor: new CacheExecutor,
+            store: $store,
+            keys: $keys,
+            ttl: $ttl,
+            queryTtl: $queryTtl,
+            cooldown: $cooldown,
+            enabled: $enabled,
+            dispatchEvents: $dispatchEvents,
+            cluster: $cluster,
+            slotting: $slottingActive,
+        );
     }
 
     /** Assert native == cold == warm for a given query. */

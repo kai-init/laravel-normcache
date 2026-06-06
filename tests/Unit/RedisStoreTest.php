@@ -437,7 +437,8 @@ class RedisStoreTest extends TestCase
         }
 
         $store = new RedisStore('normcache-test', '', false);
-        (new ReflectionProperty($store, 'igbinary'))->setValue($store, false);
+        $serializer = (new ReflectionProperty($store, 'serializer'))->getValue($store);
+        (new ReflectionProperty($serializer, 'igbinary'))->setValue($serializer, false);
 
         $this->assertNull($store->unserialize(igbinary_serialize(['id' => 42])));
     }

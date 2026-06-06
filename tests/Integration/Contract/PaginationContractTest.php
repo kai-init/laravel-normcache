@@ -167,7 +167,6 @@ class PaginationContractTest extends TestCase
         $author->posts()->create(['title' => 'Post 1']);
         $author->posts()->create(['title' => 'Post 2']);
 
-        // 1. Join + dependsOn should hit Result cache
         Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::join('posts', 'authors.id', '=', 'posts.author_id')
@@ -181,7 +180,6 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheMiss::class);
         Event::assertDispatched(QueryCacheHit::class);
 
-        // 2. Invalidated by dependency
         Post::first()->update(['title' => 'Changed']);
         Event::fake([QueryCacheMiss::class]);
         Author::join('posts', 'authors.id', '=', 'posts.author_id')
@@ -197,7 +195,6 @@ class PaginationContractTest extends TestCase
         $author->posts()->create(['title' => 'Post 1']);
         $author->posts()->create(['title' => 'Post 2']);
 
-        // 1. Join + dependsOn should hit Result cache
         Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::join('posts', 'authors.id', '=', 'posts.author_id')
