@@ -41,4 +41,9 @@ class Post extends Model
     {
         return $this->morphOne(Comment::class, 'commentable');
     }
+
+    public function getCalculatedFieldAttribute(): string
+    {
+        return 'calculated_value';
+    }
 }

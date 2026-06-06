@@ -8,6 +8,7 @@ final readonly class QueryAnalysis
         public ?array $selectedColumns = null,
         public ?array $primaryKeys = null,
         public array $bypassReasons = [],
+        public ?array $tables = null,
     ) {}
 
     public function dependencyReasons(): array

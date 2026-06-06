@@ -2,7 +2,9 @@
 
 namespace NormCache\Planning;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;
@@ -164,6 +166,8 @@ final class CachePlanner
             $isStrictRelation = in_array($context->operation, [CacheOperation::Pivot, CacheOperation::Through], true);
 
             if (!$isStrictRelation || empty($bypassReasons['normalization'])) {
+                $this->checkDependencyCompleteness($analysis, $dependencies, $builder->getModel()->getTable());
+
                 return new CachePlan(
                     mode: CacheMode::Result,
                     operation: $context->operation,
@@ -175,6 +179,8 @@ final class CachePlanner
                 );
             }
         }
+
+        $this->checkDependencyCompleteness($analysis, $dependencies, $builder->getModel()->getTable());
 
         if (!$dependencies->safe) {
             $bypassReasons['dependency'] = array_values(array_unique([
@@ -199,6 +205,35 @@ final class CachePlanner
             ])),
             bypassReasons: $bypassReasons,
         );
+    }
+
+    private function checkDependencyCompleteness(QueryAnalysis $analysis, DependencySet $dependencies, string $baseTable): void
+    {
+        if (!config('app.debug', false)) {
+            return;
+        }
+
+        $queryTables = $analysis->tables ?? [];
+        $declaredTables = $dependencies->tables ?? [];
+
+        // Map declared models to their tables
+        foreach ($dependencies->models as $modelClass) {
+            if (class_exists($modelClass) && is_subclass_of($modelClass, Model::class)) {
+                $declaredTables[] = (new $modelClass)->getTable();
+            }
+        }
+
+        // Add the base table to the declared list so it doesn't get flagged as missing
+        $declaredTables[] = $baseTable;
+
+        $missing = array_diff($queryTables, $declaredTables);
+
+        if (!empty($missing)) {
+            $tablesStr = implode(', ', $missing);
+            Log::warning(
+                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOn(). This is an under-declared dependency and can lead to stale cache reads."
+            );
+        }
     }
 
     private function resolveContextReasons(CacheableBuilder $builder, CachePlanContext $context): array

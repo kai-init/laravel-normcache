@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
@@ -661,5 +662,20 @@ class DependsOnTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         Author::query()->dependsOnTables([123]);
+    }
+
+    public function test_under_declared_dependencies_log_a_warning_in_debug_mode(): void
+    {
+        config(['app.debug' => true]);
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function ($message) {
+                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOn()');
+            });
+
+        Post::query()
+            ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->get();
     }
 }

@@ -14,6 +14,16 @@ final class QueryAnalyzer
         array $primaryKeyIdentifiers = [],
         array $contextReasons = [],
     ): QueryAnalysis {
+        $tables = [$table];
+        
+        if (!empty($base->joins)) {
+            foreach ($base->joins as $join) {
+                if (is_string($join->table)) {
+                    $tables[] = $join->table;
+                }
+            }
+        }
+
         return new QueryAnalysis(
             selectedColumns: $resolvedColumns,
             primaryKeys: self::extractPrimaryKeys($base, $primaryKeyIdentifiers),
@@ -21,6 +31,7 @@ final class QueryAnalyzer
                 $contextReasons,
                 BypassReasons::forQuery($base, $table, $resolvedColumns),
             ),
+            tables: array_unique($tables)
         );
     }
 
