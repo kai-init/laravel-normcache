@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.0] — 2026-06-06
+
+### Added
+
+- **`dependsOnTables(array $tables)`:** declare raw table names as cache dependencies alongside `dependsOn()` model classes. Useful for queries that touch tables without a corresponding Cacheable model.
+- **Dependency completeness warnings:** when `dependsOn()` or `dependsOnTables()` is used, the planner warns at query time if the declared dependencies do not cover all tables referenced in the query, surfacing likely invalidation gaps early.
+- **`chunk()`, `each()`, and `lazy()` bypass cache:** streaming operations always execute against the database; caching partial result windows is not meaningful.
+- **`sole()` bypasses cache:** must verify live row count against the database; a cached snapshot could incorrectly suppress or pass the uniqueness assertion.
+
+### Changed
+
+- **Query hash includes model casts:** queries on models with different cast configurations no longer share a cache key when the underlying SQL is identical.
+- **Atomic version bump with TTL refresh:** version increments execute `INCR + EXPIRE` atomically, preventing counters from becoming permanent when a TTL-expired key is incremented.
+- **Multi-dependency cluster routing:** normalized queries with more than one dependency model or table are routed to the result cache in cluster mode, where each version key resolves to its own slot.
+- **Internal structure:** cache execution, column projection, query hashing, and Redis serialization have been reorganized for consistency across all cache paths.
+
+### Fixed
+
+- **`deleteQuietly()` invalidates cache:** now triggers the same flush as `delete()`.
+- **`skipCache` propagation:** nested relation queries no longer inherit the flag through shared builder state.
+- **Scalar corrupt-payload fallback:** a stored scalar with an unexpected shape falls back to a live query instead of returning a wrong value.
+- **Relation projection accuracy:** through, pivot, and `belongsTo` relations with column constraints no longer write or read payloads built from the wrong column set.
+- **Pivot constraint hash stability:** constraint bindings are now serialized to a stable representation across PHP versions.
+- **`SSCAN` double-prefix:** member keys were being double-prefixed during model set flush scans.
+
+---
+
 ## [2.0.1] — 2026-06-03
 
 ### Fixed
