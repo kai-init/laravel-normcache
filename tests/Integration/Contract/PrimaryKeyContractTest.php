@@ -40,4 +40,22 @@ class PrimaryKeyContractTest extends TestCase
             fn() => Author::withoutCache()->whereIn('id', [3, 1, 2])->orderByDesc('id')->get(),
         );
     }
+
+    public function test_where_in_uuid_primary_key_order_contract(): void
+    {
+        \NormCache\Tests\Fixtures\Models\UuidItem::create(['id' => 'b8f8702c-4734-45e0-a548-18e3c66f6f9c', 'name' => 'B']);
+        \NormCache\Tests\Fixtures\Models\UuidItem::create(['id' => 'a1f8702c-4734-45e0-a548-18e3c66f6f9c', 'name' => 'A']);
+        \NormCache\Tests\Fixtures\Models\UuidItem::create(['id' => 'c1f8702c-4734-45e0-a548-18e3c66f6f9c', 'name' => 'C']);
+
+        $ids = [
+            'c1f8702c-4734-45e0-a548-18e3c66f6f9c',
+            'a1f8702c-4734-45e0-a548-18e3c66f6f9c',
+            'b8f8702c-4734-45e0-a548-18e3c66f6f9c',
+        ];
+
+        $this->contract(
+            fn() => \NormCache\Tests\Fixtures\Models\UuidItem::whereIn('id', $ids)->get(),
+            fn() => \NormCache\Tests\Fixtures\Models\UuidItem::withoutCache()->whereIn('id', $ids)->get(),
+        );
+    }
 }

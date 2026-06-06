@@ -146,4 +146,43 @@ class QueryHasherTest extends TestCase
             QueryHasher::forScalarQuery($b, $b->toBase(), 'pluck', ['name'])
         );
     }
+
+    public function test_for_relation_query_strips_specific_key(): void
+    {
+        $a = $this->makeEloquentBuilder()->where('author_id', 1)->where('active', true);
+        $b = $this->makeEloquentBuilder()->where('author_id', 2)->where('active', true);
+
+        // Should be same because author_id is stripped
+        $this->assertSame(
+            QueryHasher::forRelationQuery($a, 'author_id'),
+            QueryHasher::forRelationQuery($b, 'author_id')
+        );
+
+        $c = $this->makeEloquentBuilder()->where('author_id', 1)->where('active', false);
+
+        // Should be different because active is NOT stripped
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'author_id'),
+            QueryHasher::forRelationQuery($c, 'author_id')
+        );
+    }
+
+    public function test_normalize_value_for_hash_is_recursive(): void
+    {
+        $subquery = $this->makeBuilder()->from('users')->select('id')->where('active', true);
+        $value = [
+            'nested' => [
+                'query' => $subquery,
+                'date' => new \DateTime('2023-01-01 12:00:00'),
+            ],
+        ];
+
+        $normalized = QueryHasher::normalizeValueForHash($value);
+
+        $this->assertIsArray($normalized);
+        $this->assertArrayHasKey('nested', $normalized);
+        $this->assertArrayHasKey('query', $normalized['nested']);
+        $this->assertEquals('select "id" from "users" where "active" = ?', $normalized['nested']['query']['sql']);
+        $this->assertEquals('2023-01-01 12:00:00', $normalized['nested']['date']);
+    }
 }

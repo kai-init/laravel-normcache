@@ -185,4 +185,16 @@ class ThroughRelationTest extends TestCase
 
         $this->assertNotEmpty($queries, 'withoutCache() on HasManyThrough should issue a DB query');
     }
+
+    public function test_through_wildcard_plus_extra_column_does_not_pollute_model_cache(): void
+    {
+        $country = Country::create(['name' => 'UK']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $country->posts()->select('posts.*')->selectRaw('2 as polluted')->get();
+
+        $cached = NormCache::getModels([$post->id], Post::class);
+        $this->assertArrayNotHasKey('polluted', $cached[0]->getRawOriginal());
+    }
 }

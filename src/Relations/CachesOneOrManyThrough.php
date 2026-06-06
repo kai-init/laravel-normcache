@@ -10,6 +10,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 
 trait CachesOneOrManyThrough
@@ -22,14 +23,23 @@ trait CachesOneOrManyThrough
 
         $debugbarStart = CacheReporter::beginMeasure();
 
-        $shouldCacheModels = $this->shouldCacheRelatedModels($columns);
+        $builder = $this->prepareQueryBuilder($columns);
 
-        if (!$shouldCacheModels && !$this->relatedKeyInProjection($columns)) {
+        $classification = ProjectionClassifier::classifyForRelation(
+            $builder,
+            (array) $columns,
+            $this->related->getTable(),
+            $this->related->getKeyName()
+        );
+
+        $shouldCacheModels = $classification['shouldCacheRelatedModels'];
+        $selectedColumns = $classification['selectedRelatedColumns'];
+
+        if (!$shouldCacheModels && !$classification['relatedKeyInProjection']) {
             return parent::get($columns);
         }
 
-        $builder = $this->prepareQueryBuilder($columns);
-        $hash = QueryHasher::forResultQuery($builder);
+        $hash = QueryHasher::forRelationQuery($builder, $this->getQualifiedFirstKeyName());
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
 
@@ -61,7 +71,7 @@ trait CachesOneOrManyThrough
 
         if ($result['status'] === 'hit') {
             return NormCache::rescue(
-                function () use ($result, $relatedClass, $builder, $shouldCacheModels, $throughClass, $key, $debugbarStart) {
+                function () use ($result, $relatedClass, $builder, $selectedColumns, $throughClass, $key, $debugbarStart) {
                     CacheReporter::queryHit($relatedClass, $key, $debugbarStart, [
                         'through' => $throughClass,
                     ], 'through hit');
@@ -70,7 +80,7 @@ trait CachesOneOrManyThrough
                         $result['payload']['ids'],
                         $relatedClass,
                         $builder,
-                        $this->projectionColumns($shouldCacheModels),
+                        $selectedColumns,
                         $result['payload']['throughKeys']
                     );
                 },
@@ -103,34 +113,6 @@ trait CachesOneOrManyThrough
         return $models;
     }
 
-    private function relatedKeyInProjection(mixed $columns): bool
-    {
-        $cols = $this->query->toBase()->columns ?? (array) $columns;
-        if ($cols === ['*']) {
-            return true;
-        }
-
-        if (array_filter($cols, static fn($c) => is_string($c) && str_ends_with($c, '*'))) {
-            return true;
-        }
-
-        $key = $this->related->getKeyName();
-        $qualified = $this->related->getTable() . '.' . $key;
-
-        return in_array($key, $cols, true) || in_array($qualified, $cols, true);
-    }
-
-    private function shouldCacheRelatedModels(mixed $columns): bool
-    {
-        $queryColumns = $this->query->toBase()->columns;
-
-        if ($queryColumns !== null) {
-            return (bool) array_filter($queryColumns, static fn($c) => is_string($c) && str_ends_with($c, '*'));
-        }
-
-        return $columns === ['*'];
-    }
-
     private function shouldUseCache(): bool
     {
         if (!$this->query instanceof CacheableBuilder) {
@@ -138,8 +120,10 @@ trait CachesOneOrManyThrough
         }
 
         $base = $this->query->toBase();
+        $projection = ProjectionClassifier::resolve($base, null);
+
         $plan = $this->query->cachePlan($base, CachePlanContext::through(
-            $this->projectionColumns(true) ?? [],
+            $projection ?? [],
             $this->query->inferAggregateDependencies()
         ));
 
@@ -154,23 +138,6 @@ trait CachesOneOrManyThrough
                 $model->getKey() => $model->getAttribute('laravel_through_key'),
             ])->all(),
         ];
-    }
-
-    private function projectionColumns(bool $shouldCacheModels): ?array
-    {
-        if ($shouldCacheModels) {
-            return null;
-        }
-
-        $cols = $this->query->toBase()->columns;
-
-        if ($cols === null || $cols === ['*']) {
-            return null;
-        }
-
-        $hasWildcard = (bool) array_filter($cols, fn($c) => str_ends_with((string) $c, '*'));
-
-        return $hasWildcard ? null : $cols;
     }
 
     private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection

@@ -18,6 +18,7 @@ use NormCache\Planning\CachePlanner;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Traits\Cacheable;
 use NormCache\Traits\CachesScalarResults;
@@ -162,7 +163,7 @@ class CacheableBuilder extends Builder
     public function explain(): string
     {
         $base = $this->toBase();
-        $resolvedCols = QueryAnalyzer::resolveSelectedColumns($base, ['*']);
+        $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
         $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 
         if ($plan->mode === CacheMode::Normalized) {
@@ -197,7 +198,7 @@ class CacheableBuilder extends Builder
         $debugbarStart = CacheReporter::beginMeasure();
 
         $base = $this->toBase();
-        $resolvedCols = QueryAnalyzer::resolveSelectedColumns($base, (array) $columns);
+        $resolvedCols = ProjectionClassifier::resolve($base, (array) $columns);
         $model = $this->model::class;
         $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 

@@ -4,6 +4,7 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\Support\ProjectionClassifier;
 
 final class BypassReasons
 {
@@ -66,7 +67,7 @@ final class BypassReasons
             $safety[] = 'query lock (SELECT FOR UPDATE)';
         }
 
-        if (QueryAnalyzer::hasCalculatedColumns($resolvedColumns)) {
+        if (ProjectionClassifier::hasCalculatedColumns($resolvedColumns)) {
             $normalization[] = 'calculated or raw SELECT expressions';
         }
 

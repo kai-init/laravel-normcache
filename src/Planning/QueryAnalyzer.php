@@ -7,8 +7,6 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 
 final class QueryAnalyzer
 {
-    private const COLUMN_IDENTIFIER = '[`"]?[A-Za-z_][A-Za-z0-9_]*[`"]?';
-
     public function forBuilder(
         QueryBuilder $base,
         string $table,
@@ -70,65 +68,5 @@ final class QueryAnalyzer
         }
 
         return null;
-    }
-
-    public static function resolveSelectedColumns(QueryBuilder $base, ?array $fallback): ?array
-    {
-        $columns = $base->columns ?? (($fallback === null || $fallback === ['*']) ? null : $fallback);
-
-        if ($columns === null || $columns === ['*']) {
-            return null;
-        }
-
-        foreach ($columns as $column) {
-            if (!is_string($column) || !str_ends_with($column, '*')) {
-                return $columns;
-            }
-        }
-
-        return null;
-    }
-
-    public static function hasCalculatedColumns(?array $columns): bool
-    {
-        if ($columns === null) {
-            return false;
-        }
-
-        foreach ($columns as $column) {
-            if (!is_string($column) || !self::isCacheableSelectedColumn($column)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static function isCacheableSelectedColumn(string $column): bool
-    {
-        $column = trim($column);
-
-        if ($column === '*' || str_ends_with($column, '.*')) {
-            return true;
-        }
-
-        if (stripos($column, ' as ') !== false) {
-            $segments = preg_split('/\s+as\s+/i', trim($column));
-
-            return count($segments) === 2
-                && self::isColumnIdentifier($segments[0])
-                && self::isColumnIdentifier($segments[1], false);
-        }
-
-        return self::isColumnIdentifier($column);
-    }
-
-    private static function isColumnIdentifier(string $column, bool $allowQualifier = true): bool
-    {
-        $pattern = $allowQualifier
-            ? '/^' . self::COLUMN_IDENTIFIER . '(?:\\.' . self::COLUMN_IDENTIFIER . ')?$/'
-            : '/^' . self::COLUMN_IDENTIFIER . '$/';
-
-        return (bool) preg_match($pattern, trim($column));
     }
 }

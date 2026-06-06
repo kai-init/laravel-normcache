@@ -9,6 +9,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\AttributeProjector;
+use NormCache\Support\ProjectionClassifier;
 
 class CacheableBelongsTo extends BelongsTo
 {
@@ -23,7 +24,7 @@ class CacheableBelongsTo extends BelongsTo
 
     public function getEager()
     {
-        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
+        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
 
         if (!$this->shouldUseCacheForEagerLoad($columns)) {
             return parent::getEager();

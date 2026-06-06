@@ -473,4 +473,18 @@ class PivotCacheTest extends TestCase
 
         $this->assertEmpty($queries, 'Should hit total query cache');
     }
+
+    public function test_pivot_table_wildcard_plus_extra_column_does_not_pollute_model_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        // Query with table.* AND a computed column
+        $author->tags()->select('tags.*')->selectRaw('1 as polluted')->get();
+
+        // The model cache should NOT contain 'polluted'
+        $cached = NormCache::getModels([$tag->id], Tag::class);
+        $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
+    }
 }

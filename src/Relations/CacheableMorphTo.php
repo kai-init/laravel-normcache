@@ -9,7 +9,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
-use NormCache\Planning\QueryAnalyzer;
+use NormCache\Support\ProjectionClassifier;
 
 class CacheableMorphTo extends MorphTo
 {
@@ -94,7 +94,7 @@ class CacheableMorphTo extends MorphTo
         $instance = $this->createModelByType($type);
         $ids = array_values($this->gatherKeysByType($type, $instance->getKeyType()));
 
-        $columns = QueryAnalyzer::resolveSelectedColumns($this->query->toBase(), null);
+        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
 
         $models = NormCache::getModels($ids, $class, $columns, null, $this->query, false);
         $collection = $instance->newCollection($models);

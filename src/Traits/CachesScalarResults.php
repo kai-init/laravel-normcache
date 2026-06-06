@@ -7,6 +7,7 @@ use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\ProjectionClassifier;
 
 /**
  * @mixin CacheableBuilder
@@ -76,7 +77,7 @@ trait CachesScalarResults
 
     private function cacheScalar(string $kind, \Closure $fallback, array $columns = []): mixed
     {
-        if (QueryAnalyzer::hasCalculatedColumns($columns)) {
+        if (ProjectionClassifier::hasCalculatedColumns($columns)) {
             return $fallback();
         }
 
