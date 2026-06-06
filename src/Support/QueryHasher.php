@@ -2,8 +2,10 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\DB;
 use NormCache\CacheableBuilder;
 
 final class QueryHasher
@@ -42,26 +44,11 @@ final class QueryHasher
         $base = $builder->toBase();
         $shape = [];
 
-        $rawBindings = $base->getRawBindings();
-        $whereBindings = $rawBindings['where'] ?? [];
-        $newWhereBindings = [];
-        $bindingOffset = 0;
-
-        // Surgical strip of the parent foreign key constraint
         $wheres = [];
         foreach ($base->wheres as $where) {
-            $count = self::countBindingsForWhere($where);
-            $column = $where['column'] ?? null;
-
-            if ($column !== $stripKey) {
-                $wheres[] = self::normalizeWhereForHash($where, $base);
-                for ($i = 0; $i < $count; $i++) {
-                    if (isset($whereBindings[$bindingOffset + $i])) {
-                        $newWhereBindings[] = $whereBindings[$bindingOffset + $i];
-                    }
-                }
+            if (($where['column'] ?? null) !== $stripKey) {
+                $wheres[] = self::normalizeValueForHash($where, $base);
             }
-            $bindingOffset += $count;
         }
 
         if ($wheres !== []) {
@@ -69,7 +56,7 @@ final class QueryHasher
         }
 
         if (!empty($base->joins)) {
-            $shape['joins'] = array_map(fn ($join) => [
+            $shape['joins'] = array_map(fn($join) => [
                 'type' => $join->type ?? null,
                 'table' => is_string($join->table) ? $join->table : (string) $join->table,
                 'sql' => $join->toSql(),
@@ -83,8 +70,10 @@ final class QueryHasher
             }
         }
 
-        $rawBindings['where'] = $newWhereBindings;
-        $shape['bindings'] = self::normalizeValueForHash($rawBindings, $base);
+        $nonWhereBindings = array_diff_key($base->getRawBindings(), ['where' => null]);
+        if (!empty(array_filter($nonWhereBindings))) {
+            $shape['bindings'] = self::normalizeValueForHash($nonWhereBindings, $base);
+        }
 
         return self::hash(json_encode($shape, JSON_THROW_ON_ERROR));
     }
@@ -116,8 +105,8 @@ final class QueryHasher
             ];
         }
 
-        if ($value instanceof \Illuminate\Contracts\Database\Query\Expression) {
-            $grammar = $base?->getGrammar() ?: \Illuminate\Support\Facades\DB::getQueryGrammar();
+        if ($value instanceof Expression) {
+            $grammar = $base?->getGrammar() ?: DB::getQueryGrammar();
 
             return [
                 'expression' => (string) $value->getValue($grammar),
@@ -134,6 +123,10 @@ final class QueryHasher
 
         if ($value instanceof \DateTimeInterface) {
             return $value->format('Y-m-d H:i:s');
+        }
+
+        if (is_string($value) && !mb_detect_encoding($value, 'UTF-8', true)) {
+            return ['binary' => base64_encode($value)];
         }
 
         if (is_array($value)) {
@@ -167,69 +160,5 @@ final class QueryHasher
     {
         return str_starts_with($kind, 'count')
             || in_array($kind, ['sum', 'avg', 'min', 'max', 'exists'], true);
-    }
-
-    private static function normalizeWhereForHash(array $where, QueryBuilder $base): array
-    {
-        $type = strtolower($where['type'] ?? '');
-
-        if ($type === 'nested' && isset($where['query'])) {
-            return [
-                'type' => 'nested',
-                'boolean' => $where['boolean'] ?? 'and',
-                'wheres' => array_map(fn ($w) => self::normalizeWhereForHash($w, $base), $where['query']->wheres ?? []),
-            ];
-        }
-
-        if (in_array($type, ['exists', 'notexists', 'sub'], true) && isset($where['query'])) {
-            return [
-                'type' => $type,
-                'boolean' => $where['boolean'] ?? 'and',
-                'sql' => $where['query']->toSql(),
-                'bindings' => self::normalizeValueForHash($where['query']->getBindings(), $base),
-            ];
-        }
-
-        if ($type === 'raw') {
-            return [
-                'type' => 'raw',
-                'sql' => $where['sql'] ?? null,
-                'boolean' => $where['boolean'] ?? 'and',
-            ];
-        }
-
-        return [
-            'type' => $type,
-            'column' => is_string($where['column'] ?? null) ? $where['column'] : null,
-            'operator' => $where['operator'] ?? null,
-            'boolean' => $where['boolean'] ?? 'and',
-        ];
-    }
-
-    private static function countBindingsForWhere(array $where): int
-    {
-        $type = strtolower($where['type'] ?? '');
-
-        if (in_array($type, ['sub', 'exists', 'notexists'], true)) {
-            return count($where['query']->getBindings());
-        }
-
-        if (in_array($type, ['basic', 'date', 'month', 'day', 'year', 'time'], true)) {
-            return 1;
-        }
-
-        if (in_array($type, ['in', 'notin'], true)) {
-            return count($where['values'] ?? []);
-        }
-
-        if ($type === 'between') {
-            return 2;
-        }
-
-        if ($type === 'nested') {
-            return array_reduce($where['query']->wheres ?? [], fn ($c, $w) => $c + self::countBindingsForWhere($w), 0);
-        }
-
-        return 0;
     }
 }

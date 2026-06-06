@@ -61,6 +61,7 @@ class Post extends Model
     {
         $model = parent::newFromBuilder($attributes, $connection);
         $model->hydrated_via_builder = true;
+
         return $model;
     }
 }

@@ -2,10 +2,8 @@
 
 namespace NormCache\Relations;
 
-use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
@@ -22,13 +20,10 @@ trait CachesPivotRelation
 
     private bool $inEagerLoad = false;
 
-    private ?array $preEagerWhereBindings = null;
-
     public function addEagerConstraints(array $models): void
     {
         $this->inEagerLoad = true;
         $this->eagerParentIds = $this->getKeys($models, $this->parentKey);
-        $this->preEagerWhereBindings = $this->query->toBase()->getRawBindings()['where'];
         parent::addEagerConstraints($models);
     }
 
@@ -53,7 +48,7 @@ trait CachesPivotRelation
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
-        $constraintHash = $this->currentConstraintHash($columns);
+        $constraintHash = $this->currentConstraintHash();
         $shouldCacheRelatedModels = $classification['shouldCacheRelatedModels'];
         $selectedRelatedColumns = $classification['selectedRelatedColumns'];
 
@@ -128,7 +123,7 @@ trait CachesPivotRelation
         return $results;
     }
 
-    private function currentConstraintHash(array $columns): string
+    private function currentConstraintHash(): string
     {
         return QueryHasher::forRelationQuery($this->query, $this->getQualifiedForeignPivotKeyName());
     }

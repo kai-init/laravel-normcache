@@ -381,7 +381,7 @@ class CacheManager
         static $overrides = [];
 
         return $overrides[$modelClass] ??= (new \ReflectionMethod($modelClass, 'newFromBuilder'))
-            ->getDeclaringClass()->getName() !== \Illuminate\Database\Eloquent\Model::class;
+            ->getDeclaringClass()->getName() !== Model::class;
     }
 
     // -------------------------------------------------------------------------

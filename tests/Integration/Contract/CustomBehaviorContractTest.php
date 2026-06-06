@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
+use NormCache\Tests\Fixtures\Models\CustomPostCollection;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
@@ -41,16 +42,16 @@ class CustomBehaviorContractTest extends TestCase
 
     public function test_custom_collection_and_new_from_builder_hydration(): void
     {
-        $post1 = \NormCache\Tests\Fixtures\Models\Post::create(['title' => 'C1', 'author_id' => 1]);
-        $post2 = \NormCache\Tests\Fixtures\Models\Post::create(['title' => 'C2', 'author_id' => 1]);
+        $post1 = Post::create(['title' => 'C1', 'author_id' => 1]);
+        $post2 = Post::create(['title' => 'C2', 'author_id' => 1]);
 
         $this->contract(
-            fn() => \NormCache\Tests\Fixtures\Models\Post::whereIn('id', [$post1->id, $post2->id])->get(),
-            fn() => \NormCache\Tests\Fixtures\Models\Post::withoutCache()->whereIn('id', [$post1->id, $post2->id])->get(),
+            fn() => Post::whereIn('id', [$post1->id, $post2->id])->get(),
+            fn() => Post::withoutCache()->whereIn('id', [$post1->id, $post2->id])->get(),
         );
 
-        $cached = \NormCache\Tests\Fixtures\Models\Post::whereIn('id', [$post1->id, $post2->id])->get();
-        $this->assertInstanceOf(\NormCache\Tests\Fixtures\Models\CustomPostCollection::class, $cached);
+        $cached = Post::whereIn('id', [$post1->id, $post2->id])->get();
+        $this->assertInstanceOf(CustomPostCollection::class, $cached);
         $this->assertTrue($cached->first()->hydrated_via_builder);
     }
 }

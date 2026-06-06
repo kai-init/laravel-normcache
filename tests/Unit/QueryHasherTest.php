@@ -167,6 +167,129 @@ class QueryHasherTest extends TestCase
         );
     }
 
+    public function test_relation_hash_same_for_different_fk_batch_sizes(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereIn('author_id', [1, 2, 3])->where('active', true);
+        $b = $this->makeEloquentBuilder()->whereIn('author_id', [4, 5])->where('active', true);
+
+        $this->assertSame(
+            QueryHasher::forRelationQuery($a, 'author_id'),
+            QueryHasher::forRelationQuery($b, 'author_id')
+        );
+    }
+
+    public function test_relation_hash_captures_basic_where_value(): void
+    {
+        $a = $this->makeEloquentBuilder()->where('author_id', 1)->where('status', 1);
+        $b = $this->makeEloquentBuilder()->where('author_id', 1)->where('status', 2);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'author_id'),
+            QueryHasher::forRelationQuery($b, 'author_id')
+        );
+    }
+
+    public function test_relation_hash_captures_where_in_values(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereIn('type', [1, 2]);
+        $b = $this->makeEloquentBuilder()->whereIn('type', [3, 4]);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_captures_where_between_values(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereBetween('age', [18, 30]);
+        $b = $this->makeEloquentBuilder()->whereBetween('age', [25, 40]);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_captures_raw_order_bindings(): void
+    {
+        $a = $this->makeEloquentBuilder()->orderByRaw('CASE WHEN name = ? THEN 0 ELSE 1 END', ['Alice']);
+        $b = $this->makeEloquentBuilder()->orderByRaw('CASE WHEN name = ? THEN 0 ELSE 1 END', ['Bob']);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_distinguishes_null_check_types(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereNull('deleted_at');
+        $b = $this->makeEloquentBuilder()->whereNotNull('deleted_at');
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_distinguishes_null_check_columns(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereNull('deleted_at');
+        $b = $this->makeEloquentBuilder()->whereNull('published_at');
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_captures_nested_where_difference(): void
+    {
+        $a = $this->makeEloquentBuilder()->where(fn($q) => $q->where('active', true)->where('type', 1));
+        $b = $this->makeEloquentBuilder()->where(fn($q) => $q->where('active', true)->where('type', 2));
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_captures_exists_subquery_difference(): void
+    {
+        $sub1 = $this->makeBuilder()->from('posts')->where('published', true);
+        $sub2 = $this->makeBuilder()->from('posts')->where('published', false);
+
+        $a = $this->makeEloquentBuilder()->whereExists($sub1);
+        $b = $this->makeEloquentBuilder()->whereExists($sub2);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_is_stable(): void
+    {
+        $builder = $this->makeEloquentBuilder()->where('author_id', 1)->where('active', true);
+
+        $this->assertSame(
+            QueryHasher::forRelationQuery($builder, 'author_id'),
+            QueryHasher::forRelationQuery($builder, 'author_id')
+        );
+    }
+
+    public function test_relation_hash_stable_when_only_fk_where_present(): void
+    {
+        $a = $this->makeEloquentBuilder()->where('author_id', 99);
+        $b = $this->makeEloquentBuilder()->where('author_id', 42);
+
+        $this->assertSame(
+            QueryHasher::forRelationQuery($a, 'author_id'),
+            QueryHasher::forRelationQuery($b, 'author_id')
+        );
+    }
+
     public function test_normalize_value_for_hash_is_recursive(): void
     {
         $subquery = $this->makeBuilder()->from('users')->select('id')->where('active', true);
@@ -184,5 +307,83 @@ class QueryHasherTest extends TestCase
         $this->assertArrayHasKey('query', $normalized['nested']);
         $this->assertEquals('select "id" from "users" where "active" = ?', $normalized['nested']['query']['sql']);
         $this->assertEquals('2023-01-01 12:00:00', $normalized['nested']['date']);
+    }
+
+    public function test_relation_hash_differs_for_where_column_constraints(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereColumn('a', '=', 'b');
+        $b = $this->makeEloquentBuilder()->whereColumn('c', '=', 'd');
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_differs_for_where_integer_in_raw_values(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereIntegerInRaw('status', [1, 2, 3]);
+        $b = $this->makeEloquentBuilder()->whereIntegerInRaw('status', [4, 5, 6]);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_differs_for_where_integer_not_in_raw_values(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereIntegerNotInRaw('status', [1, 2]);
+        $b = $this->makeEloquentBuilder()->whereIntegerNotInRaw('status', [3, 4]);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_differs_for_where_between_columns(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereBetweenColumns('price', ['min_price', 'max_price']);
+        $b = $this->makeEloquentBuilder()->whereBetweenColumns('price', ['low', 'high']);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_differs_for_where_json_contains_value(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereJsonContains('settings->theme', 'dark');
+        $b = $this->makeEloquentBuilder()->whereJsonContains('settings->theme', 'light');
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_relation_hash_differs_for_where_row_values_constraints(): void
+    {
+        $a = $this->makeEloquentBuilder()->whereRowValues(['first_name', 'last_name'], '=', ['John', 'Doe']);
+        $b = $this->makeEloquentBuilder()->whereRowValues(['first_name', 'last_name'], '=', ['Jane', 'Smith']);
+
+        $this->assertNotSame(
+            QueryHasher::forRelationQuery($a, 'fake_fk'),
+            QueryHasher::forRelationQuery($b, 'fake_fk')
+        );
+    }
+
+    public function test_query_hash_normalizes_binary_string_bindings(): void
+    {
+        $a = $this->makeEloquentBuilder()->where('data', "\x80\x81\x82\xFF");
+        $b = $this->makeEloquentBuilder()->where('data', "\x83\x84\x85");
+
+        // Must not throw JsonException from json_encode on invalid UTF-8
+        $hashA = QueryHasher::forRelationQuery($a, 'fake_fk');
+        $hashB = QueryHasher::forRelationQuery($b, 'fake_fk');
+
+        $this->assertNotSame($hashA, $hashB);
     }
 }

@@ -2,7 +2,7 @@
 
 namespace NormCache\Support;
 
-use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 
 final class ProjectionClassifier
@@ -90,7 +90,7 @@ final class ProjectionClassifier
         return false;
     }
 
-    public static function classifyForRelation(\Illuminate\Database\Eloquent\Builder $query, array $columns, string $relatedTable, string $relatedKey): array
+    public static function classifyForRelation(Builder $query, array $columns, string $relatedTable, string $relatedKey): array
     {
         $queryColumns = $query->toBase()->columns;
         $resolved = $queryColumns ?? ($columns === ['*'] ? null : $columns);

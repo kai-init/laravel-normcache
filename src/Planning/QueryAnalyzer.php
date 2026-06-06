@@ -15,11 +15,11 @@ final class QueryAnalyzer
         array $contextReasons = [],
     ): QueryAnalysis {
         $tables = [$table];
-        
+
         if (!empty($base->joins)) {
             foreach ($base->joins as $join) {
                 if (is_string($join->table)) {
-                    $tables[] = $join->table;
+                    $tables[] = preg_replace('/\s+as\s+\S+$/i', '', $join->table);
                 }
             }
         }

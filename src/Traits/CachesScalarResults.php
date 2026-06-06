@@ -4,7 +4,6 @@ namespace NormCache\Traits;
 
 use NormCache\Enums\CacheMode;
 use NormCache\Planning\CachePlanContext;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;

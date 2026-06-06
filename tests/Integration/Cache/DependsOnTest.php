@@ -676,6 +676,46 @@ class DependsOnTest extends TestCase
 
         Post::query()
             ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->dependsOn([Post::class])
+            ->get();
+    }
+
+    public function test_bypassed_query_with_join_does_not_log_warning(): void
+    {
+        config(['app.debug' => true]);
+
+        Log::shouldReceive('warning')->never();
+
+        Post::query()
+            ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->get();
+    }
+
+    public function test_depends_on_tables_does_not_false_warn_for_declared_table(): void
+    {
+        config(['app.debug' => true]);
+
+        Author::create(['name' => 'Alice']);
+
+        Log::shouldReceive('warning')->never();
+
+        Author::query()
+            ->join('author_tag', 'author_tag.author_id', '=', 'authors.id')
+            ->dependsOnTables(['author_tag'])
+            ->get();
+    }
+
+    public function test_join_alias_does_not_produce_false_warning(): void
+    {
+        config(['app.debug' => true]);
+
+        Author::create(['name' => 'Alice']);
+
+        Log::shouldReceive('warning')->never();
+
+        Author::query()
+            ->join('posts as p', 'p.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
             ->get();
     }
 

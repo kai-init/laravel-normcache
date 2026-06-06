@@ -141,9 +141,6 @@ final class CachePlanner
             }
         }
 
-        // Scalar/count/pagination-count with cross-table shapes (JOIN, UNION, non-canonical FROM)
-        // cannot be safely versioned without explicit dependencies — downgrade to unsafe.
-        // Pivot and Through are excluded: they manage cross-table deps independently.
         $isScalarLikeOperation = $context->operation === CacheOperation::Scalar
             || $context->operation === CacheOperation::PaginationCount;
 
@@ -180,8 +177,6 @@ final class CachePlanner
             }
         }
 
-        $this->checkDependencyCompleteness($analysis, $dependencies, $builder->getModel()->getTable());
-
         if (!$dependencies->safe) {
             $bypassReasons['dependency'] = array_values(array_unique([
                 ...($bypassReasons['dependency'] ?? []),
@@ -214,7 +209,12 @@ final class CachePlanner
         }
 
         $queryTables = $analysis->tables ?? [];
-        $declaredTables = $dependencies->tables ?? [];
+
+        // strip connection prefix from table keys ("conn:table" → "table")
+        $declaredTables = array_map(
+            fn($key) => str_contains($key, ':') ? substr($key, strpos($key, ':') + 1) : $key,
+            $dependencies->tables
+        );
 
         // Map declared models to their tables
         foreach ($dependencies->models as $modelClass) {

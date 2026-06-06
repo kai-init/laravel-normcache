@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -69,7 +70,7 @@ class ScalarCollisionTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
 
-        $sum = Post::sum(\Illuminate\Support\Facades\DB::raw('views + 1'));
+        $sum = Post::sum(DB::raw('views + 1'));
         $this->assertEquals(11, $sum);
 
         $this->assertEmpty($this->redisKeys('test:scalar:*'));

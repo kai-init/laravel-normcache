@@ -7,7 +7,6 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\CachePlanContext;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\ProjectionClassifier;
 

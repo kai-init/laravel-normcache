@@ -20,7 +20,7 @@ class RelationCorrectnessContractTest extends TestCase
         $country = Country::create(['name' => 'USA']);
 
         $author = Author::create(['name' => 'John', 'country_id' => $country->id]);
-        
+
         $p1 = Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
         $p2 = Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 20]);
 

@@ -15,7 +15,6 @@ use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlan;
 use NormCache\Planning\CachePlanContext;
 use NormCache\Planning\CachePlanner;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
