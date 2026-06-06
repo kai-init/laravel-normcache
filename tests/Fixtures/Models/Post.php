@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Fixtures\Models;
 
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
@@ -10,10 +11,14 @@ use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use NormCache\Traits\Cacheable;
 
+class CustomPostCollection extends Collection {}
+
 class Post extends Model
 {
     use Cacheable;
     use SoftDeletes;
+
+    public $hydrated_via_builder = false;
 
     protected $guarded = [];
 
@@ -45,5 +50,17 @@ class Post extends Model
     public function getCalculatedFieldAttribute(): string
     {
         return 'calculated_value';
+    }
+
+    public function newCollection(array $models = [])
+    {
+        return new CustomPostCollection($models);
+    }
+
+    public function newFromBuilder($attributes = [], $connection = null)
+    {
+        $model = parent::newFromBuilder($attributes, $connection);
+        $model->hydrated_via_builder = true;
+        return $model;
     }
 }

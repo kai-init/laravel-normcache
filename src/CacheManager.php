@@ -344,14 +344,21 @@ class CacheManager
         $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($model);
         $modelClass = $model instanceof Model ? $model::class : $model;
 
+        $hasOverride = $this->hasNewFromBuilderOverride($modelClass);
+        $connection = $prototype->getConnectionName();
         $closure = self::hydratorClosure($modelClass);
         $fire = $this->fireRetrieved;
-        $models = array_map(static function ($attrs) use ($prototype, $closure, $fire) {
-            $instance = clone $prototype;
-            $closure($instance, $attrs, $fire);
 
-            return $instance;
-        }, $payload);
+        $models = [];
+        foreach ($payload as $attrs) {
+            if ($hasOverride) {
+                $models[] = $prototype->newFromBuilder($attrs, $connection);
+            } else {
+                $instance = clone $prototype;
+                $closure($instance, $attrs, $fire);
+                $models[] = $instance;
+            }
+        }
 
         if ($cached && $models !== []) {
             $keys = [];
@@ -367,6 +374,14 @@ class CacheManager
         }
 
         return $models;
+    }
+
+    private function hasNewFromBuilderOverride(string $modelClass): bool
+    {
+        static $overrides = [];
+
+        return $overrides[$modelClass] ??= (new \ReflectionMethod($modelClass, 'newFromBuilder'))
+            ->getDeclaringClass()->getName() !== \Illuminate\Database\Eloquent\Model::class;
     }
 
     // -------------------------------------------------------------------------
@@ -618,6 +633,8 @@ class CacheManager
     private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
     {
         $prototype ??= CacheKeyBuilder::prototype($modelClass);
+        $hasOverride = $this->hasNewFromBuilderOverride($modelClass);
+        $connection = $prototype->getConnectionName();
         $closure = self::hydratorClosure($modelClass);
         $fireRetrieved = $this->fireRetrieved;
         $hits = [];
@@ -636,9 +653,13 @@ class CacheManager
                 $attrs = AttributeProjector::projectAttributes($attrs, $projection);
             }
 
-            $instance = clone $prototype;
-            $closure($instance, $attrs, $fireRetrieved);
-            $hits[$id] = $instance;
+            if ($hasOverride) {
+                $hits[$id] = $prototype->newFromBuilder($attrs, $connection);
+            } else {
+                $instance = clone $prototype;
+                $closure($instance, $attrs, $fireRetrieved);
+                $hits[$id] = $instance;
+            }
         }
 
         return ['hits' => $hits, 'missed' => $missed];

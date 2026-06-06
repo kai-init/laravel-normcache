@@ -400,4 +400,39 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
         $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
     }
+
+    public function test_late_writer_does_not_commit_stale_version_as_current(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $initialVersion = NormCache::currentVersion(Author::class);
+
+        $buildLock = NormCache::getResultCache(Author::class, [], 'test-hash');
+        $this->assertSame('miss', $buildLock['status']);
+
+        $author->update(['name' => 'Bob']);
+        $bumpedVersion = NormCache::currentVersion(Author::class);
+        $this->assertGreaterThan($initialVersion, $bumpedVersion);
+
+        $committed = NormCache::storeResultCache(
+            $buildLock['key'],
+            ['data' => 'stale'],
+            $buildLock['buildingKey'],
+            null,
+            $buildLock['wakeKey'],
+            $buildLock['versionKeys'],
+            $buildLock['expectedVersions'], // Worker A thinks this is still current
+            $buildLock['buildingToken']
+        );
+
+        $this->assertFalse($committed, 'Late writer should have its commit rejected');
+
+        $freshRead = NormCache::getResultCache(
+            Author::class,
+            [],
+            'test-hash'
+        );
+
+        $this->assertNotSame(['data' => 'stale'], $freshRead['payload'] ?? null, 'Late writer must not poison the current fresh cache');
+    }
 }

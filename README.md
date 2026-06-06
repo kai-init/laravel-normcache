@@ -167,13 +167,17 @@ NormCache::flushTagAcrossModels('homepage');       // all models — cluster-wid
 
 ## Cache Bypasses
 
+To prevent data corruption, NormCache will automatically bypass caching and fall back to the database for:
+
 | Query feature                                        | Workaround            |
 | ---------------------------------------------------- | --------------------- |
 | Pessimistic locking (`lockForUpdate` / `sharedLock`) | None — must hit DB    |
 | Inside a database transaction                        | None — must hit DB    |
 | Raw SQL / `DB::table(...)`                           | None — flush manually |
+| Raw `WHERE` or `ORDER BY` clauses                    | Use `dependsOn()`     |
+| Aggregate and scalar queries                         | Use `dependsOn()`     |
 
-Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, raw `ORDER BY`, calculated columns — is cacheable with `dependsOn()`.
+Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, and calculated columns — is also cacheable with `dependsOn()`.
 
 ---
 
@@ -268,6 +272,36 @@ Set `slotting` to `true` only when you want Redis Cluster slot sharding across m
 ## Octane & Horizon
 
 Works out of the box. State is reset between Octane requests and queue jobs — including re-enabling the cache if a Redis error disabled it mid-job.
+
+---
+
+## Correctness Guarantees
+
+NormCache is designed to be as transparent as possible to native Eloquent, but it operates under specific guarantees and intentional limitations:
+
+### Safe & Transparent Caching
+
+NormCache guarantees hydration parity (results identical to native Eloquent) for:
+
+- **Universal Query Patterns:** Standard model lookups, primary key fast-paths, and complex result sets across both Normalized and Result modes.
+- **Full Relationship Support:** Eager-loaded relations including nested chains, pivot table attributes, and through-relations.
+- **Native Model Lifecycle:** Full support for standard Eloquent behavior including global scopes, soft deletes, and `retrieved` events.
+- **Eloquent Extensibility:** Custom casts (JSON/Enum), `newFromBuilder` overrides, and custom collection classes.
+
+### Requires `dependsOn()`
+
+Queries that join other tables or use cross-table subqueries (e.g., `whereHas`) **must** declare their dependencies using `dependsOn([OtherModel::class])`. 
+
+- **Debug Warning:** If `app.debug` is true, NormCache will log a warning if it detects a query touching a table not declared in `dependsOn()`.
+
+### Cluster Mode & Consistency
+
+- **Single Node / Hash Tagging:** Provides strong multi-key atomicity.
+- **Slotting Mode:** Offers better distribution but weaker cross-key atomicity. Multi-dependency queries are automatically routed to the result cache in slotting mode to prevent cross-slot consistency errors.
+
+### Stale Serving
+
+To prevent cache stampedes, NormCache may serve slightly stale data (up to the configured stale depth) while a background writer rebuilds the cache. This guarantees high availability under extreme load at the cost of immediate read-your-writes consistency.
 
 ---
 

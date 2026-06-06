@@ -194,6 +194,10 @@ class OptimizationsTest extends TestCase
         $builder = Author::whereKey($a1->id)->dependsOn([Post::class]);
         $builder->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        if ($this->cacheManager()->isSlotting()) {
+            $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        } else {
+            $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        }
     }
 }

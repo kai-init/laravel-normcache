@@ -678,4 +678,25 @@ class DependsOnTest extends TestCase
             ->join('authors', 'authors.id', '=', 'posts.author_id')
             ->get();
     }
+
+    public function test_deep_multi_model_dependency_chain_invalidates_correctly(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'P1', 'author_id' => $author->id]);
+        Comment::create(['body' => 'C1', 'commentable_type' => Post::class, 'commentable_id' => $post->id]);
+
+        $first = Author::with(['posts.comments'])
+            ->dependsOn([Post::class, Comment::class])
+            ->get();
+
+        $this->assertCount(1, $first->first()->posts->first()->comments);
+
+        Comment::create(['body' => 'C2', 'commentable_type' => Post::class, 'commentable_id' => $post->id]);
+
+        $second = Author::with(['posts.comments'])
+            ->dependsOn([Post::class, Comment::class])
+            ->get();
+
+        $this->assertCount(2, $second->first()->posts->first()->comments);
+    }
 }
