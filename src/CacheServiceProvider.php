@@ -65,7 +65,8 @@ class CacheServiceProvider extends ServiceProvider
             Event::listen(Looping::class, $resetManager);
 
             // Re-enable (in case fallback disabled it) between Octane requests.
-            foreach (['Laravel\Octane\Events\RequestReceived', 'Laravel\Octane\Events\TaskReceived'] as $octaneEvent) {
+            foreach (['RequestReceived', 'TaskReceived'] as $event) {
+                $octaneEvent = "Laravel\\Octane\\Events\\$event";
                 if (class_exists($octaneEvent)) {
                     Event::listen($octaneEvent, $resetManager);
                 }
