@@ -131,4 +131,26 @@ class ProjectionBypassTest extends TestCase
 
         $this->assertSame($cold, $warm);
     }
+
+    public function test_through_uses_cache_when_projection_is_table_wildcard(): void
+    {
+        $country = Country::create(['name' => 'UK']);
+        $alice = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+
+        $native = Country::withoutCache()
+            ->with(['posts' => fn($q) => $q->select('posts.*')])->get()
+            ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
+
+        $cold = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()
+            ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
+
+        $this->assertNotEmpty($this->redisKeys('test:through:*'), 'table.* projection must populate through cache');
+        $this->assertSame($native, $cold);
+
+        $warm = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()
+            ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
+
+        $this->assertSame($cold, $warm);
+    }
 }

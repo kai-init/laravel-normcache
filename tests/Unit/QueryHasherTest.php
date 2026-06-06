@@ -102,4 +102,48 @@ class QueryHasherTest extends TestCase
             QueryHasher::forPaginationCountQuery($b)
         );
     }
+
+    public function test_order_insensitive_scalar_hash_strips_order_clauses(): void
+    {
+        $plain = $this->makeEloquentBuilder()->where('id', '>', 0);
+
+        $this->assertSame(
+            QueryHasher::forScalarQuery($plain, $plain->toBase(), 'count', ['*']),
+            QueryHasher::forScalarQuery($plain, $plain->toBase(), 'count', ['*'])
+        );
+
+        $a = $this->makeEloquentBuilder()->orderBy('name');
+        $b = $this->makeEloquentBuilder()->orderBy('id');
+
+        $this->assertSame(
+            QueryHasher::forScalarQuery($a, $a->toBase(), 'count', ['*']),
+            QueryHasher::forScalarQuery($b, $b->toBase(), 'count', ['*'])
+        );
+
+        $this->assertSame(
+            QueryHasher::forScalarQuery($a, $a->toBase(), 'sum', ['id']),
+            QueryHasher::forScalarQuery($b, $b->toBase(), 'sum', ['id'])
+        );
+
+        $this->assertSame(
+            QueryHasher::forScalarQuery($a, $a->toBase(), 'exists', []),
+            QueryHasher::forScalarQuery($b, $b->toBase(), 'exists', [])
+        );
+    }
+
+    public function test_order_sensitive_scalar_hash_keeps_order_clauses(): void
+    {
+        $a = $this->makeEloquentBuilder()->orderBy('name');
+        $b = $this->makeEloquentBuilder()->orderBy('id');
+
+        $this->assertNotSame(
+            QueryHasher::forScalarQuery($a, $a->toBase(), 'value', ['name']),
+            QueryHasher::forScalarQuery($b, $b->toBase(), 'value', ['name'])
+        );
+
+        $this->assertNotSame(
+            QueryHasher::forScalarQuery($a, $a->toBase(), 'pluck', ['name']),
+            QueryHasher::forScalarQuery($b, $b->toBase(), 'pluck', ['name'])
+        );
+    }
 }

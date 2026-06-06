@@ -550,7 +550,7 @@ final class RedisStore
             );
         }
 
-        return $keys;
+        return array_values(array_unique($keys));
     }
 
     private function scanPhpRedisClusterKeys(string $pattern): array

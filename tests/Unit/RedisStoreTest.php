@@ -323,6 +323,56 @@ class RedisStoreTest extends TestCase
         $this->assertEmpty($directClient->keys('testscan:*'));
     }
 
+    public function test_predis_cluster_scan_deduplicates_keys_returned_by_multiple_nodes(): void
+    {
+        $connection = new class extends PredisClusterConnection
+        {
+            public function __construct() {}
+
+            public function client()
+            {
+                return new class implements \IteratorAggregate
+                {
+                    public function getOptions()
+                    {
+                        return new class
+                        {
+                            public $prefix = null;
+                        };
+                    }
+
+                    public function getIterator(): \Traversable
+                    {
+                        return new \ArrayIterator([
+                            new class
+                            {
+                                public function scan($cursor, array $options)
+                                {
+                                    return ['0', ['test:model:{posts}:1', 'test:model:{posts}:2']];
+                                }
+                            },
+                            new class
+                            {
+                                public function scan($cursor, array $options)
+                                {
+                                    return ['0', ['test:model:{posts}:1']];
+                                }
+                            },
+                        ]);
+                    }
+                };
+            }
+        };
+
+        $store = new RedisStore('normcache-test', '', true);
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $this->assertSame(
+            ['test:model:{posts}:1', 'test:model:{posts}:2'],
+            $store->scanPattern('test:model:*')
+        );
+    }
+
     public function test_unserialize_detects_format_by_magic_header(): void
     {
         if (!extension_loaded('igbinary')) {

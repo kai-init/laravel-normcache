@@ -186,4 +186,14 @@ class OptimizationsTest extends TestCase
         $this->assertCount(1, $queries);
         $this->assertStringContainsString('from "posts"', $queries[0]['query']);
     }
+
+    public function test_where_key_ignores_fast_path_when_extra_dependencies_exist(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+
+        $builder = Author::whereKey($a1->id)->dependsOn([Post::class]);
+        $builder->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+    }
 }

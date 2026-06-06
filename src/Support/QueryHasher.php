@@ -25,6 +25,13 @@ final class QueryHasher
 
     public static function forScalarQuery(CacheableBuilder $builder, ?QueryBuilder $query, string $kind, array $columns): string
     {
+        $query ??= $builder->toBase();
+
+        if (self::scalarKindIgnoresOrder($kind) && (!empty($query->orders) || !empty($query->unionOrders))) {
+            $query = $query->cloneWithout(['orders', 'unionOrders'])
+                ->cloneWithoutBindings(['order', 'unionOrder']);
+        }
+
         return self::hash(
             self::forNormalizedQuery($builder, $query) . ':' . $kind . ':' . json_encode($columns, JSON_THROW_ON_ERROR)
         );
@@ -54,6 +61,12 @@ final class QueryHasher
             'bindings' => array_map([self::class, 'normalizeBinding'], $query->getBindings()),
             'useWritePdo' => $query->useWritePdo,
         ], $extra), JSON_THROW_ON_ERROR));
+    }
+
+    private static function scalarKindIgnoresOrder(string $kind): bool
+    {
+        return str_starts_with($kind, 'count')
+            || in_array($kind, ['sum', 'avg', 'min', 'max', 'exists'], true);
     }
 
     private static function normalizeBinding(mixed $binding): mixed

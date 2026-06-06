@@ -2,8 +2,10 @@
 
 namespace NormCache\Relations;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
@@ -141,34 +143,35 @@ trait CachesPivotRelation
 
         foreach (['orders', 'limit', 'offset', 'groups', 'havings', 'distinct', 'unionLimit', 'unionOffset', 'unionOrders', 'lock'] as $property) {
             if ($base->{$property} !== null && $base->{$property} !== [] && $base->{$property} !== false) {
-                $shape[$property] = $base->{$property};
+                $shape[$property] = $this->normalizeValueForHash($base->{$property});
             }
         }
 
         if (!empty($base->joins)) {
-            $shape['joins'] = array_map(static fn($join) => [
+            $shape['joins'] = array_map(fn($join) => [
                 'type' => $join->type ?? null,
                 'table' => is_string($join->table) ? $join->table : (string) $join->table,
                 'sql' => $join->toSql(),
-                'bindings' => $join->getBindings(),
+                'bindings' => $this->normalizeValueForHash($join->getBindings()),
             ], $base->joins);
         }
 
         if (!empty($base->unions)) {
-            $shape['unions'] = array_map(static fn($union) => [
+            $shape['unions'] = array_map(fn($union) => [
                 'all' => $union['all'] ?? false,
                 'sql' => $union['query']->toSql(),
+                'bindings' => $this->normalizeValueForHash($union['query']->getBindings()),
             ], $base->unions);
         }
 
         $rawBindings = $base->getRawBindings();
         $whereBindings = $this->inEagerLoad ? ($this->preEagerWhereBindings ?? []) : $rawBindings['where'];
         if (!empty($whereBindings)) {
-            $shape['bindings_where'] = $whereBindings;
+            $shape['bindings_where'] = $this->normalizeValueForHash($whereBindings);
         }
         foreach (['order', 'having', 'join'] as $group) {
             if (!empty($rawBindings[$group])) {
-                $shape['bindings_' . $group] = $rawBindings[$group];
+                $shape['bindings_' . $group] = $this->normalizeValueForHash($rawBindings[$group]);
             }
         }
 
@@ -177,6 +180,48 @@ trait CachesPivotRelation
         }
 
         return QueryHasher::hash(json_encode($shape, JSON_THROW_ON_ERROR));
+    }
+
+    private function normalizeValueForHash(mixed $value): mixed
+    {
+        if ($value instanceof QueryBuilder) {
+            return [
+                'sql' => $value->toSql(),
+                'bindings' => $value->getBindings(),
+            ];
+        }
+
+        if ($value instanceof Expression) {
+            return [
+                'expression' => $value->getValue($this->query->toBase()->getGrammar()),
+            ];
+        }
+
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+
+        if ($value instanceof \Stringable) {
+            return (string) $value;
+        }
+
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $key => $item) {
+                $normalized[$key] = $this->normalizeValueForHash($item);
+            }
+
+            return $normalized;
+        }
+
+        if (is_object($value)) {
+            return [
+                'class' => $value::class,
+                'value' => method_exists($value, '__toString') ? (string) $value : null,
+            ];
+        }
+
+        return $value;
     }
 
     private function normalizeWhereForHash(array $where): array

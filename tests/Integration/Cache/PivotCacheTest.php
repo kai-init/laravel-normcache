@@ -386,6 +386,30 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_pivot_constraint_hash_normalizes_raw_order_group_and_having_shapes(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        $lowerRelation = $author->tags();
+        $lowerRelation->getQuery()
+            ->select('tags.*')
+            ->groupBy('tags.id')
+            ->havingRaw('COUNT(*) > ?', [0])
+            ->orderByRaw('LOWER(tags.name)');
+
+        $upperRelation = $author->tags();
+        $upperRelation->getQuery()
+            ->select('tags.*')
+            ->groupBy('tags.id')
+            ->havingRaw('COUNT(*) > ?', [1])
+            ->orderByRaw('UPPER(tags.name)');
+
+        $this->assertNotSame(
+            $this->callConstraintHash($lowerRelation),
+            $this->callConstraintHash($upperRelation)
+        );
+    }
+
     public function test_pivot_constraint_hash_is_stable_across_eager_batch_sizes(): void
     {
         $author = Author::create(['name' => 'Alice']);

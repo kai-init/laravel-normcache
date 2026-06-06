@@ -400,6 +400,15 @@ class EloquentContractTest extends TestCase
         );
     }
 
+    public function test_with_sum_custom_alias_matches_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withSum('posts as total_views', 'views')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withSum('posts as total_views', 'views')->orderBy('name')->get(),
+        );
+    }
+
     public function test_with_avg_has_many(): void
     {
         $this->fixtures();
@@ -424,6 +433,24 @@ class EloquentContractTest extends TestCase
         $this->contract(
             fn() => Author::withMax('posts', 'views')->orderBy('name')->get(),
             fn() => Author::withoutCache()->withoutAggregateCache()->withMax('posts', 'views')->orderBy('name')->get(),
+        );
+    }
+
+    public function test_multiple_aggregate_functions_on_same_relation_match_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withSum('posts', 'views')->withAvg('posts', 'views')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withSum('posts', 'views')->withAvg('posts', 'views')->orderBy('name')->get(),
+        );
+    }
+
+    public function test_aggregate_alias_collision_with_real_attribute_matches_native(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::withCount('posts as name')->orderBy('id')->get(),
+            fn() => Author::withoutCache()->withoutAggregateCache()->withCount('posts as name')->orderBy('id')->get(),
         );
     }
 

@@ -257,6 +257,51 @@ class ClusterModeTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive');
     }
 
+    public function test_prefix_sensitive_scan_and_flush_operations_work_in_cluster_mode(): void
+    {
+        config()->set('database.redis.options.prefix', 'laravel:');
+        Redis::purge('normcache-test');
+        $this->app->forgetInstance(CacheManager::class);
+        $this->app->forgetInstance('normcache');
+
+        try {
+            Author::create(['name' => 'Alice']);
+            Post::create(['title' => 'P1', 'author_id' => 1]);
+
+            Author::tag('homepage')->get();
+            Post::tag('homepage')->get();
+            Author::get();
+
+            $this->assertNotEmpty($this->redisKeys('test:query:*'));
+            foreach ($this->redisKeys('test:*') as $key) {
+                $this->assertStringNotContainsString('laravel:', $key);
+            }
+
+            $this->cacheManager()->flushTag(Author::class, 'homepage');
+            $this->assertEmpty($this->redisKeys('test:query:{testing:authors}:homepage:*'));
+            $this->assertNotEmpty($this->redisKeys('test:query:{testing:posts}:homepage:*'));
+
+            $this->cacheManager()->flushTagAcrossModels('homepage');
+            $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'));
+            $this->assertNotEmpty($this->redisKeys('test:query:*'));
+
+            $removed = $this->cacheManager()->getStore()->flushByPatterns(['query:*']);
+            $this->assertGreaterThan(0, $removed);
+            $this->assertEmpty($this->redisKeys('test:query:*'));
+
+            Author::get();
+            $this->assertNotEmpty($this->redisKeys('test:*'));
+
+            $this->cacheManager()->flushAll();
+            $this->assertEmpty($this->redisKeys('test:*'));
+        } finally {
+            Redis::purge('normcache-test');
+            config()->set('database.redis.options.prefix', '');
+            $this->app->forgetInstance(CacheManager::class);
+            $this->app->forgetInstance('normcache');
+        }
+    }
+
     // Standard single-model query cache (should be unaffected by cluster flag)
 
     public function test_single_model_query_cache_still_works_in_cluster_mode(): void
