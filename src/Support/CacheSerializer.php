@@ -26,16 +26,16 @@ final class CacheSerializer
             return str_contains((string) $value, '.') ? (float) $value : (int) $value;
         }
 
-        if (is_string($value) && isset($value[0]) && $value[0] === "\x00") {
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        if (isset($value[0]) && $value[0] === "\x00") {
             return $this->igbinary ? igbinary_unserialize($value) : null;
         }
 
-        if (is_string($value) && preg_match('/^[sidbaOCRrN]:|^[sidbaOCRrN];/', $value)) {
-            try {
-                return unserialize($value);
-            } catch (\Throwable) {
-                return $value;
-            }
+        if (isset($value[1]) && ($value[1] === ':' || $value[1] === ';')) {
+            return unserialize($value);
         }
 
         return $value;
