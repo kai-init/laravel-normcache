@@ -188,8 +188,7 @@ Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, and calcul
 
 - Normcache only hooks Eloquent models that use the `Cacheable` trait. Query builder calls such as `DB::table(...)`, `DB::select()`, and `DB::statement()` are never cached.
 - Writes outside Eloquent are invisible to the model version system. Flush the affected model or tag manually after imports, raw updates, maintenance jobs, or external syncs.
-- Dynamic connection switching (`Post::on('replica')`) is not supported. Use separate model classes with fixed `$connection` values when the same table is read through multiple connections.
-- Normcache caches each model's connection name and table in static properties for performance. Apps that switch a model's connection at runtime (e.g. per-tenant `setConnection()`) will get stale Redis key paths. Call `CacheKeyBuilder::reset()` after switching tenants to clear the metadata cache.
+- Normcache caches each model's connection name and table in static properties for performance. Call `CacheKeyBuilder::reset()` after switching tenants to clear the metadata cache.
 - `dependsOn()` is explicit by design. If a query reads another table, include that model class or manually flush a tag that covers the query.
 - Models are expected to use standard single-column primary keys.
 - Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.
