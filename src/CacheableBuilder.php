@@ -434,7 +434,7 @@ class CacheableBuilder extends Builder
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan, mixed $debugbarStart): Collection
     {
-        $hash = QueryHasher::forNormalizedQuery($this);
+        $hash = QueryHasher::forNormalizedQuery($this, $base);
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
 

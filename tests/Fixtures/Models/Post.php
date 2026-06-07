@@ -18,8 +18,6 @@ class Post extends Model
     use Cacheable;
     use SoftDeletes;
 
-    public $hydrated_via_builder = false;
-
     protected $guarded = [];
 
     protected $casts = [
@@ -57,11 +55,4 @@ class Post extends Model
         return new CustomPostCollection($models);
     }
 
-    public function newFromBuilder($attributes = [], $connection = null)
-    {
-        $model = parent::newFromBuilder($attributes, $connection);
-        $model->hydrated_via_builder = true;
-
-        return $model;
-    }
 }
