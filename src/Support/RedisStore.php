@@ -62,9 +62,18 @@ final class RedisStore
         }
 
         if (!$this->slotting) {
-            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $keys));
+            $prefixed = [];
+            foreach ($keys as $key) {
+                $prefixed[] = $this->prefix($key);
+            }
 
-            return array_map(fn($v) => ($v !== null && $v !== false) ? $v : null, $raw);
+            $raw = $this->connection->mget($prefixed);
+            $values = [];
+            foreach ($raw as $value) {
+                $values[] = ($value !== null && $value !== false) ? $value : null;
+            }
+
+            return $values;
         }
 
         $results = [];
@@ -190,12 +199,18 @@ final class RedisStore
         }
 
         if (!$this->slotting) {
-            $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
+            $prefixed = [];
+            foreach ($keys as $key) {
+                $prefixed[] = $this->prefix($key);
+            }
 
-            return array_map(
-                fn($v) => ($v !== null && $v !== false) ? $this->unserialize($v) : null,
-                $this->connection->mget($prefixed)
-            );
+            $raw = $this->connection->mget($prefixed);
+            $values = [];
+            foreach ($raw as $value) {
+                $values[] = ($value !== null && $value !== false) ? $this->unserialize($value) : null;
+            }
+
+            return $values;
         }
 
         $results = [];

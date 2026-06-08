@@ -62,12 +62,11 @@ final class ResultCacheReader
 
         $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
         $expectedVersions = $this->keys->versionsFromSegment($seg);
-        $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
 
         return match ($status) {
             'hit' => new ResultCacheResult(CacheStatus::Hit, $resultKey, $this->store->unserialize($payload), null, null, null, $versionKeys, $expectedVersions),
             'building' => new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            default => new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey, $versionKeys, $expectedVersions),
+            default => new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix), (string) ($claimedToken ?? $lockToken), $wakeKey, $versionKeys, $expectedVersions),
         };
     }
 
@@ -84,10 +83,10 @@ final class ResultCacheReader
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
-            $pivotKeys = array_map(
-                fn($id) => $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id),
-                $parentIds
-            );
+            $pivotKeys = [];
+            foreach ($parentIds as $id) {
+                $pivotKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
+            }
 
             return new PivotCacheResult(
                 $seg,

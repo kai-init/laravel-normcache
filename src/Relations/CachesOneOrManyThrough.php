@@ -108,11 +108,18 @@ trait CachesOneOrManyThrough
 
     private function cachePayloadFromResult(Collection $result): array
     {
+        $ids = [];
+        $throughKeys = [];
+
+        foreach ($result as $model) {
+            $id = $model->getKey();
+            $ids[] = $id;
+            $throughKeys[$id] = $model->getAttribute('laravel_through_key');
+        }
+
         return [
-            'ids' => $result->modelKeys(),
-            'throughKeys' => $result->mapWithKeys(fn($model) => [
-                $model->getKey() => $model->getAttribute('laravel_through_key'),
-            ])->all(),
+            'ids' => $ids,
+            'throughKeys' => $throughKeys,
         ];
     }
 
@@ -122,8 +129,9 @@ trait CachesOneOrManyThrough
 
         if ($throughKeys !== []) {
             foreach ($models as $model) {
-                if (array_key_exists($model->getKey(), $throughKeys)) {
-                    $model->setAttribute('laravel_through_key', $throughKeys[$model->getKey()]);
+                $id = $model->getKey();
+                if (array_key_exists($id, $throughKeys)) {
+                    $model->setAttribute('laravel_through_key', $throughKeys[$id]);
                 }
             }
         }

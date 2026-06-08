@@ -41,12 +41,14 @@ final class ModelHydrator
 
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
-
         $classKey = $this->keys->classKey($modelClass);
 
         if ($raw === null) {
             $prefix = $this->keys->modelPrefix($classKey);
-            $keys = array_map(static fn($id) => $prefix . $id, $ids);
+            $keys = [];
+            foreach ($ids as $id) {
+                $keys[] = $prefix . $id;
+            }
             $raw = $this->store->getMany($keys);
         }
 
