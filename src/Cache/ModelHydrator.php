@@ -93,11 +93,12 @@ final class ModelHydrator
         $modelClass = $model instanceof Model ? $model::class : $model;
         $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
+        $hydrate = self::hydrateClosure();
 
         $models = [];
         foreach ($payload as $attrs) {
             $instance = clone $prototype;
-            self::hydrateClosure()($instance, $attrs, $fire);
+            $hydrate($instance, $attrs, $fire);
             $models[] = $instance;
         }
 
@@ -121,6 +122,7 @@ final class ModelHydrator
     {
         $prototype = $prototype ?? CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
+        $hydrate = self::hydrateClosure();
         $hits = [];
         $missed = [];
 
@@ -138,7 +140,7 @@ final class ModelHydrator
             }
 
             $instance = clone $prototype;
-            self::hydrateClosure()($instance, $attrs, $fire);
+            $hydrate($instance, $attrs, $fire);
             $hits[$id] = $instance;
         }
 
