@@ -28,26 +28,18 @@ final class NormalizedCacheReader
             $lockToken = $this->versions->buildLockToken();
             $result = $this->luaFetchVersionedQuery($classKey, $hash, $tag, $lockToken);
 
-            $luaStatus = $result[0] ?? null;
+            $status = $result[0] ?? 'building';
             $version = $this->versions->normalizeVersion($result[1]);
             $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
-            $deserialize = fn($r) => $this->store->unserializeMany($r);
+            $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
 
-            return match ($luaStatus) {
-                'hit' => new QueryCacheResult(CacheStatus::Hit, $queryKey, $result[2], $deserialize($result[3]), null, null, [], []),
-                'stale' => new QueryCacheResult(CacheStatus::Stale, null, $result[2], $deserialize($result[3]), null, null, [], []),
-                'empty' => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
-                'miss' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null,
-                    $this->keys->buildingPrefix($classKey) . $hash,
-                    (string) ($result[2] ?? $lockToken),
-                    [$this->keys->verKey($classKey)],
-                    [(string) $version]),
-                'building' => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-                'corrupt' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, null, null,
-                    [$this->keys->verKey($classKey)],
-                    [(string) $version]),
-                default => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, null, null, [], []),
-            };
+            return $this->toQueryResult(
+                $status, $queryKey, $buildingKey, (string) (($status === 'miss' ? $result[2] : null) ?? $lockToken),
+                [$this->keys->verKey($classKey)],
+                [(string) $version],
+                in_array($status, ['hit', 'stale']) ? $result[2] : null,
+                in_array($status, ['hit', 'stale']) ? $result[3] : null
+            );
         }
 
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
@@ -61,23 +53,41 @@ final class NormalizedCacheReader
             $hash, $lockToken
         );
 
-        $luaStatus = $result[0] ?? null;
+        $status = $result[0] ?? 'building';
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
-        $deserialize = fn($r) => $this->store->unserializeMany($r);
+        $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
+        $expectedVersions = $this->keys->versionsFromSegment($seg);
 
-        return match ($luaStatus) {
-            'hit' => new QueryCacheResult(CacheStatus::Hit, $queryKey, $result[2], $deserialize($result[3]), null, null, [], []),
+        return $this->toQueryResult(
+            $status, $queryKey, $buildingKey, (string) (($status === 'miss' ? $result[2] : null) ?? $lockToken),
+            $versionKeys, $expectedVersions,
+            in_array($status, ['hit', 'stale']) ? $result[2] : null,
+            in_array($status, ['hit', 'stale']) ? $result[3] : null
+        );
+    }
+
+    private function toQueryResult(
+        string $status,
+        string $queryKey,
+        string $buildingKey,
+        string $lockToken,
+        array $versionKeys,
+        array $expectedVersions,
+        mixed $ids = null,
+        mixed $models = null
+    ): QueryCacheResult {
+        $deserialize = fn($r) => is_array($r) ? $this->store->unserializeMany($r) : [];
+
+        return match ($status) {
+            'hit' => new QueryCacheResult(CacheStatus::Hit, $queryKey, $ids, $deserialize($models), null, null, [], []),
+            'stale' => new QueryCacheResult(CacheStatus::Stale, null, $ids, $deserialize($models), null, null, [], []),
             'empty' => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
-            'miss' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null,
-                $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash,
-                (string) ($result[2] ?? $lockToken),
-                $versionKeys,
-                $this->keys->versionsFromSegment($seg)),
+            'miss' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
             'building' => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            'corrupt' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, null, null,
-                $versionKeys,
-                $this->keys->versionsFromSegment($seg)),
+            'corrupt' => $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
+                ? new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
+                : new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
             default => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, null, null, [], []),
         };
     }

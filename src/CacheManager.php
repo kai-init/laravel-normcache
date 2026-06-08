@@ -4,10 +4,10 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\CacheFlowGuard;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\VersionTracker;
 use NormCache\Support\CacheKeyBuilder;
@@ -170,6 +170,11 @@ class CacheManager
     public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
     {
         return $this->resultReader->storeEntry($key, $payload, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
+    }
+
+    public function storeManyVersionedResults(array $entries, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
+    {
+        return $this->resultReader->storeMany($entries, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
     }
 
     public function storeResultCache(string $key, array $payload, ?string $buildingKey, ?int $ttl, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): bool

@@ -103,7 +103,7 @@ final class ProjectionClassifier
             $selectedRelatedColumns = null;
         } else {
             $shouldCacheRelatedModels = self::isExactFullModelProjection($resolved, $relatedTable);
-            $selectedRelatedColumns = self::containsWildcard($resolved) ? null : $resolved;
+            $selectedRelatedColumns = $shouldCacheRelatedModels ? null : $resolved;
         }
 
         return [

@@ -4,7 +4,9 @@ namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\MultipleRecordsFoundException;
+use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 /**
@@ -37,6 +39,34 @@ class StreamingOperationsTest extends TestCase
         });
 
         $this->assertContains('Bob', $names);
+    }
+
+    public function test_temporary_streaming_bypass_does_not_persist_wrapped_eager_load_constraints(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $query = Author::query()
+            ->with('posts')
+            ->orderBy('id');
+
+        $query->chunk(1, fn() => null);
+        $query->getQuery()->limit = null;
+        $query->getQuery()->offset = null;
+        $query->get();
+
+        $queries = [];
+        DB::listen(function ($query) use (&$queries): void {
+            $queries[] = $query->sql;
+        });
+
+        $warm = $query->get();
+
+        $this->assertCount(1, $warm);
+        $this->assertTrue($warm->first()->relationLoaded('posts'));
+        $this->assertSame('Hello', $warm->first()->posts->first()->title);
+
+        $this->assertEmpty($queries, 'Cache should be hit, but these DB queries were executed: ' . implode(', ', $queries));
     }
 
     // sole()

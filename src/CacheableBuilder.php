@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Arr;
 use Illuminate\Support\LazyCollection;
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheStatus;
@@ -196,8 +197,9 @@ class CacheableBuilder extends Builder
 
         $debugbarStart = CacheReporter::beginMeasure();
 
+        $columns = Arr::wrap($columns);
         $base = $this->toBase();
-        $resolvedCols = ProjectionClassifier::resolve($base, (array) $columns);
+        $resolvedCols = ProjectionClassifier::resolve($base, $columns);
         $model = $this->model::class;
         $plan = $this->cachePlan($base, CachePlanContext::models($resolvedCols, $this->inferAggregateDependencies()));
 
@@ -213,34 +215,36 @@ class CacheableBuilder extends Builder
             $depClasses = $plan->dependencies->depClassesFor($model);
             $depTableKeys = $plan->dependencies->tables;
 
-            if (!$usesEloquentResult && !empty($base->joins) && empty($base->columns)) {
+            $resultBase = clone $base;
+
+            if (!$usesEloquentResult && !empty($resultBase->joins) && empty($resultBase->columns)) {
                 if ($columns === ['*']) {
                     CacheReporter::queryBypassed($model, ['normalization' => ['join_result_requires_explicit_select']], $debugbarStart);
 
                     return $this->getWithoutCache($columns);
                 }
 
-                $base->columns = (array) $columns;
+                $resultBase->columns = $columns;
             }
 
-            if ($base->columns === null && $columns !== ['*']) {
-                $base->columns = (array) $columns;
+            if ($resultBase->columns === null && $columns !== ['*']) {
+                $resultBase->columns = $columns;
             }
 
-            $hash = QueryHasher::forResultQuery($this, $base);
+            $hash = QueryHasher::forResultQuery($this, $resultBase);
 
             return NormCache::rescue(
                 fn() => NormCache::executor()->runResult(
                     fetch: fn() => NormCache::getResultCache($model, $depClasses, $hash, $this->cacheTag, $depTableKeys),
                     waitForBuild: fn() => NormCache::waitForBuild('result', $model, $hash, tag: $this->cacheTag, depClasses: $depClasses, depTableKeys: $depTableKeys),
-                    onMiss: function ($result) use ($columns, $model, $base, $usesEloquentResult, $debugbarStart) {
+                    onMiss: function ($result) use ($columns, $model, $resultBase, $usesEloquentResult, $debugbarStart) {
                         CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'result']);
 
                         if ($usesEloquentResult) {
                             $models = $this->getWithoutCache($columns);
                             $payload = $this->resultPayloadFromEloquentModels($models);
                         } else {
-                            $payload = $this->buildResultPayloadFromQuery($base);
+                            $payload = $this->buildResultPayloadFromQuery($resultBase);
                             $models = $this->hydrateResultPayload($payload, $model, false);
                         }
 
@@ -325,7 +329,13 @@ class CacheableBuilder extends Builder
 
     public function eagerLoadRelations(array $models): array
     {
-        if ($this->skipCache) {
+        if (!$this->skipCache) {
+            return parent::eagerLoadRelations($models);
+        }
+
+        $original = $this->eagerLoad;
+
+        try {
             foreach ($this->eagerLoad as $name => $constraint) {
                 $this->eagerLoad[$name] = function ($query) use ($constraint) {
                     $constraint($query);
@@ -335,9 +345,11 @@ class CacheableBuilder extends Builder
                     }
                 };
             }
-        }
 
-        return parent::eagerLoadRelations($models);
+            return parent::eagerLoadRelations($models);
+        } finally {
+            $this->eagerLoad = $original;
+        }
     }
 
     public function sole($columns = ['*']): Model
@@ -434,7 +446,7 @@ class CacheableBuilder extends Builder
 
     private function getByQuery(QueryBuilder $base, string $model, ?array $selectedCols, CachePlan $plan, mixed $debugbarStart): Collection
     {
-        $hash = QueryHasher::forNormalizedQuery($this);
+        $hash = QueryHasher::forNormalizedQuery($this, $base);
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
 

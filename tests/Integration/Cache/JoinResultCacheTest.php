@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -91,5 +92,36 @@ class JoinResultCacheTest extends TestCase
 
         $this->assertEmpty($this->redisKeys('test:result:*'));
         $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_join_get_star_string_without_explicit_root_select_bypasses_result_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $results = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->get('*');
+
+        $this->assertCount(1, $results);
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_corrupt_result_cache_payload_is_treated_as_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $query = Author::query()->whereHas('posts')->dependsOn([Post::class]);
+        $query->get(); // warm
+
+        $resultKey = collect($this->redisKeys('test:result:*'))->first();
+        Redis::connection('normcache-test')->set($resultKey, 'CORRUPT');
+
+        $results = $query->get();
+
+        $this->assertCount(1, $results);
+        $this->assertSame('Alice', $results->first()->name);
     }
 }

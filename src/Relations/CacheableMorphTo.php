@@ -15,9 +15,12 @@ class CacheableMorphTo extends MorphTo
 {
     public function getEager(): EloquentCollection
     {
-        foreach (array_keys($this->dictionary) as $type) {
-            $results = $this->shouldUseCacheForType($type)
-                ? $this->getResultsFromCache($type)
+        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
+
+        foreach ($this->dictionary as $type => $_) {
+            $instance = $this->cacheableInstanceForType($type);
+            $results = $instance !== null
+                ? $this->getResultsFromCache($type, $instance, $columns)
                 : $this->getResultsByType($type);
 
             $this->matchToMorphParents($type, $results);
@@ -60,41 +63,38 @@ class CacheableMorphTo extends MorphTo
         return parent::getResultsByType($type);
     }
 
-    private function shouldUseCacheForType(string $type): bool
+    private function cacheableInstanceForType(string $type): ?Model
     {
         if (!empty($this->macroBuffer)) {
-            return false;
+            return null;
         }
 
         $class = Model::getActualClassNameForMorph($type);
 
         if (isset($this->morphableConstraints[$class]) || isset($this->morphableEagerLoadCounts[$class])) {
-            return false;
+            return null;
         }
 
         $instance = $this->createModelByType($type);
         $query = $instance->newQuery();
 
         if ($this->ownerKey !== null && $this->ownerKey !== $instance->getKeyName()) {
-            return false;
+            return null;
         }
 
         if (!$query instanceof CacheableBuilder) {
-            return false;
+            return null;
         }
 
         $plan = $query->cachePlan($query->toBase(), CachePlanContext::morphToEagerLoad($type));
 
-        return $plan->mode === CacheMode::Normalized;
+        return $plan->mode === CacheMode::Normalized ? $instance : null;
     }
 
-    private function getResultsFromCache(string $type): EloquentCollection
+    private function getResultsFromCache(string $type, Model $instance, ?array $columns): EloquentCollection
     {
-        $class = Model::getActualClassNameForMorph($type);
-        $instance = $this->createModelByType($type);
+        $class = $instance::class;
         $ids = array_values($this->gatherKeysByType($type, $instance->getKeyType()));
-
-        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
 
         $models = NormCache::getModels($ids, $class, $columns, null, $this->query, false);
         $collection = $instance->newCollection($models);

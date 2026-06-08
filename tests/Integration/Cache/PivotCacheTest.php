@@ -3,12 +3,12 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
-use ReflectionMethod;
 
 /**
  * Behavioral tests: belongsToMany and morphToMany pivot caches are invalidated on
@@ -430,9 +430,61 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_pivot_constraint_hash_distinguishes_nested_where_bindings(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $php = Tag::create(['name' => 'php']);
+        $laravel = Tag::create(['name' => 'laravel']);
+
+        $post->tags()->attach([$php->id, $laravel->id]);
+
+        $first = $post->tags()
+            ->where(fn($q) => $q->where('tags.name', 'php'))
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $second = $post->tags()
+            ->where(fn($q) => $q->where('tags.name', 'laravel'))
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $this->assertSame(['php'], $first);
+        $this->assertSame(['laravel'], $second);
+    }
+
+    public function test_pivot_constraint_hash_distinguishes_raw_order_expressions(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $alpha = Tag::create(['name' => 'alpha']);
+        $beta = Tag::create(['name' => 'beta']);
+
+        $post->tags()->attach([$alpha->id, $beta->id]);
+
+        $ascending = $post->tags()
+            ->orderByRaw('LOWER(tags.name) ASC')
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $descending = $post->tags()
+            ->orderByRaw('LOWER(tags.name) DESC')
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $this->assertSame(['alpha', 'beta'], $ascending);
+        $this->assertSame(['beta', 'alpha'], $descending);
+    }
+
     private function callConstraintHash(object $relation): string
     {
-        $method = new ReflectionMethod($relation, 'currentConstraintHash');
+        $method = new \ReflectionMethod($relation, 'currentConstraintHash');
 
         return $method->invoke($relation, ['*']);
     }
@@ -486,5 +538,39 @@ class PivotCacheTest extends TestCase
         // The model cache should NOT contain 'polluted'
         $cached = NormCache::getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
+    }
+
+    public function test_corrupt_pivot_cache_entries_are_treated_as_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags')->get(); // warm pivot cache
+
+        $keys = $this->redisKeys('test:pivot:*');
+        $this->assertNotEmpty($keys);
+        $pivotKey = $keys[0];
+
+        Redis::connection('normcache-test')->set($pivotKey, 'CORRUPT');
+
+        $authors = Author::with('tags')->get();
+
+        $this->assertCount(1, $authors);
+        $this->assertCount(1, $authors->first()->tags);
+        $this->assertSame('Fiction', $authors->first()->tags->first()->name);
+    }
+
+    public function test_relation_cache_preserves_wildcard_plus_alias_projection(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+        $author->tags()->attach($tag->id);
+
+        Author::with(['tags' => fn($q) => $q->select('tags.*', 'tags.name as tag_label')])->first();
+        $result = Author::with(['tags' => fn($q) => $q->select('tags.*', 'tags.name as tag_label')])->first();
+
+        $this->assertSame('php', $result->tags->first()->name);
+        $this->assertSame('php', $result->tags->first()->tag_label);
     }
 }

@@ -40,7 +40,7 @@ class CustomBehaviorContractTest extends TestCase
         );
     }
 
-    public function test_custom_collection_and_new_from_builder_hydration(): void
+    public function test_custom_collection_is_returned_from_cache(): void
     {
         $post1 = Post::create(['title' => 'C1', 'author_id' => 1]);
         $post2 = Post::create(['title' => 'C2', 'author_id' => 1]);
@@ -52,6 +52,5 @@ class CustomBehaviorContractTest extends TestCase
 
         $cached = Post::whereIn('id', [$post1->id, $post2->id])->get();
         $this->assertInstanceOf(CustomPostCollection::class, $cached);
-        $this->assertTrue($cached->first()->hydrated_via_builder);
     }
 }

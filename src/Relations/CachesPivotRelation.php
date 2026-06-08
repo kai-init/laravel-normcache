@@ -86,14 +86,11 @@ trait CachesPivotRelation
                         );
                     });
                 },
-                onHit: function ($pivotResult) use ($relatedClass, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart, $columns) {
+                onHit: function ($pivotResult) use ($relatedClass, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart) {
                     CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}",
                         $debugbarStart, ['parents' => $cacheParentIds, 'related' => $relatedClass], 'pivot hit');
 
-                    return NormCache::rescue(
-                        fn() => $this->hydrateFromPivotCache($pivotResult->data, $relatedClass, $selectedRelatedColumns),
-                        fn() => parent::get($columns)
-                    );
+                    return $this->hydrateFromPivotCache($pivotResult->data, $relatedClass, $selectedRelatedColumns);
                 },
             ),
             fn() => parent::get($columns)
@@ -172,11 +169,14 @@ trait CachesPivotRelation
             }
 
             if ($cacheRelatedModels) {
-                $modelAttrs[$model->getKey()] = array_filter(
-                    $model->getRawOriginal(),
-                    fn($k) => !str_starts_with($k, $pivotPrefix),
-                    ARRAY_FILTER_USE_KEY
-                );
+                $attrs = [];
+                foreach ($model->getRawOriginal() as $key => $value) {
+                    if (!str_starts_with($key, $pivotPrefix)) {
+                        $attrs[$key] = $value;
+                    }
+                }
+
+                $modelAttrs[$model->getKey()] = $attrs;
             }
         }
 
@@ -185,26 +185,22 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        foreach ($pivotEntriesByKey as $key => $payload) {
-            if (!NormCache::storeVersionedResult($key, $payload, versionKeys: $versionKeys, expectedVersions: $expectedVersions)) {
-                return;
-            }
-        }
+        NormCache::storeManyVersionedResults($pivotEntriesByKey, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
 
         NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }
 
     private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass, ?array $selectedRelatedColumns): Collection
     {
-        $allRelatedIds = [];
+        $uniqueRelatedIds = [];
         foreach ($cachedByParentId as $entries) {
             foreach ($entries as $entry) {
-                $allRelatedIds[] = $entry['id'];
+                $uniqueRelatedIds[$entry['id']] = true;
             }
         }
 
         $modelsById = [];
-        foreach (NormCache::getModels(array_unique($allRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
+        foreach (NormCache::getModels(array_keys($uniqueRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
             $modelsById[$model->getKey()] = $model;
         }
 

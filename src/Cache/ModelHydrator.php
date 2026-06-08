@@ -12,8 +12,7 @@ use NormCache\Support\RedisStore;
 
 final class ModelHydrator
 {
-    /** @var array<string, \Closure> */
-    private static array $hydratorClosures = [];
+    private static ?\Closure $hydrateClosure = null;
 
     public function __construct(
         private readonly RedisStore $store,
@@ -42,12 +41,14 @@ final class ModelHydrator
 
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
-
         $classKey = $this->keys->classKey($modelClass);
 
         if ($raw === null) {
             $prefix = $this->keys->modelPrefix($classKey);
-            $keys = array_map(static fn($id) => $prefix . $id, $ids);
+            $keys = [];
+            foreach ($ids as $id) {
+                $keys[] = $prefix . $id;
+            }
             $raw = $this->store->getMany($keys);
         }
 
@@ -91,23 +92,16 @@ final class ModelHydrator
 
     public function hydrateResult(array $payload, string|Model $model, bool $cached = true): array
     {
-        $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($model);
         $modelClass = $model instanceof Model ? $model::class : $model;
-
-        $hasOverride = $this->hasNewFromBuilderOverride($modelClass);
-        $connection = $prototype->getConnectionName();
-        $closure = self::hydratorClosure($modelClass);
+        $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
+        $hydrate = self::hydrateClosure();
 
         $models = [];
         foreach ($payload as $attrs) {
-            if ($hasOverride) {
-                $models[] = $prototype->newFromBuilder($attrs, $connection);
-            } else {
-                $instance = clone $prototype;
-                $closure($instance, $attrs, $fire);
-                $models[] = $instance;
-            }
+            $instance = clone $prototype;
+            $hydrate($instance, $attrs, $fire);
+            $models[] = $instance;
         }
 
         if ($cached && $models !== []) {
@@ -126,42 +120,11 @@ final class ModelHydrator
         return $models;
     }
 
-    private function hasNewFromBuilderOverride(string $modelClass): bool
-    {
-        static $overrides = [];
-
-        return $overrides[$modelClass] ??= (new \ReflectionMethod($modelClass, 'newFromBuilder'))
-            ->getDeclaringClass()->getName() !== Model::class;
-    }
-
-    private static function hydratorClosure(string $modelClass): \Closure
-    {
-        return self::$hydratorClosures[$modelClass] ??= \Closure::bind(
-            static function ($model, $attributes, $fire) {
-                // Mirrors setRawAttributes($attributes, true): sets attributes,
-                // syncs original, and clears both cast caches.
-                $model->attributes = $attributes;
-                $model->original = $attributes;
-                $model->exists = true;
-                $model->classCastCache = [];
-                $model->attributeCastCache = [];
-
-                if ($fire) {
-                    $model->fireModelEvent('retrieved', false);
-                }
-            },
-            null,
-            $modelClass
-        );
-    }
-
     private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
     {
-        $prototype ??= CacheKeyBuilder::prototype($modelClass);
-        $hasOverride = $this->hasNewFromBuilderOverride($modelClass);
-        $connection = $prototype->getConnectionName();
-        $closure = self::hydratorClosure($modelClass);
-        $fireRetrieved = $this->fireRetrieved;
+        $prototype = $prototype ?? CacheKeyBuilder::prototype($modelClass);
+        $fire = $this->fireRetrieved;
+        $hydrate = self::hydrateClosure();
         $hits = [];
         $missed = [];
 
@@ -178,13 +141,9 @@ final class ModelHydrator
                 $attrs = AttributeProjector::projectAttributes($attrs, $projection);
             }
 
-            if ($hasOverride) {
-                $hits[$id] = $prototype->newFromBuilder($attrs, $connection);
-            } else {
-                $instance = clone $prototype;
-                $closure($instance, $attrs, $fireRetrieved);
-                $hits[$id] = $instance;
-            }
+            $instance = clone $prototype;
+            $hydrate($instance, $attrs, $fire);
+            $hits[$id] = $instance;
         }
 
         return ['hits' => $hits, 'missed' => $missed];
@@ -238,6 +197,21 @@ final class ModelHydrator
         }
 
         return $loaded->all();
+    }
+
+    private static function hydrateClosure(): \Closure
+    {
+        return self::$hydrateClosure ??= \Closure::bind(
+            static function (Model $instance, array $attrs, bool $fire): void {
+                $instance->setRawAttributes($attrs, true);
+                $instance->exists = true;
+                if ($fire) {
+                    $instance->fireModelEvent('retrieved', false);
+                }
+            },
+            null,
+            Model::class
+        );
     }
 
     private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery, bool $preserveQueryShape): EloquentBuilder

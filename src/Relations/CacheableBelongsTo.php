@@ -3,6 +3,7 @@
 namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
@@ -23,9 +24,10 @@ class CacheableBelongsTo extends BelongsTo
 
     public function getEager()
     {
-        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
+        $base = $this->query->toBase();
+        $columns = ProjectionClassifier::resolve($base, null);
 
-        if (!$this->shouldUseCacheForEagerLoad($columns)) {
+        if (!$this->shouldUseCacheForEagerLoad($columns, $base)) {
             return parent::getEager();
         }
 
@@ -36,11 +38,13 @@ class CacheableBelongsTo extends BelongsTo
         );
     }
 
-    private function shouldUseCacheForEagerLoad(?array $columns): bool
+    private function shouldUseCacheForEagerLoad(?array $columns, QueryBuilder $base): bool
     {
+        $ownerKey = $this->getOwnerKeyName();
+
         if ($this->eagerKeys === []
             || !$this->query instanceof CacheableBuilder
-            || $this->getOwnerKeyName() !== $this->related->getKeyName()
+            || $ownerKey !== $this->related->getKeyName()
             || $this->query->getEagerLoads() !== []) {
             return false;
         }
@@ -53,12 +57,11 @@ class CacheableBelongsTo extends BelongsTo
                     break;
                 }
             }
-            if ($allStrings && !isset(AttributeProjector::normalizeProjection($columns)[$this->getOwnerKeyName()])) {
+            if ($allStrings && !isset(AttributeProjector::normalizeProjection($columns)[$ownerKey])) {
                 return false;
             }
         }
 
-        $base = $this->query->toBase();
         $plan = $this->query->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
 
         return $plan->mode === CacheMode::Normalized;

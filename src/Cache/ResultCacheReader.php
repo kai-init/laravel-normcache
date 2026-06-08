@@ -31,6 +31,7 @@ final class ResultCacheReader
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
+        $lockToken = $this->versions->buildLockToken();
 
         if ($this->slotting) {
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
@@ -38,21 +39,16 @@ final class ResultCacheReader
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
             $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
             $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
-            $lockToken = $this->versions->buildLockToken();
 
             $payload = $this->store->get($resultKey);
-            if ($payload !== null) {
-                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $payload, null, null, null, $versionKeys, $expectedVersions);
-            }
+            $status = $payload !== null ? 'hit' : 'miss';
 
-            if (!$this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-                return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-            }
-
-            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+            return $this->toResultCacheResult(
+                $status, $resultKey, $buildingKey, $lockToken, $wakeKey,
+                $versionKeys, $expectedVersions, $payload, true, false
+            );
         }
 
-        $lockToken = $this->versions->buildLockToken();
         [$status, $seg, $payload, $claimedToken] = $this->luaFetchVersionedResult(
             $versionKeys, $scheduledKeys,
             $this->keys->namespacedPrefix($namespace, $classKey, $tag),
@@ -61,14 +57,47 @@ final class ResultCacheReader
         );
 
         $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
-        $expectedVersions = $this->keys->versionsFromSegment($seg);
         $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
+        $expectedVersions = $this->keys->versionsFromSegment($seg);
 
-        return match ($status) {
-            'hit' => new ResultCacheResult(CacheStatus::Hit, $resultKey, $this->store->unserialize($payload), null, null, null, $versionKeys, $expectedVersions),
-            'building' => new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            default => new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey, $versionKeys, $expectedVersions),
-        };
+        return $this->toResultCacheResult(
+            $status, $resultKey, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey,
+            $versionKeys, $expectedVersions, $payload, false, $status === 'miss'
+        );
+    }
+
+    private function toResultCacheResult(
+        string $status,
+        string $resultKey,
+        string $buildingKey,
+        string $lockToken,
+        string $wakeKey,
+        array $versionKeys,
+        array $expectedVersions,
+        mixed $payload = null,
+        bool $payloadAlreadyUnserialized = true,
+        bool $alreadyClaimed = false
+    ): ResultCacheResult {
+        if ($status === 'hit') {
+            $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
+            if (is_array($unserialized)) {
+                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+            }
+
+            // Corrupt payload (not an array), treat as miss.
+            $alreadyClaimed = false;
+        }
+
+        if ($status === 'building') {
+            return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        }
+
+        // Standard miss or corrupt hit: attempt to claim building lock.
+        if ($alreadyClaimed || $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+        }
+
+        return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
     }
 
     public function fetchPivot(
@@ -84,10 +113,10 @@ final class ResultCacheReader
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
-            $pivotKeys = array_map(
-                fn($id) => $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id),
-                $parentIds
-            );
+            $pivotKeys = [];
+            foreach ($parentIds as $id) {
+                $pivotKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
+            }
 
             return new PivotCacheResult(
                 $seg,
@@ -123,6 +152,53 @@ final class ResultCacheReader
             $key, $payload, $ttl, $buildingKey,
             $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null),
             $buildingToken
+        );
+    }
+
+    public function storeMany(
+        array $entries, int $ttl,
+        array $versionKeys, array $expectedVersions,
+        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
+    ): bool {
+        if (empty($entries)) {
+            if ($this->slotting && $buildingKey !== null) {
+                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey), $buildingToken);
+            }
+
+            return true;
+        }
+
+        if ($this->slotting) {
+            if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
+                return false;
+            }
+            $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
+            if ($written) {
+                $this->store->setMany($entries, $ttl);
+            }
+            if ($buildingKey !== null) {
+                $this->store->releaseBuilding(
+                    $buildingKey,
+                    $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
+                    $buildingToken
+                );
+            }
+
+            return $written;
+        }
+
+        return (bool) $this->store->eval(
+            RedisScripts::get('store_many_versioned'),
+            array_merge($versionKeys, array_keys($entries), [
+                $buildingKey ?? '',
+                $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),
+            ]),
+            array_merge(
+                [(string) count($versionKeys), (string) count($entries), (string) $ttl],
+                $expectedVersions,
+                array_map(fn($p) => $this->store->serialize($p), array_values($entries)),
+                [$buildingToken ?? '']
+            )
         );
     }
 
