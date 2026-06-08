@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.1] — 2026-06-08
+
+### Changed
+
+- **Pivot cache batching:** batch pivot cache writes during eager loading to reduce Redis roundtrips.
+- **Hydration optimization:** implemented closure-based hydration and removed expensive regex from unserialization for faster model loading.
+- **Dedupe transaction bumps:** reduced redundant Redis calls by deduping version bumps within the same database transaction.
+- **Internal refactoring:** extracted result handling logic for better maintainability and consistency.
+
+### Fixed
+
+- **Result cache correctness:** fixed edge cases where result cache could return stale or incorrect data.
+- **Wildcard alias support:** improved handling of queries using wildcard aliases in the result cache.
+- **Model hydration:** fixed issues with closure-based model hydration when restoring certain attribute types from cache.
+
+---
+
 ## [2.1.0] — 2026-06-06
 
 ### Added
