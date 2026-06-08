@@ -10,7 +10,14 @@ final class AttributeProjector
         $normalized = [];
 
         foreach ($columns as $column) {
-            [$source, $output] = self::parseProjection((string) $column);
+            $column = (string) $column;
+            if ($column === '*' || str_ends_with($column, '.*')) {
+                $normalized['*'] = '*';
+
+                continue;
+            }
+
+            [$source, $output] = self::parseProjection($column);
             $normalized[$output] = $source;
         }
 
@@ -25,7 +32,15 @@ final class AttributeProjector
     {
         $projected = [];
 
+        if (isset($projection['*'])) {
+            $projected = $attributes;
+        }
+
         foreach ($projection as $output => $source) {
+            if ($output === '*') {
+                continue;
+            }
+
             if (array_key_exists($source, $attributes)) {
                 $projected[$output] = $attributes[$source];
             }

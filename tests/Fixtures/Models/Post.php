@@ -54,5 +54,4 @@ class Post extends Model
     {
         return new CustomPostCollection($models);
     }
-
 }

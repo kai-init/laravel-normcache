@@ -4,10 +4,10 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\CacheFlowGuard;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\VersionTracker;
 use NormCache\Support\CacheKeyBuilder;

@@ -42,7 +42,10 @@ final class ResultCacheReader
 
             $payload = $this->store->get($resultKey);
             if ($payload !== null) {
-                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $payload, null, null, null, $versionKeys, $expectedVersions);
+                if (is_array($payload)) {
+                    return new ResultCacheResult(CacheStatus::Hit, $resultKey, $payload, null, null, null, $versionKeys, $expectedVersions);
+                }
+                // Corrupt payload (not an array), treat as miss and attempt to claim building lock.
             }
 
             if (!$this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
@@ -64,7 +67,21 @@ final class ResultCacheReader
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         return match ($status) {
-            'hit' => new ResultCacheResult(CacheStatus::Hit, $resultKey, $this->store->unserialize($payload), null, null, null, $versionKeys, $expectedVersions),
+            'hit' => (function () use ($payload, $resultKey, $versionKeys, $expectedVersions, $classKey, $seg, $lockSuffix, $lockToken, $wakeKey) {
+                $unserialized = $this->store->unserialize($payload);
+                if (is_array($unserialized)) {
+                    return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+                }
+
+                // Corrupt payload (not an array), treat as miss.
+                // We must attempt to claim the building lock to "allow rebuild" (and storage).
+                $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
+                if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+                    return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, (string) $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+                }
+
+                return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+            })(),
             'building' => new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
             default => new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix), (string) ($claimedToken ?? $lockToken), $wakeKey, $versionKeys, $expectedVersions),
         };

@@ -47,21 +47,18 @@ trait HandlesInvalidation
             return;
         }
 
-        if (is_string($model)) {
-            $this->attempt(fn() => $this->forceFlushModel($model));
-
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
+        $modelClass = is_string($model) ? $model : $model::class;
+        $conn = is_string($model)
+            ? ($this->keys->prototype($modelClass)->getConnectionName() ?? DB::getDefaultConnection())
+            : $model->getConnection()->getName();
 
         if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $model::class);
+            $this->queueModelFlush($conn, $modelClass);
 
             return;
         }
 
-        $this->attempt(fn() => $this->forceFlushModel($model::class));
+        $this->attempt(fn() => $this->forceFlushModel($modelClass));
     }
 
     public function flushInstance(Model $model): void
@@ -219,13 +216,20 @@ trait HandlesInvalidation
                 $this->forceFlushModel($modelClass);
             }
 
+            $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
+            $evictClasses = array_unique(array_column($evicts, 0));
+            $evictClassKeys = array_map(fn($class) => $this->keys->classKey($class), $evictClasses);
+
             foreach ($versions as $classKey) {
-                $this->doInvalidateKey($classKey);
+                if (!in_array($classKey, $evictClassKeys, true) && !in_array($classKey, $flushClassKeys, true)) {
+                    $this->doInvalidateKey($classKey);
+                }
             }
 
-            // Bump version once per unique class, then evict the specific keys.
-            foreach (array_unique(array_column($evicts, 0)) as $class) {
-                $this->doInvalidateVersion($class);
+            foreach ($evictClasses as $class) {
+                if (!in_array($this->keys->classKey($class), $flushClassKeys, true)) {
+                    $this->doInvalidateVersion($class);
+                }
             }
 
             foreach ($evicts as [, $key, $membersKey]) {

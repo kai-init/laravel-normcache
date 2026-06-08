@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -105,5 +106,22 @@ class JoinResultCacheTest extends TestCase
 
         $this->assertCount(1, $results);
         $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_corrupt_result_cache_payload_is_treated_as_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $query = Author::query()->whereHas('posts')->dependsOn([Post::class]);
+        $query->get(); // warm
+
+        $resultKey = collect($this->redisKeys('test:result:*'))->first();
+        Redis::connection('normcache-test')->set($resultKey, 'CORRUPT');
+
+        $results = $query->get();
+
+        $this->assertCount(1, $results);
+        $this->assertSame('Alice', $results->first()->name);
     }
 }

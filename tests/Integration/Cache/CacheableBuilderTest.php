@@ -735,4 +735,16 @@ class CacheableBuilderTest extends TestCase
 
         Event::assertDispatched(QueryBypassed::class);
     }
+
+    public function test_normalized_cache_preserves_wildcard_plus_alias_projection(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        Author::query()->select('authors.*', 'authors.name as display_name')->get();
+        $second = Author::query()->select('authors.*', 'authors.name as display_name')->get();
+
+        $this->assertSame($author->id, $second->first()->id);
+        $this->assertSame('Alice', $second->first()->name);
+        $this->assertSame('Alice', $second->first()->display_name);
+    }
 }

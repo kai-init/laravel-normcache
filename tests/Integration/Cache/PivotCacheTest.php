@@ -441,13 +441,13 @@ class PivotCacheTest extends TestCase
         $post->tags()->attach([$php->id, $laravel->id]);
 
         $first = $post->tags()
-            ->where(fn ($q) => $q->where('tags.name', 'php'))
+            ->where(fn($q) => $q->where('tags.name', 'php'))
             ->get()
             ->pluck('name')
             ->all();
 
         $second = $post->tags()
-            ->where(fn ($q) => $q->where('tags.name', 'laravel'))
+            ->where(fn($q) => $q->where('tags.name', 'laravel'))
             ->get()
             ->pluck('name')
             ->all();
@@ -538,5 +538,18 @@ class PivotCacheTest extends TestCase
         // The model cache should NOT contain 'polluted'
         $cached = NormCache::getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
+    }
+
+    public function test_relation_cache_preserves_wildcard_plus_alias_projection(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+        $author->tags()->attach($tag->id);
+
+        Author::with(['tags' => fn($q) => $q->select('tags.*', 'tags.name as tag_label')])->first();
+        $result = Author::with(['tags' => fn($q) => $q->select('tags.*', 'tags.name as tag_label')])->first();
+
+        $this->assertSame('php', $result->tags->first()->name);
+        $this->assertSame('php', $result->tags->first()->tag_label);
     }
 }

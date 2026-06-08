@@ -235,4 +235,55 @@ class TransactionInvalidationTest extends TestCase
 
         $this->assertSame('Alice', $result->name);
     }
+
+    public function test_single_model_update_in_transaction_bumps_version_once(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::query()->get(); // warm
+
+        $before = NormCache::currentVersion(Author::class);
+
+        DB::transaction(function () use ($author) {
+            $author->update(['name' => 'Alicia']);
+        });
+
+        $after = NormCache::currentVersion(Author::class);
+
+        $this->assertSame($before + 1, $after);
+    }
+
+    public function test_multiple_model_updates_in_transaction_bumps_version_once(): void
+    {
+        $a1 = Author::create(['name' => 'Alice']);
+        $a2 = Author::create(['name' => 'Bob']);
+        Author::query()->get(); // warm
+
+        $before = NormCache::currentVersion(Author::class);
+
+        DB::transaction(function () use ($a1, $a2) {
+            $a1->update(['name' => 'Alicia']);
+            $a2->update(['name' => 'Roberto']);
+        });
+
+        $after = NormCache::currentVersion(Author::class);
+
+        $this->assertSame($before + 1, $after);
+    }
+
+    public function test_flush_and_update_in_transaction_bumps_version_once(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::query()->get(); // warm
+
+        $before = NormCache::currentVersion(Author::class);
+
+        DB::transaction(function () use ($author) {
+            NormCache::flushModel(Author::class);
+            $author->update(['name' => 'Alicia']);
+        });
+
+        $after = NormCache::currentVersion(Author::class);
+
+        $this->assertSame($before + 1, $after);
+    }
 }

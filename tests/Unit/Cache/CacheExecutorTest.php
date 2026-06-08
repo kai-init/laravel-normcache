@@ -34,7 +34,11 @@ class CacheExecutorTest extends TestCase
             waitForBuild: fn() => null,
             onMiss: fn($r) => [new Collection, []],
             onStore: fn($p, $r) => null,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return new Collection; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return new Collection;
+            },
             onBuild: fn() => new Collection,
         );
 
@@ -52,7 +56,9 @@ class CacheExecutorTest extends TestCase
             fetch: fn() => $miss,
             waitForBuild: fn() => null,
             onMiss: fn($r) => [$models, ['payload']],
-            onStore: function ($p, $r) use (&$storeCalled) { $storeCalled = true; },
+            onStore: function ($p, $r) use (&$storeCalled) {
+                $storeCalled = true;
+            },
             onHit: fn($r) => new Collection,
             onBuild: fn() => new Collection,
         );
@@ -72,7 +78,11 @@ class CacheExecutorTest extends TestCase
             onMiss: fn($r) => [new Collection, []],
             onStore: fn($p, $r) => null,
             onHit: fn($r) => new Collection,
-            onBuild: function () use (&$buildCalled) { $buildCalled = true; return new Collection; },
+            onBuild: function () use (&$buildCalled) {
+                $buildCalled = true;
+
+                return new Collection;
+            },
         );
 
         $this->assertTrue($buildCalled);
@@ -89,7 +99,11 @@ class CacheExecutorTest extends TestCase
             waitForBuild: fn() => $hit,
             onMiss: fn($r) => [new Collection, []],
             onStore: fn($p, $r) => null,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return new Collection; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return new Collection;
+            },
             onBuild: fn() => new Collection,
         );
 
@@ -109,7 +123,11 @@ class CacheExecutorTest extends TestCase
             fetch: fn() => $pivotResult,
             onMiss: fn() => new Collection,
             onStore: fn($c, $r) => null,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return new Collection; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return new Collection;
+            },
         );
 
         $this->assertTrue($hitCalled);
@@ -123,8 +141,14 @@ class CacheExecutorTest extends TestCase
 
         $this->executor->runPivot(
             fetch: fn() => $pivotResult,
-            onMiss: function () use (&$missCalled) { $missCalled = true; return new Collection; },
-            onStore: function ($c, $r) use (&$storeCalled) { $storeCalled = true; },
+            onMiss: function () use (&$missCalled) {
+                $missCalled = true;
+
+                return new Collection;
+            },
+            onStore: function ($c, $r) use (&$storeCalled) {
+                $storeCalled = true;
+            },
             onHit: fn($r) => new Collection,
         );
 
@@ -144,7 +168,11 @@ class CacheExecutorTest extends TestCase
         $this->executor->runNormalized(
             fetch: fn() => $hit,
             waitForBuild: fn() => null,
-            onHit: function ($r) use (&$received) { $received = $r; return new Collection; },
+            onHit: function ($r) use (&$received) {
+                $received = $r;
+
+                return new Collection;
+            },
             onMiss: fn($r) => new Collection,
             onBuild: fn() => new Collection,
         );
@@ -160,7 +188,11 @@ class CacheExecutorTest extends TestCase
         $this->executor->runNormalized(
             fetch: fn() => $stale,
             waitForBuild: fn() => null,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return new Collection; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return new Collection;
+            },
             onMiss: fn($r) => new Collection,
             onBuild: fn() => new Collection,
         );
@@ -177,7 +209,11 @@ class CacheExecutorTest extends TestCase
             fetch: fn() => $miss,
             waitForBuild: fn() => null,
             onHit: fn($r) => new Collection,
-            onMiss: function ($r) use (&$received) { $received = $r; return new Collection; },
+            onMiss: function ($r) use (&$received) {
+                $received = $r;
+
+                return new Collection;
+            },
             onBuild: fn() => new Collection,
         );
 
@@ -194,7 +230,11 @@ class CacheExecutorTest extends TestCase
             waitForBuild: fn() => null,
             onHit: fn($r) => new Collection,
             onMiss: fn($r) => new Collection,
-            onBuild: function () use (&$buildCalled) { $buildCalled = true; return new Collection; },
+            onBuild: function () use (&$buildCalled) {
+                $buildCalled = true;
+
+                return new Collection;
+            },
         );
 
         $this->assertTrue($buildCalled);
@@ -209,7 +249,11 @@ class CacheExecutorTest extends TestCase
         $this->executor->runNormalized(
             fetch: fn() => $building,
             waitForBuild: fn() => $hit,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return new Collection; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return new Collection;
+            },
             onMiss: fn($r) => new Collection,
             onBuild: fn() => new Collection,
         );
@@ -231,7 +275,11 @@ class CacheExecutorTest extends TestCase
             waitForBuild: fn() => null,
             compute: fn() => 0,
             onStore: fn($v, $r) => null,
-            onHit: function ($r) use (&$received) { $received = $r; return $r->payload; },
+            onHit: function ($r) use (&$received) {
+                $received = $r;
+
+                return $r->payload;
+            },
         );
 
         $this->assertSame($hit, $received);
@@ -246,7 +294,9 @@ class CacheExecutorTest extends TestCase
             fetch: fn() => $miss,
             waitForBuild: fn() => null,
             compute: fn() => 99,
-            onStore: function ($v, $r) use (&$storeCalled) { $storeCalled = true; },
+            onStore: function ($v, $r) use (&$storeCalled) {
+                $storeCalled = true;
+            },
             onHit: fn($r) => $r->payload,
         );
 
@@ -280,7 +330,11 @@ class CacheExecutorTest extends TestCase
             waitForBuild: fn() => $hit,
             compute: fn() => 0,
             onStore: fn($v, $r) => null,
-            onHit: function ($r) use (&$hitCalled) { $hitCalled = true; return $r->payload; },
+            onHit: function ($r) use (&$hitCalled) {
+                $hitCalled = true;
+
+                return $r->payload;
+            },
         );
 
         $this->assertTrue($hitCalled);
