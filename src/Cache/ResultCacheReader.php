@@ -155,6 +155,53 @@ final class ResultCacheReader
         );
     }
 
+    public function storeMany(
+        array $entries, int $ttl,
+        array $versionKeys, array $expectedVersions,
+        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
+    ): bool {
+        if (empty($entries)) {
+            if ($this->slotting && $buildingKey !== null) {
+                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey), $buildingToken);
+            }
+
+            return true;
+        }
+
+        if ($this->slotting) {
+            if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
+                return false;
+            }
+            $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
+            if ($written) {
+                $this->store->setMany($entries, $ttl);
+            }
+            if ($buildingKey !== null) {
+                $this->store->releaseBuilding(
+                    $buildingKey,
+                    $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
+                    $buildingToken
+                );
+            }
+
+            return $written;
+        }
+
+        return (bool) $this->store->eval(
+            RedisScripts::get('store_many_versioned'),
+            array_merge($versionKeys, array_keys($entries), [
+                $buildingKey ?? '',
+                $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),
+            ]),
+            array_merge(
+                [(string) count($versionKeys), (string) count($entries), (string) $ttl],
+                $expectedVersions,
+                array_map(fn($p) => $this->store->serialize($p), array_values($entries)),
+                [$buildingToken ?? '']
+            )
+        );
+    }
+
     public function storeEntry(
         string $key, mixed $payload, int $ttl,
         array $versionKeys, array $expectedVersions,

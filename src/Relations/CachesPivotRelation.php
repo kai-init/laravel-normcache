@@ -185,11 +185,7 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        foreach ($pivotEntriesByKey as $key => $payload) {
-            if (!NormCache::storeVersionedResult($key, $payload, versionKeys: $versionKeys, expectedVersions: $expectedVersions)) {
-                return;
-            }
-        }
+        NormCache::storeManyVersionedResults($pivotEntriesByKey, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
 
         NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }
