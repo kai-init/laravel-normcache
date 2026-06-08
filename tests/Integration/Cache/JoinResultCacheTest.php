@@ -92,4 +92,18 @@ class JoinResultCacheTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:result:*'));
         $this->assertEmpty($this->redisKeys('test:query:*'));
     }
+
+    public function test_join_get_star_string_without_explicit_root_select_bypasses_result_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $results = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->get('*');
+
+        $this->assertCount(1, $results);
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
 }

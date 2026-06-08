@@ -422,6 +422,25 @@ class CacheableBuilderTest extends TestCase
         $this->assertContains('Bob', $names);
     }
 
+    public function test_result_cache_get_columns_does_not_mutate_builder_projection(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $query = Author::query()
+            ->whereHas('posts')
+            ->dependsOn([Post::class]);
+
+        $projected = $query->get(['id']);
+
+        $this->assertSame($author->id, $projected->first()->id);
+        $this->assertNull($projected->first()->getRawOriginal('name'));
+
+        $full = $query->get();
+
+        $this->assertSame('Alice', $full->first()->name);
+    }
+
     public function test_updating_related_model_busts_aggregate_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);

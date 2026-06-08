@@ -430,6 +430,58 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_pivot_constraint_hash_distinguishes_nested_where_bindings(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $php = Tag::create(['name' => 'php']);
+        $laravel = Tag::create(['name' => 'laravel']);
+
+        $post->tags()->attach([$php->id, $laravel->id]);
+
+        $first = $post->tags()
+            ->where(fn ($q) => $q->where('tags.name', 'php'))
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $second = $post->tags()
+            ->where(fn ($q) => $q->where('tags.name', 'laravel'))
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $this->assertSame(['php'], $first);
+        $this->assertSame(['laravel'], $second);
+    }
+
+    public function test_pivot_constraint_hash_distinguishes_raw_order_expressions(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $alpha = Tag::create(['name' => 'alpha']);
+        $beta = Tag::create(['name' => 'beta']);
+
+        $post->tags()->attach([$alpha->id, $beta->id]);
+
+        $ascending = $post->tags()
+            ->orderByRaw('LOWER(tags.name) ASC')
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $descending = $post->tags()
+            ->orderByRaw('LOWER(tags.name) DESC')
+            ->get()
+            ->pluck('name')
+            ->all();
+
+        $this->assertSame(['alpha', 'beta'], $ascending);
+        $this->assertSame(['beta', 'alpha'], $descending);
+    }
+
     private function callConstraintHash(object $relation): string
     {
         $method = new ReflectionMethod($relation, 'currentConstraintHash');
