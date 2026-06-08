@@ -31,6 +31,7 @@ final class ResultCacheReader
         $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
         $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
+        $lockToken = $this->versions->buildLockToken();
 
         if ($this->slotting) {
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
@@ -38,24 +39,16 @@ final class ResultCacheReader
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
             $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
             $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
-            $lockToken = $this->versions->buildLockToken();
 
             $payload = $this->store->get($resultKey);
-            if ($payload !== null) {
-                if (is_array($payload)) {
-                    return new ResultCacheResult(CacheStatus::Hit, $resultKey, $payload, null, null, null, $versionKeys, $expectedVersions);
-                }
-                // Corrupt payload (not an array), treat as miss and attempt to claim building lock.
-            }
+            $status = $payload !== null ? 'hit' : 'miss';
 
-            if (!$this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-                return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-            }
-
-            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+            return $this->toResultCacheResult(
+                $status, $resultKey, $buildingKey, $lockToken, $wakeKey,
+                $versionKeys, $expectedVersions, $payload, true, false
+            );
         }
 
-        $lockToken = $this->versions->buildLockToken();
         [$status, $seg, $payload, $claimedToken] = $this->luaFetchVersionedResult(
             $versionKeys, $scheduledKeys,
             $this->keys->namespacedPrefix($namespace, $classKey, $tag),
@@ -64,27 +57,47 @@ final class ResultCacheReader
         );
 
         $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
+        $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
-        return match ($status) {
-            'hit' => (function () use ($payload, $resultKey, $versionKeys, $expectedVersions, $classKey, $seg, $lockSuffix, $lockToken, $wakeKey) {
-                $unserialized = $this->store->unserialize($payload);
-                if (is_array($unserialized)) {
-                    return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
-                }
+        return $this->toResultCacheResult(
+            $status, $resultKey, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey,
+            $versionKeys, $expectedVersions, $payload, false, $status === 'miss'
+        );
+    }
 
-                // Corrupt payload (not an array), treat as miss.
-                // We must attempt to claim the building lock to "allow rebuild" (and storage).
-                $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
-                if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-                    return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, (string) $lockToken, $wakeKey, $versionKeys, $expectedVersions);
-                }
+    private function toResultCacheResult(
+        string $status,
+        string $resultKey,
+        string $buildingKey,
+        string $lockToken,
+        string $wakeKey,
+        array $versionKeys,
+        array $expectedVersions,
+        mixed $payload = null,
+        bool $payloadAlreadyUnserialized = true,
+        bool $alreadyClaimed = false
+    ): ResultCacheResult {
+        if ($status === 'hit') {
+            $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
+            if (is_array($unserialized)) {
+                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+            }
 
-                return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-            })(),
-            'building' => new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            default => new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix), (string) ($claimedToken ?? $lockToken), $wakeKey, $versionKeys, $expectedVersions),
-        };
+            // Corrupt payload (not an array), treat as miss.
+            $alreadyClaimed = false;
+        }
+
+        if ($status === 'building') {
+            return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        }
+
+        // Standard miss or corrupt hit: attempt to claim building lock.
+        if ($alreadyClaimed || $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+        }
+
+        return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
     }
 
     public function fetchPivot(

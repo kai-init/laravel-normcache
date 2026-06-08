@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit\Support;
 use Illuminate\Contracts\Database\Query\Expression as ExpressionContract;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Grammar;
+use Illuminate\Database\Query\Grammars\Grammar as QueryGrammar;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Support\ProjectionClassifier;
@@ -61,7 +62,7 @@ class ProjectionClassifierTest extends TestCase
     {
         $query = new Builder(
             connection: $this->createStub(ConnectionInterface::class),
-            grammar: $this->createStub(\Illuminate\Database\Query\Grammars\Grammar::class),
+            grammar: $this->createStub(QueryGrammar::class),
             processor: $this->createStub(Processor::class),
         );
 

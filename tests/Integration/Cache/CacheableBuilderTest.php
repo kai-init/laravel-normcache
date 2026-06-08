@@ -15,7 +15,6 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
-use ReflectionProperty;
 
 /**
  * Behavioral tests: CacheableBuilder cache-read/write paths — verifies key creation,
@@ -703,7 +702,7 @@ class CacheableBuilderTest extends TestCase
 
     private function clearGlobalScope(string $modelClass, string $name): void
     {
-        $prop = new ReflectionProperty(Model::class, 'globalScopes');
+        $prop = new \ReflectionProperty(Model::class, 'globalScopes');
         $scopes = $prop->getValue();
         unset($scopes[$modelClass][$name]);
         $prop->setValue(null, $scopes);
@@ -734,6 +733,22 @@ class CacheableBuilderTest extends TestCase
         ])->get();
 
         Event::assertDispatched(QueryBypassed::class);
+    }
+
+    public function test_corrupt_query_cache_ids_are_treated_as_miss(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::all(); // warm
+
+        $queryKey = collect($this->redisKeys('test:query:*'))->first();
+        $this->assertNotNull($queryKey);
+
+        Redis::connection('normcache-test')->set($queryKey, 'NOT_JSON');
+
+        $results = Author::all();
+
+        $this->assertCount(1, $results);
+        $this->assertSame('Alice', $results->first()->name);
     }
 
     public function test_normalized_cache_preserves_wildcard_plus_alias_projection(): void

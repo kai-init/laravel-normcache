@@ -3,12 +3,12 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
-use ReflectionMethod;
 
 /**
  * Behavioral tests: belongsToMany and morphToMany pivot caches are invalidated on
@@ -484,7 +484,7 @@ class PivotCacheTest extends TestCase
 
     private function callConstraintHash(object $relation): string
     {
-        $method = new ReflectionMethod($relation, 'currentConstraintHash');
+        $method = new \ReflectionMethod($relation, 'currentConstraintHash');
 
         return $method->invoke($relation, ['*']);
     }
@@ -538,6 +538,27 @@ class PivotCacheTest extends TestCase
         // The model cache should NOT contain 'polluted'
         $cached = NormCache::getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
+    }
+
+    public function test_corrupt_pivot_cache_entries_are_treated_as_miss(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        Author::with('tags')->get(); // warm pivot cache
+
+        $keys = $this->redisKeys('test:pivot:*');
+        $this->assertNotEmpty($keys);
+        $pivotKey = $keys[0];
+
+        Redis::connection('normcache-test')->set($pivotKey, 'CORRUPT');
+
+        $authors = Author::with('tags')->get();
+
+        $this->assertCount(1, $authors);
+        $this->assertCount(1, $authors->first()->tags);
+        $this->assertSame('Fiction', $authors->first()->tags->first()->name);
     }
 
     public function test_relation_cache_preserves_wildcard_plus_alias_projection(): void
