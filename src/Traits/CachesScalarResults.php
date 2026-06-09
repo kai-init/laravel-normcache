@@ -5,6 +5,7 @@ namespace NormCache\Traits;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
+use NormCache\Cache\ModelHydrator;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheKeyBuilder;
@@ -12,6 +13,8 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
+use NormCache\Values\QueryInspection;
 
 /**
  * @mixin CacheableBuilder
@@ -128,7 +131,7 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        if (in_array($kind, ['pluck', 'value'], true) && $this->hasAfterQueryCallbacks()) {
+        if (($kind === 'pluck' || $kind === 'value') && $this->hasAfterQueryCallbacks()) {
             return $fallback();
         }
 
@@ -138,15 +141,16 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies();
 
-        if ($this->isSimpleScalarQuery($base)) {
+        if ($this->isSimpleScalarQuery($base, $inferredDependencies)) {
             $depClasses = [];
             $depTableKeys = [];
         } else {
             $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
                 $kind,
                 $columns,
-                $executionBuilder->inferAggregateDependencies()
+                $inferredDependencies,
             ));
 
             if ($plan->mode === CacheMode::Bypass) {
@@ -210,9 +214,7 @@ trait CachesScalarResults
             return $results;
         }
 
-        return $results->map(
-            fn($value) => $this->model->newFromBuilder([$column => $value])->{$column}
-        );
+        return ModelHydrator::transformScalars($results, $this->model, $column);
     }
 
     private function valueFromPreparedBase(QueryBuilder $base, mixed $column): mixed
@@ -233,67 +235,37 @@ trait CachesScalarResults
             return $value;
         }
 
-        return $this->model->newFromBuilder([$column => $value])->{$column};
+        return ModelHydrator::transformScalar($value, $this->model, $column);
     }
 
-    private function isSimpleScalarQuery(QueryBuilder $base): bool
+    private function isSimpleScalarQuery(QueryBuilder $base, DependencySet $inferredDependencies): bool
     {
-        if ($this->isCacheSkipped()
+        if (!$inferredDependencies->safe
+            || $inferredDependencies->models !== []
+            || $inferredDependencies->tables !== []
+            || $this->isCacheSkipped()
             || !NormCache::isEnabled()
             || $this->getModel()->getConnection()->transactionLevel() > 0
             || $this->explicitDependencies() !== null
             || $this->explicitTableDependencies() !== []
-            || !empty($base->joins)
-            || !empty($base->unions)
-            || !is_string($base->from)
-            || $base->from !== $this->getModel()->getTable()
-            || ($base->lock !== null && $base->lock !== false)) {
+        ) {
             return false;
         }
 
-        foreach ((array) $base->orders as $order) {
-            if (isset($order['type']) && $order['type'] === 'Raw') {
-                return false;
-            }
-        }
+        $flags = $this->analyzer()->flags(
+            $base,
+            $this->getModel()->getTable(),
+            null,
+        );
 
-        return !$this->wheresHaveBypass((array) $base->wheres);
-    }
+        $bypassFlags = QueryInspection::RAW_ORDER
+            | QueryInspection::RAW_WHERE
+            | QueryInspection::SUBQUERY_WHERE
+            | QueryInspection::LOCK
+            | QueryInspection::NON_CANONICAL_FROM
+            | QueryInspection::JOIN
+            | QueryInspection::UNION;
 
-    private function wheresHaveBypass(array $wheres): bool
-    {
-        static $subqueryTypes = ['Exists', 'NotExists', 'Sub', 'InSub', 'NotInSub'];
-
-        foreach ($wheres as $where) {
-            $type = $where['type'] ?? '';
-
-            if (strtolower($type) === 'raw') {
-                return true;
-            }
-
-            if (in_array($type, $subqueryTypes, true)) {
-                return true;
-            }
-
-            if ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
-                return true;
-            }
-
-            if (in_array($type, ['In', 'NotIn'], true)) {
-                foreach ((array) ($where['values'] ?? []) as $v) {
-                    if ($v instanceof Expression) {
-                        return true;
-                    }
-                }
-            }
-
-            if ($type === 'Nested' && isset($where['query'])) {
-                if ($this->wheresHaveBypass((array) $where['query']->wheres)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return ($flags & $bypassFlags) === 0;
     }
 }

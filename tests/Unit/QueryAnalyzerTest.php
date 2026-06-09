@@ -1,0 +1,161 @@
+<?php
+
+namespace NormCache\Tests\Unit;
+
+use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Grammars\Grammar;
+use Illuminate\Database\Query\Processors\Processor;
+use NormCache\Planning\BypassReasons;
+use NormCache\Planning\QueryAnalyzer;
+use NormCache\Values\QueryInspection;
+use PHPUnit\Framework\TestCase;
+
+class QueryAnalyzerTest extends TestCase
+{
+    public function test_simple_query_has_no_flags(): void
+    {
+        $analyzer = new QueryAnalyzer;
+        $query = $this->makeBaseQuery();
+        $inspection = $analyzer->inspect($query, 'authors', null);
+
+        $this->assertSame(0, $inspection->flags);
+        $this->assertSame(0, $analyzer->flags($query, 'authors', null));
+        $this->assertNull($inspection->tables);
+    }
+
+    public function test_nested_wheres_are_scanned_once_for_raw_and_subquery_flags(): void
+    {
+        $nested = $this->makeBaseQuery();
+        $nested->wheres = [
+            ['type' => 'Raw', 'sql' => 'LOWER(name) = ?'],
+            ['type' => 'Exists', 'query' => $this->makeBaseQuery()],
+        ];
+
+        $query = $this->makeBaseQuery();
+        $query->wheres = [['type' => 'Nested', 'query' => $nested]];
+
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null);
+
+        $this->assertTrue($inspection->has(QueryInspection::RAW_WHERE));
+        $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
+        $this->assertTrue($inspection->hasDependencyBypass());
+    }
+
+    public function test_structural_flags_map_to_existing_reason_strings(): void
+    {
+        $query = $this->makeBaseQuery(['id', '1 + 1 as computed'], 'other_authors');
+        $query->joins = [(object) ['table' => 'countries as c']];
+        $query->groups = ['id'];
+        $query->havings = [['type' => 'Basic']];
+        $query->unions = [['query' => $this->makeBaseQuery()]];
+        $query->aggregate = ['function' => 'count', 'columns' => ['*']];
+        $query->distinct = true;
+        $query->lock = true;
+        $query->orders = [['type' => 'Raw']];
+
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', $query->columns, includeTables: true);
+
+        $this->assertSame(
+            [
+                'dependency' => ['raw ORDER expression'],
+                'normalization' => [
+                    'non-standard FROM (subquery or raw expression)',
+                    'JOIN clauses',
+                    'GROUP BY',
+                    'HAVING',
+                    'UNION',
+                    'aggregate function (count/sum/etc.)',
+                    'DISTINCT',
+                    'calculated or raw SELECT expressions',
+                ],
+                'safety' => ['query lock (SELECT FOR UPDATE)'],
+            ],
+            BypassReasons::fromInspection($inspection),
+        );
+        $this->assertSame(['authors', 'countries'], $inspection->tables);
+    }
+
+    public function test_primary_keys_are_extracted_without_reason_generation(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->wheres = [[
+            'type' => 'In',
+            'column' => 'authors.id',
+            'values' => [3, 1, 2],
+        ]];
+
+        $inspection = (new QueryAnalyzer)->inspect(
+            $query,
+            'authors',
+            null,
+            ['id', 'authors.id'],
+        );
+
+        $this->assertSame([1, 2, 3], $inspection->primaryKeys);
+    }
+
+    public function test_expression_values_are_subquery_bypasses(): void
+    {
+        $expression = $this->createStub(Expression::class);
+        $query = $this->makeBaseQuery();
+        $query->wheres = [[
+            'type' => 'In',
+            'column' => 'id',
+            'values' => [$expression],
+        ]];
+
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id']);
+
+        $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
+        $this->assertNull($inspection->primaryKeys);
+    }
+
+    public function test_direct_primary_key_inspection_allows_harmless_single_row_ordering(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->wheres = [[
+            'type' => 'Basic',
+            'column' => 'id',
+            'operator' => '=',
+            'value' => 1,
+        ]];
+        $query->orders = [['type' => 'Raw', 'sql' => 'CASE WHEN id = 1 THEN 0 END']];
+
+        $this->assertSame(
+            [1],
+            (new QueryAnalyzer)->directPrimaryKeys($query, 'authors', null, ['id', 'authors.id']),
+        );
+    }
+
+    public function test_direct_primary_key_inspection_rejects_structural_query_shapes(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->wheres = [[
+            'type' => 'Basic',
+            'column' => 'id',
+            'operator' => '=',
+            'value' => 1,
+        ]];
+        $query->groups = ['id'];
+
+        $this->assertNull(
+            (new QueryAnalyzer)->directPrimaryKeys($query, 'authors', null, ['id', 'authors.id']),
+        );
+    }
+
+    private function makeBaseQuery(?array $columns = null, string $from = 'authors'): Builder
+    {
+        $query = new Builder(
+            connection: $this->createStub(ConnectionInterface::class),
+            grammar: $this->createStub(Grammar::class),
+            processor: $this->createStub(Processor::class),
+        );
+
+        $query->columns = $columns;
+        $query->from = $from;
+
+        return $query;
+    }
+}

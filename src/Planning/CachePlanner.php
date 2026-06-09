@@ -8,11 +8,12 @@ use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;
+use NormCache\Enums\PlanningMode;
 use NormCache\Facades\NormCache;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryAnalysis;
+use NormCache\Values\QueryInspection;
 
 final class CachePlanner
 {
@@ -24,110 +25,138 @@ final class CachePlanner
         CacheableBuilder $builder,
         QueryBuilder $base,
         CachePlanContext $context,
+        PlanningMode $planningMode = PlanningMode::Hot,
     ): CachePlan {
         $slotting = NormCache::isSlotting();
-        $contextReasons = $this->resolveContextReasons($builder, $context);
+        $model = $builder->getModel();
+        $modelClass = $model::class;
+        $modelTable = $model->getTable();
+        $inferred = $context->inferredDependencies;
+        $explicit = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
+        $hasExplicit = $explicit !== null || $explicitTables !== [];
+        $cacheSkipped = $builder->isCacheSkipped();
+        $cacheDisabled = !NormCache::isEnabled();
+        $insideTransaction = $model->getConnection()->transactionLevel() > 0;
+        $contextReasons = $context->contextReasons;
+        $includeTables = $planningMode === PlanningMode::Explain;
 
-        $analysis = $this->analyzer->forBuilder(
+        $inspection = $this->analyzer->inspect(
             $base,
-            $builder->getModel()->getTable(),
+            $modelTable,
             $context->columns,
-            [$builder->getModel()->getKeyName(), $builder->getModel()->getQualifiedKeyName()],
-            $contextReasons,
+            $context->requiresNormalization()
+                ? [$model->getKeyName(), $model->getQualifiedKeyName()]
+                : [],
+            $includeTables,
         );
 
         // 1. Resolve Dependencies
-        $modelClass = $builder->getModel()::class;
-        $explicit = $builder->explicitDependencies();
-        $explicitTables = $builder->explicitTableDependencies();
-        $inferred = $context->inferredDependencies;
-        $hasExplicit = $explicit !== null || $explicitTables !== [];
-
         $dependencies = $hasExplicit
             ? new DependencySet(
                 models: array_keys(array_flip([$modelClass, ...$inferred->models, ...($explicit ?? [])])),
                 tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
             )
-            : ($analysis->hasDependencyBypass() || !$inferred->safe
+            : ($inspection->hasDependencyBypass() || isset($contextReasons['dependency']) || !$inferred->safe
                 ? DependencySet::unsafe(array_values(array_unique([
-                    ...$analysis->dependencyReasons(),
+                    ...(BypassReasons::fromInspection($inspection)['dependency'] ?? []),
+                    ...($contextReasons['dependency'] ?? []),
                     ...$inferred->reasons,
-                    ...($analysis->hasDependencyBypass() ? ['Query requires explicit dependencies.'] : []),
+                    ...($inspection->hasDependencyBypass() ? ['Query requires explicit dependencies.'] : []),
                 ])))
-                : new DependencySet(
-                    models: array_keys(array_flip([$modelClass, ...$inferred->models])),
-                    tables: $inferred->tables,
-                ));
+                : ($inferred->models === [] && $inferred->tables === []
+                    ? DependencySet::singleModel($modelClass)
+                    : new DependencySet(
+                        models: array_keys(array_flip([$modelClass, ...$inferred->models])),
+                        tables: $inferred->tables,
+                    )));
 
         // 2. Qualify Normalization
         $normalizable = false;
-        $normalizationReasons = [];
+        $normalizationFlags = $inspection->normalizationFlags();
+        $hasContextNormalizationBypass = isset($contextReasons['normalization']);
+        $requiresPrimaryKeys = false;
+
         if ($context->requiresNormalization()) {
-            if ($analysis->hasSafetyBypass()) {
-                $normalizationReasons[] = 'Query has safety bypass.';
-            } elseif ($analysis->hasDependencyBypass()) {
-                $normalizationReasons[] = 'Query has dependency bypass.';
-            } elseif ($analysis->hasNormalizationBypass()) {
-                $normalizationReasons[] = 'Query shape cannot be normalized.';
-            } else {
-                $normalizable = true;
-            }
+            $normalizable = !$insideTransaction
+                && !$inspection->hasSafetyBypass()
+                && !isset($contextReasons['safety'])
+                && !$inspection->hasDependencyBypass()
+                && !isset($contextReasons['dependency'])
+                && $normalizationFlags === 0
+                && !$hasContextNormalizationBypass;
         }
 
         // 3. Resolve Cache Mode
         $hasResultDependencies = $hasExplicit || $inferred->models !== [] || $inferred->tables !== [];
-        $isResultStyleOperation = in_array($context->operation, [
+        $isResultStyleOperation = match ($context->operation) {
             CacheOperation::Scalar,
             CacheOperation::PaginationCount,
             CacheOperation::Pivot,
-            CacheOperation::Through,
-        ], true);
+            CacheOperation::Through => true,
+            default => false,
+        };
 
-        if ($analysis->hasOptedOutBypass()) {
+        if ($cacheSkipped || $cacheDisabled || isset($contextReasons['opted_out'])) {
+            $optedOutReasons = $this->resolveContextReasons(
+                $contextReasons,
+                cacheSkipped: $cacheSkipped,
+                cacheDisabled: $cacheDisabled,
+                insideTransaction: $insideTransaction,
+            )['opted_out'] ?? [];
+
             return new CachePlan(
                 mode: CacheMode::Bypass,
                 operation: $context->operation,
                 dependencies: $dependencies,
                 normalizable: false,
                 columns: $context->columns,
-                primaryKeys: $analysis->primaryKeys,
-                reasons: $analysis->optedOutReasons(),
-                bypassReasons: ['opted_out' => $analysis->optedOutReasons()],
+                primaryKeys: $inspection->primaryKeys,
+                reasons: $optedOutReasons,
+                bypassReasons: ['opted_out' => $optedOutReasons],
             );
         }
 
-        $bypassReasons = $analysis->bypassReasons;
-
         // Relation-specific bypass relaxations or strictness
         if ($context->operation === CacheOperation::BelongsToEagerLoad || $context->operation === CacheOperation::MorphToEagerLoad) {
-            if ($analysis->primaryKeys === null) {
-                $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
+            if ($inspection->primaryKeys === null) {
+                $requiresPrimaryKeys = true;
+                $normalizable = false;
             }
         }
 
         if ($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through) {
             // Pivot/Through operations allow exactly one join (to the intermediate table)
-            if (count($bypassReasons['normalization'] ?? []) === 1 && $bypassReasons['normalization'][0] === 'JOIN clauses') {
-                if (count($base->joins ?? []) === 1) {
-                    unset($bypassReasons['normalization']);
-                }
+            if ($normalizationFlags === QueryInspection::JOIN && count($base->joins ?? []) === 1) {
+                $normalizationFlags = 0;
             }
         }
 
-        if (isset($bypassReasons['safety'])) {
+        if ($insideTransaction || $inspection->hasSafetyBypass() || isset($contextReasons['safety'])) {
+            $bypassReasons = BypassReasons::merge(
+                $this->resolveContextReasons(
+                    $contextReasons,
+                    cacheSkipped: false,
+                    cacheDisabled: false,
+                    insideTransaction: $insideTransaction,
+                ),
+                BypassReasons::fromInspection($inspection),
+            );
+            $safetyReasons = $bypassReasons['safety'] ?? [];
+
             return new CachePlan(
                 mode: CacheMode::Bypass,
                 operation: $context->operation,
                 dependencies: $dependencies,
                 normalizable: false,
                 columns: $context->columns,
-                primaryKeys: $analysis->primaryKeys,
-                reasons: $bypassReasons['safety'],
-                bypassReasons: ['safety' => $bypassReasons['safety']],
+                primaryKeys: $inspection->primaryKeys,
+                reasons: $safetyReasons,
+                bypassReasons: ['safety' => $safetyReasons],
             );
         }
 
-        if ($normalizable && $dependencies->safe && empty($bypassReasons['normalization'])) {
+        if ($normalizable && $dependencies->safe) {
             $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
 
             if (!$slotting || !$isMultiDependency) {
@@ -137,7 +166,7 @@ final class CachePlanner
                     dependencies: $dependencies,
                     normalizable: true,
                     columns: $context->columns,
-                    primaryKeys: $analysis->primaryKeys,
+                    primaryKeys: $inspection->primaryKeys,
                 );
             }
         }
@@ -151,31 +180,53 @@ final class CachePlanner
             && $inferred->models === []
             && $inferred->tables === []
             && $dependencies->safe
-            && (!empty($base->joins) || !empty($base->unions) || !is_string($base->from) || $base->from !== $builder->getModel()->getTable())
+            && (!empty($base->joins) || !empty($base->unions) || !is_string($base->from) || $base->from !== $modelTable)
         ) {
             $dependencies = DependencySet::unsafe(['complex_query_requires_depends_on']);
-            $bypassReasons['dependency'] = array_values(array_unique([
-                ...($bypassReasons['dependency'] ?? []),
-                'complex_query_requires_depends_on',
-            ]));
         }
 
         if ($dependencies->safe && ($hasResultDependencies || $isResultStyleOperation)) {
-            $isStrictRelation = in_array($context->operation, [CacheOperation::Pivot, CacheOperation::Through], true);
+            $isStrictRelation = $context->operation === CacheOperation::Pivot
+                || $context->operation === CacheOperation::Through;
 
-            if (!$isStrictRelation || empty($bypassReasons['normalization'])) {
-                $this->checkDependencyCompleteness($analysis, $dependencies, $builder->getModel()->getTable());
+            if (!$isStrictRelation || ($normalizationFlags === 0 && !$hasContextNormalizationBypass)) {
+                if (config('app.debug', false)) {
+                    $this->checkDependencyCompleteness(
+                        $inspection->tables ?? $this->analyzer->extractTables($base, $modelTable),
+                        $dependencies,
+                        $modelTable,
+                    );
+                }
 
                 return new CachePlan(
                     mode: CacheMode::Result,
                     operation: $context->operation,
                     dependencies: $dependencies,
-                    normalizable: $normalizable && empty($bypassReasons['normalization']),
+                    normalizable: $normalizable,
                     columns: $context->columns,
-                    primaryKeys: $analysis->primaryKeys,
-                    reasons: $hasResultDependencies ? ['Using dependency result cache.'] : ['Using result cache.'],
+                    primaryKeys: $inspection->primaryKeys,
                 );
             }
+        }
+
+        $bypassReasons = BypassReasons::merge(
+            $this->resolveContextReasons(
+                $contextReasons,
+                cacheSkipped: false,
+                cacheDisabled: false,
+                insideTransaction: false,
+            ),
+            BypassReasons::fromInspection($inspection),
+        );
+
+        if ($requiresPrimaryKeys) {
+            $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
+        }
+
+        if (($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through)
+            && $normalizationFlags === 0
+            && !$hasContextNormalizationBypass) {
+            unset($bypassReasons['normalization']);
         }
 
         if (!$dependencies->safe) {
@@ -191,25 +242,21 @@ final class CachePlanner
             dependencies: $dependencies,
             normalizable: $normalizable,
             columns: $context->columns,
-            primaryKeys: $analysis->primaryKeys,
+            primaryKeys: $inspection->primaryKeys,
             reasons: array_values(array_unique([
-                ...$normalizationReasons,
                 ...$dependencies->reasons,
-                ...$analysis->dependencyReasons(),
-                ...$analysis->normalizationReasons(),
+                ...($bypassReasons['dependency'] ?? []),
                 ...($bypassReasons['normalization'] ?? []),
             ])),
             bypassReasons: $bypassReasons,
         );
     }
 
-    private function checkDependencyCompleteness(QueryAnalysis $analysis, DependencySet $dependencies, string $baseTable): void
+    private function checkDependencyCompleteness(array $queryTables, DependencySet $dependencies, string $baseTable): void
     {
         if (!config('app.debug', false)) {
             return;
         }
-
-        $queryTables = $analysis->tables ?? [];
 
         // strip connection prefix from table keys ("conn:table" → "table")
         $declaredTables = array_map(
@@ -237,22 +284,24 @@ final class CachePlanner
         }
     }
 
-    private function resolveContextReasons(CacheableBuilder $builder, CachePlanContext $context): array
-    {
-        $reasons = $context->contextReasons;
-
-        if ($builder->isCacheSkipped()) {
+    private function resolveContextReasons(
+        array $reasons,
+        bool $cacheSkipped,
+        bool $cacheDisabled,
+        bool $insideTransaction,
+    ): array {
+        if ($cacheSkipped) {
             $reasons['opted_out'][] = 'withoutCache() was called explicitly';
         }
 
-        if (!NormCache::isEnabled()) {
+        if ($cacheDisabled) {
             $reasons['opted_out'][] = 'cache is globally disabled';
         }
 
-        if ($builder->getModel()->getConnection()->transactionLevel() > 0) {
+        if ($insideTransaction) {
             $reasons['safety'][] = 'inside a database transaction';
         }
 
-        return $reasons;
+        return array_filter($reasons);
     }
 }

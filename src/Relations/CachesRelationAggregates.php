@@ -176,7 +176,11 @@ trait CachesRelationAggregates
         if (!$this->cacheAggregates) {
             return $this->aggregateInferenceFailed
                 ? DependencySet::unsafe('Aggregate dependencies could not be inferred.')
-                : new DependencySet(models: [], tables: []);
+                : DependencySet::empty();
+        }
+
+        if ($this->aggregateDependencies === [] && $this->aggregateTableDependencies === []) {
+            return DependencySet::empty();
         }
 
         return new DependencySet(

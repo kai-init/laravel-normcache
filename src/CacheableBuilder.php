@@ -12,9 +12,11 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\LazyCollection;
 use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheStatus;
+use NormCache\Enums\PlanningMode;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -25,6 +27,7 @@ use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesBuilderInvalidation;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
 
 class CacheableBuilder extends Builder
@@ -34,6 +37,8 @@ class CacheableBuilder extends Builder
     private static array $validatedModelClasses = [];
 
     private static ?CachePlanner $sharedPlanner = null;
+
+    private static ?QueryAnalyzer $sharedAnalyzer = null;
 
     private bool $skipCache = false;
 
@@ -170,7 +175,7 @@ class CacheableBuilder extends Builder
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
             $executionBuilder->inferAggregateDependencies()
-        ));
+        ), PlanningMode::Explain);
 
         if ($plan->mode === CacheMode::Normalized) {
             return $plan->primaryKeys !== null ? 'cached: direct (primary key)' : 'cached';
@@ -209,9 +214,23 @@ class CacheableBuilder extends Builder
         $base = $prepared->base;
         $resolvedCols = ProjectionClassifier::resolve($base, $columns);
         $model = $this->model::class;
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies();
+        $directIds = $executionBuilder->resolveDirectModelIds(
+            $base,
+            $resolvedCols,
+            $inferredDependencies,
+        );
+
+        if ($directIds !== null) {
+            return NormCache::rescue(
+                fn() => $this->getModelsByIds($prepared, $directIds, $model, $resolvedCols),
+                fn() => $this->getWithoutCacheFromPrepared($prepared, $columns),
+            );
+        }
+
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            $executionBuilder->inferAggregateDependencies()
+            $inferredDependencies,
         ));
 
         if ($plan->mode === CacheMode::Normalized) {
@@ -491,14 +510,44 @@ class CacheableBuilder extends Builder
     // Internal
     // -------------------------------------------------------------------------
 
-    public function cachePlan(QueryBuilder $base, CachePlanContext $context): CachePlan
-    {
-        return $this->planner()->plan($this, $base, $context);
+    public function cachePlan(
+        QueryBuilder $base,
+        CachePlanContext $context,
+        PlanningMode $planningMode = PlanningMode::Hot,
+    ): CachePlan {
+        return $this->planner()->plan($this, $base, $context, $planningMode);
     }
 
     private function planner(): CachePlanner
     {
         return self::$sharedPlanner ??= new CachePlanner;
+    }
+
+    private function analyzer(): QueryAnalyzer
+    {
+        return self::$sharedAnalyzer ??= new QueryAnalyzer;
+    }
+
+    private function resolveDirectModelIds(
+        QueryBuilder $base,
+        ?array $resolvedColumns,
+        DependencySet $inferredDependencies,
+    ): ?array {
+        if (!$inferredDependencies->safe
+            || $inferredDependencies->models !== []
+            || $inferredDependencies->tables !== []
+            || $this->dependsOn !== null
+            || $this->dependsOnTables !== []
+            || $this->model->getConnection()->transactionLevel() > 0) {
+            return null;
+        }
+
+        return $this->analyzer()->directPrimaryKeys(
+            $base,
+            $this->model->getTable(),
+            $resolvedColumns,
+            [$this->model->getKeyName(), $this->model->getQualifiedKeyName()],
+        );
     }
 
     private function getByQuery(

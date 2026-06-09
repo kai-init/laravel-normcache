@@ -75,4 +75,17 @@ class ScalarCollisionTest extends TestCase
 
         $this->assertEmpty($this->redisKeys('test:scalar:*'));
     }
+
+    public function test_scalar_aggregate_alias_tracks_related_model_dependency(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $this->assertSame(1, Author::withCount('posts')->value('posts_count'));
+        $this->assertSame(1, Author::withCount('posts')->value('posts_count'));
+
+        Post::create(['title' => 'P2', 'author_id' => $author->id]);
+
+        $this->assertSame(2, Author::withCount('posts')->value('posts_count'));
+    }
 }
