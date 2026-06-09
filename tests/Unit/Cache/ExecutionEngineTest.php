@@ -3,21 +3,21 @@
 namespace NormCache\Tests\Unit\Cache;
 
 use Illuminate\Database\Eloquent\Collection;
-use NormCache\Cache\CacheExecutor;
+use NormCache\Cache\ExecutionEngine;
 use NormCache\Enums\CacheStatus;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
 use PHPUnit\Framework\TestCase;
 
-class CacheExecutorTest extends TestCase
+class ExecutionEngineTest extends TestCase
 {
-    private CacheExecutor $executor;
+    private ExecutionEngine $executor;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->executor = new CacheExecutor;
+        $this->executor = new ExecutionEngine;
     }
 
     // -------------------------------------------------------------------------

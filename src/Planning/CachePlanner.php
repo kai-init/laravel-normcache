@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
-use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
 use NormCache\Facades\NormCache;
@@ -38,8 +37,26 @@ final class CachePlanner
         $cacheSkipped = $builder->isCacheSkipped();
         $cacheDisabled = !NormCache::isEnabled();
         $insideTransaction = $model->getConnection()->transactionLevel() > 0;
-        $contextReasons = $context->contextReasons;
         $includeTables = $planningMode === PlanningMode::Explain;
+        $contextReasons = $context->contextReasons;
+
+        if (!$cacheSkipped && !$cacheDisabled && !$insideTransaction && $context->requiresNormalization()
+            && $inferred->safe && $inferred->models === [] && $inferred->tables === [] && !$hasExplicit) {
+            $directIds = $this->analyzer->directPrimaryKeys(
+                $base,
+                $modelTable,
+                $context->columns,
+                [$model->getKeyName(), $model->getQualifiedKeyName()],
+            );
+
+            if ($directIds !== null) {
+                return CachePlan::direct(
+                    operation: $context->operation,
+                    dependencies: DependencySet::singleModel($modelClass),
+                    primaryKeys: $directIds,
+                );
+            }
+        }
 
         $inspection = $this->analyzer->inspect(
             $base,
@@ -105,13 +122,9 @@ final class CachePlanner
                 insideTransaction: $insideTransaction,
             )['opted_out'] ?? [];
 
-            return new CachePlan(
-                mode: CacheMode::Bypass,
+            return CachePlan::bypass(
                 operation: $context->operation,
                 dependencies: $dependencies,
-                normalizable: false,
-                columns: $context->columns,
-                primaryKeys: $inspection->primaryKeys,
                 reasons: $optedOutReasons,
                 bypassReasons: ['opted_out' => $optedOutReasons],
             );
@@ -144,13 +157,9 @@ final class CachePlanner
             );
             $safetyReasons = $bypassReasons['safety'] ?? [];
 
-            return new CachePlan(
-                mode: CacheMode::Bypass,
+            return CachePlan::bypass(
                 operation: $context->operation,
                 dependencies: $dependencies,
-                normalizable: false,
-                columns: $context->columns,
-                primaryKeys: $inspection->primaryKeys,
                 reasons: $safetyReasons,
                 bypassReasons: ['safety' => $safetyReasons],
             );
@@ -160,11 +169,9 @@ final class CachePlanner
             $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
 
             if (!$slotting || !$isMultiDependency) {
-                return new CachePlan(
-                    mode: CacheMode::Normalized,
+                return CachePlan::normalized(
                     operation: $context->operation,
                     dependencies: $dependencies,
-                    normalizable: true,
                     columns: $context->columns,
                     primaryKeys: $inspection->primaryKeys,
                 );
@@ -198,8 +205,7 @@ final class CachePlanner
                     );
                 }
 
-                return new CachePlan(
-                    mode: CacheMode::Result,
+                return CachePlan::result(
                     operation: $context->operation,
                     dependencies: $dependencies,
                     normalizable: $normalizable,
@@ -236,13 +242,9 @@ final class CachePlanner
             ]));
         }
 
-        return new CachePlan(
-            mode: CacheMode::Bypass,
+        return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $dependencies,
-            normalizable: $normalizable,
-            columns: $context->columns,
-            primaryKeys: $inspection->primaryKeys,
             reasons: array_values(array_unique([
                 ...$dependencies->reasons,
                 ...($bypassReasons['dependency'] ?? []),

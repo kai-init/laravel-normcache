@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Traits\Cacheable;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
@@ -171,22 +172,34 @@ trait CachesRelationAggregates
         ];
     }
 
+    public function getAggregateDependencies(): array
+    {
+        return $this->aggregateDependencies;
+    }
+
+    public function getAggregateTableDependencies(): array
+    {
+        return $this->aggregateTableDependencies;
+    }
+
+    public function getAggregateAliases(): array
+    {
+        return $this->aggregateAliases;
+    }
+
+    public function isCacheAggregatesEnabled(): bool
+    {
+        return $this->cacheAggregates;
+    }
+
+    public function hasAggregateInferenceFailed(): bool
+    {
+        return $this->aggregateInferenceFailed;
+    }
+
     public function inferAggregateDependencies(): DependencySet
     {
-        if (!$this->cacheAggregates) {
-            return $this->aggregateInferenceFailed
-                ? DependencySet::unsafe('Aggregate dependencies could not be inferred.')
-                : DependencySet::empty();
-        }
-
-        if ($this->aggregateDependencies === [] && $this->aggregateTableDependencies === []) {
-            return DependencySet::empty();
-        }
-
-        return new DependencySet(
-            models: $this->aggregateDependencies,
-            tables: $this->aggregateTableDependencies,
-        );
+        return (new AggregateDependencyCollector)->collect($this)->dependencies;
     }
 
     private static function relatedIsCacheable(string $class): bool

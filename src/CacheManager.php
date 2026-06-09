@@ -4,11 +4,12 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
-use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\CacheFlowGuard;
+use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
 use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
@@ -24,10 +25,11 @@ class CacheManager
     public function __construct(
         private readonly NormalizedCacheReader $queryReader,
         private readonly ResultCacheReader $resultReader,
+        private readonly ResultExecutor $result,
         private readonly ModelHydrator $hydrator,
         private readonly VersionTracker $versions,
         private readonly CacheFlowGuard $guard,
-        private readonly CacheExecutor $executor,
+        private readonly ExecutionEngine $engine,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
         private int $ttl,
@@ -43,9 +45,14 @@ class CacheManager
     // Configuration
     // -------------------------------------------------------------------------
 
-    public function executor(): CacheExecutor
+    public function engine(): ExecutionEngine
     {
-        return $this->executor;
+        return $this->engine;
+    }
+
+    public function result(): ResultExecutor
+    {
+        return $this->result;
     }
 
     public function isEnabled(): bool

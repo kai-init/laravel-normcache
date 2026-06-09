@@ -8,7 +8,7 @@ use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
 
-final class CacheExecutor
+final class ExecutionEngine
 {
     /**
      * @param  callable(): ResultCacheResult  $fetch

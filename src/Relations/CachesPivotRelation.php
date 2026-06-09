@@ -10,6 +10,7 @@ use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
@@ -24,6 +25,28 @@ trait CachesPivotRelation
     private array $eagerParentIds = [];
 
     private bool $inEagerLoad = false;
+
+    private array $prebuiltDictionary = [];
+
+    public function match(array $models, Collection $results, $relation)
+    {
+        if (!empty($this->prebuiltDictionary)) {
+            $dictionary = $this->prebuiltDictionary;
+            $this->prebuiltDictionary = [];
+
+            foreach ($models as $model) {
+                if (isset($dictionary[$key = $model->getAttribute($this->parentKey)])) {
+                    $model->setRelation(
+                        $relation, $this->related->newCollection($dictionary[$key])
+                    );
+                }
+            }
+
+            return $models;
+        }
+
+        return parent::match($models, $results, $relation);
+    }
 
     public function addEagerConstraints(array $models): void
     {
@@ -72,7 +95,7 @@ trait CachesPivotRelation
         $parentClassKey = NormCache::classKey($parentClass);
 
         $results = NormCache::rescue(
-            fn() => NormCache::executor()->runPivot(
+            fn() => NormCache::engine()->runPivot(
                 fetch: fn() => NormCache::getPivotCache(
                     $parentClass,
                     $relatedClass,
@@ -158,7 +181,7 @@ trait CachesPivotRelation
         if (!array_key_exists($constraintHash, self::$planCache)) {
             $plan = $builder->cachePlan($base, CachePlanContext::pivot(
                 $resolvedColumns ?? [],
-                $builder->inferAggregateDependencies()
+                (new AggregateDependencyCollector)->collect($builder)->dependencies
             ));
             self::$planCache[$constraintHash] = $plan->mode === CacheMode::Result;
         }
@@ -256,16 +279,28 @@ trait CachesPivotRelation
         }
 
         $result = [];
-        foreach ($cachedByParentId as $entries) {
+        $dictionary = [];
+        $templatePivot = $this->newExistingPivot([]);
+
+        foreach ($cachedByParentId as $parentId => $entries) {
             foreach ($entries as $entry) {
                 if (!isset($modelsById[$entry['id']])) {
                     continue;
                 }
+
                 $model = clone $modelsById[$entry['id']];
-                $model->setRelation($this->accessor, $this->newExistingPivot($entry['pivot']));
+
+                $pivot = clone $templatePivot;
+                $pivot->setRawAttributes($entry['pivot'], true);
+
+                $model->setRelation($this->accessor, $pivot);
+
                 $result[] = $model;
+                $dictionary[$parentId][] = $model;
             }
         }
+
+        $this->prebuiltDictionary = $dictionary;
 
         if ($result && $prepared->builder->getEagerLoads()) {
             $result = $prepared->builder->eagerLoadRelations($result);

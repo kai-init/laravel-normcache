@@ -8,7 +8,8 @@ use NormCache\CacheManager;
 /**
  * @mixin CacheManager
  *
- * @method static \NormCache\Cache\CacheExecutor executor()
+ * @method static \NormCache\Cache\ExecutionEngine engine()
+ * @method static \NormCache\Cache\ResultExecutor result()
  */
 class NormCache extends Facade
 {

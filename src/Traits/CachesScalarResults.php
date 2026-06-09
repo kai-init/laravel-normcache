@@ -7,11 +7,13 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Enums\CacheMode;
+use NormCache\Enums\CacheOperation;
+use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
-use NormCache\Support\CacheKeyBuilder;
+use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
-use NormCache\Support\QueryHasher;
+use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 use NormCache\Values\QueryInspection;
@@ -27,10 +29,8 @@ trait CachesScalarResults
             return parent::count($columns);
         }
 
-        $kind = $columns === '*' ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_COUNT . ':' . $columns;
-
         return (int) $this->cacheScalar(
-            $kind,
+            ResultKind::Count,
             fn() => parent::count($columns),
             (array) $columns,
             fn(QueryBuilder $base) => $base->count($columns)
@@ -40,7 +40,7 @@ trait CachesScalarResults
     public function sum($column): mixed
     {
         return $this->cacheScalar(
-            'sum',
+            ResultKind::Aggregate,
             fn() => parent::sum($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->sum($column)
@@ -50,7 +50,7 @@ trait CachesScalarResults
     public function avg($column): mixed
     {
         return $this->cacheScalar(
-            'avg',
+            ResultKind::Aggregate,
             fn() => parent::avg($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->avg($column)
@@ -65,7 +65,7 @@ trait CachesScalarResults
     public function min($column): mixed
     {
         return $this->cacheScalar(
-            'min',
+            ResultKind::Aggregate,
             fn() => parent::min($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->min($column)
@@ -75,7 +75,7 @@ trait CachesScalarResults
     public function max($column): mixed
     {
         return $this->cacheScalar(
-            'max',
+            ResultKind::Aggregate,
             fn() => parent::max($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->max($column)
@@ -85,7 +85,7 @@ trait CachesScalarResults
     public function exists(): bool
     {
         return (bool) $this->cacheScalar(
-            'exists',
+            ResultKind::Aggregate,
             fn() => parent::exists() ? 1 : 0,
             compute: fn(QueryBuilder $base) => $base->exists() ? 1 : 0
         );
@@ -104,7 +104,7 @@ trait CachesScalarResults
         }
 
         return $this->cacheScalar(
-            'pluck',
+            ResultKind::Pluck,
             fn() => parent::pluck($column, $key),
             $columns,
             fn(QueryBuilder $base) => $this->pluckFromPreparedBase($base, $column, $key)
@@ -114,7 +114,7 @@ trait CachesScalarResults
     public function value($column): mixed
     {
         return $this->cacheScalar(
-            'value',
+            ResultKind::Value,
             fn() => parent::value($column),
             (array) $column,
             fn(QueryBuilder $base) => $this->valueFromPreparedBase($base, $column)
@@ -122,7 +122,7 @@ trait CachesScalarResults
     }
 
     private function cacheScalar(
-        string $kind,
+        ResultKind $kind,
         \Closure $fallback,
         array $columns = [],
         ?\Closure $compute = null,
@@ -131,7 +131,7 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        if (($kind === 'pluck' || $kind === 'value') && $this->hasAfterQueryCallbacks()) {
+        if (($kind === ResultKind::Pluck || $kind === ResultKind::Value) && $this->hasAfterQueryCallbacks()) {
             return $fallback();
         }
 
@@ -141,14 +141,16 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies();
+        $inferredDependencies = (new AggregateDependencyCollector)->collect($executionBuilder)->dependencies;
 
         if ($this->isSimpleScalarQuery($base, $inferredDependencies)) {
-            $depClasses = [];
-            $depTableKeys = [];
+            $plan = CachePlan::result(
+                operation: CacheOperation::Scalar,
+                dependencies: DependencySet::singleModel($this->model::class),
+            );
         } else {
             $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
-                $kind,
+                $kind->value,
                 $columns,
                 $inferredDependencies,
             ));
@@ -160,46 +162,17 @@ trait CachesScalarResults
 
                 return $computeValue();
             }
-
-            $depClasses = $plan->dependencies->depClassesFor($this->model::class);
-            $depTableKeys = $plan->dependencies->tables;
         }
 
-        $modelClass = $this->model::class;
-        $namespace = str_starts_with($kind, 'count') ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_SCALAR;
-        $hash = QueryHasher::forScalarQuery($executionBuilder, $base, $kind, $columns);
-        $ttl = $this->getQueryTtl();
-        $tag = $this->getCacheTag();
-        $debugbarStart = CacheReporter::beginMeasure();
-
-        return NormCache::executor()->runScalar(
-            fetch: fn() => NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-            waitForBuild: fn() => NormCache::waitForBuild('result', $modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
-            compute: $computeValue,
-            onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
-                CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind]);
-
-                NormCache::storeResultCache(
-                    $result->key,
-                    [$value],
-                    $result->buildingKey,
-                    $ttl,
-                    $result->wakeKey,
-                    $result->versionKeys,
-                    $result->expectedVersions,
-                    $result->buildingToken
-                );
-            },
-            onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $computeValue) {
-                if (!is_array($result->payload) || !array_key_exists(0, $result->payload)) {
-                    return $computeValue();
-                }
-
-                CacheReporter::queryHit($modelClass, $result->key, $debugbarStart, ['kind' => $kind]);
-
-                return $result->payload[0];
-            },
+        $result = NormCache::result()->execute(
+            $prepared,
+            $plan,
+            $kind,
+            $columns,
+            $computeValue
         );
+
+        return $result[0];
     }
 
     private function pluckFromPreparedBase(QueryBuilder $base, mixed $column, mixed $key): mixed

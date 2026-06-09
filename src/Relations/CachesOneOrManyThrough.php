@@ -7,6 +7,7 @@ use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -53,7 +54,7 @@ trait CachesOneOrManyThrough
         $depClasses = [$throughClass];
 
         return NormCache::rescue(
-            fn() => NormCache::executor()->runResult(
+            fn() => NormCache::engine()->runResult(
                 fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, null, [], CacheKeyBuilder::K_THROUGH),
                 waitForBuild: fn() => NormCache::waitForBuild(
                     'result', $relatedClass, $hash, null, $depClasses, [], CacheKeyBuilder::K_THROUGH
@@ -115,7 +116,7 @@ trait CachesOneOrManyThrough
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $builder->inferAggregateDependencies()
+            (new AggregateDependencyCollector)->collect($builder)->dependencies
         ));
 
         return $plan->mode === CacheMode::Result;

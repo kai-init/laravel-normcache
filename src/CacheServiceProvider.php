@@ -8,11 +8,12 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\CacheFlowGuard;
+use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
 use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
@@ -51,10 +52,11 @@ class CacheServiceProvider extends ServiceProvider
             return new CacheManager(
                 queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
                 resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+                result: new ResultExecutor,
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
                 versions: $versions,
                 guard: $guard,
-                executor: new CacheExecutor,
+                engine: new ExecutionEngine,
                 store: $store,
                 keys: $keys,
                 ttl: $ttl,

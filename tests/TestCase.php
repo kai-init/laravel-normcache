@@ -9,11 +9,12 @@ use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Cache\CacheExecutor;
 use NormCache\Cache\CacheFlowGuard;
+use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
 use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
@@ -176,14 +177,16 @@ abstract class TestCase extends OrchestraTestCase
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
         $guard = new CacheFlowGuard($fallback);
+        $result = new ResultExecutor;
 
         return new CacheManager(
             queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
             resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+            result: $result,
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
             versions: $versions,
             guard: $guard,
-            executor: new CacheExecutor,
+            engine: new ExecutionEngine,
             store: $store,
             keys: $keys,
             ttl: $ttl,
