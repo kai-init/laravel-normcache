@@ -48,7 +48,7 @@ final class CacheExecutor
 
     /**
      * @param  callable(): PivotCacheResult  $fetch
-     * @param  callable(): Collection  $onMiss
+     * @param  callable(): (Collection|array{Collection, Collection})  $onMiss
      * @param  callable(Collection, PivotCacheResult): void  $onStore
      * @param  callable(PivotCacheResult): Collection  $onHit
      */
@@ -64,8 +64,9 @@ final class CacheExecutor
             return $onHit($result);
         }
 
-        $models = $onMiss();
-        $onStore($models, $result);
+        $miss = $onMiss();
+        [$models, $cacheModels] = is_array($miss) ? $miss : [$miss, $miss];
+        $onStore($cacheModels, $result);
 
         return $models;
     }

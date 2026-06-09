@@ -108,7 +108,6 @@ final class CachePlanner
         if ($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through) {
             // Pivot/Through operations allow exactly one join (to the intermediate table)
             if (count($bypassReasons['normalization'] ?? []) === 1 && $bypassReasons['normalization'][0] === 'JOIN clauses') {
-                $base = $builder->toBase();
                 if (count($base->joins ?? []) === 1) {
                     unset($bypassReasons['normalization']);
                 }

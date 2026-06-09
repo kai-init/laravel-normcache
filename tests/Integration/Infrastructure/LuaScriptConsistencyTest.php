@@ -56,7 +56,9 @@ class LuaScriptConsistencyTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::forNormalizedQuery(Author::query());
+        $query = Author::query();
+
+        return QueryHasher::forNormalizedQuery($query, $query->toBase());
     }
 
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void

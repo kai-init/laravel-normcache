@@ -37,7 +37,9 @@ class StampedeProtectionTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::forNormalizedQuery(Author::query());
+        $query = Author::query();
+
+        return QueryHasher::forNormalizedQuery($query, $query->toBase());
     }
 
     public function test_waiter_serves_from_cache_after_build_completes(): void

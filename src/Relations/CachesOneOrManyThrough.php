@@ -2,8 +2,8 @@
 
 namespace NormCache\Relations;
 
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
@@ -12,21 +12,28 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\PreparedQuery;
 
 trait CachesOneOrManyThrough
 {
     public function get($columns = ['*']): Collection
     {
-        if (!$this->shouldUseCache()) {
+        if (!$this->query instanceof CacheableBuilder) {
             return parent::get($columns);
         }
 
         $debugbarStart = CacheReporter::beginMeasure();
 
-        $builder = $this->prepareQueryBuilder($columns);
+        $prepared = $this->query->prepareScopedQuery();
+        $builder = $prepared->builder;
+        $base = $prepared->base;
+        $builder->addSelect(
+            $this->shouldSelect($base->columns ? [] : $columns)
+        );
+        $prepared->applyBeforeCallbacks();
 
         $classification = ProjectionClassifier::classifyForRelation(
-            $builder,
+            $base,
             (array) $columns,
             $this->related->getTable(),
             $this->related->getKeyName()
@@ -35,11 +42,12 @@ trait CachesOneOrManyThrough
         $shouldCacheModels = $classification['shouldCacheRelatedModels'];
         $selectedColumns = $classification['selectedRelatedColumns'];
 
-        if (!$shouldCacheModels && !$classification['relatedKeyInProjection']) {
-            return parent::get($columns);
+        if (!$this->shouldUseCache($builder, $base)
+            || (!$shouldCacheModels && !$classification['relatedKeyInProjection'])) {
+            return $this->getFromPreparedBuilder($prepared);
         }
 
-        $hash = QueryHasher::forRelationQuery($builder, $this->getQualifiedFirstKeyName());
+        $hash = QueryHasher::forRelationQuery($builder, $this->getQualifiedFirstKeyName(), $base);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
         $depClasses = [$throughClass];
@@ -50,20 +58,28 @@ trait CachesOneOrManyThrough
                 waitForBuild: fn() => NormCache::waitForBuild(
                     'result', $relatedClass, $hash, null, $depClasses, [], CacheKeyBuilder::K_THROUGH
                 ),
-                onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $columns) {
+                onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,
                         ['through' => $throughClass], 'through miss');
-                    $models = parent::get($columns);
+                    $rawModels = $this->getFromPreparedBuilder($prepared, false);
                     $modelAttrs = [];
                     if ($shouldCacheModels) {
-                        foreach ($models as $model) {
+                        foreach ($rawModels as $model) {
                             $attrs = $model->getRawOriginal();
                             unset($attrs['laravel_through_key']);
                             $modelAttrs[$model->getKey()] = $attrs;
                         }
                     }
 
-                    return [$models, ['cachePayload' => $this->cachePayloadFromResult($models), 'modelAttrs' => $modelAttrs]];
+                    $cachePayload = $this->cachePayloadFromResult($rawModels);
+
+                    return [
+                        $prepared->applyAfterCallbacks($rawModels),
+                        [
+                            'cachePayload' => $cachePayload,
+                            'modelAttrs' => $modelAttrs,
+                        ],
+                    ];
                 },
                 onStore: function ($data, $result) use ($relatedClass) {
                     NormCache::attempt(function () use ($data, $result, $relatedClass) {
@@ -75,32 +91,27 @@ trait CachesOneOrManyThrough
                         }
                     });
                 },
-                onHit: function ($result) use ($relatedClass, $builder, $selectedColumns, $throughClass, $debugbarStart) {
+                onHit: function ($result) use ($relatedClass, $prepared, $selectedColumns, $throughClass, $debugbarStart) {
                     CacheReporter::queryHit($relatedClass, $result->key ?? '', $debugbarStart,
                         ['through' => $throughClass], 'through hit');
 
                     return $this->hydrateFromIds(
-                        $result->payload['ids'], $relatedClass, $builder, $selectedColumns, $result->payload['throughKeys'] ?? []
+                        $result->payload['ids'], $relatedClass, $prepared, $selectedColumns, $result->payload['throughKeys'] ?? []
                     );
                 },
-                onBuild: fn() => parent::get($columns),
+                onBuild: fn() => $this->getFromPreparedBuilder($prepared),
             ),
-            fn() => parent::get($columns)
+            fn() => $this->getFromPreparedBuilder($prepared)
         );
     }
 
-    private function shouldUseCache(): bool
+    private function shouldUseCache(CacheableBuilder $builder, Builder $base): bool
     {
-        if (!$this->query instanceof CacheableBuilder) {
-            return false;
-        }
-
-        $base = $this->query->toBase();
         $projection = ProjectionClassifier::resolve($base, null);
 
-        $plan = $this->query->cachePlan($base, CachePlanContext::through(
+        $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $this->query->inferAggregateDependencies()
+            $builder->inferAggregateDependencies()
         ));
 
         return $plan->mode === CacheMode::Result;
@@ -123,8 +134,14 @@ trait CachesOneOrManyThrough
         ];
     }
 
-    private function hydrateFromIds(array $ids, string $relatedClass, Builder $builder, ?array $selectedColumns, array $throughKeys = []): Collection
-    {
+    private function hydrateFromIds(
+        array $ids,
+        string $relatedClass,
+        PreparedQuery $prepared,
+        ?array $selectedColumns,
+        array $throughKeys = [],
+    ): Collection {
+        $builder = $prepared->builder;
         $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, null, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
@@ -140,8 +157,22 @@ trait CachesOneOrManyThrough
             $models = $builder->eagerLoadRelations($models);
         }
 
-        return $this->query->applyAfterQueryCallbacks(
-            $this->related->newCollection($models)
-        );
+        return $prepared->applyAfterCallbacks($this->related->newCollection($models));
+    }
+
+    private function getFromPreparedBuilder(PreparedQuery $prepared, bool $applyAfterCallbacks = true): Collection
+    {
+        $builder = $prepared->builder;
+        $models = $builder->getModels();
+
+        if (count($models) > 0) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        $collection = $this->related->newCollection($models);
+
+        return $applyAfterCallbacks
+            ? $prepared->applyAfterCallbacks($collection)
+            : $collection;
     }
 }

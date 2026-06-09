@@ -2,7 +2,6 @@
 
 namespace NormCache\Support;
 
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 
 final class ProjectionClassifier
@@ -90,10 +89,9 @@ final class ProjectionClassifier
         return false;
     }
 
-    public static function classifyForRelation(Builder $query, array $columns, string $relatedTable, string $relatedKey): array
+    public static function classifyForRelation(QueryBuilder $base, array $columns, string $relatedTable, string $relatedKey): array
     {
-        $queryColumns = $query->toBase()->columns;
-        $resolved = $queryColumns ?? ($columns === ['*'] ? null : $columns);
+        $resolved = $base->columns ?? ($columns === ['*'] ? null : $columns);
 
         $shouldCacheRelatedModels = false;
         $selectedRelatedColumns = null;

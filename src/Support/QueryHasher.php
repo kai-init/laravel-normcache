@@ -10,29 +10,25 @@ use NormCache\CacheableBuilder;
 
 final class QueryHasher
 {
-    public static function forNormalizedQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
+    public static function forNormalizedQuery(CacheableBuilder $builder, QueryBuilder $query): string
     {
-        $query = ($query ?? $builder->toBase())
-            ->cloneWithout(['columns'])
-            ->cloneWithoutBindings(['select']);
+        $query = $query->cloneWithout(['columns'])->cloneWithoutBindings(['select']);
 
         return self::fromBuilder($builder, $query);
     }
 
-    public static function forResultQuery(EloquentBuilder $builder, ?QueryBuilder $query = null): string
+    public static function forResultQuery(EloquentBuilder $builder, QueryBuilder $query): string
     {
         return self::fromBuilder($builder, $query);
     }
 
-    public static function forPaginationCountQuery(CacheableBuilder $builder, ?QueryBuilder $query = null): string
+    public static function forPaginationCountQuery(CacheableBuilder $builder, QueryBuilder $query): string
     {
         return self::hash(self::forNormalizedQuery($builder, $query) . ':pagination_count');
     }
 
-    public static function forScalarQuery(CacheableBuilder $builder, ?QueryBuilder $query, string $kind, array $columns): string
+    public static function forScalarQuery(CacheableBuilder $builder, QueryBuilder $query, string $kind, array $columns): string
     {
-        $query ??= $builder->toBase();
-
         if (self::scalarKindIgnoresOrder($kind) && (!empty($query->orders) || !empty($query->unionOrders))) {
             $query = $query->cloneWithout(['orders', 'unionOrders'])
                 ->cloneWithoutBindings(['order', 'unionOrder']);
@@ -43,9 +39,11 @@ final class QueryHasher
         );
     }
 
-    public static function forRelationQuery(EloquentBuilder $builder, string $stripKey): string
-    {
-        $base = $builder->toBase();
+    public static function forRelationQuery(
+        EloquentBuilder $builder,
+        string $stripKey,
+        QueryBuilder $base,
+    ): string {
         $shape = [];
 
         $wheres = [];
@@ -82,9 +80,9 @@ final class QueryHasher
         return self::hash(json_encode($shape, JSON_THROW_ON_ERROR));
     }
 
-    public static function fromBuilder(EloquentBuilder $builder, ?QueryBuilder $query = null): string
+    public static function fromBuilder(EloquentBuilder $builder, QueryBuilder $query): string
     {
-        return self::hashWith($query ?? $builder->toBase(), [
+        return self::hashWith($query, [
             'casts' => $builder->getModel()->getCasts(),
         ]);
     }

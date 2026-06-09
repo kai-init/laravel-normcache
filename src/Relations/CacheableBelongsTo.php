@@ -2,6 +2,7 @@
 
 namespace NormCache\Relations;
 
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
@@ -10,6 +11,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\PreparedQuery;
 
 class CacheableBelongsTo extends BelongsTo
 {
@@ -24,28 +26,36 @@ class CacheableBelongsTo extends BelongsTo
 
     public function getEager()
     {
-        $base = $this->query->toBase();
-        $columns = ProjectionClassifier::resolve($base, null);
-
-        if (!$this->shouldUseCacheForEagerLoad($columns, $base)) {
+        if (!$this->query instanceof CacheableBuilder) {
             return parent::getEager();
         }
 
-        return $this->query->applyAfterQueryCallbacks(
+        $prepared = $this->query->prepareCacheExecution();
+        $builder = $prepared->builder;
+        $base = $prepared->base;
+        $columns = ProjectionClassifier::resolve($base, null);
+
+        if (!$this->shouldUseCacheForEagerLoad($columns, $base, $builder)) {
+            return $this->getFromPreparedBuilder($prepared);
+        }
+
+        return $prepared->applyAfterCallbacks(
             $this->related->newCollection(
-                NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $this->query, false)
+                NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false)
             )
         );
     }
 
-    private function shouldUseCacheForEagerLoad(?array $columns, QueryBuilder $base): bool
-    {
+    private function shouldUseCacheForEagerLoad(
+        ?array $columns,
+        QueryBuilder $base,
+        CacheableBuilder $builder,
+    ): bool {
         $ownerKey = $this->getOwnerKeyName();
 
         if ($this->eagerKeys === []
-            || !$this->query instanceof CacheableBuilder
             || $ownerKey !== $this->related->getKeyName()
-            || $this->query->getEagerLoads() !== []) {
+            || $builder->getEagerLoads() !== []) {
             return false;
         }
 
@@ -62,8 +72,26 @@ class CacheableBelongsTo extends BelongsTo
             }
         }
 
-        $plan = $this->query->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
+        $plan = $builder->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
 
         return $plan->mode === CacheMode::Normalized;
+    }
+
+    private function getFromPreparedBuilder(PreparedQuery $prepared): Collection
+    {
+        if ($this->eagerKeys === []) {
+            return $this->related->newCollection();
+        }
+
+        $builder = $prepared->builder;
+        $models = $builder->getModels();
+
+        if (count($models) > 0) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        return $prepared->applyAfterCallbacks(
+            $this->related->newCollection($models)
+        );
     }
 }

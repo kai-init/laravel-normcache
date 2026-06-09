@@ -2,8 +2,10 @@
 
 namespace NormCache\Relations;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
@@ -12,6 +14,7 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\PreparedQuery;
 
 /** @mixin BelongsToMany */
 trait CachesPivotRelation
@@ -32,15 +35,30 @@ trait CachesPivotRelation
         $columns = Arr::wrap($columns);
         $cacheParentIds = $this->getCacheParentIds();
 
+        if (!$this->query instanceof CacheableBuilder) {
+            return parent::get($columns);
+        }
+
+        $prepared = $this->query->prepareScopedQuery();
+        $builder = $prepared->builder;
+        $base = $prepared->base;
+
         $classification = ProjectionClassifier::classifyForRelation(
-            $this->query,
+            $base,
             $columns,
             $this->related->getTable(),
             $this->related->getKeyName()
         );
 
-        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'])) {
-            return parent::get($columns);
+        $selectColumns = $base->columns ? [] : $columns;
+        $builder->addSelect($this->shouldSelect($selectColumns));
+        $prepared->applyBeforeCallbacks();
+        $shouldCacheRelatedModels = $classification['shouldCacheRelatedModels'];
+        $selectedRelatedColumns = $classification['selectedRelatedColumns'];
+
+        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base)
+            || (!$shouldCacheRelatedModels && !$classification['relatedKeyInProjection'])) {
+            return $this->getFromPreparedPivotBuilder($prepared);
         }
 
         $debugbarStart = CacheReporter::beginMeasure();
@@ -48,14 +66,7 @@ trait CachesPivotRelation
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
-        $constraintHash = $this->currentConstraintHash();
-        $shouldCacheRelatedModels = $classification['shouldCacheRelatedModels'];
-        $selectedRelatedColumns = $classification['selectedRelatedColumns'];
-
-        // Pivot cache payload stores related model IDs; bypass when the PK isn't in the projection.
-        if (!$shouldCacheRelatedModels && !$classification['relatedKeyInProjection']) {
-            return parent::get($columns);
-        }
+        $constraintHash = $this->currentConstraintHash($columns, $builder, $base);
 
         $results = NormCache::rescue(
             fn() => NormCache::executor()->runPivot(
@@ -67,11 +78,16 @@ trait CachesPivotRelation
                     $constraintHash,
                     $this->pivotTableKey()
                 ),
-                onMiss: function () use ($parentClass, $parentClassKey, $relatedClass, $cacheParentIds, $debugbarStart, $columns) {
+                onMiss: function () use ($parentClass, $parentClassKey, $relatedClass, $cacheParentIds, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}",
                         $debugbarStart, ['parents' => $cacheParentIds, 'related' => $relatedClass], 'pivot miss');
 
-                    return parent::get($columns);
+                    $rawModels = $this->getFromPreparedPivotBuilder($prepared, false);
+
+                    return [
+                        $prepared->applyAfterCallbacks($rawModels),
+                        $rawModels,
+                    ];
                 },
                 onStore: function ($models, $pivotResult) use ($cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $shouldCacheRelatedModels) {
                     NormCache::attempt(function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels) {
@@ -86,34 +102,58 @@ trait CachesPivotRelation
                         );
                     });
                 },
-                onHit: function ($pivotResult) use ($relatedClass, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart) {
+                onHit: function ($pivotResult) use ($relatedClass, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart, $prepared) {
                     CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}",
                         $debugbarStart, ['parents' => $cacheParentIds, 'related' => $relatedClass], 'pivot hit');
 
-                    return $this->hydrateFromPivotCache($pivotResult->data, $relatedClass, $selectedRelatedColumns);
+                    return $this->hydrateFromPivotCache(
+                        $pivotResult->data,
+                        $relatedClass,
+                        $selectedRelatedColumns,
+                        $prepared
+                    );
                 },
             ),
-            fn() => parent::get($columns)
+            fn() => $this->getFromPreparedPivotBuilder($prepared)
         );
 
         return $results;
     }
 
-    private function currentConstraintHash(): string
-    {
-        return QueryHasher::forRelationQuery($this->query, $this->getQualifiedForeignPivotKeyName());
+    private function currentConstraintHash(
+        array $columns = ['*'],
+        ?Builder $builder = null,
+        ?QueryBuilder $base = null,
+    ): string {
+        if ($builder === null) {
+            if (!$this->query instanceof CacheableBuilder) {
+                throw new \LogicException('Pivot cache hashing requires a cacheable query builder.');
+            }
+
+            $prepared = $this->query->prepareScopedQuery();
+            $builder = $prepared->builder;
+            $base = $prepared->base;
+            $selectColumns = $base->columns ? [] : $columns;
+            $builder->addSelect($this->shouldSelect($selectColumns));
+            $prepared->applyBeforeCallbacks();
+        }
+
+        return QueryHasher::forRelationQuery($builder, $this->getQualifiedForeignPivotKeyName(), $base);
     }
 
-    private function shouldUsePivotCache(array $cacheParentIds, ?array $resolvedColumns): bool
-    {
-        if (empty($cacheParentIds) || !$this->query instanceof CacheableBuilder) {
+    private function shouldUsePivotCache(
+        array $cacheParentIds,
+        ?array $resolvedColumns,
+        CacheableBuilder $builder,
+        QueryBuilder $base,
+    ): bool {
+        if (empty($cacheParentIds)) {
             return false;
         }
 
-        $base = $this->query->toBase();
-        $plan = $this->query->cachePlan($base, CachePlanContext::pivot(
+        $plan = $builder->cachePlan($base, CachePlanContext::pivot(
             $resolvedColumns ?? [],
-            $this->query->inferAggregateDependencies()
+            $builder->inferAggregateDependencies()
         ));
 
         if ($plan->mode !== CacheMode::Result) {
@@ -190,8 +230,12 @@ trait CachesPivotRelation
         NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }
 
-    private function hydrateFromPivotCache(array $cachedByParentId, string $relatedClass, ?array $selectedRelatedColumns): Collection
-    {
+    private function hydrateFromPivotCache(
+        array $cachedByParentId,
+        string $relatedClass,
+        ?array $selectedRelatedColumns,
+        PreparedQuery $prepared,
+    ): Collection {
         $uniqueRelatedIds = [];
         foreach ($cachedByParentId as $entries) {
             foreach ($entries as $entry) {
@@ -216,12 +260,29 @@ trait CachesPivotRelation
             }
         }
 
-        if ($result && $this->query->getEagerLoads()) {
-            $result = $this->query->eagerLoadRelations($result);
+        if ($result && $prepared->builder->getEagerLoads()) {
+            $result = $prepared->builder->eagerLoadRelations($result);
         }
 
-        return $this->query->applyAfterQueryCallbacks(
-            $this->related->newCollection($result)
-        );
+        return $prepared->applyAfterCallbacks($this->related->newCollection($result));
+    }
+
+    private function getFromPreparedPivotBuilder(
+        PreparedQuery $prepared,
+        bool $applyAfterCallbacks = true,
+    ): Collection {
+        $builder = $prepared->builder;
+        $models = $builder->getModels();
+        $this->hydratePivotRelation($models);
+
+        if (count($models) > 0) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        $collection = $this->related->newCollection($models);
+
+        return $applyAfterCallbacks
+            ? $prepared->applyAfterCallbacks($collection)
+            : $collection;
     }
 }

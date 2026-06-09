@@ -156,6 +156,26 @@ class CacheExecutorTest extends TestCase
         $this->assertTrue($storeCalled);
     }
 
+    public function test_run_pivot_can_store_raw_models_and_return_transformed_models(): void
+    {
+        $pivotResult = new PivotCacheResult('v1', [1 => null], [], []);
+        $raw = new Collection(['raw']);
+        $visible = new Collection(['visible']);
+        $stored = null;
+
+        $result = $this->executor->runPivot(
+            fetch: fn() => $pivotResult,
+            onMiss: fn() => [$visible, $raw],
+            onStore: function ($models) use (&$stored) {
+                $stored = $models;
+            },
+            onHit: fn() => new Collection,
+        );
+
+        $this->assertSame($visible, $result);
+        $this->assertSame($raw, $stored);
+    }
+
     // -------------------------------------------------------------------------
     // runNormalized
     // -------------------------------------------------------------------------

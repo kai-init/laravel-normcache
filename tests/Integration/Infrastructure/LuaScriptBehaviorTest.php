@@ -38,7 +38,9 @@ class LuaScriptBehaviorTest extends TestCase
 
     private function authorQueryHash(): string
     {
-        return QueryHasher::forNormalizedQuery(Author::query());
+        $query = Author::query();
+
+        return QueryHasher::forNormalizedQuery($query, $query->toBase());
     }
 
     public function test_corrupt_query_entry_is_deleted_and_treated_as_miss(): void

@@ -38,8 +38,9 @@ trait CachesRelationAggregates
         }
 
         $lowerFunction = strtolower((string) $function);
-        $colValue = $this->getQuery()->getGrammar()->isExpression($column)
-            ? $this->getQuery()->getGrammar()->getValue($column)
+        $grammar = $this->getQuery()->getGrammar();
+        $colValue = $grammar->isExpression($column)
+            ? $grammar->getValue($column)
             : $column;
 
         $dependencies = [];
@@ -127,7 +128,8 @@ trait CachesRelationAggregates
             try {
                 $testBuilder = ($relatedClass)::query();
                 $constraint($testBuilder);
-                $plan = $testBuilder->cachePlan($testBuilder->toBase(), CachePlanContext::models());
+                $prepared = $testBuilder->prepareCacheExecution();
+                $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models());
 
                 if (
                     !$plan->dependencies->safe

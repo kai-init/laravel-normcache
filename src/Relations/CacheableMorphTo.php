@@ -15,7 +15,8 @@ class CacheableMorphTo extends MorphTo
 {
     public function getEager(): EloquentCollection
     {
-        $columns = ProjectionClassifier::resolve($this->query->toBase(), null);
+        $base = $this->query->toBase();
+        $columns = ProjectionClassifier::resolve($base, null);
 
         foreach ($this->dictionary as $type => $_) {
             $instance = $this->cacheableInstanceForType($type);
@@ -40,9 +41,10 @@ class CacheableMorphTo extends MorphTo
                 $query->withoutCache();
             }
 
-            $query = $query->mergeConstraintsFrom($this->getQuery())
+            $relationQuery = $this->getQuery();
+            $query = $query->mergeConstraintsFrom($relationQuery)
                 ->with(array_merge(
-                    $this->getQuery()->getEagerLoads(),
+                    $relationQuery->getEagerLoads(),
                     (array) ($this->morphableEagerLoads[get_class($instance)] ?? [])
                 ))
                 ->withCount(
@@ -86,7 +88,11 @@ class CacheableMorphTo extends MorphTo
             return null;
         }
 
-        $plan = $query->cachePlan($query->toBase(), CachePlanContext::morphToEagerLoad($type));
+        $prepared = $query->prepareCacheExecution();
+        $plan = $prepared->builder->cachePlan(
+            $prepared->base,
+            CachePlanContext::morphToEagerLoad($type)
+        );
 
         return $plan->mode === CacheMode::Normalized ? $instance : null;
     }

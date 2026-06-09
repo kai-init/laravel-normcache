@@ -262,36 +262,20 @@ class RelationContractTest extends TestCase
     {
         $this->fixtures(); // Alice: A1(views=10), A2(views=20); Bob: B1(views=30)
 
-        // latestOfMany adds a synthetic id_aggregate JOIN column that differs from native; test semantic correctness instead.
-        $check = fn($c) => $c->map(fn($a) => [
-            'author' => $a->name,
-            'latest_title' => $a->latestPost?->title,
-        ])->all();
-
-        $native = $check(Author::withoutCache()->with('latestPost')->orderBy('name')->get());
-        $cold = $check(Author::with('latestPost')->orderBy('name')->get());
-        $warm = $check(Author::with('latestPost')->orderBy('name')->get());
-
-        $this->assertSame($native, $cold, 'cold != native');
-        $this->assertSame($cold, $warm, 'warm != cold');
+        $this->contract(
+            fn() => Author::with('latestPost')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->with('latestPost')->orderBy('name')->get(),
+        );
     }
 
     public function test_with_has_one_of_many_aggregate_column(): void
     {
         $this->fixtures(); // Alice: mostViewed=A2(20), Bob: mostViewed=B1(30), Carol: null
 
-        $check = fn($c) => $c->map(fn($a) => [
-            'author' => $a->name,
-            'most_viewed_title' => $a->mostViewedPost?->title,
-            'most_viewed_views' => $a->mostViewedPost?->views,
-        ])->all();
-
-        $native = $check(Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get());
-        $cold = $check(Author::with('mostViewedPost')->orderBy('name')->get());
-        $warm = $check(Author::with('mostViewedPost')->orderBy('name')->get());
-
-        $this->assertSame($native, $cold, 'cold != native');
-        $this->assertSame($cold, $warm, 'warm != cold');
+        $this->contract(
+            fn() => Author::with('mostViewedPost')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get(),
+        );
     }
 
     // Collection loading (load, loadMissing, loadCount, loadSum, loadMax, loadMin)

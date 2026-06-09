@@ -65,8 +65,8 @@ class QueryHasherTest extends TestCase
         $builder = $this->makeEloquentBuilder()->where('id', 1);
 
         $this->assertNotSame(
-            QueryHasher::forNormalizedQuery($builder),
-            QueryHasher::forPaginationCountQuery($builder)
+            QueryHasher::forNormalizedQuery($builder, $builder->toBase()),
+            QueryHasher::forPaginationCountQuery($builder, $builder->toBase())
         );
     }
 
@@ -76,8 +76,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('id', 1);
 
         $this->assertSame(
-            QueryHasher::forPaginationCountQuery($a),
-            QueryHasher::forPaginationCountQuery($b)
+            QueryHasher::forPaginationCountQuery($a, $a->toBase()),
+            QueryHasher::forPaginationCountQuery($b, $b->toBase())
         );
     }
 
@@ -87,8 +87,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('id', 1)->select('name');
 
         $this->assertSame(
-            QueryHasher::forPaginationCountQuery($a),
-            QueryHasher::forPaginationCountQuery($b)
+            QueryHasher::forPaginationCountQuery($a, $a->toBase()),
+            QueryHasher::forPaginationCountQuery($b, $b->toBase())
         );
     }
 
@@ -98,8 +98,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('id', 2);
 
         $this->assertNotSame(
-            QueryHasher::forPaginationCountQuery($a),
-            QueryHasher::forPaginationCountQuery($b)
+            QueryHasher::forPaginationCountQuery($a, $a->toBase()),
+            QueryHasher::forPaginationCountQuery($b, $b->toBase())
         );
     }
 
@@ -154,16 +154,16 @@ class QueryHasherTest extends TestCase
 
         // Should be same because author_id is stripped
         $this->assertSame(
-            QueryHasher::forRelationQuery($a, 'author_id'),
-            QueryHasher::forRelationQuery($b, 'author_id')
+            QueryHasher::forRelationQuery($a, 'author_id', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'author_id', $b->toBase())
         );
 
         $c = $this->makeEloquentBuilder()->where('author_id', 1)->where('active', false);
 
         // Should be different because active is NOT stripped
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'author_id'),
-            QueryHasher::forRelationQuery($c, 'author_id')
+            QueryHasher::forRelationQuery($a, 'author_id', $a->toBase()),
+            QueryHasher::forRelationQuery($c, 'author_id', $c->toBase())
         );
     }
 
@@ -173,8 +173,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereIn('author_id', [4, 5])->where('active', true);
 
         $this->assertSame(
-            QueryHasher::forRelationQuery($a, 'author_id'),
-            QueryHasher::forRelationQuery($b, 'author_id')
+            QueryHasher::forRelationQuery($a, 'author_id', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'author_id', $b->toBase())
         );
     }
 
@@ -184,8 +184,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('author_id', 1)->where('status', 2);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'author_id'),
-            QueryHasher::forRelationQuery($b, 'author_id')
+            QueryHasher::forRelationQuery($a, 'author_id', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'author_id', $b->toBase())
         );
     }
 
@@ -195,8 +195,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereIn('type', [3, 4]);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -206,8 +206,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereBetween('age', [25, 40]);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -217,8 +217,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->orderByRaw('CASE WHEN name = ? THEN 0 ELSE 1 END', ['Bob']);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -228,8 +228,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereNotNull('deleted_at');
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -239,8 +239,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereNull('published_at');
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -250,8 +250,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where(fn($q) => $q->where('active', true)->where('type', 2));
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -264,8 +264,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereExists($sub2);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -274,8 +274,8 @@ class QueryHasherTest extends TestCase
         $builder = $this->makeEloquentBuilder()->where('author_id', 1)->where('active', true);
 
         $this->assertSame(
-            QueryHasher::forRelationQuery($builder, 'author_id'),
-            QueryHasher::forRelationQuery($builder, 'author_id')
+            QueryHasher::forRelationQuery($builder, 'author_id', $builder->toBase()),
+            QueryHasher::forRelationQuery($builder, 'author_id', $builder->toBase())
         );
     }
 
@@ -285,8 +285,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('author_id', 42);
 
         $this->assertSame(
-            QueryHasher::forRelationQuery($a, 'author_id'),
-            QueryHasher::forRelationQuery($b, 'author_id')
+            QueryHasher::forRelationQuery($a, 'author_id', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'author_id', $b->toBase())
         );
     }
 
@@ -315,8 +315,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereColumn('c', '=', 'd');
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -326,8 +326,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereIntegerInRaw('status', [4, 5, 6]);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -337,8 +337,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereIntegerNotInRaw('status', [3, 4]);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -348,8 +348,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereBetweenColumns('price', ['low', 'high']);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -359,8 +359,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereJsonContains('settings->theme', 'light');
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -370,8 +370,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->whereRowValues(['first_name', 'last_name'], '=', ['Jane', 'Smith']);
 
         $this->assertNotSame(
-            QueryHasher::forRelationQuery($a, 'fake_fk'),
-            QueryHasher::forRelationQuery($b, 'fake_fk')
+            QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase()),
+            QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase())
         );
     }
 
@@ -381,8 +381,8 @@ class QueryHasherTest extends TestCase
         $b = $this->makeEloquentBuilder()->where('data', "\x83\x84\x85");
 
         // Must not throw JsonException from json_encode on invalid UTF-8
-        $hashA = QueryHasher::forRelationQuery($a, 'fake_fk');
-        $hashB = QueryHasher::forRelationQuery($b, 'fake_fk');
+        $hashA = QueryHasher::forRelationQuery($a, 'fake_fk', $a->toBase());
+        $hashB = QueryHasher::forRelationQuery($b, 'fake_fk', $b->toBase());
 
         $this->assertNotSame($hashA, $hashB);
     }
