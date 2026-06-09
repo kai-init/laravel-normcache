@@ -203,7 +203,10 @@ final class ModelHydrator
     {
         return self::$hydrateClosure ??= \Closure::bind(
             static function (Model $instance, array $attrs, bool $fire): void {
-                $instance->setRawAttributes($attrs, true);
+                $instance->attributes = $attrs;
+                $instance->original = $attrs;
+                $instance->classCastCache = [];
+                $instance->attributeCastCache = [];
                 $instance->exists = true;
                 if ($fire) {
                     $instance->fireModelEvent('retrieved', false);

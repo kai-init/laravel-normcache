@@ -213,22 +213,29 @@ class CacheKeyBuilder
     // Dependency Resolvers
     // -------------------------------------------------------------------------
 
-    public function depVersionKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
+    /**
+     * @return array{0: list<string>, 1: list<string>} [versionKeys, scheduledKeys]
+     */
+    public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
         $all = array_values(array_unique(
             array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)), $this->sortKeys($depTableKeys))
         ));
 
-        return array_map(fn($key) => $this->verKey($key), $all);
+        return [
+            array_map(fn($key) => $this->verKey($key), $all),
+            array_map(fn($key) => $this->scheduledKey($key), $all),
+        ];
+    }
+
+    public function depVersionKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
+    {
+        return $this->depKeyPairs($classKey, $depClasses, $depTableKeys)[0];
     }
 
     public function depScheduledKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
-        $all = array_values(array_unique(
-            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)), $this->sortKeys($depTableKeys))
-        ));
-
-        return array_map(fn($key) => $this->scheduledKey($key), $all);
+        return $this->depKeyPairs($classKey, $depClasses, $depTableKeys)[1];
     }
 
     // -------------------------------------------------------------------------
@@ -242,7 +249,7 @@ class CacheKeyBuilder
 
     public function resultBuildIdentityHash(string $namespace, ?string $tag, string $hash): string
     {
-        return sha1($namespace . ':' . $this->tagSegment($tag) . $hash);
+        return hash('xxh3', $namespace . ':' . $this->tagSegment($tag) . $hash);
     }
 
     // -------------------------------------------------------------------------

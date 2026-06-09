@@ -107,6 +107,10 @@ trait CachesOneOrManyThrough
 
     private function shouldUseCache(CacheableBuilder $builder, Builder $base): bool
     {
+        if ($this->isSimpleThroughQuery($base, $builder)) {
+            return true;
+        }
+
         $projection = ProjectionClassifier::resolve($base, null);
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
@@ -115,6 +119,27 @@ trait CachesOneOrManyThrough
         ));
 
         return $plan->mode === CacheMode::Result;
+    }
+
+    private function isSimpleThroughQuery(Builder $base, CacheableBuilder $builder): bool
+    {
+        // Standard HasManyThrough/HasOneThrough always has exactly one join (the intermediate table).
+        // The planner grants a bypass relaxation for this shape; validate it directly here.
+        if ($builder->isCacheSkipped()
+            || !NormCache::isEnabled()
+            || $builder->getModel()->getConnection()->transactionLevel() > 0
+            || count($base->joins ?? []) !== 1
+            || !empty($base->groups)
+            || !empty($base->havings)
+            || !empty($base->unions)
+            || ($base->lock !== null && $base->lock !== false)
+            || $builder->explicitDependencies() !== null
+            || $builder->explicitTableDependencies() !== []
+            || ProjectionClassifier::hasCalculatedColumns($base->columns)) {
+            return false;
+        }
+
+        return true;
     }
 
     private function cachePayloadFromResult(Collection $result): array

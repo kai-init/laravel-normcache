@@ -60,7 +60,7 @@ final class VersionTracker
 
     public function buildLockToken(): string
     {
-        return bin2hex(random_bytes(16));
+        return hash('xxh3', microtime(true) . mt_rand());
     }
 
     public function normalizeVersion(mixed $value = null): int

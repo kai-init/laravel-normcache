@@ -5,6 +5,7 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
@@ -89,12 +90,50 @@ class CacheableMorphTo extends MorphTo
         }
 
         $prepared = $query->prepareCacheExecution();
-        $plan = $prepared->builder->cachePlan(
-            $prepared->base,
-            CachePlanContext::morphToEagerLoad($type)
-        );
+        $builder = $prepared->builder;
+        $base = $prepared->base;
+
+        if ($this->isSimpleMorphBase($base, $builder)) {
+            return $instance;
+        }
+
+        $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad($type));
 
         return $plan->mode === CacheMode::Normalized ? $instance : null;
+    }
+
+    private function isSimpleMorphBase(QueryBuilder $base, CacheableBuilder $builder): bool
+    {
+        // At this point only global scopes (e.g. soft-delete) have been applied — no FK constraints yet.
+        // Accept only an optional soft-delete Null where; reject everything else.
+        if ($builder->isCacheSkipped()
+            || !NormCache::isEnabled()
+            || $builder->getModel()->getConnection()->transactionLevel() > 0
+            || !empty($base->joins)
+            || !empty($base->orders)
+            || !empty($base->groups)
+            || !empty($base->havings)
+            || !empty($base->unions)
+            || $base->limit !== null
+            || $base->offset > 0
+            || $base->distinct
+            || ($base->lock !== null && $base->lock !== false)
+            || $builder->explicitDependencies() !== null
+            || $builder->explicitTableDependencies() !== []) {
+            return false;
+        }
+
+        $whereCount = count($base->wheres);
+
+        if ($whereCount > 1) {
+            return false;
+        }
+
+        if ($whereCount === 1 && ($base->wheres[0]['type'] ?? null) !== 'Null') {
+            return false;
+        }
+
+        return true;
     }
 
     private function getResultsFromCache(string $type, Model $instance, ?array $columns): EloquentCollection

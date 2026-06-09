@@ -138,25 +138,32 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
-            $kind,
-            $columns,
-            $executionBuilder->inferAggregateDependencies()
-        ));
 
-        if ($plan->mode === CacheMode::Bypass) {
-            if (!$plan->hasBypassReason('opted_out')) {
-                CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
+        if ($this->isSimpleScalarQuery($base)) {
+            $depClasses = [];
+            $depTableKeys = [];
+        } else {
+            $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
+                $kind,
+                $columns,
+                $executionBuilder->inferAggregateDependencies()
+            ));
+
+            if ($plan->mode === CacheMode::Bypass) {
+                if (!$plan->hasBypassReason('opted_out')) {
+                    CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
+                }
+
+                return $computeValue();
             }
 
-            return $computeValue();
+            $depClasses = $plan->dependencies->depClassesFor($this->model::class);
+            $depTableKeys = $plan->dependencies->tables;
         }
 
         $modelClass = $this->model::class;
-        $depClasses = $plan->dependencies->depClassesFor($modelClass);
-        $depTableKeys = $plan->dependencies->tables;
         $namespace = str_starts_with($kind, 'count') ? CacheKeyBuilder::K_COUNT : CacheKeyBuilder::K_SCALAR;
-        $hash = QueryHasher::forScalarQuery($executionBuilder, $base, $kind, $plan->columns ?? []);
+        $hash = QueryHasher::forScalarQuery($executionBuilder, $base, $kind, $columns);
         $ttl = $this->getQueryTtl();
         $tag = $this->getCacheTag();
         $debugbarStart = CacheReporter::beginMeasure();
@@ -227,5 +234,66 @@ trait CachesScalarResults
         }
 
         return $this->model->newFromBuilder([$column => $value])->{$column};
+    }
+
+    private function isSimpleScalarQuery(QueryBuilder $base): bool
+    {
+        if ($this->isCacheSkipped()
+            || !NormCache::isEnabled()
+            || $this->getModel()->getConnection()->transactionLevel() > 0
+            || $this->explicitDependencies() !== null
+            || $this->explicitTableDependencies() !== []
+            || !empty($base->joins)
+            || !empty($base->unions)
+            || !is_string($base->from)
+            || $base->from !== $this->getModel()->getTable()
+            || ($base->lock !== null && $base->lock !== false)) {
+            return false;
+        }
+
+        foreach ((array) $base->orders as $order) {
+            if (isset($order['type']) && $order['type'] === 'Raw') {
+                return false;
+            }
+        }
+
+        return !$this->wheresHaveBypass((array) $base->wheres);
+    }
+
+    private function wheresHaveBypass(array $wheres): bool
+    {
+        static $subqueryTypes = ['Exists', 'NotExists', 'Sub', 'InSub', 'NotInSub'];
+
+        foreach ($wheres as $where) {
+            $type = $where['type'] ?? '';
+
+            if (strtolower($type) === 'raw') {
+                return true;
+            }
+
+            if (in_array($type, $subqueryTypes, true)) {
+                return true;
+            }
+
+            if ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
+                return true;
+            }
+
+            if (in_array($type, ['In', 'NotIn'], true)) {
+                foreach ((array) ($where['values'] ?? []) as $v) {
+                    if ($v instanceof Expression) {
+                        return true;
+                    }
+                }
+            }
+
+            if ($type === 'Nested' && isset($where['query'])) {
+                if ($this->wheresHaveBypass((array) $where['query']->wheres)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

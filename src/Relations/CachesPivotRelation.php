@@ -19,6 +19,8 @@ use NormCache\Values\PreparedQuery;
 /** @mixin BelongsToMany */
 trait CachesPivotRelation
 {
+    private static array $planCache = [];
+
     private array $eagerParentIds = [];
 
     private bool $inEagerLoad = false;
@@ -56,7 +58,9 @@ trait CachesPivotRelation
         $shouldCacheRelatedModels = $classification['shouldCacheRelatedModels'];
         $selectedRelatedColumns = $classification['selectedRelatedColumns'];
 
-        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base)
+        $constraintHash = QueryHasher::forRelationQuery($builder, $this->getQualifiedForeignPivotKeyName(), $base);
+
+        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base, $constraintHash)
             || (!$shouldCacheRelatedModels && !$classification['relatedKeyInProjection'])) {
             return $this->getFromPreparedPivotBuilder($prepared);
         }
@@ -66,7 +70,6 @@ trait CachesPivotRelation
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
-        $constraintHash = $this->currentConstraintHash($columns, $builder, $base);
 
         $results = NormCache::rescue(
             fn() => NormCache::executor()->runPivot(
@@ -146,17 +149,21 @@ trait CachesPivotRelation
         ?array $resolvedColumns,
         CacheableBuilder $builder,
         QueryBuilder $base,
+        string $constraintHash,
     ): bool {
         if (empty($cacheParentIds)) {
             return false;
         }
 
-        $plan = $builder->cachePlan($base, CachePlanContext::pivot(
-            $resolvedColumns ?? [],
-            $builder->inferAggregateDependencies()
-        ));
+        if (!array_key_exists($constraintHash, self::$planCache)) {
+            $plan = $builder->cachePlan($base, CachePlanContext::pivot(
+                $resolvedColumns ?? [],
+                $builder->inferAggregateDependencies()
+            ));
+            self::$planCache[$constraintHash] = $plan->mode === CacheMode::Result;
+        }
 
-        if ($plan->mode !== CacheMode::Result) {
+        if (!self::$planCache[$constraintHash]) {
             return false;
         }
 

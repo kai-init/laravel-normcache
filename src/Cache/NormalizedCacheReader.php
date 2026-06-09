@@ -42,8 +42,7 @@ final class NormalizedCacheReader
             );
         }
 
-        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
-        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
+        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
         $result = $this->luaFetchMultiVersionedQuery(

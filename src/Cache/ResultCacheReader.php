@@ -28,8 +28,7 @@ final class ResultCacheReader
     ): ResultCacheResult {
         $classKey = $this->keys->classKey($modelClass);
         $lockSuffix = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
-        $versionKeys = $this->keys->depVersionKeys($classKey, $depClasses, $depTableKeys);
-        $scheduledKeys = $this->keys->depScheduledKeys($classKey, $depClasses, $depTableKeys);
+        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $lockToken = $this->versions->buildLockToken();
 
@@ -106,8 +105,7 @@ final class ResultCacheReader
     ): PivotCacheResult {
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass);
-        $versionKeys = $this->keys->depVersionKeys($relatedKey, [], [$pivotTableKey ?? $parentKey]);
-        $scheduledKeys = $this->keys->depScheduledKeys($relatedKey, [], [$pivotTableKey ?? $parentKey]);
+        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($relatedKey, [], [$pivotTableKey ?? $parentKey]);
 
         if ($this->slotting) {
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);

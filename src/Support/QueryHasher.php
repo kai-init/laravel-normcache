@@ -34,9 +34,13 @@ final class QueryHasher
                 ->cloneWithoutBindings(['order', 'unionOrder']);
         }
 
-        return self::hash(
-            self::forNormalizedQuery($builder, $query) . ':' . $kind . ':' . json_encode($columns, JSON_THROW_ON_ERROR)
-        );
+        $stripped = $query->cloneWithout(['columns'])->cloneWithoutBindings(['select']);
+
+        return self::hashWith($stripped, [
+            'kind' => $kind,
+            'columns' => $columns,
+            'casts' => $builder->getModel()->getCasts(),
+        ]);
     }
 
     public static function forRelationQuery(
