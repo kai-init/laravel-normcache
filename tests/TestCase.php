@@ -9,7 +9,6 @@ use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Cache\CacheFlowGuard;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
@@ -176,7 +175,6 @@ abstract class TestCase extends OrchestraTestCase
         $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slottingActive ? '' : '{nc}:');
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
-        $guard = new CacheFlowGuard($fallback);
         $result = new ResultExecutor;
 
         return new CacheManager(
@@ -185,7 +183,7 @@ abstract class TestCase extends OrchestraTestCase
             result: $result,
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
             versions: $versions,
-            guard: $guard,
+            fallbackEnabled: $fallback,
             engine: new ExecutionEngine,
             store: $store,
             keys: $keys,

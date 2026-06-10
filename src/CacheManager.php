@@ -4,7 +4,6 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
-use NormCache\Cache\CacheFlowGuard;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
@@ -28,7 +27,7 @@ class CacheManager
         private readonly ResultExecutor $result,
         private readonly ModelHydrator $hydrator,
         private readonly VersionTracker $versions,
-        private readonly CacheFlowGuard $guard,
+        private bool $fallbackEnabled,
         private readonly ExecutionEngine $engine,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
@@ -57,7 +56,12 @@ class CacheManager
 
     public function isEnabled(): bool
     {
-        return $this->enabled && $this->guard->isEnabled();
+        return $this->enabled;
+    }
+
+    public function isFallbackEnabled(): bool
+    {
+        return $this->fallbackEnabled;
     }
 
     public function isEventsEnabled(): bool
@@ -78,13 +82,11 @@ class CacheManager
     public function enable(): void
     {
         $this->enabled = true;
-        $this->guard->enable();
     }
 
     public function disable(): void
     {
         $this->enabled = false;
-        $this->guard->disable();
     }
 
     // -------------------------------------------------------------------------
@@ -217,16 +219,35 @@ class CacheManager
     // -------------------------------------------------------------------------
     public function rescue(callable $operation, callable $fallback): mixed
     {
-        return $this->guard->rescue($operation, $fallback);
+        try {
+            return $operation();
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+        }
+
+        return $fallback();
     }
 
     public function attempt(callable $operation): bool
     {
-        return $this->guard->attempt($operation);
+        try {
+            $operation();
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->fallback($e);
+
+            return false;
+        }
     }
 
     public function fallback(\Throwable $e): void
     {
-        $this->guard->fallback($e);
+        if (!$this->fallbackEnabled) {
+            throw $e;
+        }
+
+        report($e);
+        $this->disable();
     }
 }

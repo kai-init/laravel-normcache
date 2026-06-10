@@ -374,4 +374,63 @@ class CacheManagerTest extends TestCase
         $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
         $this->assertNull($store->getRaw($wakeKey), 'Stale builder must not wake waiters for a lock it no longer owns');
     }
+
+    // -------------------------------------------------------------------------
+    // Flow control (rescue/attempt/fallback)
+    // -------------------------------------------------------------------------
+
+    public function test_is_enabled_true_by_default(): void
+    {
+        $this->assertTrue($this->manager->isEnabled());
+    }
+
+    public function test_rescue_returns_operation_result_on_success(): void
+    {
+        $this->assertSame(42, $this->manager->rescue(fn() => 42, fn() => 0));
+    }
+
+    public function test_rescue_calls_fallback_when_operation_throws_and_fallback_enabled(): void
+    {
+        $manager = $this->buildManager(fallback: true);
+
+        $result = $manager->rescue(
+            fn() => throw new \RuntimeException('redis down'),
+            fn() => 'fallback'
+        );
+
+        $this->assertSame('fallback', $result);
+    }
+
+    public function test_rescue_rethrows_when_fallback_disabled(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->manager->rescue(fn() => throw new \RuntimeException('boom'), fn() => null);
+    }
+
+    public function test_attempt_returns_true_on_success(): void
+    {
+        $this->assertTrue($this->manager->attempt(fn() => null));
+    }
+
+    public function test_attempt_returns_false_when_fallback_enabled_and_throws(): void
+    {
+        $manager = $this->buildManager(fallback: true);
+
+        $this->assertFalse($manager->attempt(fn() => throw new \RuntimeException));
+    }
+
+    public function test_attempt_rethrows_when_fallback_disabled(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->manager->attempt(fn() => throw new \RuntimeException);
+    }
+
+    public function test_fallback_disables_manager_when_fallback_enabled(): void
+    {
+        $manager = $this->buildManager(fallback: true);
+
+        $manager->fallback(new \RuntimeException);
+
+        $this->assertFalse($manager->isEnabled());
+    }
 }

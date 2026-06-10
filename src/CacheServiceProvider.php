@@ -8,7 +8,6 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use NormCache\Cache\CacheFlowGuard;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
@@ -47,7 +46,6 @@ class CacheServiceProvider extends ServiceProvider
             $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
             $keys = new CacheKeyBuilder;
             $versions = new VersionTracker($store, $keys);
-            $guard = new CacheFlowGuard($fallback);
 
             return new CacheManager(
                 queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
@@ -55,7 +53,7 @@ class CacheServiceProvider extends ServiceProvider
                 result: new ResultExecutor,
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
                 versions: $versions,
-                guard: $guard,
+                fallbackEnabled: $fallback,
                 engine: new ExecutionEngine,
                 store: $store,
                 keys: $keys,
