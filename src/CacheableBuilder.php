@@ -76,9 +76,7 @@ class CacheableBuilder extends Builder
 
     public function tag(string $tag): static
     {
-        if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
-        }
+        CacheKeyBuilder::assertValidTag($tag);
 
         $this->cacheTag = $tag;
 
@@ -171,7 +169,8 @@ class CacheableBuilder extends Builder
         $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            $executionBuilder->inferAggregateDependencies()
+            $executionBuilder->inferAggregateDependencies(),
+            selectAll: true,
         ), PlanningMode::Explain);
 
         return match ($plan->strategy) {
@@ -184,10 +183,6 @@ class CacheableBuilder extends Builder
 
     private function explainResultStrategy(): string
     {
-        if (!$this->hasAggregateColumns() && !empty($this->query->joins) && empty($this->query->columns)) {
-            return 'not cached — ' . BypassReasons::labels()['normalization'] . ': join_result_requires_explicit_select';
-        }
-
         $hasExplicit = $this->dependsOn !== null || $this->dependsOnTables !== [];
 
         return $hasExplicit ? 'cached: result (dependsOn())' : 'cached: result';
@@ -218,7 +213,8 @@ class CacheableBuilder extends Builder
 
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, $columns),
-            $prepared->builder->inferAggregateDependencies()
+            $prepared->builder->inferAggregateDependencies(),
+            selectAll: $columns === ['*'],
         ));
 
         return match ($plan->strategy) {
@@ -230,7 +226,7 @@ class CacheableBuilder extends Builder
                 fn() => $this->getFromCacheableQuery($prepared, $model, $plan->columns, $plan, $debugbarStart),
                 fn() => $this->getWithoutCacheFromPrepared($prepared, $columns)
             ),
-            CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns, $debugbarStart),
+            CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
             CacheStrategy::LiveQuery => $this->bypassAndReturn($model, $plan->bypassReasons, $debugbarStart, $prepared, $columns),
         };
     }
@@ -239,17 +235,8 @@ class CacheableBuilder extends Builder
         PreparedQuery $prepared,
         CachePlan $plan,
         array $columns,
-        mixed $debugbarStart,
     ): Collection {
         $model = $this->model::class;
-
-        if (!$this->hasAggregateColumns() && !empty($prepared->base->joins) && empty($prepared->base->columns)) {
-            if ($columns === ['*']) {
-                CacheReporter::queryBypassed($model, ['normalization' => ['join_result_requires_explicit_select']], $debugbarStart);
-
-                return $this->getWithoutCacheFromPrepared($prepared, $columns);
-            }
-        }
 
         [$payload, $cached] = NormCache::result()->execute(
             $prepared,
@@ -493,7 +480,7 @@ class CacheableBuilder extends Builder
 
         return NormCache::engine()->runNormalized(
             fetch: fn() => NormCache::getModelsFromQuery($model, $hash, $this->cacheTag, $depClasses, $depTableKeys),
-            waitForBuild: fn() => NormCache::waitForBuild('query_ids', $model, $hash, $this->cacheTag, $depClasses, $depTableKeys),
+            waitForBuild: fn() => NormCache::waitForQueryBuild($model, $hash, $this->cacheTag, $depClasses, $depTableKeys),
             onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
@@ -568,7 +555,7 @@ class CacheableBuilder extends Builder
 
         return (int) NormCache::engine()->runScalar(
             fetch: fn() => NormCache::getResultCache($model, $depClasses, $hash, $this->cacheTag, $depTableKeys, CacheKeyBuilder::K_COUNT),
-            waitForBuild: fn() => NormCache::waitForBuild('result', $model, $hash, tag: $this->cacheTag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: CacheKeyBuilder::K_COUNT),
+            waitForBuild: fn() => NormCache::waitForResultBuild($model, $hash, tag: $this->cacheTag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: CacheKeyBuilder::K_COUNT),
             compute: fn() => $base->getCountForPagination(),
             onStore: function ($value, $result) use ($model, $debugbarStart) {
                 CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'pagination count']);

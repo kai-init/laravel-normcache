@@ -14,13 +14,15 @@ final readonly class CachePlanContext
         ?DependencySet $inferredDependencies = null,
         public array $contextReasons = [],
         public ?string $kind = null,
+        public bool $selectAll = false,
     ) {
         $this->inferredDependencies = $inferredDependencies ?? DependencySet::empty();
     }
 
-    public static function models(?array $columns = null, ?DependencySet $inferred = null): self
+    /** @param  bool  $selectAll  the caller requested the default ['*'] projection */
+    public static function models(?array $columns = null, ?DependencySet $inferred = null, bool $selectAll = false): self
     {
-        return new self(CacheOperation::Models, $columns, $inferred);
+        return new self(CacheOperation::Models, $columns, $inferred, selectAll: $selectAll);
     }
 
     public static function scalar(string $kind, array $columns = [], ?DependencySet $inferred = null, array $contextReasons = []): self

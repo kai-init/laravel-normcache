@@ -57,38 +57,7 @@ final class RedisStore
     /** @return list<?string> */
     public function getRawMany(array $keys): array
     {
-        if (empty($keys)) {
-            return [];
-        }
-
-        if (!$this->slotting) {
-            $prefixed = [];
-            foreach ($keys as $key) {
-                $prefixed[] = $this->prefix($key);
-            }
-
-            $raw = $this->connection->mget($prefixed);
-            $values = [];
-            foreach ($raw as $value) {
-                $values[] = ($value !== null && $value !== false) ? $value : null;
-            }
-
-            return $values;
-        }
-
-        $results = [];
-
-        foreach ($this->groupByTag($keys) as $groupKeys) {
-            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $groupKeys));
-
-            $idx = 0;
-            foreach ($groupKeys as $key) {
-                $value = $raw[$idx++];
-                $results[$key] = ($value !== null && $value !== false) ? $value : null;
-            }
-        }
-
-        return array_map(fn($k) => $results[$k], $keys);
+        return $this->mgetValues($keys, unserialize: false);
     }
 
     public function set(string $key, mixed $value, int $ttl): void
@@ -100,16 +69,6 @@ final class RedisStore
     public function setRaw(string $key, string $value, int $ttl): void
     {
         $this->connection->setex($this->prefix($key), $ttl, $value);
-    }
-
-    public function setJson(string $key, array $value, int $ttl): void
-    {
-        $this->connection->setex($this->prefix($key), $ttl, json_encode($value, JSON_THROW_ON_ERROR));
-    }
-
-    public function setNx(string $key, string $value): void
-    {
-        $this->connection->setnx($this->prefix($key), $value);
     }
 
     /** SET NX EX — returns true if the lock was claimed. */
@@ -194,9 +153,19 @@ final class RedisStore
 
     public function getMany(array $keys): array
     {
+        return $this->mgetValues($keys, unserialize: true);
+    }
+
+    /** MGET in input order, with null for missing keys; groups by hash tag when slotting. */
+    private function mgetValues(array $keys, bool $unserialize): array
+    {
         if (empty($keys)) {
             return [];
         }
+
+        $transform = fn($value) => ($value !== null && $value !== false)
+            ? ($unserialize ? $this->unserialize($value) : $value)
+            : null;
 
         if (!$this->slotting) {
             $prefixed = [];
@@ -204,25 +173,17 @@ final class RedisStore
                 $prefixed[] = $this->prefix($key);
             }
 
-            $raw = $this->connection->mget($prefixed);
-            $values = [];
-            foreach ($raw as $value) {
-                $values[] = ($value !== null && $value !== false) ? $this->unserialize($value) : null;
-            }
-
-            return $values;
+            return array_map($transform, $this->connection->mget($prefixed));
         }
 
         $results = [];
 
         foreach ($this->groupByTag($keys) as $groupKeys) {
-            $prefixed = array_map(fn($k) => $this->prefix($k), $groupKeys);
-            $raw = $this->connection->mget($prefixed);
+            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $groupKeys));
 
             $idx = 0;
             foreach ($groupKeys as $key) {
-                $value = $raw[$idx++];
-                $results[$key] = ($value !== null && $value !== false) ? $this->unserialize($value) : null;
+                $results[$key] = $transform($raw[$idx++]);
             }
         }
 

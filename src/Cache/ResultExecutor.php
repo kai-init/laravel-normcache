@@ -36,7 +36,7 @@ final class ResultExecutor
         $value = NormCache::rescue(
             fn() => NormCache::engine()->runScalar(
                 fetch: fn() => NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-                waitForBuild: fn() => NormCache::waitForBuild('result', $modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
+                waitForBuild: fn() => NormCache::waitForResultBuild($modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
                 compute: $compute,
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);

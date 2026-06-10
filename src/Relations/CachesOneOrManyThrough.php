@@ -58,8 +58,8 @@ trait CachesOneOrManyThrough
         return NormCache::rescue(
             fn() => NormCache::engine()->runResult(
                 fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, null, [], CacheKeyBuilder::K_THROUGH),
-                waitForBuild: fn() => NormCache::waitForBuild(
-                    'result', $relatedClass, $hash, null, $depClasses, [], CacheKeyBuilder::K_THROUGH
+                waitForBuild: fn() => NormCache::waitForResultBuild(
+                    $relatedClass, $hash, null, $depClasses, [], CacheKeyBuilder::K_THROUGH
                 ),
                 onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,

@@ -19,6 +19,7 @@ use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
+use NormCache\Values\CacheConfig;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -53,17 +54,19 @@ class CacheServiceProvider extends ServiceProvider
                 result: new ResultExecutor,
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
                 versions: $versions,
-                fallbackEnabled: $fallback,
                 engine: new ExecutionEngine,
                 store: $store,
                 keys: $keys,
-                ttl: $ttl,
-                queryTtl: $queryTtl,
-                cooldown: $cooldown,
-                enabled: $enabled,
-                dispatchEvents: $events,
-                cluster: $cluster,
-                slotting: $slottingActive,
+                config: new CacheConfig(
+                    ttl: $ttl,
+                    queryTtl: $queryTtl,
+                    cooldown: $cooldown,
+                    enabled: $enabled,
+                    fallbackEnabled: $fallback,
+                    dispatchEvents: $events,
+                    cluster: $cluster,
+                    slotting: $slottingActive,
+                ),
             );
         });
 

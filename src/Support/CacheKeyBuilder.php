@@ -53,11 +53,6 @@ class CacheKeyBuilder
         return $tag !== null ? $base . $tag . ':v' : $base . 'v';
     }
 
-    public function resultPrefix(string $classKey): string
-    {
-        return self::K_RESULT . ':{' . $classKey . '}:';
-    }
-
     public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
     {
         return "{$namespace}:{{$classKey}}:" . $this->tagSegment($tag);
@@ -156,11 +151,6 @@ class CacheKeyBuilder
         return $this->namespacedPrefix($namespace, $classKey, $tag) . $seg . ':' . $hash;
     }
 
-    public function resultKey(string $classKey, ?string $tag, string $seg, string $hash): string
-    {
-        return $this->resultPrefix($classKey) . $this->tagSegment($tag) . $seg . ':' . $hash;
-    }
-
     public function resultBuildingKey(string $classKey, string $seg, string $lockSuffix): string
     {
         return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
@@ -184,11 +174,6 @@ class CacheKeyBuilder
     // -------------------------------------------------------------------------
     // Versioning Helpers
     // -------------------------------------------------------------------------
-
-    public function versionedKey(string $keyPrefix, string $seg, string $hash): string
-    {
-        return $keyPrefix . $seg . ':' . $hash;
-    }
 
     public function versionSegment(array $versionKeys, array $resolvedVersions): string
     {
@@ -228,16 +213,6 @@ class CacheKeyBuilder
         ];
     }
 
-    public function depVersionKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
-    {
-        return $this->depKeyPairs($classKey, $depClasses, $depTableKeys)[0];
-    }
-
-    public function depScheduledKeys(string $classKey, array $depClasses, array $depTableKeys = []): array
-    {
-        return $this->depKeyPairs($classKey, $depClasses, $depTableKeys)[1];
-    }
-
     // -------------------------------------------------------------------------
     // Suffixes / Segments
     // -------------------------------------------------------------------------
@@ -245,6 +220,14 @@ class CacheKeyBuilder
     public function tagSegment(?string $tag): string
     {
         return $tag !== null ? $tag . ':' : '';
+    }
+
+    /** Tags become raw key segments, so reserved key characters must be rejected. */
+    public static function assertValidTag(string $tag): void
+    {
+        if (preg_match('/[:{}\s*]/', $tag)) {
+            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
+        }
     }
 
     public function resultBuildIdentityHash(string $namespace, ?string $tag, string $hash): string

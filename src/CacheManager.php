@@ -13,6 +13,7 @@ use NormCache\Cache\VersionTracker;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Traits\HandlesInvalidation;
+use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
@@ -27,17 +28,10 @@ class CacheManager
         private readonly ResultExecutor $result,
         private readonly ModelHydrator $hydrator,
         private readonly VersionTracker $versions,
-        private bool $fallbackEnabled,
         private readonly ExecutionEngine $engine,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
-        private int $ttl,
-        private int $queryTtl,
-        private int $cooldown,
-        private bool $enabled = true,
-        private bool $dispatchEvents = true,
-        private bool $cluster = false,
-        private bool $slotting = false,
+        private readonly CacheConfig $config,
     ) {}
 
     // -------------------------------------------------------------------------
@@ -54,39 +48,44 @@ class CacheManager
         return $this->result;
     }
 
+    public function config(): CacheConfig
+    {
+        return $this->config;
+    }
+
     public function isEnabled(): bool
     {
-        return $this->enabled;
+        return $this->config->enabled;
     }
 
     public function isFallbackEnabled(): bool
     {
-        return $this->fallbackEnabled;
+        return $this->config->fallbackEnabled;
     }
 
     public function isEventsEnabled(): bool
     {
-        return $this->dispatchEvents;
+        return $this->config->dispatchEvents;
     }
 
     public function isCluster(): bool
     {
-        return $this->cluster;
+        return $this->config->cluster;
     }
 
     public function isSlotting(): bool
     {
-        return $this->slotting;
+        return $this->config->slotting;
     }
 
     public function enable(): void
     {
-        $this->enabled = true;
+        $this->config->enabled = true;
     }
 
     public function disable(): void
     {
-        $this->enabled = false;
+        $this->config->enabled = false;
     }
 
     // -------------------------------------------------------------------------
@@ -96,6 +95,11 @@ class CacheManager
     public function getStore(): RedisStore
     {
         return $this->store;
+    }
+
+    public function keys(): CacheKeyBuilder
+    {
+        return $this->keys;
     }
 
     public function classKey(string $class): string
@@ -137,12 +141,13 @@ class CacheManager
         return $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
     }
 
-    public function waitForBuild(string $store, string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): mixed
+    public function waitForQueryBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): ?QueryCacheResult
     {
-        if ($store !== 'result') {
-            return $this->queryReader->waitForBuild($modelClass, $hash, $tag, $depClasses, $depTableKeys);
-        }
+        return $this->queryReader->waitForBuild($modelClass, $hash, $tag, $depClasses, $depTableKeys);
+    }
 
+    public function waitForResultBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): ?ResultCacheResult
+    {
         return $this->resultReader->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
     }
 
@@ -178,12 +183,12 @@ class CacheManager
 
     public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
     {
-        return $this->resultReader->storeEntry($key, $payload, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
+        return $this->resultReader->storeEntry($key, $payload, $ttl ?? $this->config->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
     }
 
     public function storeManyVersionedResults(array $entries, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
     {
-        return $this->resultReader->storeMany($entries, $ttl ?? $this->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
+        return $this->resultReader->storeMany($entries, $ttl ?? $this->config->queryTtl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
     }
 
     public function storeResultCache(string $key, array $payload, ?string $buildingKey, ?int $ttl, ?string $wakeKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): bool
@@ -207,7 +212,7 @@ class CacheManager
 
         $this->store->setManyTrackedIfVersion(
             $attrsByKey,
-            $this->ttl,
+            $this->config->ttl,
             $this->keys->membersKey($classKey),
             $this->keys->verKey($classKey),
             $modelVersion
@@ -243,7 +248,7 @@ class CacheManager
 
     public function fallback(\Throwable $e): void
     {
-        if (!$this->fallbackEnabled) {
+        if (!$this->config->fallbackEnabled) {
             throw $e;
         }
 

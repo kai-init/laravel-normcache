@@ -21,8 +21,6 @@ trait CachesPivotRelation
 {
     use CollectsRelatedModels;
 
-    private static array $planCache = [];
-
     private array $eagerParentIds = [];
 
     private bool $inEagerLoad = false;
@@ -84,7 +82,7 @@ trait CachesPivotRelation
 
         $constraintHash = QueryHasher::forRelationQuery($builder, $this->getQualifiedForeignPivotKeyName(), $base);
 
-        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base, $constraintHash)
+        if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base)
             || (!$shouldCacheRelatedModels && !$classification['relatedKeyInProjection'])) {
             return $this->getFromPreparedPivotBuilder($prepared);
         }
@@ -121,7 +119,10 @@ trait CachesPivotRelation
                         $relatedKey = NormCache::classKey($relatedClass);
                         $keyMap = [];
                         foreach ($cacheParentIds as $parentId) {
-                            $keyMap[$parentId] = "pivot:{{$parentClassKey}}:{$relatedKey}:{$this->relationName}:{$constraintHash}:{$pivotResult->seg}:{$parentId}";
+                            $keyMap[$parentId] = NormCache::keys()->pivotKey(
+                                $parentClassKey, $relatedKey, $this->relationName,
+                                $constraintHash, $pivotResult->seg, $parentId
+                            );
                         }
                         $this->populatePivotCache(
                             $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
@@ -173,21 +174,17 @@ trait CachesPivotRelation
         ?array $resolvedColumns,
         CacheableBuilder $builder,
         QueryBuilder $base,
-        string $constraintHash,
     ): bool {
         if (empty($cacheParentIds)) {
             return false;
         }
 
-        if (!array_key_exists($constraintHash, self::$planCache)) {
-            $plan = $builder->cachePlan($base, CachePlanContext::pivot(
-                $resolvedColumns ?? [],
-                $builder->inferAggregateDependencies()
-            ));
-            self::$planCache[$constraintHash] = $plan->mode === CacheMode::Result;
-        }
+        $plan = $builder->cachePlan($base, CachePlanContext::pivot(
+            $resolvedColumns ?? [],
+            $builder->inferAggregateDependencies()
+        ));
 
-        if (!self::$planCache[$constraintHash]) {
+        if ($plan->mode !== CacheMode::Result) {
             return false;
         }
 

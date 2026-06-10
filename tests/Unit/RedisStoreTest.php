@@ -38,22 +38,6 @@ class RedisStoreTest extends TestCase
         $this->assertSame('bar', $this->store->get('foo'));
     }
 
-    public function test_it_can_set_and_get_json_values(): void
-    {
-        $this->store->setJson('foo', ['bar' => 'baz'], 60);
-        $this->assertSame(['bar' => 'baz'], json_decode($this->store->getRaw('foo'), true));
-    }
-
-    public function test_it_can_set_nx(): void
-    {
-        $this->store->delete('foo');
-        $this->store->setNx('foo', 'bar');
-        $this->assertSame('bar', $this->store->get('foo'));
-
-        $this->store->setNx('foo', 'baz');
-        $this->assertSame('bar', $this->store->get('foo'));
-    }
-
     public function test_it_can_set_nx_ex(): void
     {
         $this->store->delete('foo');

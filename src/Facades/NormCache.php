@@ -10,6 +10,8 @@ use NormCache\CacheManager;
  *
  * @method static \NormCache\Cache\ExecutionEngine engine()
  * @method static \NormCache\Cache\ResultExecutor result()
+ * @method static \NormCache\Support\CacheKeyBuilder keys()
+ * @method static \NormCache\Values\CacheConfig config()
  */
 class NormCache extends Facade
 {

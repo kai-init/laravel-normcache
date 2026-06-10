@@ -228,8 +228,8 @@ class CacheManagerTest extends TestCase
         $queryKey = "query:{{$classKey}}:v5:abc123";
         $buildingKey = "building:{{$classKey}}:abc123";
 
-        $store->setNx($versionKey, '5');
-        $store->setNx($buildingKey, '1');
+        $store->setRaw($versionKey, '5', 3600);
+        $store->setRaw($buildingKey, '1', 3600);
         $store->increment($versionKey); // now 6
 
         $this->cacheManager()->storeQueryIds($queryKey, [1, 2, 3], 3600, $buildingKey, [$versionKey], ['5']);
@@ -247,8 +247,8 @@ class CacheManagerTest extends TestCase
         $queryKey = "query:{{$classKey}}:v5:def456";
         $buildingKey = "building:{{$classKey}}:def456";
 
-        $store->setNx($versionKey, '5');
-        $store->setNx($buildingKey, '1');
+        $store->setRaw($versionKey, '5', 3600);
+        $store->setRaw($buildingKey, '1', 3600);
 
         $this->cacheManager()->storeQueryIds($queryKey, [4, 5, 6], 3600, $buildingKey, [$versionKey], ['5']);
 
@@ -265,8 +265,8 @@ class CacheManagerTest extends TestCase
         $queryKey = "query:{{$classKey}}:v5:token-mismatch";
         $buildingKey = "building:{{$classKey}}:token-mismatch";
 
-        $store->setNx($versionKey, '5');
-        $store->setNx($buildingKey, 'new-owner');
+        $store->setRaw($versionKey, '5', 3600);
+        $store->setRaw($buildingKey, 'new-owner', 3600);
 
         $this->cacheManager()->storeQueryIds($queryKey, [7, 8, 9], 3600, $buildingKey, [$versionKey], ['5'], 'old-owner');
 
@@ -295,7 +295,7 @@ class CacheManagerTest extends TestCase
         $buildingKey = "building:{{$classKey}}:write_with_building_key";
         $key = "query:{{$classKey}}:write_with_building_key";
 
-        $store->setNx($buildingKey, 'token');
+        $store->setRaw($buildingKey, 'token', 3600);
 
         $this->manager->storeQueryIds($key, ['1', '2'], 60, $buildingKey, [], [], 'token');
 
@@ -355,8 +355,8 @@ class CacheManagerTest extends TestCase
         $buildingKey = "building:{{$classKey}}:v5:token-mismatch";
         $wakeKey = "wake:{{$classKey}}:token-mismatch";
 
-        $store->setNx($versionKey, '5');
-        $store->setNx($buildingKey, 'new-owner');
+        $store->setRaw($versionKey, '5', 3600);
+        $store->setRaw($buildingKey, 'new-owner', 3600);
 
         $written = $this->cacheManager()->storeVersionedResult(
             $resultKey,

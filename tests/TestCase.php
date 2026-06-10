@@ -19,6 +19,7 @@ use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
+use NormCache\Values\CacheConfig;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
 use ReflectionProperty;
@@ -183,17 +184,19 @@ abstract class TestCase extends OrchestraTestCase
             result: $result,
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
             versions: $versions,
-            fallbackEnabled: $fallback,
             engine: new ExecutionEngine,
             store: $store,
             keys: $keys,
-            ttl: $ttl,
-            queryTtl: $queryTtl,
-            cooldown: $cooldown,
-            enabled: $enabled,
-            dispatchEvents: $dispatchEvents,
-            cluster: $cluster,
-            slotting: $slottingActive,
+            config: new CacheConfig(
+                ttl: $ttl,
+                queryTtl: $queryTtl,
+                cooldown: $cooldown,
+                enabled: $enabled,
+                fallbackEnabled: $fallback,
+                dispatchEvents: $dispatchEvents,
+                cluster: $cluster,
+                slotting: $slottingActive,
+            ),
         );
     }
 

@@ -4,7 +4,6 @@ namespace NormCache\Tests\Integration\Infrastructure;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
-use NormCache\CacheManager;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -12,7 +11,6 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
-use ReflectionProperty;
 
 /**
  * Behavioral tests: Lua script consistency under concurrent writes — result and pivot
@@ -50,8 +48,7 @@ class LuaScriptConsistencyTest extends TestCase
 
     private function setCooldown(int $seconds): void
     {
-        (new ReflectionProperty(CacheManager::class, 'cooldown'))
-            ->setValue($this->cacheManager(), $seconds);
+        $this->cacheManager()->config()->cooldown = $seconds;
     }
 
     private function authorQueryHash(): string

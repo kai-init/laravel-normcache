@@ -81,7 +81,7 @@ final class QueryHasher
             $shape['bindings'] = self::normalizeValueForHash($nonWhereBindings, $base);
         }
 
-        return self::hash(json_encode($shape, JSON_THROW_ON_ERROR));
+        return self::hashPayload($shape);
     }
 
     public static function fromBuilder(EloquentBuilder $builder, QueryBuilder $query): string
@@ -131,10 +131,6 @@ final class QueryHasher
             return $value->format('Y-m-d H:i:s');
         }
 
-        if (is_string($value) && !mb_detect_encoding($value, 'UTF-8', true)) {
-            return ['binary' => base64_encode($value)];
-        }
-
         if (is_array($value)) {
             $normalized = [];
             foreach ($value as $key => $item) {
@@ -156,10 +152,42 @@ final class QueryHasher
 
     private static function hashWith(QueryBuilder $query, array $extra = []): string
     {
-        return self::hash($query->toSql() . json_encode(array_merge([
+        return self::hash($query->toSql() . self::encodePayload(array_merge([
             'bindings' => self::normalizeValueForHash($query->getBindings()),
             'useWritePdo' => $query->useWritePdo,
-        ], $extra), JSON_THROW_ON_ERROR));
+        ], $extra)));
+    }
+
+    private static function hashPayload(array $payload): string
+    {
+        return self::hash(self::encodePayload($payload));
+    }
+
+    private static function encodePayload(array $payload): string
+    {
+        try {
+            return json_encode($payload, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            return json_encode(self::normalizeBinaryStringsForHash($payload), JSON_THROW_ON_ERROR);
+        }
+    }
+
+    private static function normalizeBinaryStringsForHash(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return mb_check_encoding($value, 'UTF-8') ? $value : ['binary' => base64_encode($value)];
+        }
+
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $key => $item) {
+                $normalized[$key] = self::normalizeBinaryStringsForHash($item);
+            }
+
+            return $normalized;
+        }
+
+        return $value;
     }
 
     private static function scalarKindIgnoresOrder(string $kind): bool

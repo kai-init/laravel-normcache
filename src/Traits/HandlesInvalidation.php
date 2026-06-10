@@ -150,9 +150,7 @@ trait HandlesInvalidation
 
     public function flushTag(string $modelClass, string $tag): int
     {
-        if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
-        }
+        CacheKeyBuilder::assertValidTag($tag);
 
         $classKey = $this->keys->classKey($modelClass);
 
@@ -166,9 +164,7 @@ trait HandlesInvalidation
 
     public function flushTagAcrossModels(string $tag): int
     {
-        if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
-        }
+        CacheKeyBuilder::assertValidTag($tag);
 
         return $this->store->flushByPatterns([
             CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
@@ -259,7 +255,7 @@ trait HandlesInvalidation
 
     private function doInvalidateKey(string $classKey): void
     {
-        if ($this->cooldown <= 0) {
+        if ($this->config->cooldown <= 0) {
             $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl());
 
             return;
@@ -271,12 +267,12 @@ trait HandlesInvalidation
 
     private function versionTtl(): int
     {
-        return max($this->ttl, $this->queryTtl) * 2;
+        return max($this->config->ttl, $this->config->queryTtl) * 2;
     }
 
     private function resolveCurrentVersion(string $classKey): string|int|null
     {
-        if ($this->cooldown <= 0) {
+        if ($this->config->cooldown <= 0) {
             return $this->store->getRaw($this->keys->verKey($classKey));
         }
 
@@ -289,9 +285,9 @@ trait HandlesInvalidation
 
     private function scheduleInvalidation(string $classKey): void
     {
-        $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->cooldown * 1000);
+        $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->config->cooldown * 1000);
 
-        $this->store->setNxEx($this->keys->scheduledKey($classKey), (string) $dueAtMs, $this->cooldown + $this->versionTtl());
+        $this->store->setNxEx($this->keys->scheduledKey($classKey), (string) $dueAtMs, $this->config->cooldown + $this->versionTtl());
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void
