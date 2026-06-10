@@ -3,19 +3,22 @@
 namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use NormCache\Values\PreparedQuery;
 
 /**
- * @mixin \Illuminate\Database\Eloquent\Relations\Relation
- * @property \Illuminate\Database\Eloquent\Model $related
+ * @mixin Relation
+ *
+ * @property Model $related
  */
 trait CollectsRelatedModels
 {
     /**
      * Hydrate the related models from a prepared (cache-bypassed) query.
      *
-     * @param ?\Closure(array): void $beforeEagerLoad Hook for relation-specific
-     *        per-model setup (e.g. pivot hydration) before eager loads run.
+     * @param  ?\Closure(array): void  $beforeEagerLoad  Hook for relation-specific
+     *                                                   per-model setup (e.g. pivot hydration) before eager loads run.
      */
     private function collectFromPreparedBuilder(
         PreparedQuery $prepared,
