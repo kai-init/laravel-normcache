@@ -133,7 +133,7 @@ final class ModelHydrator
             $models[] = $instance;
         }
 
-        if ($cached && $models !== []) {
+        if ($cached && $models !== [] && CacheReporter::active()) {
             $keys = [];
             foreach ($models as $m) {
                 $key = $m->getKey();

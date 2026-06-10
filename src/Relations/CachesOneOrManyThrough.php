@@ -5,7 +5,6 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
-use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -121,7 +120,7 @@ trait CachesOneOrManyThrough
             $builder->inferAggregateDependencies()
         ));
 
-        return $plan->mode === CacheMode::Result;
+        return $plan->usesResultCache();
     }
 
     private function isSimpleThroughQuery(Builder $base, CacheableBuilder $builder): bool

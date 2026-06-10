@@ -11,7 +11,7 @@ return [
     'building_lock_ttl' => (int) env('NORMCACHE_BUILDING_LOCK_TTL', 5),
     'stampede_wait_ms' => (int) env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
     'cluster' => (bool) env('NORMCACHE_CLUSTER', false),
-    'events' => (bool) env('NORMCACHE_EVENTS', true),
+    'events' => (bool) env('NORMCACHE_EVENTS', false),
     'fallback' => (bool) env('NORMCACHE_FALLBACK', false),
     'fire_retrieved' => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),

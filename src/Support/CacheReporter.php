@@ -17,6 +17,11 @@ final class CacheReporter
         return NormCacheCollector::beginMeasure();
     }
 
+    public static function active(): bool
+    {
+        return NormCacheCollector::active() || NormCache::isEventsEnabled();
+    }
+
     public static function queryHit(string $modelClass, string $key, ?float $startTime, array $meta = [], string $type = 'query hit'): void
     {
         if (NormCache::isEventsEnabled()) {

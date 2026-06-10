@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — cache events are now opt-in:** the `normcache.events` default changed from `true` to `false`.
 - **Pivot cache batching:** batch pivot cache writes during eager loading to reduce Redis roundtrips.
 - **Hydration optimization:** implemented closure-based hydration and removed expensive regex from unserialization for faster model loading.
 - **Dedupe transaction bumps:** reduced redundant Redis calls by deduping version bumps within the same database transaction.
-- **Internal refactoring:** extracted result handling logic for better maintainability and consistency.
+- **Reporting overhead:** model-hit key collection during result hydration is skipped when neither events nor a Debugbar collector are active.
 
 ### Fixed
 

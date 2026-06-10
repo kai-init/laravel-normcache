@@ -100,6 +100,7 @@ abstract class TestCase extends OrchestraTestCase
 
         $app['config']->set('normcache.connection', 'normcache-test');
         $app['config']->set('normcache.enabled', true);
+        $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
         $app['config']->set('normcache.slotting', true);
         $app['config']->set('normcache.ttl', 3600);

@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
-use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\ProjectionClassifier;
@@ -79,7 +78,7 @@ class CacheableBelongsTo extends BelongsTo
 
         $plan = $builder->cachePlan($base, CachePlanContext::belongsToEagerLoad($columns ?? []));
 
-        return $plan->mode === CacheMode::Normalized;
+        return $plan->isNormalized();
     }
 
     private function isSimplePkEagerLoad(QueryBuilder $base, CacheableBuilder $builder): bool

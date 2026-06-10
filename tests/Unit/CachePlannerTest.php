@@ -3,7 +3,6 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\Log;
-use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Planning\CachePlanner;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -42,7 +41,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::models(),
         );
 
-        $this->assertSame(CacheMode::Normalized, $plan->mode);
+        $this->assertTrue($plan->isNormalized());
         $this->assertSame([], $plan->reasons);
         $this->assertSame([], $plan->bypassReasons);
     }
@@ -58,7 +57,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::models(),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('raw ORDER expression', $plan->bypassReasons['dependency']);
     }
 
@@ -74,7 +73,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::models(),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertSame(
             ['opted_out' => ['withoutCache() was called explicitly']],
             $plan->bypassReasons,
@@ -91,7 +90,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('count', ['*']),
         );
 
-        $this->assertSame(CacheMode::Result, $plan->mode);
+        $this->assertTrue($plan->usesResultCache());
         $this->assertSame(CacheStrategy::VersionedResult, $plan->strategy);
         $this->assertSame([Author::class], $plan->dependencies->models);
     }
@@ -106,7 +105,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('count', ['*']),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('raw WHERE expression', $plan->bypassReasons['dependency']);
     }
 
@@ -121,7 +120,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('value', ['name']),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('raw ORDER expression', $plan->bypassReasons['dependency']);
     }
 
@@ -137,7 +136,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('count', ['name']),
         );
 
-        $this->assertSame(CacheMode::Result, $plan->mode);
+        $this->assertTrue($plan->usesResultCache());
         $this->assertSame(CacheStrategy::VersionedResult, $plan->strategy);
         $this->assertSame(['name'], $plan->columns);
     }
@@ -156,7 +155,7 @@ class CachePlannerTest extends TestCase
             ),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertSame(['test bypass'], $plan->bypassReasons['opted_out']);
     }
 
@@ -171,7 +170,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('count', ['*']),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('complex_query_requires_depends_on', $plan->bypassReasons['dependency']);
     }
 
@@ -185,7 +184,7 @@ class CachePlannerTest extends TestCase
             CachePlanContext::scalar('count', ['*']),
         );
 
-        $this->assertSame(CacheMode::Bypass, $plan->mode);
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('query lock (SELECT FOR UPDATE)', $plan->bypassReasons['safety']);
     }
 }

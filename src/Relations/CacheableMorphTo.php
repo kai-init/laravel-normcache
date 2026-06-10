@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
-use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\RelationCacheGuards;
@@ -100,7 +99,7 @@ class CacheableMorphTo extends MorphTo
 
         $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad($type));
 
-        return $plan->mode === CacheMode::Normalized ? $instance : null;
+        return $plan->isNormalized() ? $instance : null;
     }
 
     private function isSimpleMorphBase(QueryBuilder $base, CacheableBuilder $builder): bool

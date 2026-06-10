@@ -2,7 +2,6 @@
 
 namespace NormCache\Values;
 
-use NormCache\Enums\CacheMode;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\CacheStrategy;
 
@@ -13,7 +12,6 @@ final readonly class CachePlan
      * @param  array<string, list<string>>  $bypassReasons
      */
     public function __construct(
-        public CacheMode $mode,
         public CacheStrategy $strategy,
         public CacheOperation $operation,
         public DependencySet $dependencies,
@@ -31,7 +29,6 @@ final readonly class CachePlan
         ?array $primaryKeys = null,
     ): self {
         return new self(
-            mode: CacheMode::Normalized,
             strategy: CacheStrategy::NormalizedQuery,
             operation: $operation,
             dependencies: $dependencies,
@@ -49,7 +46,6 @@ final readonly class CachePlan
         ?array $primaryKeys = null,
     ): self {
         return new self(
-            mode: CacheMode::Result,
             strategy: CacheStrategy::VersionedResult,
             operation: $operation,
             dependencies: $dependencies,
@@ -66,7 +62,6 @@ final readonly class CachePlan
         array $bypassReasons = [],
     ): self {
         return new self(
-            mode: CacheMode::Bypass,
             strategy: CacheStrategy::LiveQuery,
             operation: $operation,
             dependencies: $dependencies,
@@ -81,7 +76,6 @@ final readonly class CachePlan
         array $primaryKeys,
     ): self {
         return new self(
-            mode: CacheMode::Normalized,
             strategy: CacheStrategy::DirectModels,
             operation: $operation,
             dependencies: $dependencies,
@@ -97,11 +91,17 @@ final readonly class CachePlan
 
     public function isCacheable(): bool
     {
-        return $this->mode !== CacheMode::Bypass;
+        return $this->strategy !== CacheStrategy::LiveQuery;
+    }
+
+    public function isNormalized(): bool
+    {
+        return $this->strategy === CacheStrategy::NormalizedQuery
+            || $this->strategy === CacheStrategy::DirectModels;
     }
 
     public function usesResultCache(): bool
     {
-        return $this->mode === CacheMode::Result;
+        return $this->strategy === CacheStrategy::VersionedResult;
     }
 }

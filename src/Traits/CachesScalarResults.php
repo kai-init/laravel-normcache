@@ -6,7 +6,6 @@ use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
 use NormCache\Cache\ModelHydrator;
-use NormCache\Enums\CacheMode;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
@@ -143,7 +142,7 @@ trait CachesScalarResults
             $inferredDependencies,
         ));
 
-        if ($plan->mode === CacheMode::Bypass) {
+        if (!$plan->isCacheable()) {
             if (!$plan->hasBypassReason('opted_out')) {
                 CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
             }

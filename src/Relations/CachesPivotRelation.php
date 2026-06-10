@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
-use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -184,7 +183,7 @@ trait CachesPivotRelation
             $builder->inferAggregateDependencies()
         ));
 
-        if ($plan->mode !== CacheMode::Result) {
+        if (!$plan->usesResultCache()) {
             return false;
         }
 
