@@ -7,16 +7,18 @@ use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
+use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\PreparedQuery;
 
 trait CachesOneOrManyThrough
 {
+    use CollectsRelatedModels;
+
     public function get($columns = ['*']): Collection
     {
         if (!$this->query instanceof CacheableBuilder) {
@@ -116,7 +118,7 @@ trait CachesOneOrManyThrough
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            (new AggregateDependencyCollector)->collect($builder)->dependencies
+            $builder->inferAggregateDependencies()
         ));
 
         return $plan->mode === CacheMode::Result;
@@ -126,16 +128,8 @@ trait CachesOneOrManyThrough
     {
         // Standard HasManyThrough/HasOneThrough always has exactly one join (the intermediate table).
         // The planner grants a bypass relaxation for this shape; validate it directly here.
-        if ($builder->isCacheSkipped()
-            || !NormCache::isEnabled()
-            || $builder->getModel()->getConnection()->transactionLevel() > 0
+        if (RelationCacheGuards::blocksBypass($builder, $base)
             || count($base->joins ?? []) !== 1
-            || !empty($base->groups)
-            || !empty($base->havings)
-            || !empty($base->unions)
-            || ($base->lock !== null && $base->lock !== false)
-            || $builder->explicitDependencies() !== null
-            || $builder->explicitTableDependencies() !== []
             || ProjectionClassifier::hasCalculatedColumns($base->columns)) {
             return false;
         }
@@ -188,17 +182,6 @@ trait CachesOneOrManyThrough
 
     private function getFromPreparedBuilder(PreparedQuery $prepared, bool $applyAfterCallbacks = true): Collection
     {
-        $builder = $prepared->builder;
-        $models = $builder->getModels();
-
-        if (count($models) > 0) {
-            $models = $builder->eagerLoadRelations($models);
-        }
-
-        $collection = $this->related->newCollection($models);
-
-        return $applyAfterCallbacks
-            ? $prepared->applyAfterCallbacks($collection)
-            : $collection;
+        return $this->collectFromPreparedBuilder($prepared, $applyAfterCallbacks);
     }
 }

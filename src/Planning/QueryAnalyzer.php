@@ -9,7 +9,7 @@ use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
-    private const SUBQUERY_WHERE_TYPES = [
+    public const SUBQUERY_WHERE_TYPES = [
         'Exists' => true,
         'NotExists' => true,
         'Sub' => true,

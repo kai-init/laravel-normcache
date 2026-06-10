@@ -7,16 +7,11 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Enums\CacheMode;
-use NormCache\Enums\CacheOperation;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
-use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
-use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 /**
  * @mixin CacheableBuilder
@@ -141,27 +136,19 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = (new AggregateDependencyCollector)->collect($executionBuilder)->dependencies;
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies();
+        $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
+            $kind->value,
+            $columns,
+            $inferredDependencies,
+        ));
 
-        if ($this->isSimpleScalarQuery($base, $inferredDependencies)) {
-            $plan = CachePlan::result(
-                operation: CacheOperation::Scalar,
-                dependencies: DependencySet::singleModel($this->model::class),
-            );
-        } else {
-            $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
-                $kind->value,
-                $columns,
-                $inferredDependencies,
-            ));
-
-            if ($plan->mode === CacheMode::Bypass) {
-                if (!$plan->hasBypassReason('opted_out')) {
-                    CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
-                }
-
-                return $computeValue();
+        if ($plan->mode === CacheMode::Bypass) {
+            if (!$plan->hasBypassReason('opted_out')) {
+                CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons);
             }
+
+            return $computeValue();
         }
 
         $result = NormCache::result()->execute(
@@ -209,36 +196,5 @@ trait CachesScalarResults
         }
 
         return ModelHydrator::transformScalar($value, $this->model, $column);
-    }
-
-    private function isSimpleScalarQuery(QueryBuilder $base, DependencySet $inferredDependencies): bool
-    {
-        if (!$inferredDependencies->safe
-            || $inferredDependencies->models !== []
-            || $inferredDependencies->tables !== []
-            || $this->isCacheSkipped()
-            || !NormCache::isEnabled()
-            || $this->getModel()->getConnection()->transactionLevel() > 0
-            || $this->explicitDependencies() !== null
-            || $this->explicitTableDependencies() !== []
-        ) {
-            return false;
-        }
-
-        $flags = $this->analyzer()->flags(
-            $base,
-            $this->getModel()->getTable(),
-            null,
-        );
-
-        $bypassFlags = QueryInspection::RAW_ORDER
-            | QueryInspection::RAW_WHERE
-            | QueryInspection::SUBQUERY_WHERE
-            | QueryInspection::LOCK
-            | QueryInspection::NON_CANONICAL_FROM
-            | QueryInspection::JOIN
-            | QueryInspection::UNION;
-
-        return ($flags & $bypassFlags) === 0;
     }
 }

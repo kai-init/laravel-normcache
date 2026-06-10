@@ -16,6 +16,14 @@ use NormCache\Values\QueryInspection;
 
 final class CachePlanner
 {
+    private const SIMPLE_RESULT_BYPASS_FLAGS = QueryInspection::RAW_ORDER
+        | QueryInspection::RAW_WHERE
+        | QueryInspection::SUBQUERY_WHERE
+        | QueryInspection::LOCK
+        | QueryInspection::NON_CANONICAL_FROM
+        | QueryInspection::JOIN
+        | QueryInspection::UNION;
+
     public function __construct(
         private readonly QueryAnalyzer $analyzer = new QueryAnalyzer,
     ) {}
@@ -26,22 +34,182 @@ final class CachePlanner
         CachePlanContext $context,
         PlanningMode $planningMode = PlanningMode::Hot,
     ): CachePlan {
-        $slotting = NormCache::isSlotting();
         $model = $builder->getModel();
+        $cacheSkipped = $builder->isCacheSkipped();
+        $cacheDisabled = !NormCache::isEnabled();
+        $explain = $planningMode === PlanningMode::Explain;
+
+        if ($cacheSkipped || $cacheDisabled || isset($context->contextReasons['opted_out'])) {
+            return $this->globalBypass($builder, $model, $context, $cacheSkipped, $cacheDisabled);
+        }
+
+        $insideTransaction = $model->getConnection()->transactionLevel() > 0;
+
+        if ($insideTransaction && !$explain) {
+            return $this->transactionBypass($builder, $model, $context);
+        }
+
+        return match ($context->operation) {
+            CacheOperation::Scalar => $this->planScalar($builder, $model, $base, $context, $insideTransaction, $explain),
+            CacheOperation::PaginationCount => $this->planPaginationCount($builder, $model, $base, $context, $insideTransaction, $explain),
+            CacheOperation::Pivot,
+            CacheOperation::Through => $this->planRelationResult($builder, $model, $base, $context, $insideTransaction, $explain),
+            CacheOperation::Models,
+            CacheOperation::BelongsToEagerLoad,
+            CacheOperation::MorphToEagerLoad => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
+        };
+    }
+
+    private function globalBypass(
+        CacheableBuilder $builder,
+        Model $model,
+        CachePlanContext $context,
+        bool $cacheSkipped,
+        bool $cacheDisabled,
+    ): CachePlan {
+        $reasons = $this->resolveContextReasons(
+            $context->contextReasons,
+            cacheSkipped: $cacheSkipped,
+            cacheDisabled: $cacheDisabled,
+            insideTransaction: false,
+        )['opted_out'] ?? [];
+
+        return CachePlan::bypass(
+            operation: $context->operation,
+            dependencies: $this->baseDependencies($builder, $model, $context),
+            reasons: $reasons,
+            bypassReasons: ['opted_out' => $reasons],
+        );
+    }
+
+    private function transactionBypass(
+        CacheableBuilder $builder,
+        Model $model,
+        CachePlanContext $context,
+    ): CachePlan {
+        $reasons = ['inside a database transaction'];
+
+        return CachePlan::bypass(
+            operation: $context->operation,
+            dependencies: $this->baseDependencies($builder, $model, $context),
+            reasons: $reasons,
+            bypassReasons: ['safety' => $reasons],
+        );
+    }
+
+    private function planScalar(
+        CacheableBuilder $builder,
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        bool $insideTransaction,
+        bool $explain,
+    ): CachePlan {
+        $explicitModels = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
+        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+
+        if (!$explain && !$insideTransaction && !$hasExplicit && $context->contextReasons === []) {
+            $plan = $this->trySimpleScalarPlan($model, $base, $context);
+
+            if ($plan !== null) {
+                return $plan;
+            }
+        }
+
+        return $this->planInspectedResult(
+            model: $model,
+            base: $base,
+            context: $context,
+            explicitModels: $explicitModels,
+            explicitTables: $explicitTables,
+            hasExplicit: $hasExplicit,
+            insideTransaction: $insideTransaction,
+            explain: $explain,
+            scalarLike: true,
+        );
+    }
+
+    private function planPaginationCount(
+        CacheableBuilder $builder,
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        bool $insideTransaction,
+        bool $explain,
+    ): CachePlan {
+        $explicitModels = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
+        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+
+        if (!$explain && !$insideTransaction && !$hasExplicit && $context->contextReasons === []) {
+            $plan = $this->trySimplePaginationCountPlan($model, $base, $context);
+
+            if ($plan !== null) {
+                return $plan;
+            }
+        }
+
+        return $this->planInspectedResult(
+            model: $model,
+            base: $base,
+            context: $context,
+            explicitModels: $explicitModels,
+            explicitTables: $explicitTables,
+            hasExplicit: $hasExplicit,
+            insideTransaction: $insideTransaction,
+            explain: $explain,
+            scalarLike: true,
+        );
+    }
+
+    private function planRelationResult(
+        CacheableBuilder $builder,
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        bool $insideTransaction,
+        bool $explain,
+    ): CachePlan {
+        $explicitModels = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
+        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+
+        return $this->planInspectedResult(
+            model: $model,
+            base: $base,
+            context: $context,
+            explicitModels: $explicitModels,
+            explicitTables: $explicitTables,
+            hasExplicit: $hasExplicit,
+            insideTransaction: $insideTransaction,
+            explain: $explain,
+            strictRelation: true,
+        );
+    }
+
+    private function planModels(
+        CacheableBuilder $builder,
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        bool $insideTransaction,
+        bool $explain,
+    ): CachePlan {
         $modelClass = $model::class;
         $modelTable = $model->getTable();
         $inferred = $context->inferredDependencies;
-        $explicit = $builder->explicitDependencies();
+        $explicitModels = $builder->explicitDependencies();
         $explicitTables = $builder->explicitTableDependencies();
-        $hasExplicit = $explicit !== null || $explicitTables !== [];
-        $cacheSkipped = $builder->isCacheSkipped();
-        $cacheDisabled = !NormCache::isEnabled();
-        $insideTransaction = $model->getConnection()->transactionLevel() > 0;
-        $includeTables = $planningMode === PlanningMode::Explain;
-        $contextReasons = $context->contextReasons;
+        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
 
-        if (!$cacheSkipped && !$cacheDisabled && !$insideTransaction && $context->requiresNormalization()
-            && $inferred->safe && $inferred->models === [] && $inferred->tables === [] && !$hasExplicit) {
+        if (!$explain
+            && !$insideTransaction
+            && !$hasExplicit
+            && $context->contextReasons === []
+            && $inferred->safe
+            && $inferred->models === []
+            && $inferred->tables === []) {
             $directIds = $this->analyzer->directPrimaryKeys(
                 $base,
                 $modelTable,
@@ -62,113 +230,50 @@ final class CachePlanner
             $base,
             $modelTable,
             $context->columns,
-            $context->requiresNormalization()
-                ? [$model->getKeyName(), $model->getQualifiedKeyName()]
-                : [],
-            $includeTables,
+            [$model->getKeyName(), $model->getQualifiedKeyName()],
+            $explain,
         );
+        $hasDependencyBypass = $inspection->hasDependencyBypass();
+        $hasContextDependencyBypass = isset($context->contextReasons['dependency']);
 
-        // 1. Resolve Dependencies
-        $dependencies = $hasExplicit
-            ? new DependencySet(
-                models: array_keys(array_flip([$modelClass, ...$inferred->models, ...($explicit ?? [])])),
-                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
-            )
-            : ($inspection->hasDependencyBypass() || isset($contextReasons['dependency']) || !$inferred->safe
-                ? DependencySet::unsafe(array_values(array_unique([
-                    ...(BypassReasons::fromInspection($inspection)['dependency'] ?? []),
-                    ...($contextReasons['dependency'] ?? []),
-                    ...$inferred->reasons,
-                    ...($inspection->hasDependencyBypass() ? ['Query requires explicit dependencies.'] : []),
-                ])))
-                : ($inferred->models === [] && $inferred->tables === []
-                    ? DependencySet::singleModel($modelClass)
-                    : new DependencySet(
-                        models: array_keys(array_flip([$modelClass, ...$inferred->models])),
-                        tables: $inferred->tables,
-                    )));
+        $dependencies = !$hasExplicit
+            && $inferred->safe
+            && $inferred->models === []
+            && $inferred->tables === []
+            && !$hasDependencyBypass
+            && !$hasContextDependencyBypass
+                ? DependencySet::singleModel($modelClass)
+                : $this->resolveDependencies(
+                    $modelClass,
+                    $context,
+                    $inspection,
+                    $explicitModels,
+                    $explicitTables,
+                    $hasExplicit,
+                );
 
-        // 2. Qualify Normalization
-        $normalizable = false;
-        $normalizationFlags = $inspection->normalizationFlags();
-        $hasContextNormalizationBypass = isset($contextReasons['normalization']);
+        if ($insideTransaction
+            || $inspection->hasSafetyBypass()
+            || isset($context->contextReasons['safety'])) {
+            return $this->safetyBypass($context, $inspection, $dependencies, $insideTransaction);
+        }
+
+        $normalizable = !$hasDependencyBypass
+            && !$hasContextDependencyBypass
+            && $inspection->normalizationFlags() === 0
+            && !isset($context->contextReasons['normalization']);
         $requiresPrimaryKeys = false;
 
-        if ($context->requiresNormalization()) {
-            $normalizable = !$insideTransaction
-                && !$inspection->hasSafetyBypass()
-                && !isset($contextReasons['safety'])
-                && !$inspection->hasDependencyBypass()
-                && !isset($contextReasons['dependency'])
-                && $normalizationFlags === 0
-                && !$hasContextNormalizationBypass;
-        }
-
-        // 3. Resolve Cache Mode
-        $hasResultDependencies = $hasExplicit || $inferred->models !== [] || $inferred->tables !== [];
-        $isResultStyleOperation = match ($context->operation) {
-            CacheOperation::Scalar,
-            CacheOperation::PaginationCount,
-            CacheOperation::Pivot,
-            CacheOperation::Through => true,
-            default => false,
-        };
-
-        if ($cacheSkipped || $cacheDisabled || isset($contextReasons['opted_out'])) {
-            $optedOutReasons = $this->resolveContextReasons(
-                $contextReasons,
-                cacheSkipped: $cacheSkipped,
-                cacheDisabled: $cacheDisabled,
-                insideTransaction: $insideTransaction,
-            )['opted_out'] ?? [];
-
-            return CachePlan::bypass(
-                operation: $context->operation,
-                dependencies: $dependencies,
-                reasons: $optedOutReasons,
-                bypassReasons: ['opted_out' => $optedOutReasons],
-            );
-        }
-
-        // Relation-specific bypass relaxations or strictness
-        if ($context->operation === CacheOperation::BelongsToEagerLoad || $context->operation === CacheOperation::MorphToEagerLoad) {
-            if ($inspection->primaryKeys === null) {
-                $requiresPrimaryKeys = true;
-                $normalizable = false;
-            }
-        }
-
-        if ($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through) {
-            // Pivot/Through operations allow exactly one join (to the intermediate table)
-            if ($normalizationFlags === QueryInspection::JOIN && count($base->joins ?? []) === 1) {
-                $normalizationFlags = 0;
-            }
-        }
-
-        if ($insideTransaction || $inspection->hasSafetyBypass() || isset($contextReasons['safety'])) {
-            $bypassReasons = BypassReasons::merge(
-                $this->resolveContextReasons(
-                    $contextReasons,
-                    cacheSkipped: false,
-                    cacheDisabled: false,
-                    insideTransaction: $insideTransaction,
-                ),
-                BypassReasons::fromInspection($inspection),
-            );
-            $safetyReasons = $bypassReasons['safety'] ?? [];
-
-            return CachePlan::bypass(
-                operation: $context->operation,
-                dependencies: $dependencies,
-                reasons: $safetyReasons,
-                bypassReasons: ['safety' => $safetyReasons],
-            );
+        if ($context->operation === CacheOperation::BelongsToEagerLoad
+            || $context->operation === CacheOperation::MorphToEagerLoad) {
+            $requiresPrimaryKeys = $inspection->primaryKeys === null;
+            $normalizable = $normalizable && !$requiresPrimaryKeys;
         }
 
         if ($normalizable && $dependencies->safe) {
             $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
 
-            if (!$slotting || !$isMultiDependency) {
+            if (!NormCache::isSlotting() || !$isMultiDependency) {
                 return CachePlan::normalized(
                     operation: $context->operation,
                     dependencies: $dependencies,
@@ -178,46 +283,322 @@ final class CachePlanner
             }
         }
 
-        $isScalarLikeOperation = $context->operation === CacheOperation::Scalar
-            || $context->operation === CacheOperation::PaginationCount;
+        if ($dependencies->safe && $this->hasResultDependencies($context, $hasExplicit)) {
+            return $this->resultPlan($modelTable, $base, $context, $inspection, $dependencies, $normalizable);
+        }
 
-        if (
-            $isScalarLikeOperation
+        return $this->bypassPlan(
+            $context,
+            $inspection,
+            $dependencies,
+            requiresPrimaryKeys: $requiresPrimaryKeys,
+        );
+    }
+
+    private function planInspectedResult(
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        ?array $explicitModels,
+        array $explicitTables,
+        bool $hasExplicit,
+        bool $insideTransaction,
+        bool $explain,
+        bool $scalarLike = false,
+        bool $strictRelation = false,
+    ): CachePlan {
+        $modelClass = $model::class;
+        $modelTable = $model->getTable();
+        $inferred = $context->inferredDependencies;
+
+        $inspection = $this->inspect($model, $base, $context, $explain);
+        $dependencies = $this->resolveDependencies(
+            $modelClass,
+            $context,
+            $inspection,
+            $explicitModels,
+            $explicitTables,
+            $hasExplicit,
+        );
+
+        if ($bypass = $this->safetyBypass($context, $inspection, $dependencies, $insideTransaction)) {
+            return $bypass;
+        }
+
+        if ($scalarLike
             && !$hasExplicit
             && $inferred->models === []
             && $inferred->tables === []
             && $dependencies->safe
-            && (!empty($base->joins) || !empty($base->unions) || !is_string($base->from) || $base->from !== $modelTable)
+            && (!empty($base->joins)
+                || !empty($base->unions)
+                || !is_string($base->from)
+                || $base->from !== $modelTable)
         ) {
             $dependencies = DependencySet::unsafe(['complex_query_requires_depends_on']);
         }
 
-        if ($dependencies->safe && ($hasResultDependencies || $isResultStyleOperation)) {
-            $isStrictRelation = $context->operation === CacheOperation::Pivot
-                || $context->operation === CacheOperation::Through;
+        $normalizationFlags = $inspection->normalizationFlags();
+        $hasContextNormalizationBypass = isset($context->contextReasons['normalization']);
 
-            if (!$isStrictRelation || ($normalizationFlags === 0 && !$hasContextNormalizationBypass)) {
-                if (config('app.debug', false)) {
-                    $this->checkDependencyCompleteness(
-                        $inspection->tables ?? $this->analyzer->extractTables($base, $modelTable),
-                        $dependencies,
-                        $modelTable,
-                    );
+        if ($strictRelation
+            && $normalizationFlags === QueryInspection::JOIN
+            && count($base->joins ?? []) === 1) {
+            $normalizationFlags = 0;
+        }
+
+        if ($dependencies->safe
+            && (!$strictRelation || ($normalizationFlags === 0 && !$hasContextNormalizationBypass))) {
+            return $this->resultPlan($modelTable, $base, $context, $inspection, $dependencies);
+        }
+
+        return $this->bypassPlan(
+            $context,
+            $inspection,
+            $dependencies,
+            relaxedRelationNormalization: $strictRelation
+                && $normalizationFlags === 0
+                && !$hasContextNormalizationBypass,
+        );
+    }
+
+    private function trySimpleScalarPlan(
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+    ): ?CachePlan {
+        $inferred = $context->inferredDependencies;
+
+        if (!$inferred->safe || $inferred->models !== [] || $inferred->tables !== []) {
+            return null;
+        }
+
+        $flags = $this->analyzer->flags($base, $model->getTable(), null);
+
+        if (($flags & self::SIMPLE_RESULT_BYPASS_FLAGS) !== 0) {
+            return null;
+        }
+
+        return CachePlan::result(
+            operation: $context->operation,
+            dependencies: DependencySet::singleModel($model::class),
+            columns: $context->columns,
+        );
+    }
+
+    private function trySimplePaginationCountPlan(
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+    ): ?CachePlan {
+        $inferred = $context->inferredDependencies;
+        $modelTable = $model->getTable();
+
+        if (!$inferred->safe || $inferred->models !== [] || $inferred->tables !== []) {
+            return null;
+        }
+
+        if (!empty($base->joins)
+            || !empty($base->unions)
+            || !is_string($base->from)
+            || $base->from !== $modelTable) {
+            return null;
+        }
+
+        if (!empty($base->lock)
+            || !empty($base->groups)
+            || !empty($base->havings)) {
+            return null;
+        }
+
+        if (!empty($base->wheres)) {
+            foreach ($base->wheres as $where) {
+                $type = $where['type'] ?? null;
+
+                if ($type === 'Raw' || $type === 'raw' || isset(QueryAnalyzer::SUBQUERY_WHERE_TYPES[$type])) {
+                    return null;
                 }
-
-                return CachePlan::result(
-                    operation: $context->operation,
-                    dependencies: $dependencies,
-                    normalizable: $normalizable,
-                    columns: $context->columns,
-                    primaryKeys: $inspection->primaryKeys,
-                );
             }
+        }
+
+        return CachePlan::result(
+            operation: $context->operation,
+            dependencies: DependencySet::singleModel($model::class),
+            columns: $context->columns,
+        );
+    }
+
+    private function inspect(
+        Model $model,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        bool $includeTables,
+        bool $includePrimaryKeys = false,
+    ): QueryInspection {
+        return $this->analyzer->inspect(
+            $base,
+            $model->getTable(),
+            $context->columns,
+            $includePrimaryKeys
+                ? [$model->getKeyName(), $model->getQualifiedKeyName()]
+                : [],
+            $includeTables,
+        );
+    }
+
+    private function resolveDependencies(
+        string $modelClass,
+        CachePlanContext $context,
+        QueryInspection $inspection,
+        ?array $explicitModels,
+        array $explicitTables,
+        bool $hasExplicit,
+    ): DependencySet {
+        $inferred = $context->inferredDependencies;
+
+        if ($hasExplicit) {
+            return new DependencySet(
+                models: array_keys(array_flip([
+                    $modelClass,
+                    ...$inferred->models,
+                    ...($explicitModels ?? []),
+                ])),
+                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
+            );
+        }
+
+        if ($inspection->hasDependencyBypass()
+            || isset($context->contextReasons['dependency'])
+            || !$inferred->safe) {
+            return DependencySet::unsafe(array_values(array_unique([
+                ...(BypassReasons::fromInspection($inspection)['dependency'] ?? []),
+                ...($context->contextReasons['dependency'] ?? []),
+                ...$inferred->reasons,
+                ...($inspection->hasDependencyBypass() ? ['Query requires explicit dependencies.'] : []),
+            ])));
+        }
+
+        if ($inferred->models === [] && $inferred->tables === []) {
+            return DependencySet::singleModel($modelClass);
+        }
+
+        return new DependencySet(
+            models: array_keys(array_flip([$modelClass, ...$inferred->models])),
+            tables: $inferred->tables,
+        );
+    }
+
+    private function baseDependencies(
+        CacheableBuilder $builder,
+        Model $model,
+        CachePlanContext $context,
+    ): DependencySet {
+        $modelClass = $model::class;
+        $inferred = $context->inferredDependencies;
+        $explicitModels = $builder->explicitDependencies();
+        $explicitTables = $builder->explicitTableDependencies();
+
+        if ($explicitModels !== null || $explicitTables !== []) {
+            return new DependencySet(
+                models: array_keys(array_flip([
+                    $modelClass,
+                    ...$inferred->models,
+                    ...($explicitModels ?? []),
+                ])),
+                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
+            );
+        }
+
+        if (!$inferred->safe || isset($context->contextReasons['dependency'])) {
+            return DependencySet::unsafe(array_values(array_unique([
+                ...($context->contextReasons['dependency'] ?? []),
+                ...$inferred->reasons,
+            ])));
+        }
+
+        if ($inferred->models === [] && $inferred->tables === []) {
+            return DependencySet::singleModel($modelClass);
+        }
+
+        return new DependencySet(
+            models: array_keys(array_flip([$modelClass, ...$inferred->models])),
+            tables: $inferred->tables,
+        );
+    }
+
+    private function safetyBypass(
+        CachePlanContext $context,
+        QueryInspection $inspection,
+        DependencySet $dependencies,
+        bool $insideTransaction,
+    ): ?CachePlan {
+        if (!$insideTransaction
+            && !$inspection->hasSafetyBypass()
+            && !isset($context->contextReasons['safety'])) {
+            return null;
         }
 
         $bypassReasons = BypassReasons::merge(
             $this->resolveContextReasons(
-                $contextReasons,
+                $context->contextReasons,
+                cacheSkipped: false,
+                cacheDisabled: false,
+                insideTransaction: $insideTransaction,
+            ),
+            BypassReasons::fromInspection($inspection),
+        );
+        $reasons = $bypassReasons['safety'] ?? [];
+
+        return CachePlan::bypass(
+            operation: $context->operation,
+            dependencies: $dependencies,
+            reasons: $reasons,
+            bypassReasons: ['safety' => $reasons],
+        );
+    }
+
+    private function hasResultDependencies(CachePlanContext $context, bool $hasExplicit): bool
+    {
+        return $hasExplicit
+            || $context->inferredDependencies->models !== []
+            || $context->inferredDependencies->tables !== [];
+    }
+
+    private function resultPlan(
+        string $modelTable,
+        QueryBuilder $base,
+        CachePlanContext $context,
+        QueryInspection $inspection,
+        DependencySet $dependencies,
+        bool $normalizable = false,
+    ): CachePlan {
+        if (config('app.debug', false)) {
+            $this->checkDependencyCompleteness(
+                $inspection->tables ?? $this->analyzer->extractTables($base, $modelTable),
+                $dependencies,
+                $modelTable,
+            );
+        }
+
+        return CachePlan::result(
+            operation: $context->operation,
+            dependencies: $dependencies,
+            normalizable: $normalizable,
+            columns: $context->columns,
+            primaryKeys: $inspection->primaryKeys,
+        );
+    }
+
+    private function bypassPlan(
+        CachePlanContext $context,
+        QueryInspection $inspection,
+        DependencySet $dependencies,
+        bool $requiresPrimaryKeys = false,
+        bool $relaxedRelationNormalization = false,
+    ): CachePlan {
+        $bypassReasons = BypassReasons::merge(
+            $this->resolveContextReasons(
+                $context->contextReasons,
                 cacheSkipped: false,
                 cacheDisabled: false,
                 insideTransaction: false,
@@ -229,9 +610,7 @@ final class CachePlanner
             $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
         }
 
-        if (($context->operation === CacheOperation::Pivot || $context->operation === CacheOperation::Through)
-            && $normalizationFlags === 0
-            && !$hasContextNormalizationBypass) {
+        if ($relaxedRelationNormalization) {
             unset($bypassReasons['normalization']);
         }
 

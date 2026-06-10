@@ -10,11 +10,14 @@ use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\PreparedQuery;
 
 class CacheableBelongsTo extends BelongsTo
 {
+    use CollectsRelatedModels;
+
     private array $eagerKeys = [];
 
     public function addEagerConstraints(array $models): void
@@ -81,20 +84,8 @@ class CacheableBelongsTo extends BelongsTo
 
     private function isSimplePkEagerLoad(QueryBuilder $base, CacheableBuilder $builder): bool
     {
-        if ($builder->isCacheSkipped()
-            || !NormCache::isEnabled()
-            || $builder->getModel()->getConnection()->transactionLevel() > 0
-            || !empty($base->joins)
-            || !empty($base->orders)
-            || !empty($base->groups)
-            || !empty($base->havings)
-            || !empty($base->unions)
-            || $base->limit !== null
-            || $base->offset > 0
-            || $base->distinct
-            || ($base->lock !== null && $base->lock !== false)
-            || $builder->explicitDependencies() !== null
-            || $builder->explicitTableDependencies() !== []) {
+        if (RelationCacheGuards::blocksBypass($builder, $base)
+            || RelationCacheGuards::hasOrderingOrJoins($base)) {
             return false;
         }
 
@@ -127,15 +118,6 @@ class CacheableBelongsTo extends BelongsTo
             return $this->related->newCollection();
         }
 
-        $builder = $prepared->builder;
-        $models = $builder->getModels();
-
-        if (count($models) > 0) {
-            $models = $builder->eagerLoadRelations($models);
-        }
-
-        return $prepared->applyAfterCallbacks(
-            $this->related->newCollection($models)
-        );
+        return $this->collectFromPreparedBuilder($prepared);
     }
 }

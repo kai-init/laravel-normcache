@@ -6,25 +6,29 @@ use NormCache\Enums\CacheOperation;
 
 final readonly class CachePlanContext
 {
+    public DependencySet $inferredDependencies;
+
     public function __construct(
         public CacheOperation $operation,
         public ?array $columns = null,
-        public DependencySet $inferredDependencies = new DependencySet,
+        ?DependencySet $inferredDependencies = null,
         public array $contextReasons = [],
         public ?string $kind = null,
-    ) {}
+    ) {
+        $this->inferredDependencies = $inferredDependencies ?? DependencySet::empty();
+    }
 
-    public static function models(?array $columns = null, DependencySet $inferred = new DependencySet): self
+    public static function models(?array $columns = null, ?DependencySet $inferred = null): self
     {
         return new self(CacheOperation::Models, $columns, $inferred);
     }
 
-    public static function scalar(string $kind, array $columns = [], DependencySet $inferred = new DependencySet): self
+    public static function scalar(string $kind, array $columns = [], ?DependencySet $inferred = null, array $contextReasons = []): self
     {
-        return new self(CacheOperation::Scalar, $columns, $inferred, kind: $kind);
+        return new self(CacheOperation::Scalar, $columns, $inferred, $contextReasons, $kind);
     }
 
-    public static function paginationCount(DependencySet $inferred = new DependencySet): self
+    public static function paginationCount(?DependencySet $inferred = null): self
     {
         return new self(CacheOperation::PaginationCount, null, $inferred, kind: 'pagination_count');
     }
@@ -39,20 +43,13 @@ final readonly class CachePlanContext
         return new self(CacheOperation::MorphToEagerLoad, kind: $type);
     }
 
-    public static function pivot(array $columns = [], DependencySet $inferred = new DependencySet): self
+    public static function pivot(array $columns = [], ?DependencySet $inferred = null): self
     {
         return new self(CacheOperation::Pivot, $columns, $inferred);
     }
 
-    public static function through(array $columns = [], DependencySet $inferred = new DependencySet): self
+    public static function through(array $columns = [], ?DependencySet $inferred = null): self
     {
         return new self(CacheOperation::Through, $columns, $inferred);
-    }
-
-    public function requiresNormalization(): bool
-    {
-        return $this->operation === CacheOperation::Models
-            || $this->operation === CacheOperation::BelongsToEagerLoad
-            || $this->operation === CacheOperation::MorphToEagerLoad;
     }
 }

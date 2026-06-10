@@ -15,10 +15,8 @@ use NormCache\Enums\CacheStrategy;
 use NormCache\Enums\PlanningMode;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -38,8 +36,6 @@ class CacheableBuilder extends Builder
     private static array $validatedModelClasses = [];
 
     private static ?CachePlanner $sharedPlanner = null;
-
-    private static ?QueryAnalyzer $sharedAnalyzer = null;
 
     private bool $skipCache = false;
 
@@ -175,7 +171,7 @@ class CacheableBuilder extends Builder
         $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            (new AggregateDependencyCollector)->collect($executionBuilder)->dependencies
+            $executionBuilder->inferAggregateDependencies()
         ), PlanningMode::Explain);
 
         return match ($plan->strategy) {
@@ -222,7 +218,7 @@ class CacheableBuilder extends Builder
 
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, $columns),
-            (new AggregateDependencyCollector)->collect($prepared->builder)->dependencies
+            $prepared->builder->inferAggregateDependencies()
         ));
 
         return match ($plan->strategy) {
@@ -301,7 +297,7 @@ class CacheableBuilder extends Builder
 
         $prepared = $this->prepareCacheExecution();
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::paginationCount(
-            (new AggregateDependencyCollector)->collect($prepared->builder)->dependencies
+            $prepared->builder->inferAggregateDependencies()
         ));
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {
@@ -480,11 +476,6 @@ class CacheableBuilder extends Builder
     private function planner(): CachePlanner
     {
         return self::$sharedPlanner ??= new CachePlanner;
-    }
-
-    private function analyzer(): QueryAnalyzer
-    {
-        return self::$sharedAnalyzer ??= new QueryAnalyzer;
     }
 
     private function getFromCacheableQuery(

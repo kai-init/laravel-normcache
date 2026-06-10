@@ -10,7 +10,6 @@ use Illuminate\Support\Arr;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\AggregateDependencyCollector;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
@@ -20,6 +19,8 @@ use NormCache\Values\PreparedQuery;
 /** @mixin BelongsToMany */
 trait CachesPivotRelation
 {
+    use CollectsRelatedModels;
+
     private static array $planCache = [];
 
     private array $eagerParentIds = [];
@@ -181,7 +182,7 @@ trait CachesPivotRelation
         if (!array_key_exists($constraintHash, self::$planCache)) {
             $plan = $builder->cachePlan($base, CachePlanContext::pivot(
                 $resolvedColumns ?? [],
-                (new AggregateDependencyCollector)->collect($builder)->dependencies
+                $builder->inferAggregateDependencies()
             ));
             self::$planCache[$constraintHash] = $plan->mode === CacheMode::Result;
         }
@@ -313,18 +314,10 @@ trait CachesPivotRelation
         PreparedQuery $prepared,
         bool $applyAfterCallbacks = true,
     ): Collection {
-        $builder = $prepared->builder;
-        $models = $builder->getModels();
-        $this->hydratePivotRelation($models);
-
-        if (count($models) > 0) {
-            $models = $builder->eagerLoadRelations($models);
-        }
-
-        $collection = $this->related->newCollection($models);
-
-        return $applyAfterCallbacks
-            ? $prepared->applyAfterCallbacks($collection)
-            : $collection;
+        return $this->collectFromPreparedBuilder(
+            $prepared,
+            $applyAfterCallbacks,
+            fn(array $models) => $this->hydratePivotRelation($models),
+        );
     }
 }

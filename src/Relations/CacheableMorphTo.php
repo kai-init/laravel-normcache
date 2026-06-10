@@ -10,6 +10,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheMode;
 use NormCache\Facades\NormCache;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlanContext;
 
 class CacheableMorphTo extends MorphTo
@@ -106,20 +107,8 @@ class CacheableMorphTo extends MorphTo
     {
         // At this point only global scopes (e.g. soft-delete) have been applied — no FK constraints yet.
         // Accept only an optional soft-delete Null where; reject everything else.
-        if ($builder->isCacheSkipped()
-            || !NormCache::isEnabled()
-            || $builder->getModel()->getConnection()->transactionLevel() > 0
-            || !empty($base->joins)
-            || !empty($base->orders)
-            || !empty($base->groups)
-            || !empty($base->havings)
-            || !empty($base->unions)
-            || $base->limit !== null
-            || $base->offset > 0
-            || $base->distinct
-            || ($base->lock !== null && $base->lock !== false)
-            || $builder->explicitDependencies() !== null
-            || $builder->explicitTableDependencies() !== []) {
+        if (RelationCacheGuards::blocksBypass($builder, $base)
+            || RelationCacheGuards::hasOrderingOrJoins($base)) {
             return false;
         }
 
