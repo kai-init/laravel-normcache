@@ -105,27 +105,6 @@ final class QueryAnalyzer
         return array_values(array_unique($tables));
     }
 
-    public function directPrimaryKeys(
-        QueryBuilder $base,
-        string $table,
-        ?array $resolvedColumns,
-        array $primaryKeyIdentifiers,
-    ): ?array {
-        if ($base->from !== $table
-            || !empty($base->joins)
-            || !empty($base->groups)
-            || !empty($base->havings)
-            || !empty($base->unions)
-            || !empty($base->aggregate)
-            || !empty($base->distinct)
-            || $base->lock !== null
-            || ProjectionClassifier::hasCalculatedColumns($resolvedColumns)) {
-            return null;
-        }
-
-        return self::extractPrimaryKeys($base, $primaryKeyIdentifiers);
-    }
-
     public static function extractPrimaryKeys(QueryBuilder $base, array $primaryKeyIdentifiers): ?array
     {
         if ($base->offset > 0) {

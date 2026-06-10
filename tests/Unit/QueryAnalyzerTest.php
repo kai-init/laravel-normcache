@@ -123,10 +123,11 @@ class QueryAnalyzerTest extends TestCase
         ]];
         $query->orders = [['type' => 'Raw', 'sql' => 'CASE WHEN id = 1 THEN 0 END']];
 
-        $this->assertSame(
-            [1],
-            (new QueryAnalyzer)->directPrimaryKeys($query, 'authors', null, ['id', 'authors.id']),
-        );
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id', 'authors.id']);
+
+        $this->assertSame([1], $inspection->primaryKeys);
+        $this->assertSame(0, $inspection->normalizationFlags());
+        $this->assertFalse($inspection->hasSafetyBypass());
     }
 
     public function test_direct_primary_key_inspection_rejects_structural_query_shapes(): void
@@ -140,9 +141,9 @@ class QueryAnalyzerTest extends TestCase
         ]];
         $query->groups = ['id'];
 
-        $this->assertNull(
-            (new QueryAnalyzer)->directPrimaryKeys($query, 'authors', null, ['id', 'authors.id']),
-        );
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id', 'authors.id']);
+
+        $this->assertNotSame(0, $inspection->normalizationFlags());
     }
 
     private function makeBaseQuery(?array $columns = null, string $from = 'authors'): Builder

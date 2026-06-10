@@ -181,29 +181,6 @@ final class CachePlanner
         $explicitTables = $builder->explicitTableDependencies();
         $hasExplicit = $explicitModels !== null || $explicitTables !== [];
 
-        if (!$explain
-            && !$insideTransaction
-            && !$hasExplicit
-            && $context->contextReasons === []
-            && $inferred->safe
-            && $inferred->models === []
-            && $inferred->tables === []) {
-            $directIds = $this->analyzer->directPrimaryKeys(
-                $base,
-                $modelTable,
-                $context->columns,
-                [$model->getKeyName(), $model->getQualifiedKeyName()],
-            );
-
-            if ($directIds !== null) {
-                return CachePlan::direct(
-                    operation: $context->operation,
-                    dependencies: DependencySet::singleModel($modelClass),
-                    primaryKeys: $directIds,
-                );
-            }
-        }
-
         $inspection = $this->analyzer->inspect(
             $base,
             $modelTable,
@@ -211,6 +188,24 @@ final class CachePlanner
             [$model->getKeyName(), $model->getQualifiedKeyName()],
             includeTables: $explain,
         );
+
+        if (!$explain
+            && !$insideTransaction
+            && !$hasExplicit
+            && $context->contextReasons === []
+            && $inferred->safe
+            && $inferred->models === []
+            && $inferred->tables === []
+            && $inspection->primaryKeys !== null
+            && $inspection->normalizationFlags() === 0
+            && !$inspection->hasSafetyBypass()) {
+            return CachePlan::direct(
+                operation: $context->operation,
+                dependencies: DependencySet::singleModel($modelClass),
+                primaryKeys: $inspection->primaryKeys,
+            );
+        }
+
         $hasDependencyBypass = $inspection->hasDependencyBypass();
         $hasContextDependencyBypass = isset($context->contextReasons['dependency']);
 
