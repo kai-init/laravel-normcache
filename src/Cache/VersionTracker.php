@@ -35,7 +35,7 @@ final class VersionTracker
 
         foreach ($versionKeys as $i => $verKey) {
             if (!isset($map[$verKey])) {
-                $map[$verKey] = (string) ($this->store->eval($script, [$verKey, $scheduledKeys[$i]], [$nowMs]) ?? '0');
+                $map[$verKey] = (string) ($this->store->script($script, [$verKey, $scheduledKeys[$i]], [$nowMs]) ?? '0');
             }
         }
 
@@ -70,7 +70,7 @@ final class VersionTracker
 
     private function fetchVersionWithCooldown(string $classKey): mixed
     {
-        return $this->store->eval(
+        return $this->store->script(
             RedisScripts::get('fetch_version_with_cooldown'),
             [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
             [(string) (int) floor(microtime(true) * 1000)]

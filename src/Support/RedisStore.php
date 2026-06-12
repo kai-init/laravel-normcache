@@ -74,7 +74,7 @@ final class RedisStore
     /** SET NX EX — returns true if the lock was claimed. */
     public function setNxEx(string $key, string $value, int $ttl): bool
     {
-        $result = $this->eval(
+        $result = $this->script(
             "return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2]))",
             [$key],
             [$value, (string) $ttl]
@@ -97,7 +97,7 @@ final class RedisStore
     /** DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock. */
     public function releaseBuilding(string $buildingKey, string $wakeKey, ?string $token = null): bool
     {
-        return (bool) $this->eval(
+        return (bool) $this->script(
             RedisScripts::get('release_building'),
             [$buildingKey, $wakeKey],
             [$token ?? '']
@@ -117,7 +117,7 @@ final class RedisStore
             return true;
         }
 
-        return (bool) $this->eval(
+        return (bool) $this->script(
             RedisScripts::get('store_if_versions_match_and_release'),
             [$key, $buildingKey, $wakeKey ?? ''],
             ['0', (string) $ttl, $value, $token ?? '']
@@ -131,7 +131,7 @@ final class RedisStore
 
     public function incrementAndExpire(string $key, int $ttl): int
     {
-        return (int) $this->eval(
+        return (int) $this->script(
             "local v = redis.call('INCR', KEYS[1]); redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])); return v",
             [$key],
             [(string) $ttl]
@@ -220,7 +220,7 @@ final class RedisStore
         $script = RedisScripts::get('set_many_tracked_if_version');
 
         foreach (array_chunk($attrsByKey, 500, true) as $chunk) {
-            $this->eval(
+            $this->script(
                 $script,
                 array_merge([$versionKey, $memberKey], array_keys($chunk)),
                 array_merge(
@@ -234,7 +234,7 @@ final class RedisStore
     /** Delete a key and remove it from a tracking set in one atomic operation. */
     public function deleteFromSet(string $key, string $memberKey): void
     {
-        $this->eval(
+        $this->script(
             "redis.call('DEL', KEYS[1]); redis.call('SREM', KEYS[2], KEYS[1])",
             [$key, $memberKey]
         );
@@ -315,7 +315,7 @@ final class RedisStore
     }
 
     /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
-    public function eval(string $script, array $keys, array $args = []): mixed
+    public function script(string $script, array $keys, array $args = []): mixed
     {
         $prefixedKeys = array_map(fn($k) => $k === '' ? '' : $this->prefix($k), $keys);
 

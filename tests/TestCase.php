@@ -174,7 +174,7 @@ abstract class TestCase extends OrchestraTestCase
         $queryTtl ??= (int) config('normcache.query_ttl');
 
         $slottingActive = $cluster && $slotting;
-        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slottingActive ? '' : '{nc}:');
+        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
         $result = new ResultExecutor;
@@ -183,7 +183,7 @@ abstract class TestCase extends OrchestraTestCase
             queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
             resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
             result: $result,
-            hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
+            hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,
             engine: new ExecutionEngine,
             store: $store,

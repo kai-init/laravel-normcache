@@ -68,10 +68,6 @@ class CacheableMorphTo extends MorphTo
 
     private function cacheableInstanceForType(string $type): ?Model
     {
-        if (!empty($this->macroBuffer)) {
-            return null;
-        }
-
         $class = Model::getActualClassNameForMorph($type);
 
         if (isset($this->morphableConstraints[$class]) || isset($this->morphableEagerLoadCounts[$class])) {
@@ -80,6 +76,10 @@ class CacheableMorphTo extends MorphTo
 
         $instance = $this->createModelByType($type);
         $query = $instance->newQuery();
+
+        if (!empty($this->macroBuffer)) {
+            $query = $this->replayMacros($query);
+        }
 
         if ($this->ownerKey !== null && $this->ownerKey !== $instance->getKeyName()) {
             return null;
@@ -129,7 +129,16 @@ class CacheableMorphTo extends MorphTo
         $class = $instance::class;
         $ids = array_values($this->gatherKeysByType($type, $instance->getKeyType()));
 
-        $models = NormCache::getModels($ids, $class, $columns, null, $this->query, false);
+        $missedQuery = $this->query;
+        if (!empty($this->macroBuffer)) {
+            $queryWithMacros = $this->replayMacros($instance->newQuery());
+            if ($queryWithMacros instanceof CacheableBuilder) {
+                $queryWithMacros->withoutCache();
+            }
+            $missedQuery = $queryWithMacros->mergeConstraintsFrom($this->query);
+        }
+
+        $models = NormCache::getModels($ids, $class, $columns, null, $missedQuery, false);
         $collection = $instance->newCollection($models);
 
         $eagerLoads = $this->morphableEagerLoads[$class] ?? [];

@@ -111,7 +111,7 @@ class RedisStoreTest extends TestCase
         $script = "return redis.call('GET', KEYS[1])";
         $this->store->set('foo', 'bar', 60);
 
-        $result = $this->store->eval($script, ['foo']);
+        $result = $this->store->script($script, ['foo']);
 
         $this->assertSame('bar', $this->store->unserialize($result));
     }
@@ -376,10 +376,10 @@ class RedisStoreTest extends TestCase
 
         // Pass a dummy key so Predis cluster can route the command to a slot.
         // The script ignores KEYS and only reads ARGV[1].
-        $result = $this->store->eval($script, ['foo'], ['hello']);
+        $result = $this->store->script($script, ['foo'], ['hello']);
         $this->assertSame('hello', $result);
 
-        $result = $this->store->eval($script, ['foo'], ['world']);
+        $result = $this->store->script($script, ['foo'], ['world']);
         $this->assertSame('world', $result);
     }
 
@@ -392,7 +392,7 @@ class RedisStoreTest extends TestCase
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
 
-        $result = $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+        $result = $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
         $this->assertSame('7', $result);
     }
@@ -407,7 +407,7 @@ class RedisStoreTest extends TestCase
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '2');
-        $store->eval($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+        $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
 
         $shas = (new ReflectionProperty(RedisStore::class, 'shas'))->getValue();
         $this->assertArrayHasKey($script, $shas);

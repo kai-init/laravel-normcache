@@ -97,7 +97,7 @@ final class NormalizedCacheReader
         $ttl ??= $this->queryTtl;
 
         if (!empty($versionKeys)) {
-            $this->store->eval(
+            $this->store->script(
                 RedisScripts::get('store_if_versions_match_and_release'),
                 array_merge($versionKeys, [
                     $key,
@@ -142,7 +142,7 @@ final class NormalizedCacheReader
 
     private function luaFetchVersionedQuery(string $classKey, string $hash, ?string $tag, string $lockToken): mixed
     {
-        return $this->store->eval(RedisScripts::get('fetch_versioned_query'), [
+        return $this->store->script(RedisScripts::get('fetch_versioned_query'), [
             $this->keys->verKey($classKey),
             $this->keys->scheduledKey($classKey),
             $this->keys->queryPrefix($classKey, $tag),
@@ -156,7 +156,7 @@ final class NormalizedCacheReader
         string $queryPrefix, string $modelPrefix, string $buildingPrefix,
         string $hash, string $lockToken,
     ): mixed {
-        return $this->store->eval(
+        return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $modelPrefix, $buildingPrefix]),
             [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]

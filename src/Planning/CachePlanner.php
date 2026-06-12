@@ -417,7 +417,6 @@ final class CachePlanner
                 ...($inspection !== null ? BypassReasons::fromInspection($inspection)['dependency'] ?? [] : []),
                 ...($context->contextReasons['dependency'] ?? []),
                 ...$inferred->reasons,
-                ...($hasDependencyBypass ? ['Query requires explicit dependencies.'] : []),
             ])));
         }
 

@@ -185,7 +185,7 @@ final class ResultCacheReader
             return $written;
         }
 
-        return (bool) $this->store->eval(
+        return (bool) $this->store->script(
             RedisScripts::get('store_many_versioned'),
             array_merge($versionKeys, array_keys($entries), [
                 $buildingKey ?? '',
@@ -224,7 +224,7 @@ final class ResultCacheReader
             return $written;
         }
 
-        return (bool) $this->store->eval(
+        return (bool) $this->store->script(
             RedisScripts::get('store_if_versions_match_and_release'),
             array_merge($versionKeys, [
                 $key,
@@ -260,7 +260,7 @@ final class ResultCacheReader
         string $resultPrefix, string $buildingPrefix,
         string $hash, string $lockSuffix, string $lockToken
     ): array {
-        $result = $this->store->eval(
+        $result = $this->store->script(
             RedisScripts::get('fetch_versioned_result'),
             array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix]),
             [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
@@ -274,7 +274,7 @@ final class ResultCacheReader
         string $constraintHash, array $parentIds,
         array $versionKeys, array $scheduledKeys
     ): array {
-        $result = $this->store->eval(
+        $result = $this->store->script(
             RedisScripts::get('fetch_versioned_pivot'),
             array_merge($versionKeys, $scheduledKeys, [$this->keys->pivotBasePrefix($parentKey, $relatedKey)]),
             array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds)

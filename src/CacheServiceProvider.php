@@ -52,7 +52,7 @@ class CacheServiceProvider extends ServiceProvider
                 queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
                 resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
                 result: new ResultExecutor,
-                hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved),
+                hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
                 versions: $versions,
                 engine: new ExecutionEngine,
                 store: $store,

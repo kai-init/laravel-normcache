@@ -55,7 +55,7 @@ class MorphToCacheTest extends TestCase
         $post = Post::create(['title' => 'Hello', 'author_id' => Author::create(['name' => 'Alice'])->id]);
         Comment::create(['body' => 'Hi', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
 
-        Post::find($post->id);
+        Post::find($post->id); // Warm up cache
 
         DB::enableQueryLog();
         Comment::with(['commentable' => fn($q) => $q->withTrashed()])->get();
@@ -64,7 +64,7 @@ class MorphToCacheTest extends TestCase
 
         $sqlTables = array_column($queries, 'query');
         $hitDb = count(array_filter($sqlTables, fn($q) => str_contains($q, '"posts"'))) > 0;
-        $this->assertTrue($hitDb, 'withTrashed() macro should force DB fallback');
+        $this->assertFalse($hitDb, 'withTrashed() macro should now use cache instead of forcing DB fallback');
     }
 
     public function test_morph_to_falls_back_when_per_type_constraint_set(): void
@@ -89,16 +89,16 @@ class MorphToCacheTest extends TestCase
         $post = Post::create(['title' => 'Hello', 'author_id' => Author::create(['name' => 'Alice'])->id]);
         Comment::create(['body' => 'Nice', 'commentable_id' => $post->id, 'commentable_type' => Post::class]);
 
-        Comment::with('commentable')->get();
+        Post::find($post->id); // Warm up cache
 
         DB::enableQueryLog();
-        $comments = Comment::with(['commentable' => fn($q) => $q->select('id', 'title')])->get();
+        $comments = Comment::with(['commentable' => fn($q) => $q->select('id', 'title', 'author_id')])->get();
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
-        // Any constraint triggers the macroBuffer, which disables the MorphTo fast-path cache.
+        // Any constraint triggers the macroBuffer, but we now support caching it if it's a simple projection.
         $postQueries = array_filter($queries, fn($q) => str_contains($q['query'], '"posts"'));
-        $this->assertNotEmpty($postQueries);
+        $this->assertEmpty($postQueries, 'select() constraint should now use cache instead of forcing DB fallback');
         $this->assertNotNull($comments->first()->commentable);
         $this->assertSame('Hello', $comments->first()->commentable->title);
     }

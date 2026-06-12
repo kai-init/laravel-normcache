@@ -276,7 +276,7 @@ trait HandlesInvalidation
             return $this->store->getRaw($this->keys->verKey($classKey));
         }
 
-        return $this->store->eval(
+        return $this->store->script(
             RedisScripts::get('fetch_version_with_cooldown'),
             [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
             [(string) (int) floor(microtime(true) * 1000)]

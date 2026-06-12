@@ -9,6 +9,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 
 final class ModelHydrator
@@ -49,6 +50,8 @@ final class ModelHydrator
         private readonly VersionTracker $versions,
         private readonly int $ttl,
         private readonly bool $fireRetrieved,
+        private readonly int $buildingLockTtl = 5,
+        private readonly int $stampedeWaitMs = 200,
     ) {}
 
     public function getModels(
@@ -71,18 +74,19 @@ final class ModelHydrator
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
         $classKey = $this->keys->classKey($modelClass);
+        $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
+
+        $hits = [];
+        $lockKey = $wakeKey = $token = null;
 
         if ($raw === null) {
-            $prefix = $this->keys->modelPrefix($classKey);
-            $keys = [];
-            foreach ($ids as $id) {
-                $keys[] = $prefix . $id;
-            }
-            $raw = $this->store->getMany($keys);
-        }
+            [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $ids);
 
-        $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
-        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
+            [$status, $missed] = $this->fetchMissedViaLua($ids, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+        } else {
+            ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
+            $status = 'hit';
+        }
 
         if ($hits !== []) {
             CacheReporter::modelHit($modelClass, array_keys($hits), $debugbarStart, [
@@ -100,23 +104,104 @@ final class ModelHydrator
             'partial' => $hits !== [],
         ]);
 
-        $fetched = $this->fetchFromDatabaseAndCache(
-            $missed,
-            $modelClass,
-            $classKey,
-            $projection,
-            $missedQuery,
-            $preserveQueryShape,
-        );
+        if ($lockKey === null) {
+            [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
+
+            [$status, $missed] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+        }
+
+        if ($status === 'building' && $missed !== []) {
+            $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
+
+            [$status, $missed] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+        }
+
+        if ($status === 'miss') {
+            try {
+                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits);
+            } finally {
+                $this->store->releaseBuilding($lockKey, $wakeKey, $token);
+            }
+        } elseif ($missed !== []) {
+            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits);
+        }
 
         $ordered = [];
         foreach ($ids as $id) {
-            if (isset($hits[$id]) || isset($fetched[$id])) {
-                $ordered[] = $hits[$id] ?? $fetched[$id];
+            if (isset($hits[$id])) {
+                $ordered[] = $hits[$id];
             }
         }
 
         return $ordered;
+    }
+
+    /** Builds the building-lock key/wake-key/token triple for a set of model ids. */
+    private function buildLockTriple(string $classKey, array $ids): array
+    {
+        $sorted = $ids;
+        sort($sorted);
+        $lockSuffix = $this->keys->resultBuildIdentityHash('model', null, implode(',', $sorted));
+        $lockKey = $this->keys->resultBuildingKey($classKey, 'model', $lockSuffix);
+        $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
+        $token = $this->versions->buildLockToken();
+
+        return [$lockKey, $wakeKey, $token];
+    }
+
+    private function fetchMissedViaLua(
+        array $idsToFetch,
+        string $modelClass,
+        string $classKey,
+        ?array $projection,
+        ?Model $prototype,
+        string $lockKey,
+        string $token,
+        array &$hits,
+    ): array {
+        $prefix = $this->keys->modelPrefix($classKey);
+        $fetchKeys = [];
+        foreach ($idsToFetch as $id) {
+            $fetchKeys[] = $prefix . $id;
+        }
+
+        $result = $this->store->script(
+            RedisScripts::get('fetch_models_with_stampede'),
+            [...$fetchKeys, $lockKey],
+            [$token, (string) $this->buildingLockTtl]
+        );
+
+        $status = $result[0];
+        $retryRaw = $this->store->unserializeMany($result[1]);
+
+        ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $retryRaw, $projection, $prototype);
+
+        foreach ($newHits as $id => $hit) {
+            $hits[$id] = $hit;
+        }
+
+        return [$status, $stillMissed];
+    }
+
+    /** Fetches still-missing ids from the database, caches them, and merges into $hits by reference. */
+    private function fetchAndMerge(
+        array $missed,
+        string $modelClass,
+        string $classKey,
+        ?array $projection,
+        ?EloquentBuilder $missedQuery,
+        bool $preserveQueryShape,
+        array &$hits,
+    ): void {
+        if ($missed === []) {
+            return;
+        }
+
+        $fetched = $this->fetchFromDatabaseAndCache($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape);
+
+        foreach ($fetched as $id => $model) {
+            $hits[$id] = $model;
+        }
     }
 
     public function hydrateResult(array $payload, string|Model $model, bool $cached = true): array

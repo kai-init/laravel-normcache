@@ -2,6 +2,7 @@
 
 namespace NormCache\Support;
 
+use Illuminate\Support\Facades\Log;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Events\ModelCacheHit;
 use NormCache\Events\ModelCacheMiss;
@@ -63,6 +64,14 @@ final class CacheReporter
     {
         if (NormCache::isEventsEnabled()) {
             event(new QueryBypassed($modelClass, $bypassReasons));
+        }
+
+        if (config('app.debug', false) && !empty($bypassReasons['dependency'])) {
+            Log::warning(sprintf(
+                'NormCache Warning: Query on %s bypassed cache due to unsafe dependency inference (%s). Please provide explicit dependsOn() or dependsOnTables() to enable caching.',
+                $modelClass,
+                implode(', ', $bypassReasons['dependency'])
+            ));
         }
 
         NormCacheCollector::recordBypass($modelClass, $bypassReasons, $startTime);
