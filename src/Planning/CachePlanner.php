@@ -603,7 +603,7 @@ final class CachePlanner
         if (!empty($missing)) {
             $tablesStr = implode(', ', $missing);
             Log::warning(
-                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOnTable(). This is an under-declared dependency and can lead to stale cache reads."
+                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOnTables(). This is an under-declared dependency and can lead to stale cache reads."
             );
         }
     }

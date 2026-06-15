@@ -35,7 +35,7 @@ class CacheServiceProvider extends ServiceProvider
             $cooldown = (int) config('normcache.cooldown');
             $cluster = (bool) config('normcache.cluster', false);
             $enabled = (bool) config('normcache.enabled', true);
-            $events = (bool) config('normcache.events', true);
+            $events = (bool) config('normcache.events', false);
             $fallback = (bool) config('normcache.fallback', false);
             $fireRetrieved = (bool) config('normcache.fire_retrieved', false);
             $buildingLockTtl = (int) config('normcache.building_lock_ttl', 5);

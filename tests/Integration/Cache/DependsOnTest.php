@@ -677,7 +677,7 @@ class DependsOnTest extends TestCase
         Log::shouldReceive('warning')
             ->once()
             ->withArgs(function ($message) {
-                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOnTable()');
+                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOnTables()');
             });
 
         Post::query()
