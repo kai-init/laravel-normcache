@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -13,6 +14,7 @@ use NormCache\Support\QueryHasher;
 use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\PreparedQuery;
+use NormCache\Values\QueryInspection;
 
 trait CachesOneOrManyThrough
 {
@@ -125,15 +127,18 @@ trait CachesOneOrManyThrough
 
     private function isSimpleThroughQuery(Builder $base, CacheableBuilder $builder): bool
     {
-        // Standard HasManyThrough/HasOneThrough always has exactly one join (the intermediate table).
-        // The planner grants a bypass relaxation for this shape; validate it directly here.
+        // Standard HasManyThrough/HasOneThrough always has exactly one join (the intermediate table)
+        // The planner grants a bypass relaxation for this shape; validate it directly here
         if (RelationCacheGuards::blocksBypass($builder, $base)
             || count($base->joins ?? []) !== 1
             || ProjectionClassifier::hasCalculatedColumns($base->columns)) {
             return false;
         }
 
-        return true;
+        // The intermediate JOIN is the only relaxation this fast path is allowed to make
+        $flags = (new QueryAnalyzer)->flags($base, $base->from, $base->columns);
+
+        return ($flags & ~QueryInspection::JOIN) === 0;
     }
 
     private function cachePayloadFromResult(Collection $result): array

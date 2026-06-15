@@ -225,8 +225,10 @@ class CacheKeyBuilder
     /** Tags become raw key segments, so reserved key characters must be rejected. */
     public static function assertValidTag(string $tag): void
     {
-        if (preg_match('/[:{}\s*]/', $tag)) {
-            throw new \InvalidArgumentException('Cache tag must not contain reserved characters (: { } * or whitespace).');
+        if ($tag === '' || preg_match('/[:{}\s*]/', $tag)) {
+            throw new \InvalidArgumentException(
+                'Cache tag must be non-empty and must not contain reserved characters (: { } * or whitespace).'
+            );
         }
     }
 

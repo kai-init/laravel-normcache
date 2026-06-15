@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.2] — 2026-06-15
+
+### Fixed
+
+- Fixed cache-key collisions between `sum`, `avg`, `min`, `max`, and `exists` aggregates.
+- Through-relations with raw `where` bindings or subquery/`whereExists` predicates now bypass caching instead of risking collisions and stale reads.
+- `value('column as alias')` no longer errors; it returns `null`, matching native Eloquent.
+- `tag('')` is now rejected.
+- Made the `normcache.events` default consistently `false` across config, provider, and README.
+- Fixed the under-declared-dependency warning to reference `dependsOnTables()`.
+
+### Changed
+
+- `dependsOnTables()` now rejects reserved key characters in table names.
+- `normcache:flush` output now says "NormCache key(s)" rather than "model cache key(s)".
+
+---
+
 ## [2.1.1] — 2026-06-08
 
 ### Changed

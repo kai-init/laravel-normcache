@@ -700,6 +700,13 @@ class CacheableBuilderTest extends TestCase
         Author::query()->tag('homepage:{bad}:*')->get();
     }
 
+    public function test_tag_rejects_empty_string(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Author::query()->tag('')->get();
+    }
+
     private function clearGlobalScope(string $modelClass, string $name): void
     {
         $prop = new \ReflectionProperty(Model::class, 'globalScopes');

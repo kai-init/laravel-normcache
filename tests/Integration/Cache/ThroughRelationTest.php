@@ -186,6 +186,55 @@ class ThroughRelationTest extends TestCase
         $this->assertNotEmpty($queries, 'withoutCache() on HasManyThrough should issue a DB query');
     }
 
+    public function test_through_relation_raw_where_bindings_affect_cache_identity(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'A', 'author_id' => $author->id]);
+        Post::create(['title' => 'B', 'author_id' => $author->id]);
+
+        $first = $country->posts()
+            ->whereRaw('posts.title = ?', ['A'])
+            ->get();
+
+        $second = $country->posts()
+            ->whereRaw('posts.title = ?', ['B'])
+            ->get();
+
+        $this->assertSame(['A'], $first->pluck('title')->all());
+        $this->assertSame(['B'], $second->pluck('title')->all());
+    }
+
+    public function test_through_relation_subquery_where_does_not_go_stale(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        DB::table('comments')->insert([
+            'body' => 'c1',
+            'commentable_type' => Post::class,
+            'commentable_id' => $post->id,
+        ]);
+
+        $warm = $country->posts()
+            ->whereExists(function ($q) {
+                $q->from('comments')->whereColumn('comments.commentable_id', 'posts.id');
+            })
+            ->get();
+        $this->assertSame(['Hello'], $warm->pluck('title')->all());
+
+        // Remove the only comment: the whereExists no longer matches the post.
+        DB::table('comments')->where('commentable_id', $post->id)->delete();
+
+        $after = $country->posts()
+            ->whereExists(function ($q) {
+                $q->from('comments')->whereColumn('comments.commentable_id', 'posts.id');
+            })
+            ->get();
+
+        $this->assertSame([], $after->pluck('title')->all());
+    }
+
     public function test_through_wildcard_plus_extra_column_does_not_pollute_model_cache(): void
     {
         $country = Country::create(['name' => 'UK']);

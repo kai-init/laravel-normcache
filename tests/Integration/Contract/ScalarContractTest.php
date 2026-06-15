@@ -182,6 +182,27 @@ class ScalarContractTest extends TestCase
         );
     }
 
+    public function test_value_with_alias(): void
+    {
+        $this->fixtures();
+        // Native Eloquent returns null for an aliased value() projection
+        $this->contract(
+            fn() => Author::orderBy('name')->value('name as headline'),
+            fn() => Author::withoutCache()->orderBy('name')->value('name as headline'),
+        );
+        $this->assertNull(Author::orderBy('name')->value('name as headline'));
+    }
+
+    public function test_value_with_qualified_alias(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => Author::orderBy('name')->value('authors.name as headline'),
+            fn() => Author::withoutCache()->orderBy('name')->value('authors.name as headline'),
+        );
+        $this->assertNull(Author::orderBy('name')->value('authors.name as headline'));
+    }
+
     public function test_value_null_on_empty(): void
     {
         $this->contract(

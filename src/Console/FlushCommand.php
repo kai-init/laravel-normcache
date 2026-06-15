@@ -24,7 +24,7 @@ class FlushCommand extends Command
     {
         $count = NormCache::flushAll();
 
-        $this->info("Flushed {$count} model cache key(s).");
+        $this->info("Flushed {$count} NormCache key(s).");
 
         return Command::SUCCESS;
     }
