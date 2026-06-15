@@ -153,6 +153,11 @@ class CacheableBuilder extends Builder
         return $this->dependsOnTables;
     }
 
+    public function hasExplicitDependencies(): bool
+    {
+        return $this->dependsOn !== null || $this->dependsOnTables !== [];
+    }
+
     public function getQueryTtl(): ?int
     {
         return $this->queryTtl;

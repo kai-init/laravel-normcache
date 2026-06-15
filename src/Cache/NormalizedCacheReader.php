@@ -3,6 +3,7 @@
 namespace NormCache\Cache;
 
 use NormCache\Enums\CacheStatus;
+use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
@@ -28,17 +29,17 @@ final class NormalizedCacheReader
             $lockToken = $this->versions->buildLockToken();
             $result = $this->luaFetchVersionedQuery($classKey, $hash, $tag, $lockToken);
 
-            $status = $result[0] ?? 'building';
+            $status = LuaStatus::fromLua($result[0] ?? null);
             $version = $this->versions->normalizeVersion($result[1]);
             $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
             $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
 
             return $this->toQueryResult(
-                $status, $queryKey, $buildingKey, (string) (($status === 'miss' ? $result[2] : null) ?? $lockToken),
+                $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
                 [$this->keys->verKey($classKey)],
                 [(string) $version],
-                in_array($status, ['hit', 'stale']) ? $result[2] : null,
-                in_array($status, ['hit', 'stale']) ? $result[3] : null
+                $status->servesData() ? $result[2] : null,
+                $status->servesData() ? $result[3] : null
             );
         }
 
@@ -52,22 +53,22 @@ final class NormalizedCacheReader
             $hash, $lockToken
         );
 
-        $status = $result[0] ?? 'building';
+        $status = LuaStatus::fromLua($result[0] ?? null);
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         return $this->toQueryResult(
-            $status, $queryKey, $buildingKey, (string) (($status === 'miss' ? $result[2] : null) ?? $lockToken),
+            $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
             $versionKeys, $expectedVersions,
-            in_array($status, ['hit', 'stale']) ? $result[2] : null,
-            in_array($status, ['hit', 'stale']) ? $result[3] : null
+            $status->servesData() ? $result[2] : null,
+            $status->servesData() ? $result[3] : null
         );
     }
 
     private function toQueryResult(
-        string $status,
+        LuaStatus $status,
         string $queryKey,
         string $buildingKey,
         string $lockToken,
@@ -79,15 +80,14 @@ final class NormalizedCacheReader
         $deserialize = fn($r) => is_array($r) ? $this->store->unserializeMany($r) : [];
 
         return match ($status) {
-            'hit' => new QueryCacheResult(CacheStatus::Hit, $queryKey, $ids, $deserialize($models), null, null, [], []),
-            'stale' => new QueryCacheResult(CacheStatus::Stale, null, $ids, $deserialize($models), null, null, [], []),
-            'empty' => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
-            'miss' => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
-            'building' => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            'corrupt' => $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
+            LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $queryKey, $ids, $deserialize($models), null, null, [], []),
+            LuaStatus::Stale => new QueryCacheResult(CacheStatus::Stale, null, $ids, $deserialize($models), null, null, [], []),
+            LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
+            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
+            LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
+            LuaStatus::Corrupt => $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
                 ? new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
                 : new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            default => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, null, null, [], []),
         };
     }
 
@@ -131,10 +131,8 @@ final class NormalizedCacheReader
     public function waitForBuild(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ?QueryCacheResult
     {
         $classKey = $this->keys->classKey($modelClass);
-        $this->store->brpop(
-            $this->keys->wakePrefix($classKey) . $hash,
-            $this->stampedeWaitMs / 1000.0
-        );
+        $this->store->brpop($this->keys->wakePrefix($classKey) . $hash, $this->stampedeWaitMs / 1000.0);
+
         $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
 
         return $result->status === CacheStatus::Building ? null : $result;

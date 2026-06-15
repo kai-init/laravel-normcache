@@ -3,6 +3,7 @@
 namespace NormCache\Cache;
 
 use NormCache\Enums\CacheStatus;
+use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
@@ -40,7 +41,7 @@ final class ResultCacheReader
             $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
 
             $payload = $this->store->get($resultKey);
-            $status = $payload !== null ? 'hit' : 'miss';
+            $status = $payload !== null ? LuaStatus::Hit : LuaStatus::Miss;
 
             return $this->toResultCacheResult(
                 $status, $resultKey, $buildingKey, $lockToken, $wakeKey,
@@ -61,12 +62,12 @@ final class ResultCacheReader
 
         return $this->toResultCacheResult(
             $status, $resultKey, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey,
-            $versionKeys, $expectedVersions, $payload, false, $status === 'miss'
+            $versionKeys, $expectedVersions, $payload, false, $status === LuaStatus::Miss
         );
     }
 
     private function toResultCacheResult(
-        string $status,
+        LuaStatus $status,
         string $resultKey,
         string $buildingKey,
         string $lockToken,
@@ -77,7 +78,7 @@ final class ResultCacheReader
         bool $payloadAlreadyUnserialized = true,
         bool $alreadyClaimed = false
     ): ResultCacheResult {
-        if ($status === 'hit') {
+        if ($status === LuaStatus::Hit) {
             $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
             if (is_array($unserialized)) {
                 return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
@@ -87,7 +88,7 @@ final class ResultCacheReader
             $alreadyClaimed = false;
         }
 
-        if ($status === 'building') {
+        if ($status === LuaStatus::Building) {
             return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
         }
 
@@ -167,22 +168,10 @@ final class ResultCacheReader
         }
 
         if ($this->slotting) {
-            if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
-                return false;
-            }
-            $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
-            if ($written) {
-                $this->store->setMany($entries, $ttl);
-            }
-            if ($buildingKey !== null) {
-                $this->store->releaseBuilding(
-                    $buildingKey,
-                    $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
-                    $buildingToken
-                );
-            }
-
-            return $written;
+            return $this->storeSlottingGuarded(
+                fn() => $this->store->setMany($entries, $ttl),
+                $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken
+            );
         }
 
         return (bool) $this->store->script(
@@ -206,22 +195,10 @@ final class ResultCacheReader
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
         if ($this->slotting) {
-            if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
-                return false;
-            }
-            $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
-            if ($written) {
-                $this->store->set($key, $payload, $ttl);
-            }
-            if ($buildingKey !== null) {
-                $this->store->releaseBuilding(
-                    $buildingKey,
-                    $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
-                    $buildingToken
-                );
-            }
-
-            return $written;
+            return $this->storeSlottingGuarded(
+                fn() => $this->store->set($key, $payload, $ttl),
+                $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken
+            );
         }
 
         return (bool) $this->store->script(
@@ -239,17 +216,40 @@ final class ResultCacheReader
         );
     }
 
+    private function storeSlottingGuarded(
+        callable $write,
+        array $versionKeys, array $expectedVersions,
+        ?string $buildingKey, ?string $wakeKey, ?string $buildingToken
+    ): bool {
+        if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
+            return false;
+        }
+
+        $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
+        if ($written) {
+            $write();
+        }
+
+        if ($buildingKey !== null) {
+            $this->store->releaseBuilding(
+                $buildingKey,
+                $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
+                $buildingToken
+            );
+        }
+
+        return $written;
+    }
+
     public function waitForBuild(
         string $modelClass, array $depClasses, string $hash,
         ?string $tag, array $depTableKeys,
         string $namespace = CacheKeyBuilder::K_RESULT
     ): ?ResultCacheResult {
         $classKey = $this->keys->classKey($modelClass);
-        $wakeHash = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
-        $this->store->brpop(
-            $this->keys->wakePrefix($classKey) . $wakeHash,
-            $this->stampedeWaitMs / 1000.0
-        );
+        $wakeSuffix = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
+        $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeSuffix, $this->stampedeWaitMs / 1000.0);
+
         $result = $this->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
 
         return $result->status === CacheStatus::Building ? null : $result;
@@ -266,7 +266,7 @@ final class ResultCacheReader
             [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
         );
 
-        return [$result[0] ?? 'building', (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
+        return [LuaStatus::fromLua($result[0] ?? null), (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
     }
 
     private function luaFetchVersionedPivotCache(

@@ -38,6 +38,11 @@ final readonly class DependencySet
         );
     }
 
+    public function hasNoDependencies(): bool
+    {
+        return $this->models === [] && $this->tables === [];
+    }
+
     public function depClassesFor(string $primaryModel): array
     {
         $dependencies = [];

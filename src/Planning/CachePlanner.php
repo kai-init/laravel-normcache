@@ -118,7 +118,7 @@ final class CachePlanner
     ): CachePlan {
         $explicitModels = $builder->explicitDependencies();
         $explicitTables = $builder->explicitTableDependencies();
-        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+        $hasExplicit = $builder->hasExplicitDependencies();
 
         if (!$explain && !$insideTransaction && !$hasExplicit && $context->contextReasons === []) {
             $plan = $this->trySimpleResultPlan($model, $base, $context, $simpleBypassFlags);
@@ -151,7 +151,7 @@ final class CachePlanner
     ): CachePlan {
         $explicitModels = $builder->explicitDependencies();
         $explicitTables = $builder->explicitTableDependencies();
-        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+        $hasExplicit = $builder->hasExplicitDependencies();
 
         return $this->planInspectedResult(
             model: $model,
@@ -179,7 +179,7 @@ final class CachePlanner
         $inferred = $context->inferredDependencies;
         $explicitModels = $builder->explicitDependencies();
         $explicitTables = $builder->explicitTableDependencies();
-        $hasExplicit = $explicitModels !== null || $explicitTables !== [];
+        $hasExplicit = $builder->hasExplicitDependencies();
 
         $inspection = $this->analyzer->inspect(
             $base,
@@ -189,16 +189,7 @@ final class CachePlanner
             includeTables: $explain,
         );
 
-        if (!$explain
-            && !$insideTransaction
-            && !$hasExplicit
-            && $context->contextReasons === []
-            && $inferred->safe
-            && $inferred->models === []
-            && $inferred->tables === []
-            && $inspection->primaryKeys !== null
-            && $inspection->normalizationFlags() === 0
-            && !$inspection->hasSafetyBypass()) {
+        if ($this->qualifiesForDirectModels($explain, $insideTransaction, $hasExplicit, $context, $inferred, $inspection)) {
             return CachePlan::direct(
                 operation: $context->operation,
                 dependencies: DependencySet::singleModel($modelClass),
@@ -210,21 +201,16 @@ final class CachePlanner
         $hasDependencyBypass = $inspection->hasDependencyBypass();
         $hasContextDependencyBypass = isset($context->contextReasons['dependency']);
 
-        $dependencies = !$hasExplicit
-            && $inferred->safe
-            && $inferred->models === []
-            && $inferred->tables === []
-            && !$hasDependencyBypass
-            && !$hasContextDependencyBypass
-                ? DependencySet::singleModel($modelClass)
-                : $this->resolveDependencies(
-                    $modelClass,
-                    $context,
-                    $inspection,
-                    $explicitModels,
-                    $explicitTables,
-                    $hasExplicit,
-                );
+        $dependencies = $this->dependsOnPrimaryModelOnly($hasExplicit, $inferred, $hasDependencyBypass, $hasContextDependencyBypass)
+            ? DependencySet::singleModel($modelClass)
+            : $this->resolveDependencies(
+                $modelClass,
+                $context,
+                $inspection,
+                $explicitModels,
+                $explicitTables,
+                $hasExplicit,
+            );
 
         if ($insideTransaction
             || $inspection->hasSafetyBypass()
@@ -314,8 +300,7 @@ final class CachePlanner
 
         if ($scalarLike
             && !$hasExplicit
-            && $inferred->models === []
-            && $inferred->tables === []
+            && $inferred->hasNoDependencies()
             && $dependencies->safe
             && (!empty($base->joins)
                 || !empty($base->unions)
@@ -357,7 +342,7 @@ final class CachePlanner
     ): ?CachePlan {
         $inferred = $context->inferredDependencies;
 
-        if (!$inferred->safe || $inferred->models !== [] || $inferred->tables !== []) {
+        if (!$inferred->safe || !$inferred->hasNoDependencies()) {
             return null;
         }
 
@@ -386,6 +371,38 @@ final class CachePlanner
             [],
             $collectTables,
         );
+    }
+
+    private function qualifiesForDirectModels(
+        bool $explain,
+        bool $insideTransaction,
+        bool $hasExplicit,
+        CachePlanContext $context,
+        DependencySet $inferred,
+        QueryInspection $inspection,
+    ): bool {
+        return !$explain
+            && !$insideTransaction
+            && !$hasExplicit
+            && $context->contextReasons === []
+            && $inferred->safe
+            && $inferred->hasNoDependencies()
+            && $inspection->primaryKeys !== null
+            && $inspection->normalizationFlags() === 0
+            && !$inspection->hasSafetyBypass();
+    }
+
+    private function dependsOnPrimaryModelOnly(
+        bool $hasExplicit,
+        DependencySet $inferred,
+        bool $hasDependencyBypass,
+        bool $hasContextDependencyBypass,
+    ): bool {
+        return !$hasExplicit
+            && $inferred->safe
+            && $inferred->hasNoDependencies()
+            && !$hasDependencyBypass
+            && !$hasContextDependencyBypass;
     }
 
     private function resolveDependencies(
@@ -421,7 +438,7 @@ final class CachePlanner
             ])));
         }
 
-        if ($inferred->models === [] && $inferred->tables === []) {
+        if ($inferred->hasNoDependencies()) {
             return DependencySet::singleModel($modelClass);
         }
 
@@ -437,16 +454,13 @@ final class CachePlanner
         Model $model,
         CachePlanContext $context,
     ): DependencySet {
-        $explicitModels = $builder->explicitDependencies();
-        $explicitTables = $builder->explicitTableDependencies();
-
         return $this->resolveDependencies(
             $model::class,
             $context,
             null,
-            $explicitModels,
-            $explicitTables,
-            $explicitModels !== null || $explicitTables !== [],
+            $builder->explicitDependencies(),
+            $builder->explicitTableDependencies(),
+            $builder->hasExplicitDependencies(),
         );
     }
 
@@ -496,8 +510,7 @@ final class CachePlanner
     private function hasResultDependencies(CachePlanContext $context, bool $hasExplicit): bool
     {
         return $hasExplicit
-            || $context->inferredDependencies->models !== []
-            || $context->inferredDependencies->tables !== [];
+            || !$context->inferredDependencies->hasNoDependencies();
     }
 
     private function resultPlan(

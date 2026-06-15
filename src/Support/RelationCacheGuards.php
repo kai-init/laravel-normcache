@@ -22,8 +22,7 @@ final class RelationCacheGuards
             || !empty($base->havings)
             || !empty($base->unions)
             || ($base->lock !== null && $base->lock !== false)
-            || $builder->explicitDependencies() !== null
-            || $builder->explicitTableDependencies() !== [];
+            || $builder->hasExplicitDependencies();
     }
 
     /** Shared by belongsTo/morphTo eager loads, which require an unmodified base query shape. */
