@@ -664,6 +664,12 @@ class DependsOnTest extends TestCase
         Author::query()->dependsOnTables([123]);
     }
 
+    public function test_depends_on_tables_rejects_reserved_key_characters(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        Author::query()->dependsOnTables(['users:{bad}'])->get();
+    }
+
     public function test_under_declared_dependencies_log_a_warning_in_debug_mode(): void
     {
         config(['app.debug' => true]);
@@ -671,7 +677,7 @@ class DependsOnTest extends TestCase
         Log::shouldReceive('warning')
             ->once()
             ->withArgs(function ($message) {
-                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOn()');
+                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOnTable()');
             });
 
         Post::query()

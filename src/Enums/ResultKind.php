@@ -9,5 +9,9 @@ enum ResultKind: string
     case Count = 'count';
     case Pluck = 'pluck';
     case PaginationCount = 'pagination_count';
-    case Aggregate = 'aggregate';
+    case Sum = 'sum';
+    case Avg = 'avg';
+    case Min = 'min';
+    case Max = 'max';
+    case Exists = 'exists';
 }

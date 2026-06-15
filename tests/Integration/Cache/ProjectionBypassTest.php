@@ -15,6 +15,39 @@ use NormCache\Tests\TestCase;
  */
 class ProjectionBypassTest extends TestCase
 {
+    // ── Direct primary-key plans ────────────────────────────────────────────
+
+    public function test_direct_primary_key_lookup_preserves_select_projection(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+
+        Author::find($author->id); // warm full model cache
+
+        $cached = Author::whereKey($author->id)->select('name')->first();
+        $native = Author::withoutCache()->whereKey($author->id)->select('name')->first();
+
+        $this->assertSame(array_keys($native->getAttributes()), array_keys($cached->getAttributes()));
+        $this->assertArrayHasKey('name', $cached->getAttributes());
+        $this->assertArrayNotHasKey('id', $cached->getAttributes());
+    }
+
+    public function test_direct_where_in_lookup_preserves_select_projection(): void
+    {
+        $a = Author::create(['name' => 'Alice']);
+        $b = Author::create(['name' => 'Bob']);
+
+        Author::find($a->id);
+        Author::find($b->id);
+
+        $cached = Author::whereIn('id', [$a->id, $b->id])->select('name')->get();
+        $native = Author::withoutCache()->whereIn('id', [$a->id, $b->id])->select('name')->get();
+
+        $this->assertSame(
+            $native->map->getAttributes()->all(),
+            $cached->map->getAttributes()->all()
+        );
+    }
+
     // ── BelongsTo ────────────────────────────────────────────────────────────
 
     public function test_belongs_to_bypasses_when_owner_key_absent_from_projection(): void

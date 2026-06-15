@@ -34,7 +34,7 @@ trait CachesScalarResults
     public function sum($column): mixed
     {
         return $this->cacheScalar(
-            ResultKind::Aggregate,
+            ResultKind::Sum,
             fn() => parent::sum($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->sum($column)
@@ -44,7 +44,7 @@ trait CachesScalarResults
     public function avg($column): mixed
     {
         return $this->cacheScalar(
-            ResultKind::Aggregate,
+            ResultKind::Avg,
             fn() => parent::avg($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->avg($column)
@@ -59,7 +59,7 @@ trait CachesScalarResults
     public function min($column): mixed
     {
         return $this->cacheScalar(
-            ResultKind::Aggregate,
+            ResultKind::Min,
             fn() => parent::min($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->min($column)
@@ -69,7 +69,7 @@ trait CachesScalarResults
     public function max($column): mixed
     {
         return $this->cacheScalar(
-            ResultKind::Aggregate,
+            ResultKind::Max,
             fn() => parent::max($column),
             (array) $column,
             fn(QueryBuilder $base) => $base->max($column)
@@ -79,7 +79,7 @@ trait CachesScalarResults
     public function exists(): bool
     {
         return (bool) $this->cacheScalar(
-            ResultKind::Aggregate,
+            ResultKind::Exists,
             fn() => parent::exists() ? 1 : 0,
             compute: fn(QueryBuilder $base) => $base->exists() ? 1 : 0
         );

@@ -74,12 +74,14 @@ final readonly class CachePlan
         CacheOperation $operation,
         DependencySet $dependencies,
         array $primaryKeys,
+        ?array $columns = null,
     ): self {
         return new self(
             strategy: CacheStrategy::DirectModels,
             operation: $operation,
             dependencies: $dependencies,
             normalizable: true,
+            columns: $columns,
             primaryKeys: $primaryKeys,
         );
     }

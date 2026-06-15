@@ -211,7 +211,7 @@ return [
     'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
     'stale_version_depth' => env('NORMCACHE_STALE_VERSION_DEPTH', 3),
     'cluster'           => env('NORMCACHE_CLUSTER', false),
-    'events'            => env('NORMCACHE_EVENTS', true),
+    'events'            => env('NORMCACHE_EVENTS', false),
     'fallback'          => env('NORMCACHE_FALLBACK', false),
     'fire_retrieved'    => env('NORMCACHE_FIRE_RETRIEVED', false),
     'debugbar'          => env('NORMCACHE_DEBUGBAR', false),
@@ -287,8 +287,8 @@ NormCache guarantees hydration parity (results identical to native Eloquent) for
 
 - **Universal Query Patterns:** Standard model lookups, primary key fast-paths, and complex result sets across both Normalized and Result modes.
 - **Full Relationship Support:** Eager-loaded relations including nested chains, pivot table attributes, and through-relations.
-- **Native Model Lifecycle:** Full support for standard Eloquent behavior including global scopes, soft deletes, and `retrieved` events.
-- **Eloquent Extensibility:** Custom casts (JSON/Enum), `newFromBuilder` overrides, and custom collection classes.
+- **Native Model Lifecycle:** Full support for standard Eloquent behavior including global scopes and soft deletes. `retrieved` events fire only when `fire_retrieved` is enabled (see Configuration).
+- **Eloquent Extensibility:** Custom casts (JSON/Enum) and custom collection classes. Cached hydration reconstructs models from raw attributes directly and does not invoke custom `newFromBuilder()` overrides.
 
 ### Requires `dependsOn()`
 

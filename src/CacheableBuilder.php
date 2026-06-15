@@ -126,6 +126,12 @@ class CacheableBuilder extends Builder
             if (!is_string($table) || $table === '') {
                 throw new \InvalidArgumentException('dependsOnTables() expects non-empty table name strings.');
             }
+
+            if (preg_match('/[:{}\s*]/', $table)) {
+                throw new \InvalidArgumentException(
+                    'dependsOnTables() table name must not contain reserved characters (: { } * or whitespace).'
+                );
+            }
         }
 
         $conn = $this->model->getConnection()->getName();

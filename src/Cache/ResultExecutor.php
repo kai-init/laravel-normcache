@@ -75,7 +75,7 @@ final class ResultExecutor
     {
         return match ($kind) {
             ResultKind::Count, ResultKind::PaginationCount => CacheKeyBuilder::K_COUNT,
-            ResultKind::Collection, ResultKind::Aggregate => CacheKeyBuilder::K_RESULT,
+            ResultKind::Collection => CacheKeyBuilder::K_RESULT,
             default => CacheKeyBuilder::K_SCALAR,
         };
     }
@@ -84,7 +84,7 @@ final class ResultExecutor
     {
         $query = $prepared->base;
 
-        if ($kind === ResultKind::Collection || $kind === ResultKind::Aggregate) {
+        if ($kind === ResultKind::Collection) {
             if (empty($query->columns) && $columns !== ['*']) {
                 $query = $query->cloneWithout([]);
                 $query->columns = $columns;

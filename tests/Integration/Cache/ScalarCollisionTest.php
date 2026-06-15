@@ -76,6 +76,26 @@ class ScalarCollisionTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:scalar:*'));
     }
 
+    public function test_sum_and_avg_same_column_do_not_share_cache_entry(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
+        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 20]);
+
+        $this->assertSame(30, Post::sum('views'));
+        $this->assertSame(15.0, Post::avg('views'));
+    }
+
+    public function test_min_and_max_same_column_do_not_share_cache_entry(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
+        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 20]);
+
+        $this->assertSame(10, Post::min('views'));
+        $this->assertSame(20, Post::max('views'));
+    }
+
     public function test_scalar_aggregate_alias_tracks_related_model_dependency(): void
     {
         $author = Author::create(['name' => 'Alice']);
