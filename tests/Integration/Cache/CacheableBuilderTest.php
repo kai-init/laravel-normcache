@@ -498,13 +498,11 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('cached', Author::query()->explain());
     }
 
-    public function test_explain_groups_where_has_as_dependency(): void
+    public function test_explain_caches_simple_wherehas_via_inferred_dependency(): void
     {
         $result = Author::whereHas('posts')->explain();
 
-        $this->assertStringContainsString("can't infer cache dependency", $result);
-        $this->assertStringContainsString('subquery WHERE', $result);
-        $this->assertStringStartsWith('not cached', $result);
+        $this->assertSame('cached: result', $result);
     }
 
     public function test_explain_groups_join_as_normalization(): void
@@ -559,7 +557,7 @@ class CacheableBuilderTest extends TestCase
         Event::fake([QueryBypassed::class]);
 
         Author::create(['name' => 'Alice']);
-        Author::whereHas('posts')->get();
+        Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
 
         Event::assertDispatched(QueryBypassed::class, function (QueryBypassed $e) {
             return $e->modelClass === Author::class
@@ -722,7 +720,7 @@ class CacheableBuilderTest extends TestCase
 
         Event::fake([QueryBypassed::class]);
 
-        Author::whereHas('posts')->get();
+        Author::whereHas('posts.comments')->get();
 
         Event::assertDispatched(QueryBypassed::class);
         $this->assertEmpty($this->redisKeys('test:query:*'));

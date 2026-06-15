@@ -28,9 +28,12 @@ final readonly class QueryInspection
 
     public const CALCULATED_COLUMNS = 1 << 11;
 
+    public const EXISTS_WHERE = 1 << 12;
+
     private const DEPENDENCY_BYPASS = self::RAW_ORDER
         | self::RAW_WHERE
-        | self::SUBQUERY_WHERE;
+        | self::SUBQUERY_WHERE
+        | self::EXISTS_WHERE;
 
     private const NORMALIZATION_BYPASS = self::NON_CANONICAL_FROM
         | self::JOIN
@@ -55,6 +58,12 @@ final readonly class QueryInspection
     public function hasDependencyBypass(): bool
     {
         return $this->has(self::DEPENDENCY_BYPASS);
+    }
+
+    /** True only if EXISTS_WHERE is the sole reason hasDependencyBypass() is true. */
+    public function hasOnlyExistsDependencyBypass(): bool
+    {
+        return ($this->flags & self::DEPENDENCY_BYPASS) === self::EXISTS_WHERE;
     }
 
     public function hasNormalizationBypass(): bool

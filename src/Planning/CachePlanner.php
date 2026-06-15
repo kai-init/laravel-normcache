@@ -428,7 +428,13 @@ final class CachePlanner
 
         $hasDependencyBypass = $inspection !== null && $inspection->hasDependencyBypass();
 
-        if ($hasDependencyBypass
+        // EXISTS_WHERE-only bypasses are exempt if inferred dependencies are safe and non-empty.
+        $exempt = $hasDependencyBypass
+            && $inspection->hasOnlyExistsDependencyBypass()
+            && $inferred->safe
+            && !$inferred->hasNoDependencies();
+
+        if (($hasDependencyBypass && !$exempt)
             || isset($context->contextReasons['dependency'])
             || !$inferred->safe) {
             return DependencySet::unsafe(array_values(array_unique([

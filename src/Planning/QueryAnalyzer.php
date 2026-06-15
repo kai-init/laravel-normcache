@@ -9,9 +9,12 @@ use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
-    public const SUBQUERY_WHERE_TYPES = [
+    public const EXISTS_WHERE_TYPES = [
         'Exists' => true,
         'NotExists' => true,
+    ];
+
+    public const SUBQUERY_WHERE_TYPES = [
         'Sub' => true,
         'InSub' => true,
         'NotInSub' => true,
@@ -162,7 +165,9 @@ final class QueryAnalyzer
                 $flags |= QueryInspection::RAW_WHERE;
             }
 
-            if (isset(self::SUBQUERY_WHERE_TYPES[$type])) {
+            if (isset(self::EXISTS_WHERE_TYPES[$type])) {
+                $flags |= QueryInspection::EXISTS_WHERE;
+            } elseif (isset(self::SUBQUERY_WHERE_TYPES[$type])) {
                 $flags |= QueryInspection::SUBQUERY_WHERE;
             } elseif (($type === 'In' || $type === 'NotIn') && $this->containsExpression((array) ($where['values'] ?? []))) {
                 $flags |= QueryInspection::SUBQUERY_WHERE;

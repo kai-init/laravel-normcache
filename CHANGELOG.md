@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Simple `whereHas`/`whereDoesntHave` caching:** `whereHas`, `orWhereHas`, `whereDoesntHave`, and `orWhereDoesntHave` on a single, non-nested, `Cacheable` relation (HasOne/HasMany/BelongsTo/BelongsToMany/HasOneThrough/HasManyThrough, with safe constraint closures) are now cached automatically via inferred dependencies — no `dependsOn()` required. Nested relations, `MorphTo`/`whereHasMorph`, and unsafe constraints continue to bypass.
+
+---
+
 ## [2.1.2] — 2026-06-15
 
 ### Fixed

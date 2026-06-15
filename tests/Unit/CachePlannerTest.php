@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Log;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Planning\CachePlanner;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
@@ -186,5 +187,66 @@ class CachePlannerTest extends TestCase
 
         $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
         $this->assertContains('query lock (SELECT FOR UPDATE)', $plan->bypassReasons['safety']);
+    }
+
+    public function test_exists_where_with_safe_inferred_dependency_is_cached_as_result(): void
+    {
+        $prepared = Author::query()->prepareCacheExecution();
+        $prepared->base->wheres[] = [
+            'type' => 'Exists',
+            'query' => Author::query()->getQuery(),
+            'boolean' => 'and',
+        ];
+
+        $plan = (new CachePlanner)->plan(
+            $prepared->builder,
+            $prepared->base,
+            CachePlanContext::models(inferred: new DependencySet(models: [Post::class])),
+        );
+
+        $this->assertSame(CacheStrategy::VersionedResult, $plan->strategy);
+        $this->assertTrue($plan->dependencies->safe);
+        $this->assertSame([Author::class, Post::class], $plan->dependencies->models);
+    }
+
+    public function test_exists_where_without_inferred_dependency_still_bypasses(): void
+    {
+        $prepared = Author::query()->prepareCacheExecution();
+        $prepared->base->wheres[] = [
+            'type' => 'Exists',
+            'query' => Author::query()->getQuery(),
+            'boolean' => 'and',
+        ];
+
+        $plan = (new CachePlanner)->plan(
+            $prepared->builder,
+            $prepared->base,
+            CachePlanContext::models(),
+        );
+
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
+    }
+
+    public function test_exists_where_combined_with_raw_where_bypasses_even_with_inferred_dependency(): void
+    {
+        $prepared = Author::query()->prepareCacheExecution();
+        $prepared->base->wheres[] = [
+            'type' => 'Exists',
+            'query' => Author::query()->getQuery(),
+            'boolean' => 'and',
+        ];
+        $prepared->base->wheres[] = [
+            'type' => 'Raw',
+            'sql' => 'LOWER(name) = LOWER(name)',
+            'boolean' => 'and',
+        ];
+
+        $plan = (new CachePlanner)->plan(
+            $prepared->builder,
+            $prepared->base,
+            CachePlanContext::models(inferred: new DependencySet(models: [Post::class])),
+        );
+
+        $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
     }
 }

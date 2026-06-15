@@ -40,7 +40,7 @@ final class BypassReasons
             $dependency[] = 'raw WHERE expression';
         }
 
-        if ($inspection->has(QueryInspection::SUBQUERY_WHERE)) {
+        if ($inspection->has(QueryInspection::SUBQUERY_WHERE | QueryInspection::EXISTS_WHERE)) {
             $dependency[] = 'subquery WHERE (whereHas/whereExists)';
         }
 

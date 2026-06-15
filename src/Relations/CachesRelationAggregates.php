@@ -5,13 +5,18 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Traits\Cacheable;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 
+/**
+ * @mixin CachesRelationExistence
+ */
 trait CachesRelationAggregates
 {
     private bool $cacheAggregates = true;
@@ -114,7 +119,14 @@ trait CachesRelationAggregates
             return null;
         }
 
-        $relation = $this->model->{$name}();
+        return $this->classifyRelationDependency($this->model->{$name}(), $constraint);
+    }
+
+    /**
+     * @param  Relation<*, *, *>  $relation
+     */
+    private function classifyRelationDependency(Relation $relation, ?callable $constraint): ?array
+    {
         $relatedClass = $relation->getRelated()::class;
 
         if (!self::relatedIsCacheable($relatedClass)) {
@@ -128,6 +140,11 @@ trait CachesRelationAggregates
             try {
                 $testBuilder = ($relatedClass)::query();
                 $constraint($testBuilder);
+
+                if (!$testBuilder instanceof CacheableBuilder) {
+                    return null;
+                }
+
                 $prepared = $testBuilder->prepareCacheExecution();
                 $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models());
 
@@ -173,20 +190,17 @@ trait CachesRelationAggregates
 
     public function inferAggregateDependencies(): DependencySet
     {
-        if (!$this->cacheAggregates) {
-            return $this->aggregateInferenceFailed
-                ? DependencySet::unsafe('Aggregate dependencies could not be inferred.')
-                : DependencySet::empty();
-        }
+        $aggregate = match (true) {
+            !$this->cacheAggregates && $this->aggregateInferenceFailed => DependencySet::unsafe('Aggregate dependencies could not be inferred.'),
+            !$this->cacheAggregates => DependencySet::empty(),
+            $this->aggregateDependencies === [] && $this->aggregateTableDependencies === [] => DependencySet::empty(),
+            default => new DependencySet(
+                models: $this->aggregateDependencies,
+                tables: $this->aggregateTableDependencies,
+            ),
+        };
 
-        if ($this->aggregateDependencies === [] && $this->aggregateTableDependencies === []) {
-            return DependencySet::empty();
-        }
-
-        return new DependencySet(
-            models: $this->aggregateDependencies,
-            tables: $this->aggregateTableDependencies,
-        );
+        return $aggregate->merge($this->inferExistenceDependencies());
     }
 
     private static function relatedIsCacheable(string $class): bool

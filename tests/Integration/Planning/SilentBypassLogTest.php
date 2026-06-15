@@ -18,6 +18,6 @@ class SilentBypassLogTest extends TestCase
                 return str_contains($msg, 'unsafe dependency inference');
             });
 
-        Author::whereHas('posts')->get();
+        Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
     }
 }

@@ -25,7 +25,7 @@ class QueryAnalyzerTest extends TestCase
         $this->assertNull($inspection->tables);
     }
 
-    public function test_nested_wheres_are_scanned_once_for_raw_and_subquery_flags(): void
+    public function test_nested_wheres_are_scanned_once_for_raw_and_exists_flags(): void
     {
         $nested = $this->makeBaseQuery();
         $nested->wheres = [
@@ -39,8 +39,33 @@ class QueryAnalyzerTest extends TestCase
         $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null);
 
         $this->assertTrue($inspection->has(QueryInspection::RAW_WHERE));
-        $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
+        $this->assertTrue($inspection->has(QueryInspection::EXISTS_WHERE));
+        $this->assertFalse($inspection->has(QueryInspection::SUBQUERY_WHERE));
         $this->assertTrue($inspection->hasDependencyBypass());
+    }
+
+    public function test_notexists_where_type_sets_exists_where_flag(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->wheres = [['type' => 'NotExists', 'query' => $this->makeBaseQuery()]];
+
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null);
+
+        $this->assertTrue($inspection->has(QueryInspection::EXISTS_WHERE));
+        $this->assertFalse($inspection->has(QueryInspection::SUBQUERY_WHERE));
+        $this->assertTrue($inspection->hasOnlyExistsDependencyBypass());
+    }
+
+    public function test_sub_where_type_sets_subquery_where_flag_not_exists_where(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->wheres = [['type' => 'Sub', 'query' => $this->makeBaseQuery()]];
+
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null);
+
+        $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
+        $this->assertFalse($inspection->has(QueryInspection::EXISTS_WHERE));
+        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
     }
 
     public function test_structural_flags_map_to_existing_reason_strings(): void
@@ -110,6 +135,48 @@ class QueryAnalyzerTest extends TestCase
 
         $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
         $this->assertNull($inspection->primaryKeys);
+    }
+
+    public function test_exists_where_flag_alone_satisfies_only_exists_dependency_bypass(): void
+    {
+        $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE);
+
+        $this->assertTrue($inspection->hasDependencyBypass());
+        $this->assertTrue($inspection->hasOnlyExistsDependencyBypass());
+    }
+
+    public function test_exists_where_combined_with_raw_where_is_not_only_exists_bypass(): void
+    {
+        $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE | QueryInspection::RAW_WHERE);
+
+        $this->assertTrue($inspection->hasDependencyBypass());
+        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
+    }
+
+    public function test_subquery_where_alone_is_not_only_exists_bypass(): void
+    {
+        $inspection = new QueryInspection(flags: QueryInspection::SUBQUERY_WHERE);
+
+        $this->assertTrue($inspection->hasDependencyBypass());
+        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
+    }
+
+    public function test_no_dependency_bypass_is_not_only_exists_bypass(): void
+    {
+        $inspection = new QueryInspection(flags: 0);
+
+        $this->assertFalse($inspection->hasDependencyBypass());
+        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
+    }
+
+    public function test_exists_where_flag_maps_to_subquery_dependency_reason(): void
+    {
+        $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE);
+
+        $this->assertSame(
+            ['dependency' => ['subquery WHERE (whereHas/whereExists)']],
+            BypassReasons::fromInspection($inspection),
+        );
     }
 
     public function test_direct_primary_key_inspection_allows_harmless_single_row_ordering(): void

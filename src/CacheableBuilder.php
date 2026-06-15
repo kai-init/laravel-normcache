@@ -18,6 +18,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
 use NormCache\Relations\CachesRelationAggregates;
+use NormCache\Relations\CachesRelationExistence;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -31,7 +32,7 @@ use NormCache\Values\PreparedQuery;
 
 class CacheableBuilder extends Builder
 {
-    use CachesRelationAggregates, CachesScalarResults, HandlesBuilderInvalidation;
+    use CachesRelationAggregates, CachesRelationExistence, CachesScalarResults, HandlesBuilderInvalidation;
 
     private static array $validatedModelClasses = [];
 
