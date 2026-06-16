@@ -19,6 +19,7 @@ final class CachePlanner
     private const SIMPLE_RESULT_BYPASS_FLAGS = QueryInspection::RAW_ORDER
         | QueryInspection::RAW_WHERE
         | QueryInspection::SUBQUERY_WHERE
+        | QueryInspection::EXISTS_WHERE
         | QueryInspection::LOCK
         | QueryInspection::NON_CANONICAL_FROM
         | QueryInspection::JOIN
@@ -27,6 +28,7 @@ final class CachePlanner
     // Raw ORDER is allowed: getCountForPagination() ignores ordering entirely.
     private const SIMPLE_PAGINATION_BYPASS_FLAGS = QueryInspection::RAW_WHERE
         | QueryInspection::SUBQUERY_WHERE
+        | QueryInspection::EXISTS_WHERE
         | QueryInspection::LOCK
         | QueryInspection::NON_CANONICAL_FROM
         | QueryInspection::JOIN

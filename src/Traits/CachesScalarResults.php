@@ -135,7 +135,7 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies();
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge($executionBuilder->inferJoinDependencies($base));
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
             $kind->value,
             $columns,

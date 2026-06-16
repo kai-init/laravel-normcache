@@ -63,12 +63,14 @@ trait CachesOneOrManyThrough
             ...$plan->dependencies->depClassesFor($relatedClass),
         ]));
         $depTableKeys = $plan->dependencies->tables;
+        $tag = $builder->getCacheTag();
+        $ttl = $builder->getQueryTtl();
 
         return NormCache::rescue(
             fn() => NormCache::engine()->runResult(
-                fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, null, $depTableKeys, CacheKeyBuilder::K_THROUGH),
+                fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, $tag, $depTableKeys, CacheKeyBuilder::K_THROUGH),
                 waitForBuild: fn() => NormCache::waitForResultBuild(
-                    $relatedClass, $hash, null, $depClasses, $depTableKeys, CacheKeyBuilder::K_THROUGH
+                    $relatedClass, $hash, $tag, $depClasses, $depTableKeys, CacheKeyBuilder::K_THROUGH
                 ),
                 onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,
@@ -93,10 +95,10 @@ trait CachesOneOrManyThrough
                         ],
                     ];
                 },
-                onStore: function ($data, $result) use ($relatedClass) {
-                    NormCache::attempt(function () use ($data, $result, $relatedClass) {
+                onStore: function ($data, $result) use ($relatedClass, $ttl) {
+                    NormCache::attempt(function () use ($data, $result, $relatedClass, $ttl) {
                         if (NormCache::storeResultCache(
-                            $result->key, $data['cachePayload'], $result->buildingKey, null,
+                            $result->key, $data['cachePayload'], $result->buildingKey, $ttl,
                             $result->wakeKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken
                         )) {
                             NormCache::cacheModelAttrs($relatedClass, $data['modelAttrs']);

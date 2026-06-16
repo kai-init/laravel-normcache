@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
@@ -139,6 +140,101 @@ class JoinResultCacheTest extends TestCase
 
         $this->assertCount(1, $results);
         $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_expression_join_bypasses_inferred_dependency(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join(DB::raw('posts p'), 'p.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->get();
+
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_multiple_joins_all_table_deps_collected_and_invalidated(): void
+    {
+        $author = Author::create(['name' => 'Alice', 'country_id' => null]);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $first = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->join('countries', 'countries.id', '=', 'authors.country_id')
+            ->select('authors.*')
+            ->get();
+        $this->assertCount(0, $first); // no country_id match yet
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+
+        // Bump a country — should invalidate because countries is a tracked dep
+        Country::create(['name' => 'AU']);
+
+        $second = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->join('countries', 'countries.id', '=', 'authors.country_id')
+            ->select('authors.*')
+            ->get();
+
+        $this->assertSame(0, $second->count());
+    }
+
+    public function test_plain_join_count_infers_join_dependency_and_invalidates(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $count1 = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->count();
+
+        $this->assertSame(1, $count1);
+
+        Post::create(['title' => 'P2', 'author_id' => $author->id]);
+
+        $count2 = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->count();
+
+        $this->assertSame(2, $count2);
+    }
+
+    public function test_plain_join_paginate_infers_join_dependency_and_invalidates(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        $page1 = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->paginate(10);
+
+        $this->assertSame(1, $page1->total());
+
+        Post::create(['title' => 'P2', 'author_id' => $author->id]);
+
+        $page2 = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->paginate(10);
+
+        $this->assertSame(2, $page2->total());
+    }
+
+    public function test_join_to_non_cacheable_table_infers_table_dep_and_caches(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'P1', 'author_id' => $author->id]);
+
+        // author_tag has no Cacheable model — dep is tracked as a table version key
+        Author::query()
+            ->join('author_tag', 'author_tag.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
     }
 
     public function test_corrupt_result_cache_payload_is_treated_as_miss(): void

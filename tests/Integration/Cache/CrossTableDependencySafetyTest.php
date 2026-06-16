@@ -12,15 +12,16 @@ use NormCache\Tests\TestCase;
  */
 class CrossTableDependencySafetyTest extends TestCase
 {
-    public function test_join_count_without_depends_on_bypasses_count_cache(): void
+    public function test_join_count_without_depends_on_infers_join_dependency_and_caches(): void
     {
-        Author::create(['name' => 'Alice']);
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->count();
 
-        $this->assertEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('test:count:*'));
     }
 
     public function test_join_count_with_depends_on_caches(): void
@@ -54,16 +55,17 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertSame(2, $query());
     }
 
-    public function test_join_paginate_without_depends_on_does_not_cache_count(): void
+    public function test_join_paginate_without_depends_on_infers_join_dependency_and_caches_count(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
             ->paginate(10);
 
-        $this->assertEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('test:count:*'));
     }
 
     public function test_join_paginate_with_depends_on_caches_count(): void

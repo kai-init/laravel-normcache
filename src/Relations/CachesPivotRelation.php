@@ -87,6 +87,7 @@ trait CachesPivotRelation
         }
 
         $debugbarStart = CacheReporter::beginMeasure();
+        $ttl = $builder->getQueryTtl();
 
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
@@ -113,8 +114,8 @@ trait CachesPivotRelation
                         $rawModels,
                     ];
                 },
-                onStore: function ($models, $pivotResult) use ($cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $shouldCacheRelatedModels) {
-                    NormCache::attempt(function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels) {
+                onStore: function ($models, $pivotResult) use ($cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $shouldCacheRelatedModels, $ttl) {
+                    NormCache::attempt(function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels, $ttl) {
                         $relatedKey = NormCache::classKey($relatedClass);
                         $keyMap = [];
                         foreach ($cacheParentIds as $parentId) {
@@ -125,7 +126,7 @@ trait CachesPivotRelation
                         }
                         $this->populatePivotCache(
                             $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
-                            $pivotResult->versionKeys, $pivotResult->expectedVersions
+                            $pivotResult->versionKeys, $pivotResult->expectedVersions, $ttl
                         );
                     });
                 },
@@ -182,6 +183,10 @@ trait CachesPivotRelation
             return false;
         }
 
+        if ($builder->getCacheTag() !== null) {
+            return false;
+        }
+
         $plan = $builder->cachePlan($base, CachePlanContext::pivot(
             $resolvedColumns ?? [],
             $builder->inferAggregateDependencies()
@@ -222,7 +227,7 @@ trait CachesPivotRelation
         return [];
     }
 
-    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels, array $versionKeys, array $expectedVersions): void
+    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels, array $versionKeys, array $expectedVersions, ?int $ttl = null): void
     {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
         $modelAttrs = [];
@@ -256,7 +261,7 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        NormCache::storeManyVersionedResults($pivotEntriesByKey, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
+        NormCache::storeManyVersionedResults($pivotEntriesByKey, ttl: $ttl, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
 
         NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }

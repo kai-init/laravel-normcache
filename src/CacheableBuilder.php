@@ -300,7 +300,7 @@ class CacheableBuilder extends Builder
 
         $prepared = $this->prepareCacheExecution();
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::paginationCount(
-            $prepared->builder->inferAggregateDependencies()
+            $prepared->builder->inferAggregateDependencies()->merge($prepared->builder->inferJoinDependencies($prepared->base))
         ));
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {

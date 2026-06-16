@@ -84,25 +84,26 @@ Post::withoutCache()->get();
 
 ### Cross-Table Queries
 
-Queries that span multiple tables or use complex features (JOIN, GROUP BY, DISTINCT, subqueries) are not cached by default — Normcache can't infer which model writes should invalidate them. `dependsOn()` lets you declare these dependencies explicitly:
+Simple `whereHas` / `whereDoesntHave` on a non-nested `Cacheable` relation and plain `join()` calls with an explicit root-table projection are inferred automatically — no `dependsOn()` needed:
 
 ```php
-// Also works with JOIN, GROUP BY, DISTINCT, subqueries, calculated columns, etc.
-Author::whereHas('posts', fn($q) => $q->where('published', true))
-    ->dependsOn([Post::class])
-    ->get();
+Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
+
+Author::join('posts', 'posts.author_id', '=', 'authors.id')
+    ->select('authors.*')
+    ->get(); // also works with count(), sum(), exists(), paginate()
 ```
 
-Use `dependsOnTables()` when the dependency is a table with no Cacheable model:
+Everything else requires `dependsOn()`: manual `whereExists`, raw predicates, nested relations, `GROUP BY`, `DISTINCT`, and calculated columns. Use `dependsOnTables()` when the joined table has no `Cacheable` model:
 
 ```php
 Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
-    ->select('authors.*', 'legacy_stats.score')
+    ->select('authors.*')
     ->dependsOnTables(['legacy_stats'])
     ->get();
 ```
 
-> **Note:** This declares a read dependency only. Normcache does not bump the version automatically — call `NormCache::invalidateTableVersion('mysql', 'legacy_stats')` after any external write to that table.
+> **Note:** `dependsOnTables()` declares a read dependency only. Call `NormCache::invalidateTableVersion('mysql', 'legacy_stats')` after any external write to that table.
 
 Normcache chooses the best caching strategy automatically:
 
@@ -283,7 +284,7 @@ NormCache is designed to be as transparent as possible to native Eloquent, but i
 
 ### Safe & Transparent Caching
 
-NormCache guarantees hydration parity (results identical to native Eloquent) for:
+NormCache matches native Eloquent hydration for supported query shapes, with the following intentional limitations:
 
 - **Universal Query Patterns:** Standard model lookups, primary key fast-paths, and complex result sets across both Normalized and Result modes.
 - **Full Relationship Support:** Eager-loaded relations including nested chains, pivot table attributes, and through-relations.
@@ -292,7 +293,7 @@ NormCache guarantees hydration parity (results identical to native Eloquent) for
 
 ### Requires `dependsOn()`
 
-Queries that join other tables or use cross-table subqueries (e.g., `whereHas`) **must** declare their dependencies using `dependsOn([OtherModel::class])`.
+Simple `whereHas` and plain `join()` with an explicit root-table projection are inferred automatically. Everything else — manual `whereExists`, raw predicates, expression joins, nested relations, `GROUP BY`, `DISTINCT`, and calculated columns — requires `dependsOn()` or `dependsOnTables()`.
 
 - **Debug Warning:** If `app.debug` is true, NormCache will log a warning if it detects a query touching a table not declared in `dependsOn()`.
 

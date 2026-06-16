@@ -10,6 +10,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Traits\Cacheable;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
@@ -133,6 +134,25 @@ trait CachesRelationAggregates
             return null;
         }
 
+        $relationExtraTables = [];
+        $relationQuery = $relation->getQuery();
+
+        if ($relationQuery instanceof CacheableBuilder) {
+            $relationBase = $relationQuery->toBase();
+
+            if ((new QueryAnalyzer)->inspect($relationBase, $relation->getRelated()->getTable(), null)->hasDependencyBypass()) {
+                return null;
+            }
+
+            $joinDeps = $relationQuery->inferJoinDependencies($relationBase);
+
+            if (!empty($relationBase->joins) && $joinDeps->tables === []) {
+                return null;
+            }
+
+            $relationExtraTables = $joinDeps->tables;
+        }
+
         $constraintModels = [];
         $constraintTables = [];
 
@@ -148,11 +168,7 @@ trait CachesRelationAggregates
                 $prepared = $testBuilder->prepareCacheExecution();
                 $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models());
 
-                if (
-                    !$plan->dependencies->safe
-                    || $plan->hasBypassReason('dependency')
-                    || $plan->hasBypassReason('normalization')
-                ) {
+                if (!$plan->isCacheable()) {
                     return null;
                 }
 
@@ -184,7 +200,7 @@ trait CachesRelationAggregates
             'throughClass' => $throughClass,
             'tableKey' => $tableKey,
             'constraintModels' => $constraintModels,
-            'constraintTables' => $constraintTables,
+            'constraintTables' => array_values(array_unique([...$constraintTables, ...$relationExtraTables])),
         ];
     }
 

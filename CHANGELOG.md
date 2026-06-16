@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Relation definitions with built-in `whereExists`, raw predicates, or non-inferrable joins now bypass `whereHas`/`withCount` inference instead of caching under incomplete dependencies.
+- `count()`, `exists()`, `sum()`, `avg()`, `min()`, `max()`, and `paginate()` with a manual `whereExists` now bypass unless `dependsOn()` is declared.
+- `lockForUpdate()` and `withoutCache()` inside a `whereHas` constraint now prevent the outer query from being cached.
+- Plain `join()` auto-inference extended to scalar and pagination paths — consistent with `get()`.
+- Through-relation `tag()` and `ttl()` now applied to result fetch and store calls.
+- Pivot-relation `ttl()` now applied to result writes; `tag()` bypasses pivot caching (key structure does not support tag namespacing).
+
+---
+
 ## [2.2.0] — 2026-06-16
 
 ### Added
