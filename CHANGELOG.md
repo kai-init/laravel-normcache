@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.2.0] — 2026-06-16
 
 ### Added
 
-- **Simple `whereHas`/`whereDoesntHave` caching:** `whereHas`, `orWhereHas`, `whereDoesntHave`, and `orWhereDoesntHave` on a single, non-nested, `Cacheable` relation (HasOne/HasMany/BelongsTo/BelongsToMany/HasOneThrough/HasManyThrough, with safe constraint closures) are now cached automatically via inferred dependencies — no `dependsOn()` required. Nested relations, `MorphTo`/`whereHasMorph`, and unsafe constraints continue to bypass.
+- **Simple `whereHas`/`whereDoesntHave` caching:** `whereHas`, `orWhereHas`, `whereDoesntHave`, and `orWhereDoesntHave` are now cached automatically — no `dependsOn()` required. Works for single, non-nested `Cacheable` relations with safe constraint closures. Nested relations, `MorphTo`, and unsafe constraints still bypass.
+- **Automatic join table inference:** plain `join()` calls automatically add the joined table as a cache dependency. Use an explicit root-table projection (e.g. `select('authors.*')`) to enable result caching; `SELECT *` joins still bypass.
+
+### Fixed
+
+- **Through-relation cross-parent cache collision:** `hasManyThrough`/`hasOneThrough` no longer share a cache key across different parent models. Previously two parents (e.g. two countries) could receive each other's cached results.
+- **Through-relation `dependsOn()` dependencies ignored:** extra dependencies declared on a through-relation query are now included in the version keys and will correctly invalidate the cache.
+- **Pivot relation with explicit `dependsOn()` bypasses instead of caching:** pivot caching cannot track extra dependencies in version keys, so it now bypasses rather than risk stale results.
+- **Through simple guard misses non-canonical `from`:** the fast-path check now compares against the actual related model table, so aliased or replaced `from` sources are correctly detected and bypass the cache.
 
 ---
 
