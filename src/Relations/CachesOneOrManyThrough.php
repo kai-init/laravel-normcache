@@ -5,6 +5,7 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
+use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheKeyBuilder;
@@ -12,7 +13,9 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Support\RelationCacheGuards;
+use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
 use NormCache\Values\QueryInspection;
 
@@ -46,21 +49,26 @@ trait CachesOneOrManyThrough
         $shouldCacheModels = $classification['shouldCacheRelatedModels'];
         $selectedColumns = $classification['selectedRelatedColumns'];
 
-        if (!$this->shouldUseCache($builder, $base)
-            || (!$shouldCacheModels && !$classification['relatedKeyInProjection'])) {
+        $plan = $this->shouldUseCache($builder, $base);
+
+        if ($plan === null || (!$shouldCacheModels && !$classification['relatedKeyInProjection'])) {
             return $this->getFromPreparedBuilder($prepared);
         }
 
-        $hash = QueryHasher::forRelationQuery($builder, $this->getQualifiedFirstKeyName(), $base);
+        $hash = QueryHasher::forResultQuery($builder, $base);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
-        $depClasses = [$throughClass];
+        $depClasses = array_values(array_unique([
+            $throughClass,
+            ...$plan->dependencies->depClassesFor($relatedClass),
+        ]));
+        $depTableKeys = $plan->dependencies->tables;
 
         return NormCache::rescue(
             fn() => NormCache::engine()->runResult(
-                fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, null, [], CacheKeyBuilder::K_THROUGH),
+                fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, null, $depTableKeys, CacheKeyBuilder::K_THROUGH),
                 waitForBuild: fn() => NormCache::waitForResultBuild(
-                    $relatedClass, $hash, null, $depClasses, [], CacheKeyBuilder::K_THROUGH
+                    $relatedClass, $hash, null, $depClasses, $depTableKeys, CacheKeyBuilder::K_THROUGH
                 ),
                 onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,
@@ -109,10 +117,13 @@ trait CachesOneOrManyThrough
         );
     }
 
-    private function shouldUseCache(CacheableBuilder $builder, Builder $base): bool
+    private function shouldUseCache(CacheableBuilder $builder, Builder $base): ?CachePlan
     {
         if ($this->isSimpleThroughQuery($base, $builder)) {
-            return true;
+            return CachePlan::result(
+                operation: CacheOperation::Through,
+                dependencies: new DependencySet(models: [$this->throughParent::class]),
+            );
         }
 
         $projection = ProjectionClassifier::resolve($base, null);
@@ -122,7 +133,7 @@ trait CachesOneOrManyThrough
             $builder->inferAggregateDependencies()
         ));
 
-        return $plan->usesResultCache();
+        return $plan->usesResultCache() ? $plan : null;
     }
 
     private function isSimpleThroughQuery(Builder $base, CacheableBuilder $builder): bool
@@ -135,8 +146,9 @@ trait CachesOneOrManyThrough
             return false;
         }
 
-        // The intermediate JOIN is the only relaxation this fast path is allowed to make
-        $flags = (new QueryAnalyzer)->flags($base, $base->from, $base->columns);
+        // The intermediate JOIN is the only relaxation this fast path is allowed to make.
+        // Compare against the canonical related table so NON_CANONICAL_FROM is detectable.
+        $flags = (new QueryAnalyzer)->flags($base, $this->related->getTable(), $base->columns);
 
         return ($flags & ~QueryInspection::JOIN) === 0;
     }

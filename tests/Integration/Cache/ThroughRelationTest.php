@@ -246,4 +246,36 @@ class ThroughRelationTest extends TestCase
         $cached = NormCache::getModels([$post->id], Post::class);
         $this->assertArrayNotHasKey('polluted', $cached[0]->getRawOriginal());
     }
+
+    public function test_lazy_has_many_through_cache_is_parent_specific(): void
+    {
+        $au = Country::create(['name' => 'Australia']);
+        $ca = Country::create(['name' => 'Canada']);
+
+        $auAuthor = Author::create(['name' => 'Alice', 'country_id' => $au->id]);
+        $caAuthor = Author::create(['name' => 'Bob', 'country_id' => $ca->id]);
+
+        Post::create(['title' => 'AU Post', 'author_id' => $auAuthor->id]);
+        Post::create(['title' => 'CA Post', 'author_id' => $caAuthor->id]);
+
+        $this->assertSame(['AU Post'], $au->posts()->get()->pluck('title')->all());
+        $this->assertSame(['CA Post'], $ca->posts()->get()->pluck('title')->all());
+    }
+
+    public function test_eager_has_many_through_cache_is_parent_set_specific(): void
+    {
+        $au = Country::create(['name' => 'Australia']);
+        $ca = Country::create(['name' => 'Canada']);
+
+        $auAuthor = Author::create(['name' => 'Alice', 'country_id' => $au->id]);
+        $caAuthor = Author::create(['name' => 'Bob', 'country_id' => $ca->id]);
+
+        Post::create(['title' => 'AU Post', 'author_id' => $auAuthor->id]);
+        Post::create(['title' => 'CA Post', 'author_id' => $caAuthor->id]);
+
+        $countries = Country::with('posts')->get()->keyBy('name');
+
+        $this->assertSame(['AU Post'], $countries['Australia']->posts->pluck('title')->all());
+        $this->assertSame(['CA Post'], $countries['Canada']->posts->pluck('title')->all());
+    }
 }

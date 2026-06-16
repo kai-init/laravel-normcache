@@ -178,6 +178,10 @@ trait CachesPivotRelation
             return false;
         }
 
+        if ($builder->hasExplicitDependencies()) {
+            return false;
+        }
+
         $plan = $builder->cachePlan($base, CachePlanContext::pivot(
             $resolvedColumns ?? [],
             $builder->inferAggregateDependencies()

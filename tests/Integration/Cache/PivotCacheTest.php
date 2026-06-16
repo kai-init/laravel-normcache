@@ -573,4 +573,15 @@ class PivotCacheTest extends TestCase
         $this->assertSame('php', $result->tags->first()->name);
         $this->assertSame('php', $result->tags->first()->tag_label);
     }
+
+    public function test_pivot_with_explicit_dependencies_bypasses_pivot_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'php']);
+        $author->tags()->attach($tag->id);
+
+        $author->tags()->dependsOn([Post::class])->get();
+
+        $this->assertEmpty($this->redisKeys('test:pivot:*'));
+    }
 }
