@@ -670,15 +670,11 @@ class DependsOnTest extends TestCase
         Author::query()->dependsOnTables(['users:{bad}'])->get();
     }
 
-    public function test_under_declared_dependencies_log_a_warning_in_debug_mode(): void
+    public function test_plain_join_table_is_auto_inferred_and_does_not_warn(): void
     {
         config(['app.debug' => true]);
 
-        Log::shouldReceive('warning')
-            ->once()
-            ->withArgs(function ($message) {
-                return str_contains($message, 'NormCache Warning: Query touches tables (authors) that are not present in dependsOnTables()');
-            });
+        Log::shouldReceive('warning')->never();
 
         Post::query()
             ->join('authors', 'authors.id', '=', 'posts.author_id')

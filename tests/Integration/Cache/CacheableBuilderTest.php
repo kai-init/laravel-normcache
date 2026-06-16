@@ -512,7 +512,7 @@ class CacheableBuilderTest extends TestCase
             ->explain();
 
         $this->assertStringContainsString("can't be normalized", $result);
-        $this->assertStringContainsString('JOIN', $result);
+        $this->assertStringContainsString('join_result_requires_explicit_select', $result);
     }
 
     public function test_explain_groups_non_standard_from_as_normalization(): void
@@ -543,12 +543,13 @@ class CacheableBuilderTest extends TestCase
     public function test_explain_shows_all_categories_when_multiple_apply(): void
     {
         $result = Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->groupBy('authors.id')
+            ->whereRaw('1 = 1')
+            ->groupBy('name')
             ->explain();
 
+        $this->assertStringContainsString("can't infer cache dependency", $result);
         $this->assertStringContainsString("can't be normalized", $result);
-        $this->assertStringContainsString('JOIN', $result);
+        $this->assertStringContainsString('raw WHERE', $result);
         $this->assertStringContainsString('GROUP BY', $result);
     }
 

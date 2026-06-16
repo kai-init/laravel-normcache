@@ -28,6 +28,7 @@ use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesBuilderInvalidation;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
 
 class CacheableBuilder extends Builder
@@ -181,7 +182,7 @@ class CacheableBuilder extends Builder
         $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            $executionBuilder->inferAggregateDependencies(),
+            $executionBuilder->inferAggregateDependencies()->merge($executionBuilder->inferJoinDependencies($base)),
             selectAll: true,
         ), PlanningMode::Explain);
 
@@ -223,9 +224,12 @@ class CacheableBuilder extends Builder
         $prepared = $this->prepareCacheExecution();
         $model = $this->model::class;
 
+        $inferred = $prepared->builder->inferAggregateDependencies()
+            ->merge($prepared->builder->inferJoinDependencies($prepared->base));
+
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, $columns),
-            $prepared->builder->inferAggregateDependencies(),
+            $inferred,
             selectAll: $columns === ['*'],
         ));
 
@@ -546,6 +550,27 @@ class CacheableBuilder extends Builder
         NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
         return $ids;
+    }
+
+    public function inferJoinDependencies(QueryBuilder $base): DependencySet
+    {
+        if (empty($base->joins)) {
+            return DependencySet::empty();
+        }
+
+        $connection = $this->model->getConnection()->getName();
+        $tables = [];
+
+        foreach ($base->joins as $join) {
+            if (!is_string($join->table)) {
+                return DependencySet::empty();
+            }
+
+            $table = preg_replace('/\s+as\s+\S+$/i', '', $join->table);
+            $tables[] = NormCache::tableKey($connection, $table);
+        }
+
+        return new DependencySet(tables: array_values(array_unique($tables)));
     }
 
     private function buildIds(QueryBuilder $base): array

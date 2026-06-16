@@ -80,7 +80,7 @@ class JoinResultCacheTest extends TestCase
         $this->assertSame('Alice', $results->first()->name);
     }
 
-    public function test_join_without_depends_on_bypasses_regardless_of_select(): void
+    public function test_plain_join_without_depends_on_infers_table_dependency_and_caches(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -90,8 +90,41 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
+        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_plain_join_without_explicit_root_select_bypasses_despite_inferred_tables(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->get();
+
         $this->assertEmpty($this->redisKeys('test:result:*'));
         $this->assertEmpty($this->redisKeys('test:query:*'));
+    }
+
+    public function test_inferred_join_invalidates_when_joined_table_is_written(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $first = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->get();
+        $this->assertCount(1, $first);
+
+        $author2 = Author::create(['name' => 'Bob']);
+        Post::create(['title' => 'World', 'author_id' => $author2->id]);
+
+        $second = Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->select('authors.*')
+            ->get();
+        $this->assertCount(2, $second);
     }
 
     public function test_join_get_star_string_without_explicit_root_select_bypasses_result_cache(): void
