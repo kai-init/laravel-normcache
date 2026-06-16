@@ -226,9 +226,7 @@ final class ModelHydrator
                     $keys[] = $key;
                 }
             }
-            if ($keys !== []) {
-                CacheReporter::modelHit($modelClass, $keys, null);
-            }
+            CacheReporter::modelHit($modelClass, $keys, null);
         }
 
         return $models;

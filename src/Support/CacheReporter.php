@@ -25,6 +25,10 @@ final class CacheReporter
 
     public static function queryHit(string $modelClass, string $key, ?float $startTime, array $meta = [], string $type = 'query hit'): void
     {
+        if (!self::active()) {
+            return;
+        }
+
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheHit($modelClass, $key));
         }
@@ -34,6 +38,10 @@ final class CacheReporter
 
     public static function queryMiss(string $modelClass, string $key, ?float $startTime, array $meta = [], string $type = 'query miss'): void
     {
+        if (!self::active()) {
+            return;
+        }
+
         if (NormCache::isEventsEnabled()) {
             event(new QueryCacheMiss($modelClass, $key));
         }
@@ -43,6 +51,10 @@ final class CacheReporter
 
     public static function modelHit(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
     {
+        if (!self::active()) {
+            return;
+        }
+
         if (NormCache::isEventsEnabled() && $ids !== []) {
             event(new ModelCacheHit($modelClass, $ids));
         }
@@ -52,6 +64,10 @@ final class CacheReporter
 
     public static function modelMiss(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
     {
+        if (!self::active()) {
+            return;
+        }
+
         if (NormCache::isEventsEnabled() && $ids !== []) {
             event(new ModelCacheMiss($modelClass, $ids));
         }
@@ -62,6 +78,10 @@ final class CacheReporter
     /** @param array<string, list<string>> $bypassReasons */
     public static function queryBypassed(string $modelClass, array $bypassReasons, ?float $startTime = null): void
     {
+        if (!self::active()) {
+            return;
+        }
+
         if (NormCache::isEventsEnabled()) {
             event(new QueryBypassed($modelClass, $bypassReasons));
         }

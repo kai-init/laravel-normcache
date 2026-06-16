@@ -163,31 +163,53 @@ final class RedisStore
             return [];
         }
 
-        $transform = fn($value) => ($value !== null && $value !== false)
-            ? ($unserialize ? $this->unserialize($value) : $value)
-            : null;
-
         if (!$this->slotting) {
             $prefixed = [];
             foreach ($keys as $key) {
                 $prefixed[] = $this->prefix($key);
             }
 
-            return array_map($transform, $this->connection->mget($prefixed));
+            $raw = $this->connection->mget($prefixed);
+            $values = [];
+
+            foreach ($raw as $i => $value) {
+                $values[$i] = $this->mgetValue($value, $unserialize);
+            }
+
+            return $values;
         }
 
         $results = [];
 
         foreach ($this->groupByTag($keys) as $groupKeys) {
-            $raw = $this->connection->mget(array_map(fn($k) => $this->prefix($k), $groupKeys));
+            $prefixed = [];
+            foreach ($groupKeys as $key) {
+                $prefixed[] = $this->prefix($key);
+            }
+
+            $raw = $this->connection->mget($prefixed);
 
             $idx = 0;
             foreach ($groupKeys as $key) {
-                $results[$key] = $transform($raw[$idx++]);
+                $results[$key] = $this->mgetValue($raw[$idx++], $unserialize);
             }
         }
 
-        return array_map(fn($k) => $results[$k], $keys);
+        $ordered = [];
+        foreach ($keys as $key) {
+            $ordered[] = $results[$key];
+        }
+
+        return $ordered;
+    }
+
+    private function mgetValue(mixed $value, bool $unserialize): mixed
+    {
+        if ($value === null || $value === false) {
+            return null;
+        }
+
+        return $unserialize ? $this->unserialize($value) : $value;
     }
 
     public function setMany(array $pairs, int $ttl): void
@@ -317,7 +339,10 @@ final class RedisStore
     /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
     public function script(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = array_map(fn($k) => $k === '' ? '' : $this->prefix($k), $keys);
+        $prefixedKeys = [];
+        foreach ($keys as $key) {
+            $prefixedKeys[] = $key === '' ? '' : $this->prefix($key);
+        }
 
         // In cluster mode, all keys MUST hash to the same slot.
         // If some keys are empty (optional), we replace them with a dummy key
@@ -332,10 +357,11 @@ final class RedisStore
             }
 
             if ($tag !== null) {
-                $prefixedKeys = array_map(
-                    fn($pk) => $pk === '' ? "{$tag}:null" : $pk,
-                    $prefixedKeys
-                );
+                foreach ($prefixedKeys as $i => $prefixedKey) {
+                    if ($prefixedKey === '') {
+                        $prefixedKeys[$i] = "{$tag}:null";
+                    }
+                }
             }
         }
 

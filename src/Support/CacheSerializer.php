@@ -43,9 +43,14 @@ final class CacheSerializer
 
     public function unserializeMany(array $raw): array
     {
-        return array_map(
-            fn($value) => $value !== null && $value !== false ? $this->unserialize($value) : null,
-            $raw
-        );
+        $values = [];
+
+        foreach ($raw as $key => $value) {
+            $values[$key] = $value !== null && $value !== false
+                ? $this->unserialize($value)
+                : null;
+        }
+
+        return $values;
     }
 }
