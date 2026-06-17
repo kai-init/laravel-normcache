@@ -159,6 +159,7 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':{' . $classKey . '}:' . $tag . ':*',
         ]);
     }
 
@@ -171,6 +172,7 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*',
         ]);
     }
 

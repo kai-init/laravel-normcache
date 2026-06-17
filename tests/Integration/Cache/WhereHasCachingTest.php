@@ -97,6 +97,20 @@ class WhereHasCachingTest extends TestCase
         $this->assertStringContainsString("can't infer cache dependency", $result);
     }
 
+    public function test_wherehas_relation_definition_with_lock_bypasses(): void
+    {
+        $result = Author::whereHas('lockedPosts')->explain();
+
+        $this->assertStringStartsWith('not cached', $result);
+    }
+
+    public function test_wherehas_relation_definition_with_without_cache_bypasses(): void
+    {
+        $result = Author::whereHas('cacheSkippedPosts')->explain();
+
+        $this->assertStringStartsWith('not cached', $result);
+    }
+
     // whereDoesntHave / orWhereHas / count thresholds
 
     public function test_wheredoesnthave_caches_and_invalidates_on_membership_change(): void

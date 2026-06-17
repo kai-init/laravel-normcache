@@ -26,6 +26,16 @@ class Author extends Model
         return $this->hasMany(Post::class);
     }
 
+    public function lockedPosts(): HasMany
+    {
+        return $this->hasMany(Post::class)->lockForUpdate();
+    }
+
+    public function cacheSkippedPosts(): HasMany
+    {
+        return $this->hasMany(Post::class)->withoutCache();
+    }
+
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class, 'author_tag');

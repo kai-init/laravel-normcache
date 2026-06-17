@@ -138,15 +138,20 @@ trait CachesRelationAggregates
         $relationQuery = $relation->getQuery();
 
         if ($relationQuery instanceof CacheableBuilder) {
-            $relationBase = $relationQuery->toBase();
+            if ($relationQuery->isCacheSkipped()) {
+                return null;
+            }
 
-            if ((new QueryAnalyzer)->inspect($relationBase, $relation->getRelated()->getTable(), null)->hasDependencyBypass()) {
+            $relationBase = $relationQuery->toBase();
+            $inspection = (new QueryAnalyzer)->inspect($relationBase, $relation->getRelated()->getTable(), null);
+
+            if ($inspection->hasDependencyBypass() || $inspection->hasSafetyBypass()) {
                 return null;
             }
 
             $joinDeps = $relationQuery->inferJoinDependencies($relationBase);
 
-            if (!empty($relationBase->joins) && $joinDeps->tables === []) {
+            if (!$joinDeps->safe || (!empty($relationBase->joins) && $joinDeps->tables === [])) {
                 return null;
             }
 

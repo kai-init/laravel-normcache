@@ -566,11 +566,35 @@ class CacheableBuilder extends Builder
                 return DependencySet::empty();
             }
 
+            if ($this->joinClauseHasComplexWheres($join->wheres ?? [])) {
+                return DependencySet::unsafe('join clause dependency could not be inferred');
+            }
+
+            if ($this->joinTableHasImplicitAlias($join->table)) {
+                return DependencySet::unsafe('join table alias could not be inferred');
+            }
+
             $table = preg_replace('/\s+as\s+\S+$/i', '', $join->table);
             $tables[] = NormCache::tableKey($connection, $table);
         }
 
         return new DependencySet(tables: array_values(array_unique($tables)));
+    }
+
+    private function joinTableHasImplicitAlias(string $table): bool
+    {
+        return (bool) preg_match('/\s+/', trim($table)) && !preg_match('/\s+as\s+/i', $table);
+    }
+
+    private function joinClauseHasComplexWheres(array $wheres): bool
+    {
+        foreach ($wheres as $where) {
+            if (!in_array($where['type'] ?? null, ['Column', 'Basic', 'Null', 'NotNull'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function buildIds(QueryBuilder $base): array

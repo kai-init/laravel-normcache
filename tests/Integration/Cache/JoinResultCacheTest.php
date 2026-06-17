@@ -155,30 +155,86 @@ class JoinResultCacheTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:result:*'));
     }
 
+    public function test_join_with_where_exists_clause_bypasses_auto_inference(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        DB::table('comments')->insert([
+            'body' => 'c1',
+            'commentable_type' => Post::class,
+            'commentable_id' => $post->id,
+        ]);
+
+        Author::query()
+            ->join('posts', function ($join) {
+                $join->on('posts.author_id', '=', 'authors.id')
+                    ->whereExists(function ($query) {
+                        $query
+                            ->from('comments')
+                            ->whereColumn('comments.commentable_id', 'posts.id')
+                            ->where('comments.commentable_type', Post::class);
+                    });
+            })
+            ->select('authors.*')
+            ->get();
+
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_join_with_raw_clause_bypasses_auto_inference(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        Author::query()
+            ->join('posts', function ($join) {
+                $join->on('posts.author_id', '=', 'authors.id')
+                    ->whereRaw('posts.title <> ?', ['Draft']);
+            })
+            ->select('authors.*')
+            ->get();
+
+        $this->assertEmpty($this->redisKeys('test:result:*'));
+    }
+
+    public function test_implicit_join_alias_bypasses_auto_inference(): void
+    {
+        $builder = Author::query()
+            ->join('posts p', 'p.author_id', '=', 'authors.id')
+            ->select('authors.*');
+        $prepared = $builder->prepareCacheExecution();
+
+        $dependencies = $builder->inferJoinDependencies($prepared->base);
+
+        $this->assertFalse($dependencies->safe);
+    }
+
     public function test_multiple_joins_all_table_deps_collected_and_invalidated(): void
     {
-        $author = Author::create(['name' => 'Alice', 'country_id' => null]);
+        $country = Country::create(['name' => 'AU']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
         Post::create(['title' => 'P1', 'author_id' => $author->id]);
 
         $first = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->join('countries', 'countries.id', '=', 'authors.country_id')
+            ->where('countries.name', 'AU')
             ->select('authors.*')
             ->get();
-        $this->assertCount(0, $first); // no country_id match yet
+        $this->assertCount(1, $first);
 
         $this->assertNotEmpty($this->redisKeys('test:result:*'));
 
-        // Bump a country — should invalidate because countries is a tracked dep
-        Country::create(['name' => 'AU']);
+        $country->update(['name' => 'NZ']);
 
         $second = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->join('countries', 'countries.id', '=', 'authors.country_id')
+            ->where('countries.name', 'AU')
             ->select('authors.*')
             ->get();
 
-        $this->assertSame(0, $second->count());
+        $this->assertCount(0, $second);
     }
 
     public function test_plain_join_count_infers_join_dependency_and_invalidates(): void

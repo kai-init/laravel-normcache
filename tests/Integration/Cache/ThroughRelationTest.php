@@ -61,6 +61,21 @@ class ThroughRelationTest extends TestCase
         $this->assertSame($keyCountAfterFirst, count($this->redisKeys('test:*')));
     }
 
+    public function test_flush_tag_removes_tagged_through_relation_cache(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->tag('homepage')->get();
+
+        $this->assertNotEmpty($this->redisKeys('test:through:*:homepage:*'));
+
+        NormCache::flushTag(Post::class, 'homepage');
+
+        $this->assertEmpty($this->redisKeys('test:through:*:homepage:*'));
+    }
+
     public function test_has_many_through_cache_invalidated_when_post_version_changes(): void
     {
         $country = Country::create(['name' => 'Australia']);

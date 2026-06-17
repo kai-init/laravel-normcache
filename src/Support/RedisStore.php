@@ -350,8 +350,9 @@ final class RedisStore
         if ($this->isCluster()) {
             $tag = null;
             foreach ($prefixedKeys as $pk) {
-                if (preg_match('/\{([^}]+)\}/', $pk, $matches)) {
-                    $tag = $matches[0];
+                $hashTag = $this->hashTag($pk, includeBraces: true);
+                if ($hashTag !== null) {
+                    $tag = $hashTag;
                     break;
                 }
             }
@@ -441,11 +442,30 @@ final class RedisStore
         $groups = [];
 
         foreach ($keys as $key) {
-            $tag = preg_match('/\{([^}]+)\}/', $key, $matches) ? $matches[1] : $key;
+            $tag = $this->hashTag($key) ?? $key;
             $groups[$tag][] = $key;
         }
 
         return $groups;
+    }
+
+    private function hashTag(string $key, bool $includeBraces = false): ?string
+    {
+        $start = strpos($key, '{');
+
+        if ($start === false) {
+            return null;
+        }
+
+        $end = strpos($key, '}', $start + 1);
+
+        if ($end === false || $end === $start + 1) {
+            return null;
+        }
+
+        return $includeBraces
+            ? substr($key, $start, $end - $start + 1)
+            : substr($key, $start + 1, $end - $start - 1);
     }
 
     private function connectionPrefix(): string

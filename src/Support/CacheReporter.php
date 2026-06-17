@@ -78,20 +78,20 @@ final class CacheReporter
     /** @param array<string, list<string>> $bypassReasons */
     public static function queryBypassed(string $modelClass, array $bypassReasons, ?float $startTime = null): void
     {
-        if (!self::active()) {
-            return;
-        }
-
-        if (NormCache::isEventsEnabled()) {
-            event(new QueryBypassed($modelClass, $bypassReasons));
-        }
-
         if (config('app.debug', false) && !empty($bypassReasons['dependency'])) {
             Log::warning(sprintf(
                 'NormCache Warning: Query on %s bypassed cache due to unsafe dependency inference (%s). Please provide explicit dependsOn() or dependsOnTables() to enable caching.',
                 $modelClass,
                 implode(', ', $bypassReasons['dependency'])
             ));
+        }
+
+        if (!self::active()) {
+            return;
+        }
+
+        if (NormCache::isEventsEnabled()) {
+            event(new QueryBypassed($modelClass, $bypassReasons));
         }
 
         NormCacheCollector::recordBypass($modelClass, $bypassReasons, $startTime);

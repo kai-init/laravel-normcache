@@ -20,4 +20,21 @@ class SilentBypassLogTest extends TestCase
 
         Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
     }
+
+    public function test_logs_dependency_bypass_warning_when_events_and_debugbar_are_disabled()
+    {
+        config([
+            'app.debug' => true,
+            'normcache.events' => false,
+            'normcache.debugbar' => false,
+        ]);
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(function ($msg) {
+                return str_contains($msg, 'unsafe dependency inference');
+            });
+
+        Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
+    }
 }
