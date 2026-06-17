@@ -67,7 +67,8 @@ final class ModelHydrator
             return [];
         }
 
-        $debugbarStart = CacheReporter::beginMeasure();
+        $reporting = CacheReporter::active();
+        $debugbarStart = $reporting ? CacheReporter::beginMeasure() : null;
 
         $containedInQueryHit = $raw !== null;
 
@@ -88,8 +89,8 @@ final class ModelHydrator
             $status = 'hit';
         }
 
-        if ($hits !== []) {
-            CacheReporter::modelHit($modelClass, array_keys($hits), $debugbarStart, [
+        if ($hits !== [] && $reporting) {
+            CacheReporter::modelHitActive($modelClass, array_keys($hits), $debugbarStart, [
                 'suppress_collector' => $containedInQueryHit,
                 'ids' => $ids,
             ]);
@@ -99,10 +100,12 @@ final class ModelHydrator
             return array_values($hits);
         }
 
-        CacheReporter::modelMiss($modelClass, $missed, $debugbarStart, [
-            'hits' => array_keys($hits),
-            'partial' => $hits !== [],
-        ]);
+        if ($reporting) {
+            CacheReporter::modelMissActive($modelClass, $missed, $debugbarStart, [
+                'hits' => array_keys($hits),
+                'partial' => $hits !== [],
+            ]);
+        }
 
         if ($lockKey === null) {
             [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);

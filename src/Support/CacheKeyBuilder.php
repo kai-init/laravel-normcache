@@ -177,12 +177,24 @@ class CacheKeyBuilder
 
     public function versionSegment(array $versionKeys, array $resolvedVersions): string
     {
-        return implode(':', array_map(fn($key) => 'v' . $resolvedVersions[$key], $versionKeys));
+        $versions = [];
+
+        foreach ($versionKeys as $key) {
+            $versions[] = 'v' . $resolvedVersions[$key];
+        }
+
+        return implode(':', $versions);
     }
 
     public function versionsFromSegment(string $seg): array
     {
-        return array_map(fn($version) => substr($version, 1), explode(':', $seg));
+        $parts = explode(':', $seg);
+
+        foreach ($parts as $i => $version) {
+            $parts[$i] = substr($version, 1);
+        }
+
+        return $parts;
     }
 
     public function buildingToWakeKey(string $buildingKey): string
@@ -203,14 +215,44 @@ class CacheKeyBuilder
      */
     public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
-        $all = array_values(array_unique(
-            array_merge([$classKey], array_map($this->classKey(...), $this->sortClassesByKey($depClasses)), $this->sortKeys($depTableKeys))
-        ));
+        if ($depClasses === [] && $depTableKeys === []) {
+            return [
+                [$this->verKey($classKey)],
+                [$this->scheduledKey($classKey)],
+            ];
+        }
 
-        return [
-            array_map(fn($key) => $this->verKey($key), $all),
-            array_map(fn($key) => $this->scheduledKey($key), $all),
-        ];
+        $all = [];
+        $seen = [];
+
+        $seen[$classKey] = true;
+        $all[] = $classKey;
+
+        foreach ($this->sortClassesByKey($depClasses) as $class) {
+            $key = $this->classKey($class);
+
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $all[] = $key;
+            }
+        }
+
+        foreach ($this->sortKeys($depTableKeys) as $key) {
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $all[] = $key;
+            }
+        }
+
+        $versionKeys = [];
+        $scheduledKeys = [];
+
+        foreach ($all as $key) {
+            $versionKeys[] = $this->verKey($key);
+            $scheduledKeys[] = $this->scheduledKey($key);
+        }
+
+        return [$versionKeys, $scheduledKeys];
     }
 
     // -------------------------------------------------------------------------

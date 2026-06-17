@@ -55,6 +55,11 @@ final class CacheReporter
             return;
         }
 
+        self::modelHitActive($modelClass, $ids, $startTime, $meta);
+    }
+
+    public static function modelHitActive(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
+    {
         if (NormCache::isEventsEnabled() && $ids !== []) {
             event(new ModelCacheHit($modelClass, $ids));
         }
@@ -68,6 +73,11 @@ final class CacheReporter
             return;
         }
 
+        self::modelMissActive($modelClass, $ids, $startTime, $meta);
+    }
+
+    public static function modelMissActive(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
+    {
         if (NormCache::isEventsEnabled() && $ids !== []) {
             event(new ModelCacheMiss($modelClass, $ids));
         }
