@@ -252,8 +252,13 @@ final class ModelHydrator
         $values = $results->all();
 
         if ($isCast === null) {
+            $template = $model->newInstance([], true);
+            $hydrate = self::hydrateClosure();
+
             foreach ($values as $key => $value) {
-                $values[$key] = $model->newFromBuilder([$column => $value])->{$column};
+                $instance = clone $template;
+                $hydrate($instance, [$column => $value], true);
+                $values[$key] = $instance->{$column};
             }
 
             return new Collection($values);
@@ -316,6 +321,7 @@ final class ModelHydrator
 
         $attrsByKey = [];
         $deletedAtCol = CacheKeyBuilder::deletedAtColumn($modelClass);
+        $hydrate = $projection !== null ? self::hydrateClosure() : null;
 
         foreach ($loaded as $id => $model) {
             $attrs = $model->getRawOriginal();
@@ -325,8 +331,11 @@ final class ModelHydrator
                 $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
             }
 
-            if ($projection !== null) {
-                $model->setRawAttributes(AttributeProjector::projectAttributes($attrs, $projection), true);
+            if ($hydrate !== null) {
+                // 'retrieved' already fired once for these models via the get() above;
+                // re-projecting attributes doesn't need setRawAttributes' syncOriginal()
+                // round-trip through getAttributes()/mergeAttributesFromCachedCasts().
+                $hydrate($model, AttributeProjector::projectAttributes($attrs, $projection), false);
             }
         }
 

@@ -4,6 +4,7 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
@@ -19,6 +20,8 @@ use NormCache\Values\PreparedQuery;
 trait CachesPivotRelation
 {
     use CollectsRelatedModels;
+
+    private static ?\Closure $pivotHydrateClosure = null;
 
     private array $eagerParentIds = [];
 
@@ -297,7 +300,7 @@ trait CachesPivotRelation
                 $model = clone $modelsById[$entry['id']];
 
                 $pivot = clone $templatePivot;
-                $pivot->setRawAttributes($entry['pivot'], true);
+                self::pivotHydrateClosure()($pivot, $entry['pivot']);
 
                 $model->setRelation($this->accessor, $pivot);
 
@@ -323,6 +326,38 @@ trait CachesPivotRelation
             $prepared,
             $applyAfterCallbacks,
             fn(array $models) => $this->hydratePivotRelation($models),
+        );
+    }
+
+    protected function hydratePivotRelation(array $models)
+    {
+        $template = null;
+
+        foreach ($models as $model) {
+            $values = $this->migratePivotAttributes($model);
+
+            if ($template === null) {
+                $pivot = $template = $this->newExistingPivot($values);
+            } else {
+                $pivot = clone $template;
+                self::pivotHydrateClosure()($pivot, $values);
+            }
+
+            $model->setRelation($this->accessor, $pivot);
+        }
+    }
+
+    private static function pivotHydrateClosure(): \Closure
+    {
+        return self::$pivotHydrateClosure ??= \Closure::bind(
+            static function (Model $pivot, array $attributes): void {
+                $pivot->attributes = $attributes;
+                $pivot->original = $attributes;
+                $pivot->classCastCache = [];
+                $pivot->attributeCastCache = [];
+            },
+            null,
+            Model::class
         );
     }
 }

@@ -102,6 +102,27 @@ class CastAttributeTest extends TestCase
         $this->assertSame(1, $retrieved);
     }
 
+    public function test_pluck_fires_retrieved_once_per_row_not_once_per_batch(): void
+    {
+        // ModelHydrator::transformScalars() clones a template pivot-like instance per
+        // row when a retrieved listener forces the slow path. Guard against the clone
+        // optimization collapsing N rows into a single fired event.
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'A', 'author_id' => $author->id, 'published' => true]);
+        Post::create(['title' => 'B', 'author_id' => $author->id, 'published' => false]);
+        Post::create(['title' => 'C', 'author_id' => $author->id, 'published' => true]);
+
+        $retrieved = 0;
+        Event::listen('eloquent.retrieved: ' . Post::class, function () use (&$retrieved): void {
+            $retrieved++;
+        });
+
+        $values = Post::orderBy('id')->pluck('published');
+
+        $this->assertSame([true, false, true], $values->all());
+        $this->assertSame(3, $retrieved);
+    }
+
     public function test_array_cast_survives_model_cache_db_fallback(): void
     {
         $author = Author::create(['name' => 'Alice']);
