@@ -4,10 +4,10 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
+use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
@@ -20,8 +20,6 @@ use NormCache\Values\PreparedQuery;
 trait CachesPivotRelation
 {
     use CollectsRelatedModels;
-
-    private static ?\Closure $pivotHydrateClosure = null;
 
     private array $eagerParentIds = [];
 
@@ -300,7 +298,7 @@ trait CachesPivotRelation
                 $model = clone $modelsById[$entry['id']];
 
                 $pivot = clone $templatePivot;
-                self::pivotHydrateClosure()($pivot, $entry['pivot']);
+                ModelHydrator::hydrateClosure()($pivot, $entry['pivot'], false);
 
                 $model->setRelation($this->accessor, $pivot);
 
@@ -340,24 +338,10 @@ trait CachesPivotRelation
                 $pivot = $template = $this->newExistingPivot($values);
             } else {
                 $pivot = clone $template;
-                self::pivotHydrateClosure()($pivot, $values);
+                ModelHydrator::hydrateClosure()($pivot, $values, false);
             }
 
             $model->setRelation($this->accessor, $pivot);
         }
-    }
-
-    private static function pivotHydrateClosure(): \Closure
-    {
-        return self::$pivotHydrateClosure ??= \Closure::bind(
-            static function (Model $pivot, array $attributes): void {
-                $pivot->attributes = $attributes;
-                $pivot->original = $attributes;
-                $pivot->classCastCache = [];
-                $pivot->attributeCastCache = [];
-            },
-            null,
-            Model::class
-        );
     }
 }

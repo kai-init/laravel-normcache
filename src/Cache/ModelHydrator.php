@@ -369,7 +369,7 @@ final class ModelHydrator
         return $loaded->all();
     }
 
-    private static function hydrateClosure(): \Closure
+    public static function hydrateClosure(): \Closure
     {
         return self::$hydrateClosure ??= \Closure::bind(
             static function (Model $instance, array $attrs, bool $fire): void {
