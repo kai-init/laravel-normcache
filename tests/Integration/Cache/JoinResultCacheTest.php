@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -204,7 +205,10 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*');
         $prepared = $builder->prepareCacheExecution();
 
-        $dependencies = $builder->inferJoinDependencies($prepared->base);
+        $dependencies = (new QueryAnalyzer)->inferJoinDependencies(
+            $prepared->base,
+            $builder->getModel()->getConnection()->getName()
+        );
 
         $this->assertFalse($dependencies->safe);
     }

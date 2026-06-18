@@ -8,6 +8,7 @@ use Illuminate\Support\Str;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\CachePlanContext;
@@ -135,7 +136,9 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge($executionBuilder->inferJoinDependencies($base));
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge(
+            (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
+        );
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
             $kind->value,
             $columns,

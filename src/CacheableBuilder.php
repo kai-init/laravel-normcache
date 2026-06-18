@@ -10,25 +10,24 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
 use Illuminate\Support\LazyCollection;
-use NormCache\Enums\CacheStatus;
+use NormCache\Cache\ModelsExecutor;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Enums\PlanningMode;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
+use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Relations\CachesRelationExistence;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
-use NormCache\Support\QueryHasher;
 use NormCache\Traits\Cacheable;
 use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesBuilderInvalidation;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
-use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
 
 class CacheableBuilder extends Builder
@@ -38,6 +37,8 @@ class CacheableBuilder extends Builder
     private static array $validatedModelClasses = [];
 
     private static ?CachePlanner $sharedPlanner = null;
+
+    private static ?ModelsExecutor $sharedModelsExecutor = null;
 
     private bool $skipCache = false;
 
@@ -182,7 +183,9 @@ class CacheableBuilder extends Builder
         $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            $executionBuilder->inferAggregateDependencies()->merge($executionBuilder->inferJoinDependencies($base)),
+            $executionBuilder->inferAggregateDependencies()->merge(
+                (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
+            ),
             selectAll: true,
         ), PlanningMode::Explain);
 
@@ -225,7 +228,10 @@ class CacheableBuilder extends Builder
         $model = $this->model::class;
 
         $inferred = $prepared->builder->inferAggregateDependencies()
-            ->merge($prepared->builder->inferJoinDependencies($prepared->base));
+            ->merge((new QueryAnalyzer)->inferJoinDependencies(
+                $prepared->base,
+                $prepared->builder->getModel()->getConnection()->getName()
+            ));
 
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, $columns),
@@ -235,11 +241,11 @@ class CacheableBuilder extends Builder
 
         return match ($plan->strategy) {
             CacheStrategy::DirectModels => NormCache::rescue(
-                fn() => $this->getModelsByIds($prepared, $plan->primaryKeys, $model, $plan->columns),
+                fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
                 fn() => $this->getWithoutCacheFromPrepared($prepared, $columns),
             ),
             CacheStrategy::NormalizedQuery => NormCache::rescue(
-                fn() => $this->getFromCacheableQuery($prepared, $model, $plan->columns, $plan, $debugbarStart),
+                fn() => $this->modelsExecutor()->runNormalized($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
                 fn() => $this->getWithoutCacheFromPrepared($prepared, $columns)
             ),
             CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
@@ -300,7 +306,9 @@ class CacheableBuilder extends Builder
 
         $prepared = $this->prepareCacheExecution();
         $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::paginationCount(
-            $prepared->builder->inferAggregateDependencies()->merge($prepared->builder->inferJoinDependencies($prepared->base))
+            $prepared->builder->inferAggregateDependencies()->merge(
+                (new QueryAnalyzer)->inferJoinDependencies($prepared->base, $prepared->builder->getModel()->getConnection()->getName())
+            )
         ));
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {
@@ -481,128 +489,9 @@ class CacheableBuilder extends Builder
         return self::$sharedPlanner ??= new CachePlanner;
     }
 
-    private function getFromCacheableQuery(
-        PreparedQuery $prepared,
-        string $model,
-        ?array $selectedCols,
-        CachePlan $plan,
-        mixed $debugbarStart,
-    ): Collection {
-        $executionBuilder = $prepared->builder;
-        $base = $prepared->base;
-        $hash = QueryHasher::forNormalizedQuery($executionBuilder, $base);
-        $depClasses = $plan->dependencies->depClassesFor($model);
-        $depTableKeys = $plan->dependencies->tables;
-
-        return NormCache::engine()->runNormalized(
-            fetch: fn() => NormCache::getModelsFromQuery($model, $hash, $this->cacheTag, $depClasses, $depTableKeys),
-            waitForBuild: fn() => NormCache::waitForQueryBuild($model, $hash, $this->cacheTag, $depClasses, $depTableKeys),
-            onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart) {
-                CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
-
-                return $this->finalizeResult(NormCache::getModels($this->buildIds($base), $model, $selectedCols, null, $executionBuilder, true, $this->model), $prepared);
-            },
-            onMiss: function ($result) use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart) {
-                CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'ids']);
-
-                $ids = $this->resolveIds($result->key, $base, $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken);
-
-                return $this->finalizeResult(NormCache::getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $this->model), $prepared);
-            },
-            onHit: function ($result) use ($prepared, $executionBuilder, $model, $hash, $selectedCols, $debugbarStart) {
-                $key = $result->status === CacheStatus::Stale ? "stale:{$hash}" : $result->key;
-
-                CacheReporter::queryHit($model, $key, $debugbarStart, [
-                    'kind' => 'ids + models',
-                    'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result->ids) . ' ids)',
-                    'contains_model' => $result->ids,
-                ]);
-
-                return $this->finalizeResult(NormCache::getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $this->model), $prepared);
-            },
-        );
-    }
-
-    private function getModelsByIds(
-        PreparedQuery $prepared,
-        array $ids,
-        string $model,
-        ?array $selectedCols,
-    ): Collection {
-        $executionBuilder = $prepared->builder;
-
-        return $this->finalizeResult(NormCache::getModels(
-            $ids,
-            $model,
-            $selectedCols,
-            null,
-            $executionBuilder,
-            false,
-            $this->model
-        ), $prepared);
-    }
-
-    private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
+    private function modelsExecutor(): ModelsExecutor
     {
-        $ids = $this->buildIds($base);
-        NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
-
-        return $ids;
-    }
-
-    public function inferJoinDependencies(QueryBuilder $base): DependencySet
-    {
-        if (empty($base->joins)) {
-            return DependencySet::empty();
-        }
-
-        $connection = $this->model->getConnection()->getName();
-        $tables = [];
-
-        foreach ($base->joins as $join) {
-            if (!is_string($join->table)) {
-                return DependencySet::empty();
-            }
-
-            if ($this->joinClauseHasComplexWheres($join->wheres ?? [])) {
-                return DependencySet::unsafe('join clause dependency could not be inferred');
-            }
-
-            if ($this->joinTableHasImplicitAlias($join->table)) {
-                return DependencySet::unsafe('join table alias could not be inferred');
-            }
-
-            $table = preg_replace('/\s+as\s+\S+$/i', '', $join->table);
-            $tables[] = NormCache::tableKey($connection, $table);
-        }
-
-        return new DependencySet(tables: array_values(array_unique($tables)));
-    }
-
-    private function joinTableHasImplicitAlias(string $table): bool
-    {
-        return (bool) preg_match('/\s+/', trim($table)) && !preg_match('/\s+as\s+/i', $table);
-    }
-
-    private function joinClauseHasComplexWheres(array $wheres): bool
-    {
-        foreach ($wheres as $where) {
-            if (!in_array($where['type'] ?? null, ['Column', 'Basic', 'Null', 'NotNull'], true)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function buildIds(QueryBuilder $base): array
-    {
-        return $base
-            ->cloneWithout(['columns'])
-            ->cloneWithoutBindings(['select'])
-            ->select($this->model->getKeyName())
-            ->pluck($this->model->getKeyName())
-            ->all();
+        return self::$sharedModelsExecutor ??= new ModelsExecutor;
     }
 
     private function rememberPaginationTotal(PreparedQuery $prepared, CachePlan $plan): int

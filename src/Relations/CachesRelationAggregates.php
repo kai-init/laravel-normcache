@@ -149,7 +149,10 @@ trait CachesRelationAggregates
                 return null;
             }
 
-            $joinDeps = $relationQuery->inferJoinDependencies($relationBase);
+            $joinDeps = (new QueryAnalyzer)->inferJoinDependencies(
+                $relationBase,
+                $relationQuery->getModel()->getConnection()->getName()
+            );
 
             if (!$joinDeps->safe || (!empty($relationBase->joins) && $joinDeps->tables === [])) {
                 return null;

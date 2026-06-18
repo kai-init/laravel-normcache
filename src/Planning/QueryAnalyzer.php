@@ -4,7 +4,9 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\Facades\NormCache;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Values\DependencySet;
 use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
@@ -101,11 +103,60 @@ final class QueryAnalyzer
 
         foreach ((array) $base->joins as $join) {
             if (is_string($join->table)) {
-                $tables[] = preg_replace('/\s+as\s+\S+$/i', '', $join->table);
+                $tables[] = self::stripAlias($join->table);
             }
         }
 
         return array_values(array_unique($tables));
+    }
+
+    /** @param string $connection  Eloquent connection name, e.g. $model->getConnection()->getName() */
+    public function inferJoinDependencies(QueryBuilder $base, string $connection): DependencySet
+    {
+        if (empty($base->joins)) {
+            return DependencySet::empty();
+        }
+
+        $tables = [];
+
+        foreach ($base->joins as $join) {
+            if (!is_string($join->table)) {
+                return DependencySet::empty();
+            }
+
+            if ($this->joinClauseHasComplexWheres($join->wheres ?? [])) {
+                return DependencySet::unsafe('join clause dependency could not be inferred');
+            }
+
+            if ($this->joinTableHasImplicitAlias($join->table)) {
+                return DependencySet::unsafe('join table alias could not be inferred');
+            }
+
+            $tables[] = NormCache::tableKey($connection, self::stripAlias($join->table));
+        }
+
+        return new DependencySet(tables: array_values(array_unique($tables)));
+    }
+
+    private function joinTableHasImplicitAlias(string $table): bool
+    {
+        return (bool) preg_match('/\s+/', trim($table)) && !preg_match('/\s+as\s+/i', $table);
+    }
+
+    private function joinClauseHasComplexWheres(array $wheres): bool
+    {
+        foreach ($wheres as $where) {
+            if (!in_array($where['type'] ?? null, ['Column', 'Basic', 'Null', 'NotNull'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function stripAlias(string $table): string
+    {
+        return preg_replace('/\s+as\s+\S+$/i', '', $table);
     }
 
     public static function extractPrimaryKeys(QueryBuilder $base, array $primaryKeyIdentifiers): ?array
