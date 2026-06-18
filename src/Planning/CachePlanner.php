@@ -578,6 +578,12 @@ final class CachePlanner
             return;
         }
 
+        if ($inspection->has(QueryInspection::EXISTS_WHERE | QueryInspection::SUBQUERY_WHERE)) {
+            Log::warning(
+                'NormCache Warning: Query contains subquery/exists predicates. NormCache cannot verify all touched tables; ensure dependsOn()/dependsOnTables() includes every table read by the subquery.'
+            );
+        }
+
         $this->checkDependencyCompleteness(
             $inspection->tables ?? $this->analyzer->extractTables($base, $modelTable),
             $dependencies,
@@ -608,7 +614,7 @@ final class CachePlanner
         if (!empty($missing)) {
             $tablesStr = implode(', ', $missing);
             Log::warning(
-                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOnTables(). This is an under-declared dependency and can lead to stale cache reads."
+                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOn()/dependsOnTables(). This is an under-declared dependency and can lead to stale cache reads."
             );
         }
     }

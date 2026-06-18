@@ -84,7 +84,7 @@ Post::withoutCache()->get();
 
 ### Cross-Table Queries
 
-Simple `whereHas` / `whereDoesntHave` on a non-nested `Cacheable` relation and plain `join()` calls with an explicit root-table projection are inferred automatically — no `dependsOn()` needed:
+Simple `whereHas` / `whereDoesntHave` on a non-nested `Cacheable` relation and plain string `join()` calls with an explicit root-table projection are inferred automatically — no `dependsOn()` needed. Join inference is conservative: it bypasses joins with implicit aliases (`join('posts p', ...)`), expression join targets, raw or subquery join predicates, and unsupported join-clause conditions — those require `dependsOn()`/`dependsOnTables()` like everything else below.
 
 ```php
 Author::whereHas('posts', fn($q) => $q->where('published', true))->get();

@@ -24,6 +24,11 @@ final class QueryHasher
 
     public static function forPaginationCountQuery(CacheableBuilder $builder, QueryBuilder $query): string
     {
+        if (!empty($query->orders) || !empty($query->unionOrders)) {
+            $query = $query->cloneWithout(['orders', 'unionOrders'])
+                ->cloneWithoutBindings(['order', 'unionOrder']);
+        }
+
         return self::hash(self::forNormalizedQuery($builder, $query) . ':pagination_count');
     }
 

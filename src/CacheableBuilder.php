@@ -544,8 +544,6 @@ class CacheableBuilder extends Builder
 
     private function resolveIds(string $key, QueryBuilder $base, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): array
     {
-        CacheReporter::queryMiss($this->model::class, $key, null);
-
         $ids = $this->buildIds($base);
         NormCache::storeQueryIds($key, $ids, $this->queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
