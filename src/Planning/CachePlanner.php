@@ -484,15 +484,7 @@ final class CachePlanner
             return null;
         }
 
-        $bypassReasons = BypassReasons::merge(
-            $this->resolveContextReasons(
-                $context->contextReasons,
-                cacheSkipped: false,
-                cacheDisabled: false,
-                insideTransaction: $insideTransaction,
-            ),
-            BypassReasons::fromInspection($inspection),
-        );
+        $bypassReasons = $this->mergedBypassReasons($context, $inspection, $insideTransaction);
         $reasons = $bypassReasons['safety'] ?? [];
 
         return CachePlan::bypass(
@@ -547,15 +539,7 @@ final class CachePlanner
         bool $requiresPrimaryKeys = false,
         bool $relaxedRelationNormalization = false,
     ): CachePlan {
-        $bypassReasons = BypassReasons::merge(
-            $this->resolveContextReasons(
-                $context->contextReasons,
-                cacheSkipped: false,
-                cacheDisabled: false,
-                insideTransaction: false,
-            ),
-            BypassReasons::fromInspection($inspection),
-        );
+        $bypassReasons = $this->mergedBypassReasons($context, $inspection);
 
         if ($requiresPrimaryKeys) {
             $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
@@ -627,6 +611,22 @@ final class CachePlanner
                 "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOnTables(). This is an under-declared dependency and can lead to stale cache reads."
             );
         }
+    }
+
+    private function mergedBypassReasons(
+        CachePlanContext $context,
+        QueryInspection $inspection,
+        bool $insideTransaction = false,
+    ): array {
+        return BypassReasons::merge(
+            $this->resolveContextReasons(
+                $context->contextReasons,
+                cacheSkipped: false,
+                cacheDisabled: false,
+                insideTransaction: $insideTransaction,
+            ),
+            BypassReasons::fromInspection($inspection),
+        );
     }
 
     private function resolveContextReasons(

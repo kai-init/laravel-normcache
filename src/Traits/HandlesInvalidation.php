@@ -32,13 +32,11 @@ trait HandlesInvalidation
 
         $conn = $model->getConnection()->getName();
 
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueVersionFlush($conn, $this->keys->classKey($model::class));
-
-            return;
-        }
-
-        $this->attempt(fn() => $this->doInvalidateVersion($model::class));
+        $this->queueOrRun(
+            $conn,
+            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class)),
+            fn() => $this->doInvalidateVersion($model::class),
+        );
     }
 
     public function flushModel(Model|string $model): void
@@ -52,13 +50,11 @@ trait HandlesInvalidation
             ? ($this->keys->prototype($modelClass)->getConnectionName() ?? DB::getDefaultConnection())
             : $model->getConnection()->getName();
 
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $this->queueModelFlush($conn, $modelClass);
-
-            return;
-        }
-
-        $this->attempt(fn() => $this->forceFlushModel($modelClass));
+        $this->queueOrRun(
+            $conn,
+            fn() => $this->queueModelFlush($conn, $modelClass),
+            fn() => $this->forceFlushModel($modelClass),
+        );
     }
 
     public function flushInstance(Model $model): void
@@ -70,23 +66,19 @@ trait HandlesInvalidation
         $conn = $model->getConnection()->getName();
         $class = $model::class;
         $key = $this->keys->modelKey($class, $model->getKey());
+        $classKey = $this->keys->classKey($class);
 
-        if (DB::connection($conn)->transactionLevel() > 0) {
-            $classKey = $this->keys->classKey($class);
-            $this->queueVersionFlush($conn, $classKey);
-            $this->queueInstanceEvict($conn, $class, $key, $this->keys->membersKey($classKey));
-
-            return;
-        }
-
-        $this->attempt(function () use ($class, $key) {
-            $classKey = $this->keys->classKey($class);
-            $this->doInvalidateVersion($class);
-            $this->store->deleteFromSet(
-                $key,
-                $this->keys->membersKey($classKey)
-            );
-        });
+        $this->queueOrRun(
+            $conn,
+            function () use ($conn, $class, $key, $classKey) {
+                $this->queueVersionFlush($conn, $classKey);
+                $this->queueInstanceEvict($conn, $class, $key, $this->keys->membersKey($classKey));
+            },
+            function () use ($class, $key, $classKey) {
+                $this->doInvalidateVersion($class);
+                $this->store->deleteFromSet($key, $this->keys->membersKey($classKey));
+            },
+        );
     }
 
     public function invalidateTableVersion(string $connectionName, string $table): void
@@ -97,13 +89,11 @@ trait HandlesInvalidation
 
         $classKey = $this->keys->tableKey($connectionName, $table);
 
-        if (DB::connection($connectionName)->transactionLevel() > 0) {
-            $this->queueVersionFlush($connectionName, $classKey);
-
-            return;
-        }
-
-        $this->attempt(fn() => $this->doInvalidateKey($classKey));
+        $this->queueOrRun(
+            $connectionName,
+            fn() => $this->queueVersionFlush($connectionName, $classKey),
+            fn() => $this->doInvalidateKey($classKey),
+        );
     }
 
     public function evictModelKey(string $modelClass, mixed $id): void
@@ -182,19 +172,19 @@ trait HandlesInvalidation
             return;
         }
 
-        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
-            foreach ($modelClasses as $modelClass) {
-                $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass));
-            }
-
-            return;
-        }
-
-        $this->attempt(function () use ($modelClasses) {
-            foreach ($modelClasses as $modelClass) {
-                $this->doInvalidateVersion($modelClass);
-            }
-        });
+        $this->queueOrRun(
+            $connectionName,
+            function () use ($connectionName, $modelClasses) {
+                foreach ($modelClasses as $modelClass) {
+                    $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass));
+                }
+            },
+            function () use ($modelClasses) {
+                foreach ($modelClasses as $modelClass) {
+                    $this->doInvalidateVersion($modelClass);
+                }
+            },
+        );
     }
 
     public function commitPending(string $connectionName): void
@@ -249,6 +239,16 @@ trait HandlesInvalidation
     }
 
     // Private — invalidation internals
+    private function queueOrRun(?string $connectionName, callable $queue, callable $immediate): void
+    {
+        if ($connectionName !== null && DB::connection($connectionName)->transactionLevel() > 0) {
+            $queue();
+
+            return;
+        }
+
+        $this->attempt($immediate);
+    }
 
     private function doInvalidateVersion(string $modelClass): void
     {
