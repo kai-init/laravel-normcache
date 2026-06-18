@@ -310,7 +310,7 @@ class CacheableBuilder extends Builder
         }
 
         try {
-            $cachedTotal = $this->rememberPaginationTotal($prepared->base, $plan, $debugbarStart);
+            $cachedTotal = $this->rememberPaginationTotal($prepared, $plan);
         } catch (\Throwable $e) {
             NormCache::fallback($e);
 
@@ -607,40 +607,16 @@ class CacheableBuilder extends Builder
             ->all();
     }
 
-    private function rememberPaginationTotal(QueryBuilder $base, CachePlan $plan, mixed $debugbarStart): int
+    private function rememberPaginationTotal(PreparedQuery $prepared, CachePlan $plan): int
     {
-        $model = $this->model::class;
-        $depClasses = $plan->dependencies->depClassesFor($model);
-        $depTableKeys = $plan->dependencies->tables;
-        $hash = QueryHasher::forPaginationCountQuery($this, $base);
-
-        return (int) NormCache::engine()->runScalar(
-            fetch: fn() => NormCache::getResultCache($model, $depClasses, $hash, $this->cacheTag, $depTableKeys, CacheKeyBuilder::K_COUNT),
-            waitForBuild: fn() => NormCache::waitForResultBuild($model, $hash, tag: $this->cacheTag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: CacheKeyBuilder::K_COUNT),
-            compute: fn() => $base->getCountForPagination(),
-            onStore: function ($value, $result) use ($model, $debugbarStart) {
-                CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'pagination count']);
-
-                NormCache::storeResultCache(
-                    $result->key,
-                    [$value],
-                    $result->buildingKey,
-                    $this->queryTtl,
-                    $result->wakeKey,
-                    $result->versionKeys,
-                    $result->expectedVersions,
-                    $result->buildingToken
-                );
-            },
-            onHit: function ($result) use ($model, $base, $debugbarStart) {
-                if (!is_array($result->payload) || !array_key_exists(0, $result->payload)) {
-                    return $base->getCountForPagination();
-                }
-
-                CacheReporter::queryHit($model, $result->key, $debugbarStart, ['kind' => 'pagination count']);
-
-                return $result->payload[0];
-            },
+        [$value] = NormCache::result()->execute(
+            $prepared,
+            $plan,
+            ResultKind::PaginationCount,
+            [],
+            fn() => $prepared->base->getCountForPagination()
         );
+
+        return (int) $value;
     }
 }
