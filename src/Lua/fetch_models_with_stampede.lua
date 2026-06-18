@@ -1,10 +1,11 @@
--- Fetch multiple model keys, returning them. 
+-- Fetch multiple model keys, returning them plus the model-class version.
 -- If any are missing, attempts to acquire the building lock.
 -- KEYS[1..n] = model keys
 -- KEYS[n+1]  = lock key
+-- KEYS[n+2]  = model-class version key
 -- ARGV[1]    = lock token
 -- ARGV[2]    = lock ttl
-local n = #KEYS - 1
+local n = #KEYS - 2
 local chunk_size = 500
 local values = {}
 for start = 1, n, chunk_size do
@@ -15,6 +16,8 @@ for start = 1, n, chunk_size do
     for i = 1, #chunk_values do values[#values + 1] = chunk_values[i] end
 end
 
+local version = redis.call('GET', KEYS[n+2]) or '0'
+
 local all_hit = true
 for i=1, n do
     if not values[i] then
@@ -24,11 +27,11 @@ for i=1, n do
 end
 
 if all_hit then
-    return {'hit', values}
+    return {'hit', values, false, version}
 end
 
 if redis.call('SET', KEYS[n+1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2])) then
-    return {'miss', values, ARGV[1]}
+    return {'miss', values, ARGV[1], version}
 end
 
-return {'building', values, false}
+return {'building', values, false, version}

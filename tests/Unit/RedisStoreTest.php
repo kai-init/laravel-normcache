@@ -138,6 +138,48 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
     }
 
+    public function test_it_can_set_many_tracked_if_version_with_lock_release(): void
+    {
+        $this->store->delete(['member:2', 'ver:2', 'key:3', 'key:4', 'lock:2', 'wake:2']);
+        $this->store->setRaw('ver:2', '1', 60);
+        $this->store->setNxEx('lock:2', 'tok', 60);
+
+        $attrs = [
+            'key:3' => ['id' => 3, 'name' => 'Dee'],
+            'key:4' => ['id' => 4, 'name' => 'Eve'],
+        ];
+
+        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:2', 'ver:2', 1, 'lock:2', 'wake:2', 'tok');
+
+        $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('key:3'));
+        $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('key:4'));
+        $this->assertNull($this->store->getRaw('lock:2'), 'build lock should be released after the write');
+    }
+
+    public function test_it_skips_write_but_still_releases_on_version_mismatch(): void
+    {
+        $this->store->delete(['member:3', 'ver:3', 'key:5', 'lock:3', 'wake:3']);
+        $this->store->setRaw('ver:3', '2', 60);
+        $this->store->setNxEx('lock:3', 'tok', 60);
+
+        $this->store->setManyTrackedIfVersion(
+            ['key:5' => ['id' => 5]], 60, 'member:3', 'ver:3', 1, 'lock:3', 'wake:3', 'tok'
+        );
+
+        $this->assertNull($this->store->get('key:5'));
+        $this->assertNull($this->store->getRaw('lock:3'), 'build lock should still be released even when the write is skipped');
+    }
+
+    public function test_it_releases_lock_unconditionally_when_there_is_nothing_to_write(): void
+    {
+        $this->store->delete(['lock:4', 'wake:4']);
+        $this->store->setNxEx('lock:4', 'tok', 60);
+
+        $this->store->setManyTrackedIfVersion([], 60, 'member:4', 'ver:4', 1, 'lock:4', 'wake:4', 'tok');
+
+        $this->assertNull($this->store->getRaw('lock:4'));
+    }
+
     public function test_it_can_flush_by_patterns(): void
     {
         $this->store->set('foo:1', 'a', 60);

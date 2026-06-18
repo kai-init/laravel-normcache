@@ -76,7 +76,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_models_with_stampede'),
-            [$modelKey, $lockKey],
+            [$modelKey, $lockKey, $keys->verKey($classKey)],
             ['token', '5']
         );
 

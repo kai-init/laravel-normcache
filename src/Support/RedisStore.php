@@ -233,20 +233,40 @@ final class RedisStore
         });
     }
 
-    public function setManyTrackedIfVersion(array $attrsByKey, int $ttl, string $memberKey, string $versionKey, int $expectedVersion): void
-    {
+    /** CAS write of model attribute entries; releases the build lock as part of the write when given. */
+    public function setManyTrackedIfVersion(
+        array $attrsByKey,
+        int $ttl,
+        string $memberKey,
+        string $versionKey,
+        int $expectedVersion,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
+    ): void {
         if (empty($attrsByKey)) {
+            if ($buildingKey !== null) {
+                $this->releaseBuilding($buildingKey, $wakeKey ?? '', $token);
+            }
+
             return;
         }
 
         $script = RedisScripts::get('set_many_tracked_if_version');
+        $chunks = array_chunk($attrsByKey, 500, true);
+        $lastChunk = array_key_last($chunks);
 
-        foreach (array_chunk($attrsByKey, 500, true) as $chunk) {
+        foreach ($chunks as $i => $chunk) {
+            $isLast = $i === $lastChunk;
+
             $this->script(
                 $script,
-                array_merge([$versionKey, $memberKey], array_keys($chunk)),
                 array_merge(
-                    [(string) $expectedVersion, (string) $ttl, (string) count($chunk)],
+                    [$versionKey, $memberKey, $isLast ? ($buildingKey ?? '') : '', $isLast ? ($wakeKey ?? '') : ''],
+                    array_keys($chunk)
+                ),
+                array_merge(
+                    [(string) $expectedVersion, (string) $ttl, (string) count($chunk), $isLast ? ($token ?? '') : ''],
                     array_map(fn($attrs) => $this->serialize($attrs), array_values($chunk))
                 )
             );

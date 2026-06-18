@@ -79,11 +79,12 @@ final class ModelHydrator
 
         $hits = [];
         $lockKey = $wakeKey = $token = null;
+        $version = 0;
 
         if ($raw === null) {
             [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $ids);
 
-            [$status, $missed] = $this->fetchMissedViaLua($ids, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+            [$status, $missed, $version] = $this->fetchMissedViaLua($ids, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
         } else {
             ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
             $status = 'hit';
@@ -110,23 +111,25 @@ final class ModelHydrator
         if ($lockKey === null) {
             [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
 
-            [$status, $missed] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+            [$status, $missed, $version] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
         }
 
         if ($status === 'building' && $missed !== []) {
             $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
 
-            [$status, $missed] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+            [$status, $missed, $version] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
         }
 
         if ($status === 'miss') {
             try {
-                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits);
-            } finally {
+                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $version, $lockKey, $wakeKey, $token);
+            } catch (\Throwable $e) {
                 $this->store->releaseBuilding($lockKey, $wakeKey, $token);
+
+                throw $e;
             }
         } elseif ($missed !== []) {
-            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits);
+            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $version);
         }
 
         $ordered = [];
@@ -170,12 +173,13 @@ final class ModelHydrator
 
         $result = $this->store->script(
             RedisScripts::get('fetch_models_with_stampede'),
-            [...$fetchKeys, $lockKey],
+            [...$fetchKeys, $lockKey, $this->keys->verKey($classKey)],
             [$token, (string) $this->buildingLockTtl]
         );
 
         $status = $result[0];
         $retryRaw = $this->store->unserializeMany($result[1]);
+        $version = $this->versions->normalizeVersion($result[3] ?? null);
 
         ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $retryRaw, $projection, $prototype);
 
@@ -183,7 +187,7 @@ final class ModelHydrator
             $hits[$id] = $hit;
         }
 
-        return [$status, $stillMissed];
+        return [$status, $stillMissed, $version];
     }
 
     /** Fetches still-missing ids from the database, caches them, and merges into $hits by reference. */
@@ -195,12 +199,19 @@ final class ModelHydrator
         ?EloquentBuilder $missedQuery,
         bool $preserveQueryShape,
         array &$hits,
+        int $modelVersion,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
     ): void {
         if ($missed === []) {
             return;
         }
 
-        $fetched = $this->fetchFromDatabaseAndCache($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape);
+        $fetched = $this->fetchFromDatabaseAndCache(
+            $missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape,
+            $modelVersion, $buildingKey, $wakeKey, $token
+        );
 
         foreach ($fetched as $id => $model) {
             $hits[$id] = $model;
@@ -305,8 +316,11 @@ final class ModelHydrator
         ?array $projection,
         ?EloquentBuilder $missedQuery,
         bool $preserveQueryShape,
+        int $modelVersion,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
     ): array {
-        $modelVersion = $this->versions->currentVersion($modelClass);
         $prototype = CacheKeyBuilder::prototype($modelClass);
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
@@ -339,13 +353,16 @@ final class ModelHydrator
             }
         }
 
-        if ($attrsByKey !== []) {
+        if ($attrsByKey !== [] || $buildingKey !== null) {
             $this->store->setManyTrackedIfVersion(
                 $attrsByKey,
                 $this->ttl,
                 $this->keys->membersKey($classKey),
                 $this->keys->verKey($classKey),
-                $modelVersion
+                $modelVersion,
+                $buildingKey,
+                $wakeKey,
+                $token
             );
         }
 

@@ -1,27 +1,50 @@
--- Write model attribute entries only if the version key still matches.
--- Skips all writes silently if the version has moved on.
+-- Write model attribute entries only if the version key still matches, then release the
+-- build lock. The lock is always released, even when the write is skipped.
 --
 -- KEYS[1]    = version key (ver:{classKey}:)
 -- KEYS[2]    = members set key
--- KEYS[3..]  = model attribute keys to write
+-- KEYS[3]    = building lock key (or '' to skip release)
+-- KEYS[4]    = wake key (or '' to skip)
+-- KEYS[5..]  = model attribute keys to write
 -- ARGV[1]    = expected version
 -- ARGV[2]    = TTL in seconds
 -- ARGV[3]    = n (number of model keys)
--- ARGV[4..]  = serialized attribute values
+-- ARGV[4]    = building lock token (optional; empty means release unconditionally)
+-- ARGV[5..]  = serialized attribute values
+local token = ARGV[4] or ''
+
+local function release_building()
+    if KEYS[3] == '' then return end
+    if token ~= '' and redis.call('GET', KEYS[3]) ~= token then return end
+    redis.call('DEL', KEYS[3])
+    if KEYS[4] ~= '' then
+        redis.call('LPUSH', KEYS[4], '1')
+        redis.call('EXPIRE', KEYS[4], 10)
+    end
+end
+
+if KEYS[3] ~= '' and token ~= '' and redis.call('GET', KEYS[3]) ~= token then
+    return 0
+end
+
 local current = redis.call('GET', KEYS[1]) or '0'
-if current ~= ARGV[1] then return 0 end
+if current ~= ARGV[1] then
+    release_building()
+    return 0
+end
 
 local ttl = tonumber(ARGV[2])
 local n = tonumber(ARGV[3])
 local members = {}
 
 for i = 1, n do
-    local key = KEYS[2 + i]
-    redis.call('SETEX', key, ttl, ARGV[3 + i])
+    local key = KEYS[4 + i]
+    redis.call('SETEX', key, ttl, ARGV[4 + i])
     members[i] = key
 end
 
 redis.call('SADD', KEYS[2], unpack(members))
 redis.call('EXPIRE', KEYS[2], ttl)
 
+release_building()
 return n
