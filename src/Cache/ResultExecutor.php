@@ -30,7 +30,7 @@ final class ResultExecutor
         $hash = $this->resolveHash($prepared, $kind, $columns);
         $depClasses = $plan->dependencies->depClassesFor($modelClass);
         $depTableKeys = $plan->dependencies->tables;
-        $structuredPayload = $kind === ResultKind::Collection || $kind === ResultKind::Through;
+        $structuredPayload = $kind === ResultKind::Collection;
 
         $execution = NormCache::rescue(
             fn() => NormCache::engine()->runScalar(
@@ -78,7 +78,6 @@ final class ResultExecutor
         return match ($kind) {
             ResultKind::Count, ResultKind::PaginationCount => CacheKeyBuilder::K_COUNT,
             ResultKind::Collection => CacheKeyBuilder::K_RESULT,
-            ResultKind::Through => CacheKeyBuilder::K_THROUGH,
             default => CacheKeyBuilder::K_SCALAR,
         };
     }
@@ -87,7 +86,7 @@ final class ResultExecutor
     {
         $query = $prepared->base;
 
-        if ($kind === ResultKind::Collection || $kind === ResultKind::Through) {
+        if ($kind === ResultKind::Collection) {
             if (empty($query->columns) && $columns !== ['*']) {
                 $query = $query->cloneWithout([]);
                 $query->columns = $columns;

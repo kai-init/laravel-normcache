@@ -14,5 +14,4 @@ enum ResultKind: string
     case Min = 'min';
     case Max = 'max';
     case Exists = 'exists';
-    case Through = 'through';
 }

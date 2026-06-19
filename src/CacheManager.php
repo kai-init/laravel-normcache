@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
+use NormCache\Cache\NormalizedThroughReader;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
@@ -17,6 +18,7 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
+use NormCache\Values\ThroughCacheResult;
 
 class CacheManager
 {
@@ -25,6 +27,7 @@ class CacheManager
     public function __construct(
         private readonly NormalizedCacheReader $queryReader,
         private readonly ResultCacheReader $resultReader,
+        private readonly NormalizedThroughReader $throughReader,
         private readonly ResultExecutor $result,
         private readonly ModelHydrator $hydrator,
         private readonly VersionTracker $versions,
@@ -126,6 +129,11 @@ class CacheManager
     // Reads
     // -------------------------------------------------------------------------
 
+    public function getThroughCache(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): ThroughCacheResult
+    {
+        return $this->throughReader->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
+    }
+
     public function getModelsFromQuery(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): QueryCacheResult
     {
         return $this->queryReader->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
@@ -144,6 +152,11 @@ class CacheManager
     public function waitForQueryBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): ?QueryCacheResult
     {
         return $this->queryReader->waitForBuild($modelClass, $hash, $tag, $depClasses, $depTableKeys);
+    }
+
+    public function waitForThroughBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = []): ?ThroughCacheResult
+    {
+        return $this->throughReader->waitForBuild($modelClass, $hash, $tag, $depClasses, $depTableKeys);
     }
 
     public function waitForResultBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): ?ResultCacheResult
@@ -179,6 +192,11 @@ class CacheManager
     public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): void
     {
         $this->queryReader->store($key, $ids, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+    }
+
+    public function storeThroughIds(string $key, array $ids, array $throughKeys, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): void
+    {
+        $this->throughReader->store($key, $ids, $throughKeys, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
     }
 
     public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool

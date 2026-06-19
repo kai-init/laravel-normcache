@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Redis;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\NormalizedCacheReader;
+use NormCache\Cache\NormalizedThroughReader;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
@@ -182,6 +183,7 @@ abstract class TestCase extends OrchestraTestCase
         return new CacheManager(
             queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
             resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs),
             result: $result,
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,

@@ -7,6 +7,7 @@ use NormCache\Enums\CacheStatus;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
+use NormCache\Values\ThroughCacheResult;
 
 final class ExecutionEngine
 {
@@ -115,6 +116,40 @@ final class ExecutionEngine
      * @param  callable(QueryCacheResult): Collection  $onHit
      */
     public function runNormalized(
+        callable $fetch,
+        callable $waitForBuild,
+        callable $onBuild,
+        callable $onMiss,
+        callable $onHit,
+    ): Collection {
+        $result = $fetch();
+
+        if ($result->status === CacheStatus::Building) {
+            $result = $waitForBuild();
+
+            if ($result === null) {
+                return $onBuild();
+            }
+        }
+
+        if ($result->status === CacheStatus::Miss) {
+            return $onMiss($result);
+        }
+
+        return $onHit($result);
+    }
+
+    /**
+     * Same control flow as {@see self::runNormalized()}, kept as a separate method so call
+     * sites get ThroughCacheResult-typed callables instead of QueryCacheResult.
+     *
+     * @param  callable(): ThroughCacheResult  $fetch
+     * @param  callable(): (ThroughCacheResult|null)  $waitForBuild
+     * @param  callable(): Collection  $onBuild
+     * @param  callable(ThroughCacheResult): Collection  $onMiss
+     * @param  callable(ThroughCacheResult): Collection  $onHit
+     */
+    public function runThrough(
         callable $fetch,
         callable $waitForBuild,
         callable $onBuild,
