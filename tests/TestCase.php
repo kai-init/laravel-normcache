@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Cache\ModelHydrator;
@@ -208,7 +209,31 @@ abstract class TestCase extends OrchestraTestCase
     {
         $expected = $this->normalize($native());
         $cold = $this->normalize($cached());
-        $warm = $this->normalize($cached());
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        try {
+            $warm = $this->normalize($cached());
+            $warmQueries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+
+        if ($warmQueries !== []) {
+            fwrite(STDERR, sprintf(
+                "\n\nSQL Query\n"
+            ));
+
+            foreach ($warmQueries as $i => $query) {
+                fwrite(STDERR, sprintf(
+                    "------------------ \n%s;\n",
+                    rtrim(preg_replace('/\s+/', ' ', $query['query'] ?? ''), ';')
+                ));
+            }
+
+            fwrite(STDERR, "\n");
+        }
 
         $this->assertSame($expected, $cold, 'cold cache result differs from native Eloquent');
         $this->assertSame($cold, $warm, 'warm cache result differs from cold');

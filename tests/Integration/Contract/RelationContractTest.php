@@ -268,6 +268,16 @@ class RelationContractTest extends TestCase
         );
     }
 
+    public function test_with_has_one_through_of_many_latest(): void
+    {
+        $this->fixtures(); // UK: latest post is B1 through Bob
+
+        $this->contract(
+            fn() => Country::with('latestPost')->orderBy('name')->get(),
+            fn() => Country::withoutCache()->with('latestPost')->orderBy('name')->get(),
+        );
+    }
+
     public function test_with_has_one_of_many_aggregate_column(): void
     {
         $this->fixtures(); // Alice: mostViewed=A2(20), Bob: mostViewed=B1(30), Carol: null
