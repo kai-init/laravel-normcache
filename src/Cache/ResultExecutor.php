@@ -30,20 +30,21 @@ final class ResultExecutor
         $hash = $this->resolveHash($prepared, $kind, $columns);
         $depClasses = $plan->dependencies->depClassesFor($modelClass);
         $depTableKeys = $plan->dependencies->tables;
+        $structuredPayload = $kind === ResultKind::Collection || $kind === ResultKind::Through;
 
-        $cached = false;
-
-        $value = NormCache::rescue(
+        $execution = NormCache::rescue(
             fn() => NormCache::engine()->runScalar(
                 fetch: fn() => NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
                 waitForBuild: fn() => NormCache::waitForResultBuild($modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
-                compute: $compute,
+                compute: fn() => ['value' => $compute(), 'cached' => false],
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
 
+                    $payload = $value['value'];
+
                     NormCache::storeResultCache(
                         $result->key,
-                        is_array($value) ? $value : [$value],
+                        is_array($payload) ? $payload : [$payload],
                         $result->buildingKey,
                         $ttl,
                         $result->wakeKey,
@@ -52,23 +53,24 @@ final class ResultExecutor
                         $result->buildingToken
                     );
                 },
-                onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, &$cached) {
-                    if (!is_array($result->payload) || ($kind !== ResultKind::Collection && !array_key_exists(0, $result->payload))) {
-                        return $compute();
+                onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, $structuredPayload) {
+                    if (!is_array($result->payload) || (!$structuredPayload && !array_key_exists(0, $result->payload))) {
+                        return ['value' => $compute(), 'cached' => false];
                     }
 
-                    $cached = true;
                     CacheReporter::queryHit($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
 
-                    return $kind === ResultKind::Collection
+                    $value = $structuredPayload
                         ? $result->payload
                         : $result->payload[0];
+
+                    return ['value' => $value, 'cached' => true];
                 },
             ),
-            $compute
+            fn() => ['value' => $compute(), 'cached' => false]
         );
 
-        return [$value, $cached];
+        return [$execution['value'], $execution['cached']];
     }
 
     private function resolveNamespace(ResultKind $kind): string
@@ -76,6 +78,7 @@ final class ResultExecutor
         return match ($kind) {
             ResultKind::Count, ResultKind::PaginationCount => CacheKeyBuilder::K_COUNT,
             ResultKind::Collection => CacheKeyBuilder::K_RESULT,
+            ResultKind::Through => CacheKeyBuilder::K_THROUGH,
             default => CacheKeyBuilder::K_SCALAR,
         };
     }
@@ -84,7 +87,7 @@ final class ResultExecutor
     {
         $query = $prepared->base;
 
-        if ($kind === ResultKind::Collection) {
+        if ($kind === ResultKind::Collection || $kind === ResultKind::Through) {
             if (empty($query->columns) && $columns !== ['*']) {
                 $query = $query->cloneWithout([]);
                 $query->columns = $columns;

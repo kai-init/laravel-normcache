@@ -6,12 +6,10 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
+use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
-use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
-use NormCache\Support\QueryHasher;
 use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
@@ -28,8 +26,6 @@ trait CachesOneOrManyThrough
         if (!$this->query instanceof CacheableBuilder) {
             return parent::get($columns);
         }
-
-        $debugbarStart = CacheReporter::beginMeasure();
 
         $prepared = $this->query->prepareScopedQuery();
         $builder = $prepared->builder;
@@ -55,68 +51,48 @@ trait CachesOneOrManyThrough
             return $this->getFromPreparedBuilder($prepared);
         }
 
-        $hash = QueryHasher::forResultQuery($builder, $base);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
-        $depClasses = array_values(array_unique([
-            $throughClass,
-            ...$plan->dependencies->depClassesFor($relatedClass),
-        ]));
-        $depTableKeys = $plan->dependencies->tables;
-        $tag = $builder->getCacheTag();
-        $ttl = $builder->getQueryTtl();
 
-        return NormCache::rescue(
-            fn() => NormCache::engine()->runResult(
-                fetch: fn() => NormCache::getResultCache($relatedClass, $depClasses, $hash, $tag, $depTableKeys, CacheKeyBuilder::K_THROUGH),
-                waitForBuild: fn() => NormCache::waitForResultBuild(
-                    $relatedClass, $hash, $tag, $depClasses, $depTableKeys, CacheKeyBuilder::K_THROUGH
-                ),
-                onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared) {
-                    CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,
-                        ['through' => $throughClass], 'through miss');
-                    $rawModels = $this->getFromPreparedBuilder($prepared, false);
-                    $modelAttrs = [];
-                    if ($shouldCacheModels) {
-                        foreach ($rawModels as $model) {
-                            $attrs = $model->getRawOriginal();
-                            unset($attrs['laravel_through_key']);
-                            $modelAttrs[$model->getKey()] = $attrs;
-                        }
-                    }
-
-                    $cachePayload = $this->cachePayloadFromResult($rawModels);
-
-                    return [
-                        $prepared->applyAfterCallbacks($rawModels),
-                        [
-                            'cachePayload' => $cachePayload,
-                            'modelAttrs' => $modelAttrs,
-                        ],
-                    ];
-                },
-                onStore: function ($data, $result) use ($relatedClass, $ttl) {
-                    NormCache::attempt(function () use ($data, $result, $relatedClass, $ttl) {
-                        if (NormCache::storeResultCache(
-                            $result->key, $data['cachePayload'], $result->buildingKey, $ttl,
-                            $result->wakeKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken
-                        )) {
-                            NormCache::cacheModelAttrs($relatedClass, $data['modelAttrs']);
-                        }
-                    });
-                },
-                onHit: function ($result) use ($relatedClass, $prepared, $selectedColumns, $throughClass, $debugbarStart) {
-                    CacheReporter::queryHit($relatedClass, $result->key ?? '', $debugbarStart,
-                        ['through' => $throughClass], 'through hit');
-
-                    return $this->hydrateFromIds(
-                        $result->payload['ids'], $relatedClass, $prepared, $selectedColumns, $result->payload['throughKeys'] ?? []
-                    );
-                },
-                onBuild: fn() => $this->getFromPreparedBuilder($prepared),
-            ),
-            fn() => $this->getFromPreparedBuilder($prepared)
+        $plan = CachePlan::result(
+            operation: $plan->operation,
+            dependencies: $plan->dependencies->merge(DependencySet::singleModel($throughClass)),
+            normalizable: $plan->normalizable,
+            columns: $plan->columns,
+            primaryKeys: $plan->primaryKeys,
         );
+
+        $liveResult = null;
+
+        [$payload, $cached] = NormCache::result()->execute(
+            $prepared,
+            $plan,
+            ResultKind::Through,
+            [],
+            function () use ($prepared, $shouldCacheModels, $relatedClass, &$liveResult) {
+                $rawModels = $this->getFromPreparedBuilder($prepared, false);
+
+                if ($shouldCacheModels) {
+                    $modelAttrs = [];
+                    foreach ($rawModels as $model) {
+                        $attrs = $model->getRawOriginal();
+                        unset($attrs['laravel_through_key']);
+                        $modelAttrs[$model->getKey()] = $attrs;
+                    }
+                    NormCache::attempt(fn() => NormCache::cacheModelAttrs($relatedClass, $modelAttrs));
+                }
+
+                $liveResult = $rawModels;
+
+                return $this->cachePayloadFromResult($rawModels);
+            }
+        );
+
+        if (!$cached) {
+            return $prepared->applyAfterCallbacks($liveResult);
+        }
+
+        return $this->hydrateFromIds($payload['ids'], $relatedClass, $prepared, $selectedColumns, $payload['throughKeys'] ?? []);
     }
 
     private function shouldUseCache(CacheableBuilder $builder, Builder $base): ?CachePlan
