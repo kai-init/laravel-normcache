@@ -85,6 +85,6 @@ trait CachesRelationExistence
             return null;
         }
 
-        return $this->classifyRelationDependency($relation, $constraint);
+        return (new RelationDependencyClassifier)->classify($relation, $constraint);
     }
 }

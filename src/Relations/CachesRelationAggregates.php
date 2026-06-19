@@ -3,21 +3,10 @@
 namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
-use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use NormCache\CacheableBuilder;
-use NormCache\Facades\NormCache;
-use NormCache\Planning\QueryAnalyzer;
-use NormCache\Traits\Cacheable;
-use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 
-/**
- * @mixin CachesRelationExistence
- */
 trait CachesRelationAggregates
 {
     private bool $cacheAggregates = true;
@@ -43,15 +32,9 @@ trait CachesRelationAggregates
             return parent::withAggregate($relations, $column, $function);
         }
 
-        $lowerFunction = strtolower((string) $function);
-        $grammar = $this->getQuery()->getGrammar();
-        $colValue = $grammar->isExpression($column)
-            ? $grammar->getValue($column)
-            : $column;
-
         $dependencies = [];
         $tableDependencies = [];
-        $aliases = [];
+        $names = [];
 
         foreach (Arr::wrap($relations) as $name => $constraint) {
             if (is_numeric($name)) {
@@ -59,17 +42,12 @@ trait CachesRelationAggregates
                 $constraint = null;
             }
 
-            $explicitAlias = null;
             $segments = explode(' ', (string) $name);
             if (count($segments) === 3 && Str::lower($segments[1]) === 'as') {
-                [$name, $explicitAlias] = [$segments[0], $segments[2]];
+                $name = $segments[0];
             }
 
-            $alias = $explicitAlias ?? Str::snake(
-                preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$lowerFunction} {$colValue}")
-            );
-
-            $aliases[] = $alias;
+            $names[] = $name;
 
             $entry = $this->classifyAggregate($name, $constraint);
 
@@ -95,12 +73,37 @@ trait CachesRelationAggregates
         }
 
         $result = parent::withAggregate($relations, $column, $function);
+        // Slice from the end: the first withAggregate() call on a bare query also injects a
+        // "table.*" wildcard column, which would shift a from-the-front slice by one.
+        $newColumns = array_slice($result->getQuery()->columns ?? [], -count($names));
+
+        $aliases = [];
+        foreach ($newColumns as $i => $col) {
+            $aliases[] = $this->resolveAlias($col, $names[$i] ?? null, $function, $column);
+        }
 
         $this->aggregateDependencies = array_values(array_unique([...$this->aggregateDependencies, ...$dependencies]));
         $this->aggregateTableDependencies = array_values(array_unique([...$this->aggregateTableDependencies, ...$tableDependencies]));
         $this->aggregateAliases = array_values(array_unique([...$this->aggregateAliases, ...$aliases]));
 
         return $result;
+    }
+
+    // Eloquent assigns this alias internally but exposes no way to read it back; parse it out of
+    // the rendered SQL, falling back to predicting it the way Eloquent itself does if unmatched.
+    private function resolveAlias(mixed $column, ?string $name, ?string $function, mixed $columnArg): string
+    {
+        $grammar = $this->getQuery()->getGrammar();
+        $sql = $grammar->isExpression($column) ? $grammar->getValue($column) : (string) $column;
+
+        if (preg_match('/\bas\s+([`"\[]?)([A-Za-z0-9_]+)\1\s*$/i', $sql, $m)) {
+            return $m[2];
+        }
+
+        $lowerFunction = strtolower((string) $function);
+        $colValue = $grammar->isExpression($columnArg) ? $grammar->getValue($columnArg) : $columnArg;
+
+        return Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$lowerFunction} {$colValue}"));
     }
 
     private function clearAggregateTracking(bool $failed = false): void
@@ -120,96 +123,7 @@ trait CachesRelationAggregates
             return null;
         }
 
-        return $this->classifyRelationDependency($this->model->{$name}(), $constraint);
-    }
-
-    /**
-     * @param  Relation<*, *, *>  $relation
-     */
-    private function classifyRelationDependency(Relation $relation, ?callable $constraint): ?array
-    {
-        $relatedClass = $relation->getRelated()::class;
-
-        if (!self::relatedIsCacheable($relatedClass)) {
-            return null;
-        }
-
-        $relationExtraTables = [];
-        $relationQuery = $relation->getQuery();
-
-        if ($relationQuery instanceof CacheableBuilder) {
-            if ($relationQuery->isCacheSkipped()) {
-                return null;
-            }
-
-            $relationBase = $relationQuery->toBase();
-            $inspection = (new QueryAnalyzer)->inspect($relationBase, $relation->getRelated()->getTable(), null);
-
-            if ($inspection->hasDependencyBypass() || $inspection->hasSafetyBypass()) {
-                return null;
-            }
-
-            $joinDeps = (new QueryAnalyzer)->inferJoinDependencies(
-                $relationBase,
-                $relationQuery->getModel()->getConnection()->getName()
-            );
-
-            if (!$joinDeps->safe || (!empty($relationBase->joins) && $joinDeps->tables === [])) {
-                return null;
-            }
-
-            $relationExtraTables = $joinDeps->tables;
-        }
-
-        $constraintModels = [];
-        $constraintTables = [];
-
-        if ($constraint !== null) {
-            try {
-                $testBuilder = ($relatedClass)::query();
-                $constraint($testBuilder);
-
-                if (!$testBuilder instanceof CacheableBuilder) {
-                    return null;
-                }
-
-                $prepared = $testBuilder->prepareCacheExecution();
-                $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models());
-
-                if (!$plan->isCacheable()) {
-                    return null;
-                }
-
-                $constraintModels = $plan->dependencies->models;
-                $constraintTables = $plan->dependencies->tables;
-            } catch (\Throwable) {
-                return null;
-            }
-        }
-
-        $throughClass = null;
-        if ($relation instanceof HasOneOrManyThrough) {
-            $through = (new \ReflectionProperty($relation, 'throughParent'))->getValue($relation)::class;
-            if (self::relatedIsCacheable($through)) {
-                $throughClass = $through;
-            }
-        }
-
-        $tableKey = null;
-        if ($relation instanceof BelongsToMany) {
-            $tableKey = NormCache::tableKey(
-                $this->model->getConnection()->getName(),
-                $relation->getTable(),
-            );
-        }
-
-        return [
-            'relatedClass' => $relatedClass,
-            'throughClass' => $throughClass,
-            'tableKey' => $tableKey,
-            'constraintModels' => $constraintModels,
-            'constraintTables' => array_values(array_unique([...$constraintTables, ...$relationExtraTables])),
-        ];
+        return (new RelationDependencyClassifier)->classify($this->model->{$name}(), $constraint);
     }
 
     public function inferAggregateDependencies(): DependencySet
@@ -225,13 +139,6 @@ trait CachesRelationAggregates
         };
 
         return $aggregate->merge($this->inferExistenceDependencies());
-    }
-
-    private static function relatedIsCacheable(string $class): bool
-    {
-        static $cache = [];
-
-        return $cache[$class] ??= in_array(Cacheable::class, class_uses_recursive($class), true);
     }
 
     public function hasAggregateColumns(): bool
