@@ -41,11 +41,13 @@ class CacheableBelongsTo extends BelongsTo
             return $this->getFromPreparedBuilder($prepared);
         }
 
-        return $prepared->applyAfterCallbacks(
-            $this->related->newCollection(
-                NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false)
-            )
-        );
+        $models = NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false);
+
+        if ($builder->getEagerLoads() !== []) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        return $prepared->applyAfterCallbacks($this->related->newCollection($models));
     }
 
     private function shouldUseCacheForEagerLoad(
@@ -56,8 +58,7 @@ class CacheableBelongsTo extends BelongsTo
         $ownerKey = $this->getOwnerKeyName();
 
         if ($this->eagerKeys === []
-            || $ownerKey !== $this->related->getKeyName()
-            || $builder->getEagerLoads() !== []) {
+            || $ownerKey !== $this->related->getKeyName()) {
             return false;
         }
 

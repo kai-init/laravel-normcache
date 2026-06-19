@@ -190,6 +190,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Post::with('author.tags')->orderBy('title')->get(),
             fn() => Post::withoutCache()->with('author.tags')->orderBy('title')->get(),
+            expectNoWarmQueries: true,
         );
     }
 
