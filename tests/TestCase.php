@@ -179,28 +179,30 @@ abstract class TestCase extends OrchestraTestCase
         $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
-        $result = new ResultExecutor;
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive);
+        $engine = new ExecutionEngine;
+        $config = new CacheConfig(
+            ttl: $ttl,
+            queryTtl: $queryTtl,
+            cooldown: $cooldown,
+            enabled: $enabled,
+            fallbackEnabled: $fallback,
+            dispatchEvents: $dispatchEvents,
+            cluster: $cluster,
+            slotting: $slottingActive,
+        );
 
         return new CacheManager(
             queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs),
-            resultReader: new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+            resultReader: $resultReader,
             throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs),
-            result: $result,
+            result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,
-            engine: new ExecutionEngine,
+            engine: $engine,
             store: $store,
             keys: $keys,
-            config: new CacheConfig(
-                ttl: $ttl,
-                queryTtl: $queryTtl,
-                cooldown: $cooldown,
-                enabled: $enabled,
-                fallbackEnabled: $fallback,
-                dispatchEvents: $dispatchEvents,
-                cluster: $cluster,
-                slotting: $slottingActive,
-            ),
+            config: $config,
         );
     }
 

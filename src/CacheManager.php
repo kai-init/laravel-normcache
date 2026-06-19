@@ -12,6 +12,7 @@ use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FallbackHandler;
 use NormCache\Support\RedisStore;
 use NormCache\Traits\HandlesInvalidation;
 use NormCache\Values\CacheConfig;
@@ -242,35 +243,16 @@ class CacheManager
     // -------------------------------------------------------------------------
     public function rescue(callable $operation, callable $fallback): mixed
     {
-        try {
-            return $operation();
-        } catch (\Throwable $e) {
-            $this->fallback($e);
-        }
-
-        return $fallback();
+        return FallbackHandler::rescue($this->config, $operation, $fallback);
     }
 
     public function attempt(callable $operation): bool
     {
-        try {
-            $operation();
-
-            return true;
-        } catch (\Throwable $e) {
-            $this->fallback($e);
-
-            return false;
-        }
+        return FallbackHandler::attempt($this->config, $operation);
     }
 
     public function fallback(\Throwable $e): void
     {
-        if (!$this->config->fallbackEnabled) {
-            throw $e;
-        }
-
-        report($e);
-        $this->disable();
+        FallbackHandler::fallback($this->config, $e);
     }
 }

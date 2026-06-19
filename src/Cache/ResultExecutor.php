@@ -4,15 +4,22 @@ namespace NormCache\Cache;
 
 use Closure;
 use NormCache\Enums\ResultKind;
-use NormCache\Facades\NormCache;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\FallbackHandler;
 use NormCache\Support\QueryHasher;
+use NormCache\Values\CacheConfig;
 use NormCache\Values\CachePlan;
 use NormCache\Values\PreparedQuery;
 
 final class ResultExecutor
 {
+    public function __construct(
+        private readonly ExecutionEngine $engine,
+        private readonly ResultCacheReader $resultReader,
+        private readonly CacheConfig $config,
+    ) {}
+
     public function execute(
         PreparedQuery $prepared,
         CachePlan $plan,
@@ -32,17 +39,18 @@ final class ResultExecutor
         $depTableKeys = $plan->dependencies->tables;
         $structuredPayload = $kind === ResultKind::Collection;
 
-        $execution = NormCache::rescue(
-            fn() => NormCache::engine()->runScalar(
-                fetch: fn() => NormCache::getResultCache($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-                waitForBuild: fn() => NormCache::waitForResultBuild($modelClass, $hash, tag: $tag, depClasses: $depClasses, depTableKeys: $depTableKeys, namespace: $namespace),
+        $execution = FallbackHandler::rescue(
+            $this->config,
+            fn() => $this->engine->runScalar(
+                fetch: fn() => $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+                waitForBuild: fn() => $this->resultReader->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
                 compute: fn() => ['value' => $compute(), 'cached' => false],
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
 
                     $payload = $value['value'];
 
-                    NormCache::storeResultCache(
+                    $this->resultReader->store(
                         $result->key,
                         is_array($payload) ? $payload : [$payload],
                         $result->buildingKey,
