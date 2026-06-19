@@ -13,6 +13,11 @@ trait CachesRelationships
         return new CacheableBelongsTo($query, $child, $foreignKey, $ownerKey, $relation);
     }
 
+    protected function newHasOne(Builder $query, Model $parent, $foreignKey, $localKey)
+    {
+        return new CacheableHasOne($query, $parent, $foreignKey, $localKey);
+    }
+
     protected function newMorphToMany(
         EloquentBuilder $query,
         Model $parent,

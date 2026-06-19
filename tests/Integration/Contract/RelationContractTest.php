@@ -265,6 +265,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('latestPost')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('latestPost')->orderBy('name')->get(),
+            expectNoWarmQueries: true,
         );
     }
 
@@ -275,6 +276,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Country::with('latestPost')->orderBy('name')->get(),
             fn() => Country::withoutCache()->with('latestPost')->orderBy('name')->get(),
+            expectNoWarmQueries: true,
         );
     }
 
@@ -285,6 +287,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('mostViewedPost')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get(),
+            expectNoWarmQueries: true,
         );
     }
 

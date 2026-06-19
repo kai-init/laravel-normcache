@@ -317,7 +317,7 @@ final class CachePlanner
 
         if ($strictRelation
             && $normalizationFlags === QueryInspection::JOIN
-            && count($base->joins ?? []) === 1) {
+            && (count($base->joins ?? []) === 1 || $hasExplicit)) {
             $normalizationFlags = 0;
         }
 

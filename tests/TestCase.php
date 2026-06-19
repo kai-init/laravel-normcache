@@ -205,7 +205,7 @@ abstract class TestCase extends OrchestraTestCase
     }
 
     /** Assert native == cold == warm for a given query. */
-    protected function contract(callable $cached, callable $native): void
+    protected function contract(callable $cached, callable $native, bool $expectNoWarmQueries = false): void
     {
         $expected = $this->normalize($native());
         $cold = $this->normalize($cached());
@@ -222,10 +222,13 @@ abstract class TestCase extends OrchestraTestCase
 
         if ($warmQueries !== []) {
             fwrite(STDERR, sprintf(
-                "\n\nSQL Query\n"
+                "\n\nSQL Query (%s::%s, %d)\n",
+                static::class,
+                $this->name(),
+                count($warmQueries)
             ));
 
-            foreach ($warmQueries as $i => $query) {
+            foreach ($warmQueries as $query) {
                 fwrite(STDERR, sprintf(
                     "------------------ \n%s;\n",
                     rtrim(preg_replace('/\s+/', ' ', $query['query'] ?? ''), ';')
@@ -237,6 +240,10 @@ abstract class TestCase extends OrchestraTestCase
 
         $this->assertSame($expected, $cold, 'cold cache result differs from native Eloquent');
         $this->assertSame($cold, $warm, 'warm cache result differs from cold');
+
+        if ($expectNoWarmQueries) {
+            $this->assertSame([], $warmQueries, 'expected no SQL queries on the warm cache path');
+        }
     }
 
     protected function normalize(mixed $value): mixed

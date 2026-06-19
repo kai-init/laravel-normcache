@@ -28,9 +28,12 @@ trait CachesOneOrManyThrough
             return parent::get($columns);
         }
 
+        $query = $this->query;
+        $this->applyOneOfManyDependency($query);
+
         $debugbarStart = CacheReporter::beginMeasure();
 
-        $prepared = $this->query->prepareScopedQuery();
+        $prepared = $query->prepareScopedQuery();
         $builder = $prepared->builder;
         $base = $prepared->base;
         $builder->addSelect(
@@ -114,6 +117,13 @@ trait CachesOneOrManyThrough
             ),
             fn() => $this->getFromPreparedBuilder($prepared)
         );
+    }
+
+    private function applyOneOfManyDependency(CacheableBuilder $query): void
+    {
+        if (method_exists($this, 'isOneOfMany') && $this->isOneOfMany()) {
+            $query->dependsOn([$this->throughParent::class]);
+        }
     }
 
     private function shouldUseCache(CacheableBuilder $builder, Builder $base): ?CachePlan
