@@ -81,7 +81,8 @@ class ModelHydratorStampedeTest extends TestCase
         );
 
         $this->assertSame('hit', $result[0]);
-        $this->assertFalse($result[1], 'No lock token should be returned on a hit');
+        // phpredis decodes a nested Lua `false` as PHP false; predis decodes the same RESP nil as null.
+        $this->assertFalse((bool) $result[1], 'No lock token should be returned on a hit');
 
         // The model payload itself is fetched separately via a plain MGET, not via the script.
         [$fetched] = $store->getMany([$modelKey]);
