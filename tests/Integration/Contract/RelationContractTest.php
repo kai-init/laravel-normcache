@@ -50,6 +50,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('posts')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('posts')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 

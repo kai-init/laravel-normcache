@@ -12,7 +12,11 @@ final class QueryHasher
 {
     public static function forNormalizedQuery(CacheableBuilder $builder, QueryBuilder $query): string
     {
-        $query = $query->cloneWithout(['columns'])->cloneWithoutBindings(['select']);
+        $selectBindings = $query->getRawBindings()['select'];
+
+        if (!empty($query->columns) || !empty($selectBindings)) {
+            $query = $query->cloneWithout(['columns'])->cloneWithoutBindings(['select']);
+        }
 
         return self::fromBuilder($builder, $query);
     }

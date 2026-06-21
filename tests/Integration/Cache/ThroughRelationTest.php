@@ -27,7 +27,7 @@ class ThroughRelationTest extends TestCase
 
         $cached = $this->modelCacheEntry(Post::class, $post->id);
 
-        $this->assertIsArray($cached);
+        $this->assertNotNull($cached, 'Through loads should populate the per-id model cache');
         $this->assertArrayNotHasKey('laravel_through_key', $cached);
     }
 
@@ -59,6 +59,33 @@ class ThroughRelationTest extends TestCase
 
         $this->assertEquals($first, $second);
         $this->assertSame($keyCountAfterFirst, count($this->redisKeys('test:*')));
+    }
+
+    public function test_simple_has_many_through_warm_hit_refetches_only_evicted_child_model(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $first = $country->posts()->get();
+
+        $this->assertSame(['Hello'], $first->pluck('title')->all());
+        $this->assertNotEmpty($this->redisKeys('test:through:*'));
+
+        Redis::connection('normcache-test')
+            ->del($this->prefixedModelKey(Post::class, $post->id));
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) { $queryCount++; });
+
+        $second = $country->posts()->get();
+
+        $this->assertSame(['Hello'], $second->pluck('title')->all());
+        $this->assertSame(
+            1,
+            $queryCount,
+            'Expected normalized through cache to refetch only the evicted Post row, not the whole relation'
+        );
     }
 
     public function test_flush_tag_removes_tagged_through_relation_cache(): void
@@ -122,9 +149,14 @@ class ThroughRelationTest extends TestCase
 
         $cached = $this->modelCacheEntry(Post::class, $post->id);
 
-        $this->assertIsArray($cached);
-        $this->assertArrayNotHasKey('name', $cached);
-        $this->assertArrayNotHasKey('country_id', $cached);
+        $canonicalColumns = array_keys((array) DB::table('posts')->find($post->id));
+
+        $this->assertNotNull($cached, 'The evicted Post should be refetched and recached');
+        $this->assertArrayNotHasKey('laravel_through_key', $cached);
+        $this->assertEmpty(
+            array_diff(array_keys($cached), $canonicalColumns),
+            'No join columns should leak into the cached attributes'
+        );
     }
 
     public function test_through_relation_model_cache_miss_does_not_corrupt_post_id(): void

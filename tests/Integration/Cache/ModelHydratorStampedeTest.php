@@ -60,7 +60,7 @@ class ModelHydratorStampedeTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
-    public function test_stampede_script_hit_payload_round_trips_through_unserialize_many(): void
+    public function test_stampede_script_reports_hit_without_returning_model_payload(): void
     {
         $manager = $this->buildManager();
         $store = $manager->getStore();
@@ -81,10 +81,11 @@ class ModelHydratorStampedeTest extends TestCase
         );
 
         $this->assertSame('hit', $result[0]);
+        $this->assertFalse($result[1], 'No lock token should be returned on a hit');
 
-        $unserialized = $store->unserializeMany($result[1]);
-
-        $this->assertIsArray($unserialized[0]);
-        $this->assertSame($attrs['name'], $unserialized[0]['name']);
+        // The model payload itself is fetched separately via a plain MGET, not via the script.
+        [$fetched] = $store->getMany([$modelKey]);
+        $this->assertIsArray($fetched);
+        $this->assertSame($attrs['name'], $fetched['name']);
     }
 }

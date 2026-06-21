@@ -178,8 +178,8 @@ final class ModelHydrator
         );
 
         $status = $result[0];
-        $retryRaw = $this->store->unserializeMany($result[1]);
-        $version = $this->versions->normalizeVersion($result[3] ?? null);
+        $retryRaw = $this->store->getMany($fetchKeys);
+        $version = $this->versions->normalizeVersion($result[2] ?? null);
 
         ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $retryRaw, $projection, $prototype);
 

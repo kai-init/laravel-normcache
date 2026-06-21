@@ -178,7 +178,7 @@ class ProjectionBypassTest extends TestCase
         $cold = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()
             ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
 
-        $this->assertNotEmpty($this->redisKeys('test:through:*'), 'table.* projection must populate through cache');
+        $this->assertNotEmpty($this->redisKeys('test:through:*'), 'table.* projection must populate the through-relation cache');
         $this->assertSame($native, $cold);
 
         $warm = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()

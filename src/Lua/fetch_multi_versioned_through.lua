@@ -1,32 +1,20 @@
 -- Fetch a multi-versioned through query result with cooldown support.
+-- Returns ids/throughKeys only; the model blobs are fetched separately via a
+-- plain MGET from PHP (Lua's bulk multi-string reply marshaling is dramatically
+-- slower than a native MGET for the same payload, so we don't return models here).
 --
 -- KEYS[1..n]    = version keys
 -- KEYS[n+1..2n] = scheduled keys (one per version key, same order)
 -- KEYS[2n+1]    = query prefix
--- KEYS[2n+2]    = model prefix
--- KEYS[2n+3]    = building prefix
+-- KEYS[2n+2]    = building prefix
 -- ARGV[1]       = hash
 -- ARGV[2]       = current timestamp in ms
 -- ARGV[3]       = building lock TTL in seconds
 -- ARGV[4]       = building lock token
 --
--- Returns: {status, seg, [ids, throughKeys, models]}
-local n = (#KEYS - 3) / 2
+-- Returns: {status, seg, [ids, throughKeys]}
+local n = (#KEYS - 2) / 2
 local now = tonumber(ARGV[2])
-
-local function mget_models(model_prefix, ids)
-    local keys = {}
-    for i, id in ipairs(ids) do keys[i] = model_prefix .. id end
-    local results = {}
-    for start = 1, #keys, 500 do
-        local stop = math.min(start + 499, #keys)
-        local chunk = {}
-        for i = start, stop do chunk[#chunk + 1] = keys[i] end
-        local values = redis.call('MGET', unpack(chunk))
-        for i = 1, #values do results[#results + 1] = values[i] end
-    end
-    return results
-end
 
 local vers = {}
 for i = 1, n do
@@ -51,7 +39,7 @@ local query_key = KEYS[2 * n + 1] .. seg .. ':' .. ARGV[1]
 local raw_payload = redis.call('GET', query_key)
 
 if not raw_payload then
-    local building_key = KEYS[2 * n + 3] .. seg .. ':' .. ARGV[1]
+    local building_key = KEYS[2 * n + 2] .. seg .. ':' .. ARGV[1]
     local claimed = redis.call('SET', building_key, ARGV[4], 'NX', 'EX', tonumber(ARGV[3]))
     if claimed then return {'miss', seg, ARGV[4]} end
     return {'building', seg}
@@ -68,4 +56,4 @@ local throughKeys = parsed.t
 
 if #ids == 0 then return {'empty', seg} end
 
-return {'hit', seg, ids, throughKeys, mget_models(KEYS[2 * n + 2], ids)}
+return {'hit', seg, ids, throughKeys}

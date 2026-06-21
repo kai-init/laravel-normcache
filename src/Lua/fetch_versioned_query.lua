@@ -1,32 +1,20 @@
 -- Fetch a versioned query result with cooldown and stale-serve support.
+-- Returns ids only; the model blobs are fetched separately via a plain MGET
+-- from PHP (Lua's bulk multi-string reply marshaling is dramatically slower
+-- than a native MGET for the same payload, so we don't return models here).
 --
 -- KEYS[1] = ver key         (ver:{classKey}:)
 -- KEYS[2] = scheduled key   (scheduled:{classKey}:)
 -- KEYS[3] = query prefix    (query:{classKey}:v)
--- KEYS[4] = model prefix    (model:{classKey}:)
--- KEYS[5] = building prefix (building:{classKey}:)
+-- KEYS[4] = building prefix (building:{classKey}:)
 -- ARGV[1] = hash
 -- ARGV[2] = current timestamp in ms
 -- ARGV[3] = building lock TTL in seconds
 -- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
 -- ARGV[5] = building lock token
 --
--- Returns: {status, ver, [ids, models]}
-local function mget_models(model_prefix, ids)
-    local keys = {}
-    for i, id in ipairs(ids) do keys[i] = model_prefix .. id end
-    local results = {}
-    for start = 1, #keys, 500 do
-        local stop = math.min(start + 499, #keys)
-        local chunk = {}
-        for i = start, stop do chunk[#chunk + 1] = keys[i] end
-        local values = redis.call('MGET', unpack(chunk))
-        for i = 1, #values do results[#results + 1] = values[i] end
-    end
-    return results
-end
-
-local function serve_stale(ver, hash, query_prefix, model_prefix, depth)
+-- Returns: {status, ver, [ids]}
+local function serve_stale(ver, hash, query_prefix, depth)
     if depth <= 0 then return nil end
     local ver_num = tonumber(ver)
     for i = 1, depth do
@@ -36,7 +24,7 @@ local function serve_stale(ver, hash, query_prefix, model_prefix, depth)
         if stale_raw then
             local ok, ids = pcall(cjson.decode, stale_raw)
             if ok and type(ids) == 'table' and #ids > 0 then
-                return {'stale', ver, ids, mget_models(model_prefix, ids)}
+                return {'stale', ver, ids}
             end
         end
     end
@@ -60,10 +48,10 @@ end
 local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
 local ids_raw = redis.call('GET', query_key)
 if not ids_raw then
-    local building_key = KEYS[5] .. ARGV[1]
+    local building_key = KEYS[4] .. ARGV[1]
     local claimed = redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3]))
     if claimed then return {'miss', ver, ARGV[5]} end
-    return serve_stale(ver, ARGV[1], KEYS[3], KEYS[4], tonumber(ARGV[4]) or 3) or {'building', ver}
+    return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
 end
 
 local ok, ids = pcall(cjson.decode, ids_raw)
@@ -74,4 +62,4 @@ end
 
 if #ids == 0 then return {'empty', ver} end
 
-return {'hit', ver, ids, mget_models(KEYS[4], ids)}
+return {'hit', ver, ids}

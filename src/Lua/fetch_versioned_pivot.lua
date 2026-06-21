@@ -1,16 +1,15 @@
--- Fetch pivot cache entries for a set of parent IDs.
+-- Resolve the version segment for a pivot cache lookup.
+-- Does not fetch the pivot payloads; PHP fetches those separately via a plain
+-- MGET (Lua's bulk multi-string reply marshaling is dramatically slower than a
+-- native MGET for the same payload, so we don't return them here).
 --
 -- KEYS[1..n]    = version keys (parent, related, ...)
 -- KEYS[n+1..2n] = scheduled keys (one per version key, same order)
--- KEYS[2n+1]    = pivot key prefix (pivot:{parentKey}:{relatedKey}:)
--- ARGV[1]       = relation name
--- ARGV[2]       = constraint hash
--- ARGV[3]       = current timestamp in ms
--- ARGV[4..]     = parent IDs
+-- ARGV[1]       = current timestamp in ms
 --
--- Returns: {seg, [raw_data...]}
-local n = (#KEYS - 1) / 2
-local now = tonumber(ARGV[3])
+-- Returns: seg
+local n = #KEYS / 2
+local now = tonumber(ARGV[1])
 
 local vers = {}
 for i = 1, n do
@@ -31,9 +30,4 @@ end
 local seg = 'v' .. vers[1]
 for i = 2, n do seg = seg .. ':v' .. vers[i] end
 
-local prefix = KEYS[2 * n + 1] .. ARGV[1] .. ':' .. ARGV[2] .. ':' .. seg .. ':'
-local pivot_keys = {}
-for i = 4, #ARGV do pivot_keys[#pivot_keys + 1] = prefix .. ARGV[i] end
-local data = {}
-if #pivot_keys > 0 then data = redis.call('MGET', unpack(pivot_keys)) end
-return {seg, data}
+return seg

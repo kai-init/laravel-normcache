@@ -125,13 +125,16 @@ final class ResultCacheReader
             );
         }
 
-        [$seg, $payloads] = $this->luaFetchVersionedPivotCache(
-            $parentKey, $relatedKey, $relation, $constraintHash, $parentIds, $versionKeys, $scheduledKeys
-        );
+        $seg = $this->luaFetchVersionedPivotSegment($versionKeys, $scheduledKeys);
+
+        $pivotKeys = [];
+        foreach ($parentIds as $id) {
+            $pivotKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
+        }
 
         return new PivotCacheResult(
-            (string) $seg,
-            array_combine($parentIds, $this->store->unserializeMany($payloads)),
+            $seg,
+            array_combine($parentIds, $this->store->getMany($pivotKeys)),
             $versionKeys,
             $this->keys->versionsFromSegment($seg),
         );
@@ -269,17 +272,14 @@ final class ResultCacheReader
         return [LuaStatus::fromLua($result[0] ?? null), (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
     }
 
-    private function luaFetchVersionedPivotCache(
-        string $parentKey, string $relatedKey, string $relation,
-        string $constraintHash, array $parentIds,
-        array $versionKeys, array $scheduledKeys
-    ): array {
+    private function luaFetchVersionedPivotSegment(array $versionKeys, array $scheduledKeys): string
+    {
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_pivot'),
-            array_merge($versionKeys, $scheduledKeys, [$this->keys->pivotBasePrefix($parentKey, $relatedKey)]),
-            array_merge([$relation, $constraintHash, (string) (int) floor(microtime(true) * 1000)], $parentIds)
+            array_merge($versionKeys, $scheduledKeys),
+            [(string) (int) floor(microtime(true) * 1000)]
         );
 
-        return [(string) ($result[0] ?? ''), $result[1] ?? []];
+        return (string) ($result ?? '');
     }
 }

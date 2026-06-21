@@ -28,6 +28,7 @@ use NormCache\Traits\CachesScalarResults;
 use NormCache\Traits\HandlesBuilderInvalidation;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
 
 class CacheableBuilder extends Builder
@@ -181,11 +182,12 @@ class CacheableBuilder extends Builder
         $executionBuilder = $prepared->builder;
         $base = $prepared->base;
         $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
+        $explainJoinDeps = !empty($base->joins)
+            ? (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
+            : DependencySet::empty();
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
             $resolvedCols,
-            $executionBuilder->inferAggregateDependencies()->merge(
-                (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
-            ),
+            $executionBuilder->inferAggregateDependencies()->merge($explainJoinDeps),
             selectAll: true,
         ), PlanningMode::Explain);
 
@@ -227,14 +229,20 @@ class CacheableBuilder extends Builder
         $prepared = $this->prepareCacheExecution();
         $model = $this->model::class;
 
-        $inferred = $prepared->builder->inferAggregateDependencies()
-            ->merge((new QueryAnalyzer)->inferJoinDependencies(
-                $prepared->base,
-                $prepared->builder->getModel()->getConnection()->getName()
-            ));
+        $base = $prepared->base;
+        $execBuilder = $prepared->builder;
 
-        $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models(
-            ProjectionClassifier::resolve($prepared->base, $columns),
+        $joinDeps = !empty($base->joins)
+            ? (new QueryAnalyzer)->inferJoinDependencies(
+                $base,
+                $execBuilder->getModel()->getConnection()->getName()
+            )
+            : DependencySet::empty();
+
+        $inferred = $execBuilder->inferAggregateDependencies()->merge($joinDeps);
+
+        $plan = $execBuilder->cachePlan($base, CachePlanContext::models(
+            ProjectionClassifier::resolve($base, $columns),
             $inferred,
             selectAll: $columns === ['*'],
         ));
@@ -305,10 +313,13 @@ class CacheableBuilder extends Builder
         $debugbarStart = CacheReporter::beginMeasure();
 
         $prepared = $this->prepareCacheExecution();
-        $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::paginationCount(
-            $prepared->builder->inferAggregateDependencies()->merge(
-                (new QueryAnalyzer)->inferJoinDependencies($prepared->base, $prepared->builder->getModel()->getConnection()->getName())
-            )
+        $paginateBase = $prepared->base;
+        $paginateBuilder = $prepared->builder;
+        $paginateJoinDeps = !empty($paginateBase->joins)
+            ? (new QueryAnalyzer)->inferJoinDependencies($paginateBase, $paginateBuilder->getModel()->getConnection()->getName())
+            : DependencySet::empty();
+        $plan = $paginateBuilder->cachePlan($paginateBase, CachePlanContext::paginationCount(
+            $paginateBuilder->inferAggregateDependencies()->merge($paginateJoinDeps)
         ));
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {

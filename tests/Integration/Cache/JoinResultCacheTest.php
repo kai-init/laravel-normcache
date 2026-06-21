@@ -69,7 +69,7 @@ class JoinResultCacheTest extends TestCase
             ->get();
 
         $queryCount = 0;
-        DB::listen(fn() => $queryCount++);
+        DB::listen(function () use (&$queryCount) { $queryCount++; });
 
         $results = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
