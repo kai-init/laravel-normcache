@@ -41,6 +41,19 @@ class SoftDeleteInvalidationTest extends TestCase
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Post::class));
     }
 
+    public function test_soft_deleting_model_increments_version_by_exactly_one(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        Post::all();
+
+        $versionBefore = NormCache::currentVersion(Post::class);
+
+        $post->delete();
+
+        $this->assertSame($versionBefore + 1, NormCache::currentVersion(Post::class));
+    }
+
     public function test_force_deleting_soft_deletable_model_flushes_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);

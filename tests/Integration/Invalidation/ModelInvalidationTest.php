@@ -54,6 +54,31 @@ class ModelInvalidationTest extends TestCase
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
+    public function test_deleting_model_increments_version_by_exactly_one(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::all();
+
+        $versionBefore = NormCache::currentVersion(Author::class);
+
+        $author->delete();
+
+        $this->assertSame($versionBefore + 1, NormCache::currentVersion(Author::class));
+    }
+
+    public function test_incrementing_model_increments_version_by_exactly_one(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'views' => 0]);
+        Post::all();
+
+        $versionBefore = NormCache::currentVersion(Post::class);
+
+        $post->increment('views');
+
+        $this->assertSame($versionBefore + 1, NormCache::currentVersion(Post::class));
+    }
+
     public function test_members_set_has_ttl_matching_model_ttl(): void
     {
         Author::create(['name' => 'Alice']);

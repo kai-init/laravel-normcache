@@ -63,44 +63,6 @@ trait Cacheable
         return $this->saveWithCacheInvalidation(fn() => Model::withoutEvents(fn() => parent::save($options)));
     }
 
-    public function delete(): ?bool
-    {
-        $result = parent::delete();
-        $this->flushIfDeleted($result);
-
-        return $result;
-    }
-
-    public function increment($column, $amount = 1, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::increment($column, $amount, $extra));
-    }
-
-    public function decrement($column, $amount = 1, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::decrement($column, $amount, $extra));
-    }
-
-    public function incrementQuietly($column, $amount = 1, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::incrementQuietly($column, $amount, $extra));
-    }
-
-    public function decrementQuietly($column, $amount = 1, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::decrementQuietly($column, $amount, $extra));
-    }
-
-    public function incrementEach(array $columns, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::incrementEach($columns, $extra));
-    }
-
-    public function decrementEach(array $columns, array $extra = []): int
-    {
-        return $this->flushAfterCounterMutation(parent::decrementEach($columns, $extra));
-    }
-
     protected function performInsert(Builder $query): bool
     {
         if (method_exists($query, 'withoutInvalidation')) {
@@ -164,13 +126,6 @@ trait Cacheable
         NormCache::flushInstance($this);
     }
 
-    private function flushIfDeleted(?bool $result): void
-    {
-        if ($result) {
-            NormCache::flushInstance($this);
-        }
-    }
-
     // Evict before save so observers do not read a stale model payload.
     private function evictBeforeSaveForObservers(bool $existsBefore, mixed $originalKey = null): void
     {
@@ -195,17 +150,6 @@ trait Cacheable
         }
 
         NormCache::evictModelKey(static::class, $originalKey ?? $this->getKey());
-    }
-
-    private function flushAfterCounterMutation(int|bool $result): int|bool
-    {
-        if ($result) {
-            $this->exists
-                ? NormCache::flushInstance($this)
-                : NormCache::flushModel($this);
-        }
-
-        return $result;
     }
 
     private function isRestoreSave(bool $existsBefore): bool
