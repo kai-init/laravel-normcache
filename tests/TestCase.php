@@ -152,6 +152,13 @@ abstract class TestCase extends OrchestraTestCase
         return $this->app->make('normcache');
     }
 
+    protected function setClusterMode(bool $enabled): void
+    {
+        $this->app->forgetInstance(CacheManager::class);
+        $this->app->forgetInstance('normcache');
+        config(['normcache.cluster' => $enabled]);
+    }
+
     /**
      * Build a standalone CacheManager (not bound in the container) for tests
      * that need specific construction parameters like cooldown or slotting.

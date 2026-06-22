@@ -129,6 +129,8 @@ class OptimizationsTest extends TestCase
 
     public function test_multi_dependency_query_corrupt_payload_degrades_to_miss_and_repairs(): void
     {
+        $this->setClusterMode(false);
+
         Author::create(['name' => 'Multi Dep Author']);
 
         Author::query()->dependsOn([Post::class])->get();

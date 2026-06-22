@@ -20,14 +20,7 @@ class ClusterModeTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->enableClusterMode();
-    }
-
-    private function enableClusterMode(): void
-    {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => true]);
+        $this->setClusterMode(true);
     }
 
     // dependsOn result cache
