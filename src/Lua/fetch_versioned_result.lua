@@ -1,6 +1,5 @@
--- Atomic fetch for result cache entries.
--- Reads all version keys, applies any pending cooldown invalidations, constructs
--- the versioned payload key, and fetches. On a miss, acquires the build lock.
+-- Atomic fetch for result cache entries. Resolves the version segment (applying any due
+-- cooldown invalidation), fetches the payload, and claims the build lock on a miss.
 --
 -- KEYS[1..n]       = version keys
 -- KEYS[n+1..2n]    = scheduled keys (one per version key, same order)

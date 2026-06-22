@@ -90,6 +90,35 @@ class ThroughRelationTest extends TestCase
         );
     }
 
+    public function test_through_relation_corrupt_query_payload_degrades_to_miss_and_repairs(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $country->posts()->get();
+
+        $queryKey = collect($this->redisKeys('test:through:*'))->first();
+        $this->assertNotNull($queryKey);
+
+        Redis::connection('normcache-test')->set($queryKey, 'NOT_JSON');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $results = $country->posts()->get();
+
+        $this->assertGreaterThan(0, $queryCount, 'Corrupt through payload should fall through to a fresh DB query');
+        $this->assertSame([$post->id], $results->pluck('id')->all());
+
+        $raw = Redis::connection('normcache-test')->get($queryKey);
+        $repaired = json_decode($raw, true);
+        $this->assertIsArray($repaired);
+        $this->assertSame([(string) $post->id], $repaired['i']);
+    }
+
     public function test_flush_tag_removes_tagged_through_relation_cache(): void
     {
         $country = Country::create(['name' => 'Australia']);

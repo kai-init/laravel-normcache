@@ -1,7 +1,6 @@
 -- Fetch a multi-versioned through query result with cooldown support.
--- Returns ids/throughKeys only; the model blobs are fetched separately via a
--- plain MGET from PHP (Lua's bulk multi-string reply marshaling is dramatically
--- slower than a native MGET for the same payload, so we don't return models here).
+-- Model blobs are fetched separately via a plain MGET from PHP — much faster than Lua's
+-- bulk reply marshaling for the same payload.
 --
 -- KEYS[1..n]    = version keys
 -- KEYS[n+1..2n] = scheduled keys (one per version key, same order)
@@ -12,7 +11,9 @@
 -- ARGV[3]       = building lock TTL in seconds
 -- ARGV[4]       = building lock token
 --
--- Returns: {status, seg, [ids, throughKeys]}
+-- Returns: {status, seg, [raw_payload]}
+-- On a hit, status is 'hit_raw' and the payload ({i, t}) is an undecoded JSON string — PHP
+-- decodes it and handles corrupt JSON, since decoding here just to marshal it back out is slower.
 local n = (#KEYS - 2) / 2
 local now = tonumber(ARGV[2])
 
@@ -45,15 +46,4 @@ if not raw_payload then
     return {'building', seg}
 end
 
-local ok, parsed = pcall(cjson.decode, raw_payload)
-if not ok or type(parsed) ~= 'table' or not parsed.i or not parsed.t then
-    redis.call('DEL', query_key)
-    return {'corrupt', seg}
-end
-
-local ids = parsed.i
-local throughKeys = parsed.t
-
-if #ids == 0 then return {'empty', seg} end
-
-return {'hit', seg, ids, throughKeys}
+return {'hit_raw', seg, raw_payload}

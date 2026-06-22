@@ -366,7 +366,6 @@ class CacheableBuilder extends Builder
 
     public function sole($columns = ['*']): Model
     {
-        // sole() must verify row count against live DB state, not a cached snapshot.
         return $this->bypassingCache(fn() => parent::sole($columns));
     }
 
@@ -394,12 +393,6 @@ class CacheableBuilder extends Builder
         } finally {
             $this->skipCache = $previous;
         }
-    }
-
-    public function cursor(): LazyCollection
-    {
-        // Streams via QueryBuilder::cursor() — never reaches CacheableBuilder::get().
-        return parent::cursor();
     }
 
     // -------------------------------------------------------------------------

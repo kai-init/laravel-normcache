@@ -1,7 +1,6 @@
 -- Fetch a versioned query result with cooldown and stale-serve support.
--- Returns ids only; the model blobs are fetched separately via a plain MGET
--- from PHP (Lua's bulk multi-string reply marshaling is dramatically slower
--- than a native MGET for the same payload, so we don't return models here).
+-- Model blobs are fetched separately via a plain MGET from PHP — much faster than Lua's
+-- bulk reply marshaling for the same payload.
 --
 -- KEYS[1] = ver key         (ver:{classKey}:)
 -- KEYS[2] = scheduled key   (scheduled:{classKey}:)
@@ -13,7 +12,10 @@
 -- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
 -- ARGV[5] = building lock token
 --
--- Returns: {status, ver, [ids]}
+-- Returns: {status, ver, [ids|ids_raw]}
+-- On a hit, status is 'hit_raw' and the id list is an undecoded JSON string — PHP decodes
+-- it and handles corrupt JSON. Stale-serving below still decodes in Lua, since it needs to
+-- inspect multiple candidate versions in one round trip.
 local function serve_stale(ver, hash, query_prefix, depth)
     if depth <= 0 then return nil end
     local ver_num = tonumber(ver)
@@ -54,12 +56,4 @@ if not ids_raw then
     return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
 end
 
-local ok, ids = pcall(cjson.decode, ids_raw)
-if not ok or type(ids) ~= 'table' then
-    redis.call('DEL', query_key)
-    return {'corrupt', ver}
-end
-
-if #ids == 0 then return {'empty', ver} end
-
-return {'hit', ver, ids}
+return {'hit_raw', ver, ids_raw}

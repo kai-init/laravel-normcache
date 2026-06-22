@@ -147,16 +147,12 @@ trait CachesOneOrManyThrough
 
     private function isSimpleThroughQuery(Builder $base, CacheableBuilder $builder): bool
     {
-        // Standard HasManyThrough/HasOneThrough always has exactly one join (the intermediate table)
-        // The planner grants a bypass relaxation for this shape; validate it directly here
         if (RelationCacheGuards::blocksBypass($builder, $base)
             || count($base->joins ?? []) !== 1
             || ProjectionClassifier::hasCalculatedColumns($base->columns)) {
             return false;
         }
 
-        // The intermediate JOIN is the only relaxation this fast path is allowed to make.
-        // Compare against the canonical related table so NON_CANONICAL_FROM is detectable.
         $flags = (new QueryAnalyzer)->flags($base, $this->related->getTable(), $base->columns);
 
         return ($flags & ~QueryInspection::JOIN) === 0;

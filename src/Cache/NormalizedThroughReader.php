@@ -42,21 +42,12 @@ final class NormalizedThroughReader
             $hash, $lockToken
         );
 
-        $status = LuaStatus::fromLua($result[0] ?? null);
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
-
-        $ids = null;
-        $throughKeys = null;
-        $models = null;
-
-        if ($status->servesData()) {
-            $ids = $result[2] ?? [];
-            $throughKeys = $result[3] ?? [];
-            $models = $this->fetchModels($classKey, $ids);
-        }
+        [$status, $ids, $throughKeys] = $this->resolveIdsAndThroughKeys($result, $queryKey);
+        $models = $status->servesData() ? $this->fetchModels($classKey, $ids) : null;
 
         return $this->toThroughResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
@@ -93,6 +84,38 @@ final class NormalizedThroughReader
         }
 
         return new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $throughKeys, $this->fetchModels($classKey, $ids), null, null, [], []);
+    }
+
+    /**
+     * Resolves a Lua fetch result into [status, ids, throughKeys]. A 'hit_raw' status carries an
+     * undecoded JSON {i, t} string (see fetch_multi_versioned_through.lua) that gets decoded and
+     * validated here, deleting the key and falling back to Corrupt if it's not a valid shape.
+     */
+    private function resolveIdsAndThroughKeys(array $result, string $queryKey): array
+    {
+        if (($result[0] ?? null) !== 'hit_raw') {
+            $status = LuaStatus::fromLua($result[0] ?? null);
+
+            return [
+                $status,
+                $status->servesData() ? ($result[2] ?? []) : null,
+                $status->servesData() ? ($result[3] ?? []) : null,
+            ];
+        }
+
+        $parsed = json_decode($result[2], true);
+
+        if (!is_array($parsed) || !is_array($parsed['i'] ?? null) || !is_array($parsed['t'] ?? null)) {
+            $this->store->delete($queryKey);
+
+            return [LuaStatus::Corrupt, null, null];
+        }
+
+        if (empty($parsed['i'])) {
+            return [LuaStatus::Empty, [], []];
+        }
+
+        return [LuaStatus::Hit, $parsed['i'], $parsed['t']];
     }
 
     private function toThroughResult(

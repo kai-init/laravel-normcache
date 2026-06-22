@@ -127,6 +127,53 @@ class OptimizationsTest extends TestCase
         $this->assertCount(0, $second);
     }
 
+    public function test_multi_dependency_query_corrupt_payload_degrades_to_miss_and_repairs(): void
+    {
+        Author::create(['name' => 'Multi Dep Author']);
+
+        Author::query()->dependsOn([Post::class])->get();
+
+        $queryKey = collect($this->redisKeys('test:query:*'))->first();
+        $this->assertNotNull($queryKey);
+
+        Redis::connection(config('normcache.connection'))->set($queryKey, '{not-json');
+
+        Event::fake([QueryCacheMiss::class]);
+
+        $found = Author::query()->dependsOn([Post::class])->get();
+
+        $this->assertCount(1, $found);
+        Event::assertDispatched(QueryCacheMiss::class);
+
+        $raw = app('normcache')->getStore()->getRaw(
+            str_replace(config('normcache.key_prefix'), '', $queryKey)
+        );
+        $repaired = $raw !== null ? json_decode($raw, true) : null;
+        $this->assertSame([(string) $found->first()->id], $repaired);
+    }
+
+    public function test_large_id_list_round_trips_correctly(): void
+    {
+        $names = [];
+        for ($i = 0; $i < 1200; $i++) {
+            $names[] = ['name' => "Bulk Author {$i}"];
+        }
+        Author::insert($names);
+
+        $cold = Author::orderBy('id')->get();
+        $warm = Author::orderBy('id')->get();
+
+        $this->assertCount(1200, $cold);
+        $this->assertSame(
+            $cold->pluck('id')->all(),
+            $warm->pluck('id')->all()
+        );
+        $this->assertSame(
+            $cold->pluck('name')->all(),
+            $warm->pluck('name')->all()
+        );
+    }
+
     public function test_fast_path_is_used_for_single_primary_key_lookup_with_order_by()
     {
         $author = Author::create(['name' => 'Order Author']);

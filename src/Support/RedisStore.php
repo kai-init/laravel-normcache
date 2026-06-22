@@ -364,9 +364,6 @@ final class RedisStore
             $prefixedKeys[] = $key === '' ? '' : $this->prefix($key);
         }
 
-        // In cluster mode, all keys MUST hash to the same slot.
-        // If some keys are empty (optional), we replace them with a dummy key
-        // sharing the hash tag of the first tagged key found.
         if ($this->isCluster()) {
             $tag = null;
             foreach ($prefixedKeys as $pk) {

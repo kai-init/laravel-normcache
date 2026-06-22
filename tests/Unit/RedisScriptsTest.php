@@ -10,7 +10,7 @@ class RedisScriptsTest extends TestCase
 {
     private static array $knownScripts = [
         'fetch_version_with_cooldown',
-        'fetch_models_with_stampede',
+        'fetch_model_build_status',
         'fetch_multi_versioned_query',
         'fetch_multi_versioned_through',
         'fetch_versioned_pivot',

@@ -247,7 +247,6 @@ final class CachePlanner
 
         if ($dependencies->safe && $this->hasResultDependencies($context, $hasExplicit)) {
             if ($this->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
-                // Still surface under-declared dependencies: the same query with an explicit select is cacheable.
                 $this->warnUnderDeclaredDependencies($modelTable, $base, $inspection, $dependencies);
                 $reasons = ['join_result_requires_explicit_select'];
 

@@ -32,11 +32,10 @@ final class NormalizedCacheReader
             $lockToken = $this->versions->buildLockToken();
             $result = $this->luaFetchVersionedQuery($classKey, $hash, $tag, $lockToken);
 
-            $status = LuaStatus::fromLua($result[0] ?? null);
             $version = $this->versions->normalizeVersion($result[1]);
             $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
             $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
-            $ids = $status->servesData() ? $result[2] : null;
+            [$status, $ids] = $this->resolveIds($result, $queryKey);
 
             return $this->toQueryResult(
                 $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
@@ -61,12 +60,11 @@ final class NormalizedCacheReader
             $hash, $lockToken
         );
 
-        $status = LuaStatus::fromLua($result[0] ?? null);
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
-        $ids = $status->servesData() ? $result[2] : null;
+        [$status, $ids] = $this->resolveIds($result, $queryKey);
 
         return $this->toQueryResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
@@ -101,6 +99,29 @@ final class NormalizedCacheReader
         }
 
         return new QueryCacheResult(CacheStatus::Hit, $queryKey, $parsed, $this->fetchModels($classKey, $parsed), null, null, [], []);
+    }
+
+    private function resolveIds(array $result, string $queryKey): array
+    {
+        if (($result[0] ?? null) !== 'hit_raw') {
+            $status = LuaStatus::fromLua($result[0] ?? null);
+
+            return [$status, $status->servesData() ? $result[2] : null];
+        }
+
+        $ids = json_decode($result[2], true);
+
+        if (!is_array($ids) || !array_is_list($ids)) {
+            $this->store->delete($queryKey);
+
+            return [LuaStatus::Corrupt, null];
+        }
+
+        if (empty($ids)) {
+            return [LuaStatus::Empty, []];
+        }
+
+        return [LuaStatus::Hit, $ids];
     }
 
     private function toQueryResult(

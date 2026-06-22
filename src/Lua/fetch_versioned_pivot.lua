@@ -1,7 +1,5 @@
--- Resolve the version segment for a pivot cache lookup.
--- Does not fetch the pivot payloads; PHP fetches those separately via a plain
--- MGET (Lua's bulk multi-string reply marshaling is dramatically slower than a
--- native MGET for the same payload, so we don't return them here).
+-- Resolve the version segment for a pivot cache lookup. Doesn't fetch the pivot payloads —
+-- PHP fetches those separately via a plain MGET, much faster than Lua's bulk reply marshaling.
 --
 -- KEYS[1..n]    = version keys (parent, related, ...)
 -- KEYS[n+1..2n] = scheduled keys (one per version key, same order)
