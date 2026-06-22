@@ -32,7 +32,7 @@ final class NormalizedThroughReader
 
         $lockToken = $this->versions->buildLockToken();
 
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             return $this->fetchSlotted($classKey, $hash, $queryPrefix, $versionKeys, $scheduledKeys, $lockToken);
         }
 
@@ -148,7 +148,7 @@ final class NormalizedThroughReader
 
         $payload = json_encode(['i' => $ids, 't' => $throughKeys], JSON_THROW_ON_ERROR);
 
-        if ($this->slotting && !empty($versionKeys)) {
+        if ($this->usesSlotting() && !empty($versionKeys)) {
             $this->storeSlottingGuarded($key, $payload, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
             return;

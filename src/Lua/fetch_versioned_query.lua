@@ -1,21 +1,22 @@
 -- Fetch a versioned query result with cooldown and stale-serve support.
--- Model blobs are fetched separately via a plain MGET from PHP — much faster than Lua's
--- bulk reply marshaling for the same payload.
+-- Small hits (<= ARGV[6] ids) also fetch model blobs inline, saving a round trip; larger
+-- hits return ids only and let PHP MGET them separately.
 --
 -- KEYS[1] = ver key         (ver:{classKey}:)
 -- KEYS[2] = scheduled key   (scheduled:{classKey}:)
 -- KEYS[3] = query prefix    (query:{classKey}:v)
 -- KEYS[4] = building prefix (building:{classKey}:)
+-- KEYS[5] = model prefix    (model:{classKey}:)
 -- ARGV[1] = hash
 -- ARGV[2] = current timestamp in ms
 -- ARGV[3] = building lock TTL in seconds
 -- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
 -- ARGV[5] = building lock token
+-- ARGV[6] = inline model threshold (max ids to inline-fetch models for; <= 0 disables inlining)
 --
--- Returns: {status, ver, [ids|ids_raw]}
--- On a hit, status is 'hit_raw' and the id list is an undecoded JSON string — PHP decodes
--- it and handles corrupt JSON. Stale-serving below still decodes in Lua, since it needs to
--- inspect multiple candidate versions in one round trip.
+-- Returns: {status, ver, [ids|ids_raw], [models]}
+-- status is 'hit_raw' (ids only) or 'hit_inline' (4th element has models, same order as ids,
+-- missing entries as false). Stale-serving isn't inlined.
 local function serve_stale(ver, hash, query_prefix, depth)
     if depth <= 0 then return nil end
     local ver_num = tonumber(ver)
@@ -54,6 +55,18 @@ if not ids_raw then
     local claimed = redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3]))
     if claimed then return {'miss', ver, ARGV[5]} end
     return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
+end
+
+local threshold = tonumber(ARGV[6]) or 0
+if threshold > 0 then
+    local ok, ids = pcall(cjson.decode, ids_raw)
+    if ok and type(ids) == 'table' and #ids > 0 and #ids <= threshold then
+        local models = {}
+        for i = 1, #ids do
+            models[i] = redis.call('GET', KEYS[5] .. tostring(ids[i]))
+        end
+        return {'hit_inline', ver, ids_raw, models}
+    end
 end
 
 return {'hit_raw', ver, ids_raw}

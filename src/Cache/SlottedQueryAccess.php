@@ -5,6 +5,11 @@ namespace NormCache\Cache;
 /** Shared slotting-safe key resolution and guarded write, used by readers whose keys are rooted at a single classKey. */
 trait SlottedQueryAccess
 {
+    private function usesSlotting(): bool
+    {
+        return $this->slotting || $this->store->isCluster();
+    }
+
     private function resolveSlotKeys(
         string $classKey, string $hash, string $queryPrefix,
         array $versionKeys, array $scheduledKeys

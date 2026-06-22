@@ -156,14 +156,14 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    /** MGET in input order, with null for missing keys; groups by hash tag when slotting. */
+    /** MGET in input order, with null for missing keys; groups by hash tag when slotting or on a real cluster. */
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {
             return [];
         }
 
-        if (!$this->slotting) {
+        if (!$this->slotting && !$this->isCluster()) {
             $prefixed = [];
             foreach ($keys as $key) {
                 $prefixed[] = $this->prefix($key);
@@ -442,7 +442,7 @@ final class RedisStore
     // Private
     // -------------------------------------------------------------------------
 
-    private function isCluster(): bool
+    public function isCluster(): bool
     {
         return $this->connection instanceof PhpRedisClusterConnection
             || $this->connection instanceof PredisClusterConnection;

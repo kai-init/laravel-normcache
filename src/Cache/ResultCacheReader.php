@@ -22,6 +22,11 @@ final class ResultCacheReader
         private readonly bool $slotting = false,
     ) {}
 
+    private function usesSlotting(): bool
+    {
+        return $this->slotting || $this->store->isCluster();
+    }
+
     public function fetch(
         string $modelClass, array $depClasses, string $hash,
         ?string $tag, array $depTableKeys,
@@ -33,7 +38,7 @@ final class ResultCacheReader
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $lockToken = $this->versions->buildLockToken();
 
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
@@ -108,7 +113,7 @@ final class ResultCacheReader
         $relatedKey = $this->keys->classKey($relatedClass);
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($relatedKey, [], [$pivotTableKey ?? $parentKey]);
 
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
             $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
             $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
@@ -163,14 +168,14 @@ final class ResultCacheReader
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
         if (empty($entries)) {
-            if ($this->slotting && $buildingKey !== null) {
+            if ($this->usesSlotting() && $buildingKey !== null) {
                 $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey), $buildingToken);
             }
 
             return true;
         }
 
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             return $this->storeSlottingGuarded(
                 fn() => $this->store->setMany($entries, $ttl),
                 $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken
@@ -197,7 +202,7 @@ final class ResultCacheReader
         array $versionKeys, array $expectedVersions,
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             return $this->storeSlottingGuarded(
                 fn() => $this->store->set($key, $payload, $ttl),
                 $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken

@@ -22,6 +22,7 @@ final class NormalizedCacheReader
         private readonly int $staleVersionDepth,
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
+        private readonly int $inlineModelThreshold = 0,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult
@@ -35,14 +36,14 @@ final class NormalizedCacheReader
             $version = $this->versions->normalizeVersion($result[1]);
             $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
             $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
-            [$status, $ids] = $this->resolveIds($result, $queryKey);
+            [$status, $ids, $models] = $this->resolveIdsAndModels($result, $queryKey);
 
             return $this->toQueryResult(
                 $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
                 [$this->keys->verKey($classKey)],
                 [(string) $version],
                 $ids,
-                is_array($ids) ? $this->fetchModels($classKey, $ids) : null
+                $models ?? (is_array($ids) ? $this->fetchModels($classKey, $ids) : null)
             );
         }
 
@@ -50,13 +51,13 @@ final class NormalizedCacheReader
         $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
 
-        if ($this->slotting) {
+        if ($this->usesSlotting()) {
             return $this->fetchSlotted($classKey, $hash, $queryPrefix, $versionKeys, $scheduledKeys, $lockToken);
         }
 
         $result = $this->luaFetchMultiVersionedQuery(
             $versionKeys, $scheduledKeys, $queryPrefix,
-            $this->keys->buildingPrefix($classKey),
+            $this->keys->buildingPrefix($classKey), $classKey,
             $hash, $lockToken
         );
 
@@ -64,13 +65,13 @@ final class NormalizedCacheReader
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
-        [$status, $ids] = $this->resolveIds($result, $queryKey);
+        [$status, $ids, $models] = $this->resolveIdsAndModels($result, $queryKey);
 
         return $this->toQueryResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
             $versionKeys, $expectedVersions,
             $ids,
-            is_array($ids) ? $this->fetchModels($classKey, $ids) : null
+            $models ?? (is_array($ids) ? $this->fetchModels($classKey, $ids) : null)
         );
     }
 
@@ -101,12 +102,14 @@ final class NormalizedCacheReader
         return new QueryCacheResult(CacheStatus::Hit, $queryKey, $parsed, $this->fetchModels($classKey, $parsed), null, null, [], []);
     }
 
-    private function resolveIds(array $result, string $queryKey): array
+    private function resolveIdsAndModels(array $result, string $queryKey): array
     {
-        if (($result[0] ?? null) !== 'hit_raw') {
-            $status = LuaStatus::fromLua($result[0] ?? null);
+        $tag = $result[0] ?? null;
 
-            return [$status, $status->servesData() ? $result[2] : null];
+        if ($tag !== 'hit_raw' && $tag !== 'hit_inline') {
+            $status = LuaStatus::fromLua($tag);
+
+            return [$status, $status->servesData() ? $result[2] : null, null];
         }
 
         $ids = json_decode($result[2], true);
@@ -114,14 +117,16 @@ final class NormalizedCacheReader
         if (!is_array($ids) || !array_is_list($ids)) {
             $this->store->delete($queryKey);
 
-            return [LuaStatus::Corrupt, null];
+            return [LuaStatus::Corrupt, null, null];
         }
 
         if (empty($ids)) {
-            return [LuaStatus::Empty, []];
+            return [LuaStatus::Empty, [], null];
         }
 
-        return [LuaStatus::Hit, $ids];
+        $models = $tag === 'hit_inline' ? $this->store->unserializeMany($result[3] ?? []) : null;
+
+        return [LuaStatus::Hit, $ids, $models];
     }
 
     private function toQueryResult(
@@ -151,7 +156,7 @@ final class NormalizedCacheReader
         $ids = array_map('strval', $ids);
         $ttl ??= $this->queryTtl;
 
-        if ($this->slotting && !empty($versionKeys)) {
+        if ($this->usesSlotting() && !empty($versionKeys)) {
             $this->storeSlottingGuarded($key, json_encode($ids, JSON_THROW_ON_ERROR), $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
 
             return;
@@ -206,18 +211,19 @@ final class NormalizedCacheReader
             $this->keys->scheduledKey($classKey),
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->buildingPrefix($classKey),
-        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
+            $this->keys->modelPrefix($classKey),
+        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken, $this->inlineModelThreshold]);
     }
 
     private function luaFetchMultiVersionedQuery(
         array $versionKeys, array $scheduledKeys,
-        string $queryPrefix, string $buildingPrefix,
+        string $queryPrefix, string $buildingPrefix, string $classKey,
         string $hash, string $lockToken,
     ): mixed {
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->modelPrefix($classKey)]),
+            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken, $this->inlineModelThreshold]
         );
     }
 }
