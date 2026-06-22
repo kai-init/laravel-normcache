@@ -53,7 +53,6 @@ final class QueryHasher
     }
 
     public static function forRelationQuery(
-        EloquentBuilder $builder,
         string $stripKey,
         QueryBuilder $base,
     ): string {

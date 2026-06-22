@@ -2,7 +2,6 @@
 
 namespace NormCache\Relations;
 
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -80,7 +79,7 @@ trait CachesPivotRelation
         $shouldCacheRelatedModels = $classification['shouldCacheRelatedModels'];
         $selectedRelatedColumns = $classification['selectedRelatedColumns'];
 
-        $constraintHash = QueryHasher::forRelationQuery($builder, $this->getQualifiedForeignPivotKeyName(), $base);
+        $constraintHash = QueryHasher::forRelationQuery($this->getQualifiedForeignPivotKeyName(), $base);
 
         if (!$this->shouldUsePivotCache($cacheParentIds, $classification['resolvedColumns'], $builder, $base)
             || (!$shouldCacheRelatedModels && !$classification['relatedKeyInProjection'])) {
@@ -147,27 +146,6 @@ trait CachesPivotRelation
         );
 
         return $results;
-    }
-
-    private function currentConstraintHash(
-        array $columns = ['*'],
-        ?Builder $builder = null,
-        ?QueryBuilder $base = null,
-    ): string {
-        if ($builder === null) {
-            if (!$this->query instanceof CacheableBuilder) {
-                throw new \LogicException('Pivot cache hashing requires a cacheable query builder.');
-            }
-
-            $prepared = $this->query->prepareScopedQuery();
-            $builder = $prepared->builder;
-            $base = $prepared->base;
-            $selectColumns = $base->columns ? [] : $columns;
-            $builder->addSelect($this->shouldSelect($selectColumns));
-            $prepared->applyBeforeCallbacks();
-        }
-
-        return QueryHasher::forRelationQuery($builder, $this->getQualifiedForeignPivotKeyName(), $base);
     }
 
     private function shouldUsePivotCache(

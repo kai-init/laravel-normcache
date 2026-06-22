@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
+use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
@@ -482,11 +483,13 @@ class PivotCacheTest extends TestCase
         $this->assertSame(['beta', 'alpha'], $descending);
     }
 
+    /** Hashes via the same public path CachesPivotRelation::get() uses, instead of reaching into a private method. */
     private function callConstraintHash(object $relation): string
     {
-        $method = new \ReflectionMethod($relation, 'currentConstraintHash');
+        $prepared = $relation->prepareScopedQuery();
+        $prepared->applyBeforeCallbacks();
 
-        return $method->invoke($relation, ['*']);
+        return QueryHasher::forRelationQuery($relation->getQualifiedForeignPivotKeyName(), $prepared->base);
     }
 
     public function test_pivot_cache_used_when_projection_is_table_wildcard(): void
