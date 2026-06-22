@@ -16,6 +16,10 @@ final class ModelHydrator
 {
     private static ?\Closure $hydrateClosure = null;
 
+    private static ?\Closure $setAttributeDirectClosure = null;
+
+    private static ?\Closure $getAttributeDirectClosure = null;
+
     private static ?\Closure $transformScalarClosure = null;
 
     private static ?\Closure $transformScalarsClosure = null;
@@ -482,6 +486,41 @@ final class ModelHydrator
                 if ($fire) {
                     $instance->fireModelEvent('retrieved', false);
                 }
+            },
+            null,
+            Model::class
+        );
+    }
+
+    /**
+     * Writes a single attribute straight into the attributes array, bypassing the mutator/cast
+     * resolution Model::setAttribute() runs on every call — pure overhead for synthetic columns
+     * (e.g. laravel_through_key) that never have a cast or mutator.
+     */
+    public static function setAttributeDirectClosure(): \Closure
+    {
+        return self::$setAttributeDirectClosure ??= \Closure::bind(
+            static function (Model $instance, string $key, mixed $value): void {
+                $instance->attributes[$key] = $value;
+            },
+            null,
+            Model::class
+        );
+    }
+
+    /**
+     * Reads a single attribute straight from the attributes array, bypassing the mutator/cast
+     * resolution Model::getAttribute() runs on every call. Safe for reading a freshly-hydrated
+     * model's own primary key against ids that came from the same raw cache payload (see
+     * laravel_through_key matching in CachesOneOrManyThrough) — those ids were never run through
+     * a PK cast either, so comparing raw-to-raw is actually more consistent than going through
+     * Model::getKey().
+     */
+    public static function getAttributeDirectClosure(): \Closure
+    {
+        return self::$getAttributeDirectClosure ??= \Closure::bind(
+            static function (Model $instance, string $key): mixed {
+                return $instance->attributes[$key] ?? null;
             },
             null,
             Model::class

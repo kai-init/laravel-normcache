@@ -4,6 +4,7 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
+use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
@@ -187,10 +188,13 @@ trait CachesOneOrManyThrough
         $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
+            $getAttribute = ModelHydrator::getAttributeDirectClosure();
+            $setAttribute = ModelHydrator::setAttributeDirectClosure();
+            $keyName = $this->related->getKeyName();
             foreach ($models as $model) {
-                $id = $model->getKey();
+                $id = $getAttribute($model, $keyName);
                 if (array_key_exists($id, $throughKeys)) {
-                    $model->setAttribute('laravel_through_key', $throughKeys[$id]);
+                    $setAttribute($model, 'laravel_through_key', $throughKeys[$id]);
                 }
             }
         }

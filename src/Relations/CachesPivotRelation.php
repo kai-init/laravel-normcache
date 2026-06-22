@@ -259,8 +259,10 @@ trait CachesPivotRelation
         }
 
         $modelsById = [];
+        $getAttribute = ModelHydrator::getAttributeDirectClosure();
+        $keyName = $this->related->getKeyName();
         foreach (NormCache::getModels(array_keys($uniqueRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
-            $modelsById[$model->getKey()] = $model;
+            $modelsById[$getAttribute($model, $keyName)] = $model;
         }
 
         $result = [];
