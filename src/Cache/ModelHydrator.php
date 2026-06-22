@@ -329,14 +329,37 @@ final class ModelHydrator
         ?string $wakeKey = null,
         ?string $token = null,
     ): array {
-        $prototype = CacheKeyBuilder::prototype($modelClass);
-        $pk = $prototype->getKeyName();
-        $qualifiedPk = $prototype->getQualifiedKeyName();
         $query = $this->prepareMissedQuery(
             $modelClass,
             $missedQuery instanceof CacheableBuilder ? $missedQuery : null,
             $preserveQueryShape
         );
+
+        if ($this->overridesNewFromBuilder($query->getModel())) {
+            return $this->fetchAndCacheUsingEloquent(
+                $missed, $modelClass, $classKey, $projection, $query, $modelVersion, $buildingKey, $wakeKey, $token
+            );
+        }
+
+        return $this->fetchAndCacheUsingClosure(
+            $missed, $modelClass, $classKey, $projection, $query, $query->getModel(), $modelVersion, $buildingKey, $wakeKey, $token
+        );
+    }
+
+    private function fetchAndCacheUsingEloquent(
+        array $missed,
+        string $modelClass,
+        string $classKey,
+        ?array $projection,
+        EloquentBuilder $query,
+        int $modelVersion,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
+    ): array {
+        $prototype = CacheKeyBuilder::prototype($modelClass);
+        $pk = $prototype->getKeyName();
+        $qualifiedPk = $prototype->getQualifiedKeyName();
         $loaded = $query->whereIn($qualifiedPk, $missed)
             ->get(['*'])
             ->keyBy($pk);
@@ -372,6 +395,79 @@ final class ModelHydrator
         }
 
         return $loaded->all();
+    }
+
+    private function fetchAndCacheUsingClosure(
+        array $missed,
+        string $modelClass,
+        string $classKey,
+        ?array $projection,
+        EloquentBuilder $query,
+        Model $prototype,
+        int $modelVersion,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
+    ): array {
+        $pk = $prototype->getKeyName();
+        $qualifiedPk = $prototype->getQualifiedKeyName();
+        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($modelClass);
+        $hydrate = self::hydrateClosure();
+        $connectionName = $query->getModel()->getConnectionName();
+
+        $rows = $query->whereIn($qualifiedPk, $missed)
+            ->toBase()
+            ->get(['*']);
+
+        $models = [];
+        $attrsByKey = [];
+
+        foreach ($rows as $row) {
+            $attrs = (array) $row;
+
+            if (!array_key_exists($pk, $attrs)) {
+                continue;
+            }
+
+            $id = $attrs[$pk];
+
+            $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
+            if (!$isTrashed) {
+                $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
+            }
+
+            $returnAttrs = $projection !== null
+                ? AttributeProjector::projectAttributes($attrs, $projection)
+                : $attrs;
+
+            $instance = clone $prototype;
+            $instance->setConnection($connectionName);
+            $hydrate($instance, $returnAttrs, true);
+
+            $models[$id] = $instance;
+        }
+
+        if ($attrsByKey !== [] || $buildingKey !== null) {
+            $this->store->setManyTrackedIfVersion(
+                $attrsByKey,
+                $this->ttl,
+                $this->keys->membersKey($classKey),
+                $this->keys->verKey($classKey),
+                $modelVersion,
+                $buildingKey,
+                $wakeKey,
+                $token
+            );
+        }
+
+        return $models;
+    }
+
+    private function overridesNewFromBuilder(Model $model): bool
+    {
+        $method = new \ReflectionMethod($model, 'newFromBuilder');
+
+        return $method->getDeclaringClass()->getName() !== Model::class;
     }
 
     public static function hydrateClosure(): \Closure
