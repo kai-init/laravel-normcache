@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Query\Expression;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\VersionTracker;
@@ -306,6 +307,6 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $this->assertIsBool($post->published);
         $this->assertSame(['k' => 'v'], $post->metadata);
         $this->assertSame('calculated_value', $post->calculated_field);
-        $this->assertInstanceOf(\Illuminate\Support\Carbon::class, $post->created_at);
+        $this->assertInstanceOf(Carbon::class, $post->created_at);
     }
 }
