@@ -76,7 +76,9 @@ class ThroughRelationTest extends TestCase
             ->del($this->prefixedModelKey(Post::class, $post->id));
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $second = $country->posts()->get();
 

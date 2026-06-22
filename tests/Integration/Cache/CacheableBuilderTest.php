@@ -168,7 +168,9 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(1, Author::withCount('posts')->find($author->id)->posts_count);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
         Author::withCount('posts')->find($author->id);
         $this->assertSame(0, $queryCount, 'Expected cache hit — no DB queries');
 

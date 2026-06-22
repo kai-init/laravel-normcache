@@ -77,18 +77,11 @@ final class ModelHydrator
         $classKey = $this->keys->classKey($modelClass);
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
 
-        $hits = [];
+        $raw ??= $this->store->getMany($this->modelKeysFor($classKey, $ids));
+
+        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
         $lockKey = $wakeKey = $token = null;
         $version = 0;
-
-        if ($raw === null) {
-            [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $ids);
-
-            [$status, $missed, $version] = $this->fetchMissedViaLua($ids, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
-        } else {
-            ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
-            $status = 'hit';
-        }
 
         if ($hits !== [] && $reporting) {
             CacheReporter::modelHitActive($modelClass, array_keys($hits), $debugbarStart, [
@@ -108,11 +101,9 @@ final class ModelHydrator
             ]);
         }
 
-        if ($lockKey === null) {
-            [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
+        [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
 
-            [$status, $missed, $version] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
-        }
+        [$status, $missed, $version] = $this->fetchMissedViaLua($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
 
         if ($status === 'building' && $missed !== []) {
             $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
@@ -155,6 +146,17 @@ final class ModelHydrator
         return [$lockKey, $wakeKey, $token];
     }
 
+    private function modelKeysFor(string $classKey, array $ids): array
+    {
+        $prefix = $this->keys->modelPrefix($classKey);
+        $keys = [];
+        foreach ($ids as $id) {
+            $keys[] = $prefix . $id;
+        }
+
+        return $keys;
+    }
+
     private function fetchMissedViaLua(
         array $idsToFetch,
         string $modelClass,
@@ -165,11 +167,7 @@ final class ModelHydrator
         string $token,
         array &$hits,
     ): array {
-        $prefix = $this->keys->modelPrefix($classKey);
-        $fetchKeys = [];
-        foreach ($idsToFetch as $id) {
-            $fetchKeys[] = $prefix . $id;
-        }
+        $fetchKeys = $this->modelKeysFor($classKey, $idsToFetch);
 
         $result = $this->store->script(
             RedisScripts::get('fetch_models_with_stampede'),

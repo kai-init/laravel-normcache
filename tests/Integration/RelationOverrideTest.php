@@ -19,7 +19,9 @@ class RelationOverrideTest extends TestCase
         $this->assertCount(1, $first->posts);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
         $second = Author::find($author->id);
         $this->assertCount(1, $second->posts);
         $this->assertSame(0, $queryCount, 'Expected cache hit — no DB queries for lazy posts relation');
@@ -39,7 +41,9 @@ class RelationOverrideTest extends TestCase
         $this->assertCount(1, $first->posts);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
         $second = Author::with('posts')->find($author->id);
         $this->assertCount(1, $second->posts);
         $this->assertSame(0, $queryCount, 'Expected cache hit — no DB queries for eager-loaded posts');
@@ -61,7 +65,9 @@ class RelationOverrideTest extends TestCase
         $this->evictModelCache(Post::class, $post->id);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $second = Author::with('posts')->find($author->id);
 
@@ -104,7 +110,9 @@ class RelationOverrideTest extends TestCase
         $this->assertSame(14, (int) $first->first()->doubled_views);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $second = $author->posts()
             ->select('posts.*')
@@ -131,7 +139,9 @@ class RelationOverrideTest extends TestCase
         $this->assertSame(['A Post'], $first->posts->pluck('title')->all());
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
 
         $second = Author::with(['posts' => fn($query) => $query->orderBy('title')->limit(1)])
             ->find($author->id);
@@ -187,7 +197,9 @@ class RelationOverrideTest extends TestCase
         $this->assertCount(1, $first->comments);
 
         $queryCount = 0;
-        DB::listen(function () use (&$queryCount) { $queryCount++; });
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
         $second = Author::with('comments')->find($author->id);
         $this->assertCount(1, $second->comments);
         $this->assertSame(0, $queryCount, 'Expected cache hit — no DB queries for eager-loaded comments');
