@@ -8,11 +8,7 @@ use NormCache\Facades\NormCache;
 
 final class RelationCacheGuards
 {
-    /**
-     * Conditions shared by every relation's "simple shape" bypass check:
-     * cache disabled/opted-out, inside a transaction, or any query feature
-     * that the planner can't normalize regardless of relation type.
-     */
+    /** Conditions shared by every relation's "simple shape" bypass check, regardless of relation type. */
     public static function blocksBypass(CacheableBuilder $builder, QueryBuilder $base): bool
     {
         return $builder->isCacheSkipped()

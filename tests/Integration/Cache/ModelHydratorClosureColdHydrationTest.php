@@ -293,6 +293,81 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $this->assertSame(0, InstrumentedPost::$setRawAttributesCalls, 'join query with explicit select should still be hydrated through the closure path');
     }
 
+    public function test_cold_miss_with_joined_missed_query_uses_closure_hydration_and_avoids_ambiguous_columns(): void
+    {
+        $author = Author::create(['name' => 'Owen']);
+        $post = InstrumentedPost::create(['title' => 'JoinAmbiguous', 'author_id' => $author->id]);
+        $this->evictModelCache(InstrumentedPost::class, $post->id);
+        InstrumentedPost::$setRawAttributesCalls = 0;
+
+        $manager = $this->buildManager();
+        $joinedQuery = InstrumentedPost::query()->withoutCache()
+            ->join('authors', 'authors.id', '=', 'posts.author_id');
+
+        $models = $manager->getModels([$post->id], InstrumentedPost::class, null, null, $joinedQuery, true);
+
+        $this->assertCount(1, $models);
+        $this->assertSame('JoinAmbiguous', $models[0]->title);
+        $this->assertSame($post->id, $models[0]->id, 'Must resolve the post id, not the colliding authors.id from the join');
+        $this->assertSame(0, InstrumentedPost::$setRawAttributesCalls, 'A joined missedQuery is safe via the table-qualified select, so closure hydration must still be used');
+    }
+
+    public function test_cold_miss_with_grouped_missed_query_returns_one_row_per_requested_id(): void
+    {
+        $author = Author::create(['name' => 'Petra']);
+        $post1 = InstrumentedPost::create(['title' => 'GroupedOne', 'author_id' => $author->id]);
+        $post2 = InstrumentedPost::create(['title' => 'GroupedTwo', 'author_id' => $author->id]);
+        $this->evictModelCache(InstrumentedPost::class, $post1->id);
+        $this->evictModelCache(InstrumentedPost::class, $post2->id);
+
+        $manager = $this->buildManager();
+        // Groups by author_id: post1 and post2 share an author, so a naive
+        // whereIn(pk, [post1, post2]) on top of this GROUP BY would collapse to one row.
+        $groupedQuery = InstrumentedPost::query()->withoutCache()->groupBy('author_id');
+
+        $models = $manager->getModels([$post1->id, $post2->id], InstrumentedPost::class, null, null, $groupedQuery, true);
+
+        $this->assertCount(2, $models, 'Both requested ids must be resolved, not collapsed by the original query\'s GROUP BY');
+        $titles = array_map(fn($m) => $m->title, $models);
+        $this->assertEqualsCanonicalizing(['GroupedOne', 'GroupedTwo'], $titles);
+    }
+
+    /**
+     * Regression test for a real bug: prepareMissedQuery() used to preserve UNION untouched.
+     * Laravel applies whereIn()/where() only to the *first* arm of a union — the second arm is
+     * left unconstrained. So a cold-miss refetch over a unioned missedQuery actually fetched
+     * BOTH the requested row and the unrelated row from the union's second arm, and queued the
+     * unrelated row's attributes for caching under its own key as a side effect — confirmed by
+     * instrumenting fetchAndCacheUsingClosure() and observing attrsByKey contain both ids before
+     * this fix. The final return value happens to get filtered back down to the requested ids
+     * regardless (see the $ordered loop in getModels()), so the only reliable, fix-sensitive
+     * signal here is the SQL that actually got executed for the refetch.
+     */
+    public function test_cold_miss_with_unioned_missed_query_does_not_run_the_union_for_the_refetch(): void
+    {
+        $author = Author::create(['name' => 'Quinn']);
+        $wanted = InstrumentedPost::create(['title' => 'Wanted', 'author_id' => $author->id]);
+        InstrumentedPost::create(['title' => 'Unrequested', 'author_id' => $author->id]);
+        $this->evictModelCache(InstrumentedPost::class, $wanted->id);
+
+        $manager = $this->buildManager();
+        $unionedQuery = InstrumentedPost::query()->withoutCache()->where('title', 'Wanted');
+        $unionedQuery->getQuery()->union(
+            InstrumentedPost::query()->withoutCache()->where('title', 'Unrequested')->getQuery()
+        );
+
+        DB::enableQueryLog();
+        $models = $manager->getModels([$wanted->id], InstrumentedPost::class, null, null, $unionedQuery, true);
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, $models);
+        $this->assertSame('Wanted', $models[0]->title);
+
+        $refetchRanAUnion = array_filter($queries, fn($q) => str_contains(strtolower($q['query']), 'union'));
+        $this->assertSame([], $refetchRanAUnion, 'The original union must not be reused for the by-id refetch — it leaves the second arm unconstrained by the requested ids');
+    }
+
     public function test_warm_cold_parity_for_casts_dates_json_booleans_and_accessors(): void
     {
         $author = Author::create(['name' => 'Mona']);

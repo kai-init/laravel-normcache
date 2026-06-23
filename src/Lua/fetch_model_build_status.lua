@@ -10,16 +10,30 @@
 -- Returns: {status, lockTokenOrFalse, version, rawValues} — rawValues are the raw MGET results
 -- in KEYS[1..n] order; the caller unserializes/hydrates them.
 local n = #KEYS - 2
-local values = redis.call('MGET', unpack(KEYS, 1, n))
-local version = redis.call('GET', KEYS[n + 2]) or '0'
-
+local chunkSize = 500
+local values = {}
 local allHit = true
-for i = 1, n do
-    if not values[i] then
-        allHit = false
-        break
+
+for start = 1, n, chunkSize do
+    local stop = math.min(start + chunkSize - 1, n)
+    local chunk = {}
+
+    for i = start, stop do
+        chunk[#chunk + 1] = KEYS[i]
+    end
+
+    local chunkValues = redis.call('MGET', unpack(chunk))
+
+    for i = 1, #chunkValues do
+        values[start + i - 1] = chunkValues[i]
+
+        if not chunkValues[i] then
+            allHit = false
+        end
     end
 end
+
+local version = redis.call('GET', KEYS[n + 2]) or '0'
 
 if allHit then
     return {'hit', false, version, values}

@@ -154,4 +154,82 @@ class ModelHydratorStampedeTest extends TestCase
         $this->assertSame('Carol', $hits[$author->id]->name);
         $this->assertNull($store->getRaw($lockKey), 'Must not claim the build lock when the retry MGET already resolves the miss');
     }
+
+    public function test_build_status_script_all_hit_across_multiple_mget_chunks(): void
+    {
+        $manager = $this->buildManager();
+        $store = $manager->getStore();
+        $keys = new CacheKeyBuilder;
+
+        $classKey = $keys->classKey(Author::class);
+        $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
+
+        // Exceeds the script's internal MGET chunk size (500) to exercise chunk boundaries.
+        $count = 1200;
+        $modelKeys = [];
+        for ($i = 0; $i < $count; $i++) {
+            $modelKey = $keys->modelPrefix($classKey) . "present-{$i}";
+            $store->set($modelKey, ['id' => $i], 60);
+            $modelKeys[] = $modelKey;
+        }
+
+        $result = $store->script(
+            RedisScripts::get('fetch_model_build_status'),
+            [...$modelKeys, $lockKey, $keys->verKey($classKey)],
+            ['token', '5']
+        );
+
+        $this->assertSame('hit', $result[0]);
+        $this->assertFalse((bool) $result[1]);
+        $this->assertCount($count, $result[3]);
+
+        foreach ($result[3] as $i => $raw) {
+            $this->assertNotNull($raw, "Expected value at index {$i} to be present");
+        }
+
+        $this->assertNull($store->getRaw($lockKey), 'Must not claim the build lock when everything is present');
+    }
+
+    public function test_build_status_script_partial_miss_across_chunk_boundary(): void
+    {
+        $manager = $this->buildManager();
+        $store = $manager->getStore();
+        $keys = new CacheKeyBuilder;
+
+        $classKey = $keys->classKey(Author::class);
+        $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
+
+        // Put the single missing key right at the chunk boundary (index 500, 0-based) so the
+        // miss falls in the second internal MGET chunk.
+        $count = 600;
+        $missingIndex = 500;
+        $modelKeys = [];
+        for ($i = 0; $i < $count; $i++) {
+            $modelKey = $keys->modelPrefix($classKey) . "key-{$i}";
+            if ($i !== $missingIndex) {
+                $store->set($modelKey, ['id' => $i], 60);
+            }
+            $modelKeys[] = $modelKey;
+        }
+
+        $result = $store->script(
+            RedisScripts::get('fetch_model_build_status'),
+            [...$modelKeys, $lockKey, $keys->verKey($classKey)],
+            ['token', '5']
+        );
+
+        $this->assertSame('miss', $result[0]);
+        $this->assertSame('token', $result[1]);
+        $this->assertCount($count, $result[3]);
+        // phpredis decodes a nested Lua `false` as PHP false; predis decodes the same RESP nil as null.
+        $this->assertFalse((bool) $result[3][$missingIndex], 'Missing key must be falsy at its original index');
+
+        foreach ($result[3] as $i => $raw) {
+            if ($i !== $missingIndex) {
+                $this->assertNotNull($raw, "Expected value at index {$i} to be present");
+            }
+        }
+
+        $this->assertSame('token', $store->getRaw($lockKey), 'Must claim the build lock when anything is missing');
+    }
 }

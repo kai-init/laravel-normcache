@@ -86,11 +86,6 @@ final class NormalizedThroughReader
         return new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $throughKeys, $this->fetchModels($classKey, $ids), null, null, [], []);
     }
 
-    /**
-     * Resolves a Lua fetch result into [status, ids, throughKeys]. A 'hit_raw' status carries an
-     * undecoded JSON {i, t} string (see fetch_multi_versioned_through.lua) that gets decoded and
-     * validated here, deleting the key and falling back to Corrupt if it's not a valid shape.
-     */
     private function resolveIdsAndThroughKeys(array $result, string $queryKey): array
     {
         if (($result[0] ?? null) !== 'hit_raw') {

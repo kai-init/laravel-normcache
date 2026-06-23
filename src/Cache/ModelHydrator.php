@@ -4,6 +4,7 @@ namespace NormCache\Cache;
 
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
 use NormCache\CacheableBuilder;
 use NormCache\Support\AttributeProjector;
@@ -360,7 +361,7 @@ final class ModelHydrator
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
         $loaded = $query->whereIn($qualifiedPk, $missed)
-            ->get(['*'])
+            ->get([$prototype->getTable() . '.*'])
             ->keyBy($pk);
 
         $attrsByKey = [];
@@ -416,7 +417,7 @@ final class ModelHydrator
 
         $rows = $query->whereIn($qualifiedPk, $missed)
             ->toBase()
-            ->get(['*']);
+            ->get([$prototype->getTable() . '.*']);
 
         $models = [];
         $attrsByKey = [];
@@ -487,11 +488,6 @@ final class ModelHydrator
         );
     }
 
-    /**
-     * Writes a single attribute straight into the attributes array, bypassing the mutator/cast
-     * resolution Model::setAttribute() runs on every call — pure overhead for synthetic columns
-     * (e.g. laravel_through_key) that never have a cast or mutator.
-     */
     public static function setAttributeDirectClosure(): \Closure
     {
         return self::$setAttributeDirectClosure ??= \Closure::bind(
@@ -503,14 +499,6 @@ final class ModelHydrator
         );
     }
 
-    /**
-     * Reads a single attribute straight from the attributes array, bypassing the mutator/cast
-     * resolution Model::getAttribute() runs on every call. Safe for reading a freshly-hydrated
-     * model's own primary key against ids that came from the same raw cache payload (see
-     * laravel_through_key matching in CachesOneOrManyThrough) — those ids were never run through
-     * a PK cast either, so comparing raw-to-raw is actually more consistent than going through
-     * Model::getKey().
-     */
     public static function getAttributeDirectClosure(): \Closure
     {
         return self::$getAttributeDirectClosure ??= \Closure::bind(
@@ -597,7 +585,7 @@ final class ModelHydrator
 
     private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery, bool $preserveQueryShape): EloquentBuilder
     {
-        if ($missedQuery === null || !$preserveQueryShape) {
+        if ($missedQuery === null || !$preserveQueryShape || !$this->canPreserveQueryShape($missedQuery->getQuery())) {
             $builder = $modelClass::query();
             if ($builder instanceof CacheableBuilder) {
                 $missedQuery?->applyRemovedScopesTo($builder);
@@ -608,9 +596,10 @@ final class ModelHydrator
             return $builder;
         }
 
+        // Groups/havings are stripped: we already know the primary keys and want each one's raw row, not an aggregate.
         $base = $missedQuery->getQuery()
-            ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
-            ->cloneWithoutBindings(['select', 'order']);
+            ->cloneWithout(['columns', 'orders', 'limit', 'offset', 'groups', 'havings'])
+            ->cloneWithoutBindings(['select', 'order', 'groupBy', 'having']);
 
         $builder = (new CacheableBuilder($base))
             ->setModel($missedQuery->getModel())
@@ -619,5 +608,10 @@ final class ModelHydrator
         $missedQuery->applyRemovedScopesTo($builder);
 
         return $builder;
+    }
+
+    private function canPreserveQueryShape(QueryBuilder $base): bool
+    {
+        return $base->unions === null && is_string($base->from);
     }
 }
