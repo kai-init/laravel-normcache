@@ -84,7 +84,17 @@ Post::withoutCache()->get();
 
 ### Cross-Table Queries
 
-Simple `whereHas` / `whereDoesntHave` on a non-nested `Cacheable` relation and plain string `join()` calls with an explicit root-table projection are inferred automatically — no `dependsOn()` needed. Join inference is conservative: it bypasses joins with implicit aliases (`join('posts p', ...)`), expression join targets, raw or subquery join predicates, and unsupported join-clause conditions — those require `dependsOn()`/`dependsOnTables()` like everything else below.
+Two shapes are inferred automatically — no `dependsOn()` needed:
+
+- `whereHas` / `whereDoesntHave` on a non-nested `Cacheable` relation
+- plain string `join()` calls with an explicit root-table projection
+
+Join inference is conservative and falls back to requiring `dependsOn()`/`dependsOnTables()` for:
+
+- implicit aliases, e.g. `join('posts p', ...)`
+- expression join targets
+- raw or subquery join predicates
+- other unsupported join-clause conditions
 
 ```php
 Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
@@ -94,7 +104,15 @@ Author::join('posts', 'posts.author_id', '=', 'authors.id')
     ->get(); // also works with count(), sum(), exists(), paginate()
 ```
 
-Everything else requires `dependsOn()`: manual `whereExists`, raw predicates, nested relations, `GROUP BY`, `DISTINCT`, and calculated columns. Use `dependsOnTables()` when the joined table has no `Cacheable` model:
+Everything else requires `dependsOn()`, including:
+
+- manual `whereExists`
+- raw predicates
+- nested relations
+- `GROUP BY` / `DISTINCT`
+- calculated columns
+
+Use `dependsOnTables()` when the joined table has no `Cacheable` model:
 
 ```php
 Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
@@ -198,37 +216,24 @@ Everything else — `JOIN`, `GROUP BY`, `DISTINCT`, subquery `WHERE`, and calcul
 
 ## Configuration
 
-```php
-// config/normcache.php
-return [
-    'connection'        => env('NORMCACHE_CONNECTION', 'cache'),
-    'enabled'           => env('NORMCACHE_ENABLED', true),
-    'ttl'               => env('NORMCACHE_TTL', 604800),
-    'query_ttl'         => env('NORMCACHE_QUERY_TTL', 3600),
-    'key_prefix'        => env('NORMCACHE_PREFIX', ''),
-    'slotting'          => env('NORMCACHE_SLOTTING', false),
-    'cooldown'          => env('NORMCACHE_COOLDOWN', 0),
-    'building_lock_ttl' => env('NORMCACHE_BUILDING_LOCK_TTL', 5),
-    'stampede_wait_ms'  => env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
-    'stale_version_depth' => env('NORMCACHE_STALE_VERSION_DEPTH', 3),
-    'cluster'           => env('NORMCACHE_CLUSTER', false),
-    'events'            => env('NORMCACHE_EVENTS', false),
-    'fallback'          => env('NORMCACHE_FALLBACK', false),
-    'fire_retrieved'    => env('NORMCACHE_FIRE_RETRIEVED', false),
-    'debugbar'          => env('NORMCACHE_DEBUGBAR', false),
-];
-```
+Publish `config/normcache.php` to tune these options (each is also configurable via a `NORMCACHE_*` env var):
 
+- **`connection`** — Redis connection (from `config/database.php`) NormCache reads and writes through. Default: `cache`.
+- **`enabled`** — Master switch. When `false`, every query falls through to the database. Default: `true`.
 - **`ttl`** — Lifetime of individual model attribute keys. Default: 7 days.
 - **`query_ttl`** — Lifetime of query, raw, pivot, and through cache keys. Default: 1 hour.
+- **`key_prefix`** — String prepended to every NormCache Redis key — use to namespace shared Redis instances. Default: none.
 - **`slotting`** — When `false` (default), all NormCache keys are placed on one Redis Cluster slot using the `{nc}` slot prefix.
 - **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
 - **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
-- **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.
+- **`inline_model_threshold`** — Max IDs in a query hit for which model attributes are fetched inline in the same Lua call, saving a round trip. Set to `0` to disable inlining. Default: 50.
+- **`cluster`** — Enable Redis Cluster-aware key routing and multi-slot Lua calls. Default: `false`.
 - **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
+- **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.
 - **`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event.
+- **`debugbar`** — Enable the Laravel Debugbar collector (see Observability). Default: `false`.
 
 ---
 
