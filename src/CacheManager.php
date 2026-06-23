@@ -160,11 +160,6 @@ class CacheManager
         return $this->throughReader->waitForBuild($modelClass, $hash, $tag, $depClasses, $depTableKeys);
     }
 
-    public function waitForResultBuild(string $modelClass, string $hash, ?string $tag = null, array $depClasses = [], array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): ?ResultCacheResult
-    {
-        return $this->resultReader->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
-    }
-
     // -------------------------------------------------------------------------
     // Loading
     // -------------------------------------------------------------------------

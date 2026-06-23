@@ -68,11 +68,6 @@ class CacheKeyBuilder
         return $this->pivotBasePrefix($parentKey, $relatedKey) . $relation . ':' . $constraintHash . ':' . $seg . ':';
     }
 
-    public function throughPrefix(string $relatedKey, string $throughKey): string
-    {
-        return self::K_THROUGH . ':{' . $relatedKey . '}:' . $throughKey . ':';
-    }
-
     public function buildingPrefix(string $classKey): string
     {
         return self::K_BUILDING . ':{' . $classKey . '}:';
@@ -154,11 +149,6 @@ class CacheKeyBuilder
     public function resultBuildingKey(string $classKey, string $seg, string $lockSuffix): string
     {
         return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
-    }
-
-    public function throughKey(string $relatedKey, string $throughKey, string $seg, string $hash): string
-    {
-        return $this->throughPrefix($relatedKey, $throughKey) . $seg . ':' . $hash;
     }
 
     public function pivotKey(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, mixed $parentId): string

@@ -67,15 +67,6 @@ final class CacheReporter
         NormCacheCollector::recordModel('model hit', $modelClass, $ids, $startTime, $meta);
     }
 
-    public static function modelMiss(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
-    {
-        if (!self::active()) {
-            return;
-        }
-
-        self::modelMissActive($modelClass, $ids, $startTime, $meta);
-    }
-
     public static function modelMissActive(string $modelClass, array $ids, ?float $startTime, array $meta = []): void
     {
         if (NormCache::isEventsEnabled() && $ids !== []) {
