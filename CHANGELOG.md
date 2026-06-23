@@ -9,14 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [2.2.1] — 2026-06-23
+
 ### Fixed
 
 - Relation definitions with built-in `whereExists`, raw predicates, or non-inferrable joins now bypass `whereHas`/`withCount` inference instead of caching under incomplete dependencies.
 - `count()`, `exists()`, `sum()`, `avg()`, `min()`, `max()`, and `paginate()` with a manual `whereExists` now bypass unless `dependsOn()` is declared.
 - `lockForUpdate()` and `withoutCache()` inside a `whereHas` constraint now prevent the outer query from being cached.
-- Plain `join()` auto-inference extended to scalar and pagination paths — consistent with `get()`.
+- Plain `join()` auto-inference extended to scalar and pagination paths, and now correctly bypasses on complex join predicates, implicit table aliases, or inside `withCount()`/`withAggregate()`.
 - Through-relation `tag()` and `ttl()` now applied to result fetch and store calls.
 - Pivot-relation `ttl()` now applied to result writes; `tag()` bypasses pivot caching (key structure does not support tag namespacing).
+- Nested eager loads on a cached `belongsTo` relation (e.g. `with('order.customer')`) are now hydrated instead of being silently dropped.
+- `latestOfMany()`/`oldestOfMany()`, `hasOne`, and `hasOneThrough` relations now correctly track their cache dependency.
+- Fixed cross-slot `EVALSHA` errors when running against a real Redis Cluster with multi-dependency queries.
+
+### Changed
+
+- Reduced Redis round trips for cold cache misses across model hydration, relation loading, and the build-lock recheck.
+- Cache hits on query/through/pivot lookups now decode their JSON payload in PHP instead of in Lua, avoiding Lua's slower bulk-reply marshaling on the warm path.
 
 ---
 
