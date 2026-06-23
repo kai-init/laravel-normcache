@@ -70,10 +70,11 @@ class ModelHydratorStampedeTest extends TestCase
 
         $classKey = $keys->classKey(Author::class);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
+        $modelKey = $keys->modelPrefix($classKey) . 'missing-id';
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [$lockKey, $keys->verKey($classKey)],
+            [$modelKey, $lockKey, $keys->verKey($classKey)],
             ['token', '5']
         );
 
@@ -90,11 +91,12 @@ class ModelHydratorStampedeTest extends TestCase
 
         $classKey = $keys->classKey(Author::class);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
+        $modelKey = $keys->modelPrefix($classKey) . 'missing-id';
         $store->setNxEx($lockKey, 'other-token', 5);
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [$lockKey, $keys->verKey($classKey)],
+            [$modelKey, $lockKey, $keys->verKey($classKey)],
             ['token', '5']
         );
 
@@ -102,6 +104,28 @@ class ModelHydratorStampedeTest extends TestCase
         // phpredis decodes a nested Lua `false` as PHP false; predis decodes the same RESP nil as null.
         $this->assertFalse((bool) $result[1], 'No lock token should be returned when another process holds the lock');
         $this->assertSame('other-token', $store->getRaw($lockKey), 'Must not overwrite a lock held by another process');
+    }
+
+    public function test_build_status_script_reports_hit_without_claiming_lock_when_recheck_resolves(): void
+    {
+        $manager = $this->buildManager();
+        $store = $manager->getStore();
+        $keys = new CacheKeyBuilder;
+
+        $classKey = $keys->classKey(Author::class);
+        $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
+        $modelKey = $keys->modelPrefix($classKey) . 'present-id';
+        $store->set($modelKey, ['id' => 1, 'name' => 'Present'], 60);
+
+        $result = $store->script(
+            RedisScripts::get('fetch_model_build_status'),
+            [$modelKey, $lockKey, $keys->verKey($classKey)],
+            ['token', '5']
+        );
+
+        $this->assertSame('hit', $result[0]);
+        $this->assertFalse((bool) $result[1], 'No lock token should be returned when the recheck finds everything present');
+        $this->assertNull($store->getRaw($lockKey), 'Must not claim the build lock when the recheck already resolves the miss');
     }
 
     public function test_fetch_missed_status_resolves_via_retry_mget_without_claiming_lock(): void

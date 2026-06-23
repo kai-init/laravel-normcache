@@ -161,12 +161,7 @@ final class ModelHydrator
         return $keys;
     }
 
-    /**
-     * Re-checks ids known to be missing via a native MGET (cheaper than Lua doing its own
-     * MGET for the same presence check) — this also catches another worker having filled
-     * them between the caller's MGET and this one. Only claims the build lock, via a
-     * status-only Lua script, if ids are still missing after that.
-     */
+    /** Re-checks still-missing ids and atomically claims the build lock if anything's still missing. */
     private function fetchMissedStatus(
         array $idsToFetch,
         string $modelClass,
@@ -178,7 +173,16 @@ final class ModelHydrator
         array &$hits,
     ): array {
         $fetchKeys = $this->modelKeysFor($classKey, $idsToFetch);
-        $raw = $this->store->getMany($fetchKeys);
+
+        $result = $this->store->script(
+            RedisScripts::get('fetch_model_build_status'),
+            [...$fetchKeys, $lockKey, $this->keys->verKey($classKey)],
+            [$token, (string) $this->buildingLockTtl]
+        );
+
+        $status = $result[0];
+        $version = $this->versions->normalizeVersion($result[2] ?? null);
+        $raw = $this->store->unserializeMany($result[3] ?? []);
 
         ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $raw, $projection, $prototype);
 
@@ -189,15 +193,6 @@ final class ModelHydrator
         if ($stillMissed === []) {
             return ['hit', [], 0];
         }
-
-        $result = $this->store->script(
-            RedisScripts::get('fetch_model_build_status'),
-            [$lockKey, $this->keys->verKey($classKey)],
-            [$token, (string) $this->buildingLockTtl]
-        );
-
-        $status = $result[0];
-        $version = $this->versions->normalizeVersion($result[2] ?? null);
 
         return [$status, $stillMissed, $version];
     }
