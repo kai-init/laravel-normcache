@@ -112,8 +112,6 @@ class LuaScriptBehaviorTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 
-    // luaFetchVersionedQuery — cooldown guard (fix 2)
-
     public function test_non_numeric_scheduled_key_is_cleaned_up_without_version_bump(): void
     {
         Author::create(['name' => 'Alice']);

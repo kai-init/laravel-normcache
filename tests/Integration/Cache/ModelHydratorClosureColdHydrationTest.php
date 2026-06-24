@@ -333,15 +333,14 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
     }
 
     /**
-     * Regression test for a real bug: prepareMissedQuery() used to preserve UNION untouched.
      * Laravel applies whereIn()/where() only to the *first* arm of a union — the second arm is
-     * left unconstrained. So a cold-miss refetch over a unioned missedQuery actually fetched
-     * BOTH the requested row and the unrelated row from the union's second arm, and queued the
-     * unrelated row's attributes for caching under its own key as a side effect — confirmed by
-     * instrumenting fetchAndCacheUsingClosure() and observing attrsByKey contain both ids before
-     * this fix. The final return value happens to get filtered back down to the requested ids
-     * regardless (see the $ordered loop in getModels()), so the only reliable, fix-sensitive
-     * signal here is the SQL that actually got executed for the refetch.
+     * left unconstrained. If prepareMissedQuery() preserved a UNION untouched, a cold-miss
+     * refetch over a unioned missedQuery would fetch BOTH the requested row and the unrelated
+     * row from the union's second arm, queuing the unrelated row's attributes for caching under
+     * its own key as a side effect. The final return value gets filtered back down to the
+     * requested ids regardless (see the $ordered loop in getModels()), so the SQL actually
+     * executed for the refetch — not the returned models — is the only signal that distinguishes
+     * correct behavior from this bug.
      */
     public function test_cold_miss_with_unioned_missed_query_does_not_run_the_union_for_the_refetch(): void
     {
