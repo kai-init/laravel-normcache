@@ -8,7 +8,7 @@ use NormCache\Facades\NormCache;
 
 final class RelationCacheGuards
 {
-    /** Conditions shared by every relation's "simple shape" bypass check, regardless of relation type. */
+    // Conditions shared by every relation's "simple shape" bypass check, regardless of relation type.
     public static function blocksBypass(CacheableBuilder $builder, QueryBuilder $base): bool
     {
         return $builder->isCacheSkipped()
@@ -21,7 +21,7 @@ final class RelationCacheGuards
             || $builder->hasExplicitDependencies();
     }
 
-    /** Shared by belongsTo/morphTo eager loads, which require an unmodified base query shape. */
+    // Shared by belongsTo/morphTo eager loads, which require an unmodified base query shape.
     public static function hasOrderingOrJoins(QueryBuilder $base): bool
     {
         return !empty($base->joins)

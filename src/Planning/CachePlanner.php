@@ -358,7 +358,7 @@ final class CachePlanner
         );
     }
 
-    /** Touched tables are only collected for explain/debug output, so $collectTables receives $explain. */
+    // Touched tables are only collected for explain/debug output, so $collectTables receives $explain.
     private function inspect(
         Model $model,
         QueryBuilder $base,
@@ -455,7 +455,7 @@ final class CachePlanner
         );
     }
 
-    /** Dependencies for plans made without query inspection (global/transaction bypasses). */
+    // Dependencies for plans made without query inspection (global/transaction bypasses).
     private function baseDependencies(
         CacheableBuilder $builder,
         Model $model,
@@ -494,7 +494,7 @@ final class CachePlanner
         );
     }
 
-    /** SELECT * over a join pulls joined-table columns into hydration; require an explicit select. */
+    // SELECT * over a join pulls joined-table columns into hydration; require an explicit select.
     private function requiresExplicitSelectForJoinResult(
         CacheableBuilder $builder,
         QueryBuilder $base,
@@ -592,20 +592,20 @@ final class CachePlanner
 
     private function checkDependencyCompleteness(array $queryTables, DependencySet $dependencies, string $baseTable): void
     {
-        // strip connection prefix from table keys ("conn:table" → "table")
+        // Strip connection prefix from table keys ("conn:table" → "table").
         $declaredTables = array_map(
             fn($key) => str_contains($key, ':') ? substr($key, strpos($key, ':') + 1) : $key,
             $dependencies->tables
         );
 
-        // Map declared models to their tables
+        // Map declared models to their tables.
         foreach ($dependencies->models as $modelClass) {
             if (class_exists($modelClass) && is_subclass_of($modelClass, Model::class)) {
                 $declaredTables[] = (new $modelClass)->getTable();
             }
         }
 
-        // Add the base table to the declared list so it doesn't get flagged as missing
+        // Add the base table to the declared list so it doesn't get flagged as missing.
         $declaredTables[] = $baseTable;
 
         $missing = array_diff($queryTables, $declaredTables);

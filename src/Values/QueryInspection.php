@@ -60,7 +60,7 @@ final readonly class QueryInspection
         return $this->has(self::DEPENDENCY_BYPASS);
     }
 
-    /** True only if EXISTS_WHERE is the sole reason hasDependencyBypass() is true. */
+    // True only if EXISTS_WHERE is the sole reason hasDependencyBypass() is true.
     public function hasOnlyExistsDependencyBypass(): bool
     {
         return ($this->flags & self::DEPENDENCY_BYPASS) === self::EXISTS_WHERE;

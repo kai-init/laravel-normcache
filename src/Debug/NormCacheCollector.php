@@ -21,7 +21,7 @@ final class NormCacheCollector
         return self::$instance !== null;
     }
 
-    /** Returns the current timestamp only when a collector is active, avoiding microtime() overhead otherwise. */
+    // Returns the current timestamp only when a collector is active, avoiding microtime() overhead otherwise.
     public static function beginMeasure(): ?float
     {
         return self::$instance !== null ? microtime(true) : null;

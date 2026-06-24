@@ -87,7 +87,7 @@ class CacheKeyBuilder
         return self::$classKeys[$class] ??= $this->resolveClassKey($class);
     }
 
-    /** Clear all static metadata caches. Call this after switching tenant connections. */
+    // Clear all static metadata caches. Call this after switching tenant connections.
     public static function reset(): void
     {
         self::$classKeys = [];
@@ -254,7 +254,7 @@ class CacheKeyBuilder
         return $tag !== null ? $tag . ':' : '';
     }
 
-    /** Tags become raw key segments, so reserved key characters must be rejected. */
+    // Tags become raw key segments, so reserved key characters must be rejected.
     public static function assertValidTag(string $tag): void
     {
         if ($tag === '' || preg_match('/[:{}\s*]/', $tag)) {

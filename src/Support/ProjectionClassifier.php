@@ -38,7 +38,7 @@ final class ProjectionClassifier
                 continue;
             }
 
-            // Internal artifacts (laravel_through_key or pivot_*) are not pollutants
+            // Internal artifacts (laravel_through_key or pivot_*) are not pollutants.
             if (str_contains($column, ' as laravel_through_key') || str_contains($column, ' as pivot_')) {
                 continue;
             }

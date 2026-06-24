@@ -11,13 +11,13 @@ enum LuaStatus: string
     case Empty = 'empty';
     case Corrupt = 'corrupt';
 
-    /** Degenerate/unrecognised input defaults to Miss: rebuild from DB */
+    // Degenerate/unrecognised input defaults to Miss: rebuild from DB.
     public static function fromLua(mixed $status): self
     {
         return self::tryFrom((string) $status) ?? self::Miss;
     }
 
-    /** This status is expected to include a payload slot. */
+    // This status is expected to include a payload slot.
     public function hasPayload(): bool
     {
         return $this === self::Hit || $this === self::Stale;

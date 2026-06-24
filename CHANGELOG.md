@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.0] — 2026-06-24
+
+### Added
+
+- Pivot cache (`belongsToMany`/`morphToMany`) build-lock stampede protection: concurrent misses on the same batch wait on a wake signal instead of racing the database.
+- `stampede_wake_tokens` config (default `64`): wakes N waiters per completed build instead of 1.
+- Stale-serve (depth-bounded backward version search) extended from single-dependency queries to multi-dependency query, through, and result caches.
+
+### Changed
+
+- `fallback` default: `false` → `true` (fails open to the database on Redis errors). Set `NORMCACHE_FALLBACK=false` to restore fail-closed behavior.
+- Removed `inline_model_threshold` config and the inline model-fetch path in the query/through Lua scripts; models now hydrate from cache in PHP after the Lua round trip.
+
+### Fixed
+
+- Cluster fixed-hash mode (`cluster=true`, `slotting=false`) now uses the atomic multi-key Lua path instead of the per-key fallback.
+- `fetch_model_build_status.lua` chunks `MGET` at 500 keys/batch, fixing a Lua/Redis argument-limit error on cold misses ≥500 ids.
+- Cold-miss re-query on joined tables now selects `{table}.*` instead of `*`, fixing an ambiguous-column error.
+
+---
+
 ## [2.2.1] — 2026-06-23
 
 ### Fixed

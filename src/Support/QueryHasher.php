@@ -99,7 +99,7 @@ final class QueryHasher
         ]);
     }
 
-    /** Low-level query hash (no model state). Primarily for tests. */
+    // Low-level query hash (no model state). Primarily for tests.
     public static function fromQuery(QueryBuilder $query): string
     {
         return self::hashWith($query);

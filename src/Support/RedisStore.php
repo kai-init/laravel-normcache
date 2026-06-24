@@ -36,7 +36,7 @@ final class RedisStore
 
     public function prefix(string $key): string
     {
-        // Follow the expected order: slotPrefix then keyPrefix
+        // Follow the expected order: slotPrefix then keyPrefix.
         return $this->slotPrefix . $this->keyPrefix . $key;
     }
 
@@ -47,7 +47,7 @@ final class RedisStore
         return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
 
-    /** Returns the raw string value without deserialization (for JSON-encoded entries). */
+    // Returns the raw string value without deserialization (for JSON-encoded entries).
     public function getRaw(string $key): ?string
     {
         $value = $this->connection->get($this->prefix($key));
@@ -66,13 +66,13 @@ final class RedisStore
         $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
     }
 
-    /** Set a raw string value without serialization. */
+    // Set a raw string value without serialization.
     public function setRaw(string $key, string $value, int $ttl): void
     {
         $this->connection->setex($this->prefix($key), $ttl, $value);
     }
 
-    /** SET NX EX — returns true if the lock was claimed. */
+    // SET NX EX — returns true if the lock was claimed.
     public function setNxEx(string $key, string $value, int $ttl): bool
     {
         $result = $this->script(
@@ -95,7 +95,7 @@ final class RedisStore
         $this->del($prefixed);
     }
 
-    /** DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock. */
+    // DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock.
     public function releaseBuilding(string $buildingKey, string $wakeKey, ?string $token = null): bool
     {
         return (bool) $this->script(
@@ -157,7 +157,7 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    /** MGET in input order, with null for missing keys; groups by hash tag when slotting or on a real cluster. */
+    // MGET in input order, with null for missing keys; groups by hash tag when slotting or on a real cluster.
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {
@@ -234,7 +234,7 @@ final class RedisStore
         });
     }
 
-    /** CAS write of model attribute entries; releases the build lock as part of the write when given. */
+    // CAS write of model attribute entries; releases the build lock as part of the write when given.
     public function setManyTrackedIfVersion(
         array $attrsByKey,
         int $ttl,
@@ -275,7 +275,7 @@ final class RedisStore
         }
     }
 
-    /** Delete a key and remove it from a tracking set in one atomic operation. */
+    // Delete a key and remove it from a tracking set in one atomic operation.
     public function deleteFromSet(string $key, string $memberKey): void
     {
         $this->script(
@@ -358,7 +358,7 @@ final class RedisStore
         return $total;
     }
 
-    /** Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT. */
+    // Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT.
     public function script(string $script, array $keys, array $args = []): mixed
     {
         $prefixedKeys = [];

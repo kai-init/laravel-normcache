@@ -207,7 +207,7 @@ final class ResultCacheReader
         return $result->status === CacheStatus::Building ? null : $result;
     }
 
-    /** Lock key is segment-specific; the wake key is not, since waiters re-fetch to learn the current segment anyway. */
+    // Lock key is segment-specific; the wake key is not, since waiters re-fetch to learn the current segment anyway.
     private function pivotLockKeys(string $relatedKey, string $relation, string $constraintHash, array $parentIds, ?string $seg): array
     {
         $sortedIds = $parentIds;

@@ -138,7 +138,7 @@ final class ModelHydrator
         return $ordered;
     }
 
-    /** Builds the building-lock key/wake-key/token triple for a set of model ids. */
+    // Builds the building-lock key/wake-key/token triple for a set of model ids.
     private function buildLockTriple(string $classKey, array $ids): array
     {
         $sorted = $ids;
@@ -162,7 +162,7 @@ final class ModelHydrator
         return $keys;
     }
 
-    /** Re-checks still-missing ids and atomically claims the build lock if anything's still missing. */
+    // Re-checks still-missing ids and atomically claims the build lock if anything's still missing.
     private function fetchMissedStatus(
         array $idsToFetch,
         string $modelClass,
@@ -199,7 +199,7 @@ final class ModelHydrator
         return [$status, $stillMissed, $version];
     }
 
-    /** Fetches still-missing ids from the database, caches them, and merges into $hits by reference. */
+    // Fetches still-missing ids from the database, caches them, and merges into $hits by reference.
     private function fetchAndMerge(
         array $missed,
         string $modelClass,

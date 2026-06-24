@@ -190,7 +190,7 @@ trait CachesScalarResults
 
         $column = $column instanceof Expression ? $column->getValue($this->getGrammar()) : $column;
         $column = Str::afterLast((string) $column, '.');
-        // Match native Eloquent, which yields null for an aliased projection ("x as y")
+        // Match native Eloquent, which yields null for an aliased projection ("x as y").
         $value = $result->{$column} ?? null;
 
         if (!$this->model->hasAnyGetMutator($column)
