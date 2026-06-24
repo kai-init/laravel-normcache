@@ -6,6 +6,7 @@
 -- KEYS[3] = query prefix    (query:{classKey}:v)
 -- KEYS[4] = building prefix (building:{classKey}:)
 -- KEYS[5] = model prefix    (model:{classKey}:)
+-- KEYS[6] = wake prefix     (wake:{classKey}:)
 -- ARGV[1] = hash
 -- ARGV[2] = current timestamp in ms
 -- ARGV[3] = building lock TTL in seconds
@@ -51,7 +52,10 @@ local ids_raw = redis.call('GET', query_key)
 if not ids_raw then
     local building_key = KEYS[4] .. ARGV[1]
     local claimed = redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3]))
-    if claimed then return {'miss', ver, ARGV[5]} end
+    if claimed then
+        redis.call('DEL', KEYS[6] .. ARGV[1])
+        return {'miss', ver, ARGV[5]}
+    end
     return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
 end
 

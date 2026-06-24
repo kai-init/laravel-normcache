@@ -227,10 +227,11 @@ Publish `config/normcache.php` to tune these options (each is also configurable 
 - **`cooldown`** — Useful for write-heavy models. Version bump debounce in seconds. Manual calls to `NormCache::flushModel()` always invalidate immediately regardless of this setting.
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
+- **`stampede_wake_tokens`** — How many list wake tokens to push when a cache build completes. Higher values wake more concurrent waiters immediately; old tokens are cleared when a new build lock is claimed.
 - **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
 - **`cluster`** — Enable Redis Cluster-aware key routing and multi-slot Lua calls. Default: `false`.
 - **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
-- **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.
+- **`fallback`** — Default: `true` (fail open). When `true`, Redis exceptions disable the cache for the request/job and queries fall back to the database silently; during a Redis outage this shifts load to the database. Set to `false` to fail closed and re-throw Redis exceptions.
 - **`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event.
 - **`debugbar`** — Enable the Laravel Debugbar collector (see Observability). Default: `false`.
 

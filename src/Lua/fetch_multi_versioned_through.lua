@@ -6,6 +6,7 @@
 -- KEYS[n+1..2n] = scheduled keys (one per version key, same order)
 -- KEYS[2n+1]    = query prefix
 -- KEYS[2n+2]    = building prefix
+-- KEYS[2n+3]    = wake prefix
 -- ARGV[1]       = hash
 -- ARGV[2]       = current timestamp in ms
 -- ARGV[3]       = building lock TTL in seconds
@@ -14,7 +15,7 @@
 -- Returns: {status, seg, [raw_payload]}
 -- On a hit, status is 'hit_raw' and the payload ({i, t}) is an undecoded JSON string — PHP
 -- decodes it and handles corrupt JSON, since decoding here just to marshal it back out is slower.
-local n = (#KEYS - 2) / 2
+local n = (#KEYS - 3) / 2
 local now = tonumber(ARGV[2])
 
 local vers = {}
@@ -42,7 +43,10 @@ local raw_payload = redis.call('GET', query_key)
 if not raw_payload then
     local building_key = KEYS[2 * n + 2] .. seg .. ':' .. ARGV[1]
     local claimed = redis.call('SET', building_key, ARGV[4], 'NX', 'EX', tonumber(ARGV[3]))
-    if claimed then return {'miss', seg, ARGV[4]} end
+    if claimed then
+        redis.call('DEL', KEYS[2 * n + 3] .. ARGV[1])
+        return {'miss', seg, ARGV[4]}
+    end
     return {'building', seg}
 end
 

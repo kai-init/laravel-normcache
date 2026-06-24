@@ -6,6 +6,7 @@
 -- KEYS[2n+1]    = query prefix
 -- KEYS[2n+2]    = building prefix
 -- KEYS[2n+3]    = model prefix
+-- KEYS[2n+4]    = wake prefix
 -- ARGV[1]       = hash
 -- ARGV[2]       = current timestamp in ms
 -- ARGV[3]       = building lock TTL in seconds
@@ -13,7 +14,7 @@
 --
 -- Returns: {status, seg, [ids_raw], [models]}
 -- status is 'hit' (4th element has models, same order as ids, missing entries as false).
-local n = (#KEYS - 3) / 2
+local n = (#KEYS - 4) / 2
 local now = tonumber(ARGV[2])
 
 local vers = {}
@@ -41,7 +42,10 @@ local ids_raw = redis.call('GET', query_key)
 if not ids_raw then
     local building_key = KEYS[2 * n + 2] .. seg .. ':' .. ARGV[1]
     local claimed = redis.call('SET', building_key, ARGV[4], 'NX', 'EX', tonumber(ARGV[3]))
-    if claimed then return {'miss', seg, ARGV[4]} end
+    if claimed then
+        redis.call('DEL', KEYS[2 * n + 4] .. ARGV[1])
+        return {'miss', seg, ARGV[4]}
+    end
     return {'building', seg}
 end
 

@@ -20,6 +20,7 @@ final class ResultCacheReader
         private readonly int $buildingLockTtl,
         private readonly int $stampedeWaitMs,
         private readonly bool $slotting = false,
+        private readonly int $wakeTokenCount = 64,
     ) {}
 
     private function usesSlotting(): bool
@@ -58,6 +59,7 @@ final class ResultCacheReader
             $versionKeys, $scheduledKeys,
             $this->keys->namespacedPrefix($namespace, $classKey, $tag),
             $this->keys->buildingPrefix($classKey),
+            $this->keys->wakePrefix($classKey),
             $hash, $lockSuffix, $lockToken
         );
 
@@ -99,6 +101,10 @@ final class ResultCacheReader
 
         // Standard miss or corrupt hit: attempt to claim building lock.
         if ($alreadyClaimed || $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+            if (!$alreadyClaimed) {
+                $this->store->delete($wakeKey);
+            }
+
             return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
         }
 
@@ -192,7 +198,7 @@ final class ResultCacheReader
                 [(string) count($versionKeys), (string) count($entries), (string) $ttl],
                 $expectedVersions,
                 array_map(fn($p) => $this->store->serialize($p), array_values($entries)),
-                [$buildingToken ?? '']
+                [$buildingToken ?? '', (string) $this->wakeTokenCount]
             )
         );
     }
@@ -219,7 +225,7 @@ final class ResultCacheReader
             array_merge(
                 [(string) count($versionKeys), (string) $ttl],
                 $expectedVersions,
-                [$this->store->serialize($payload), $buildingToken ?? '']
+                [$this->store->serialize($payload), $buildingToken ?? '', (string) $this->wakeTokenCount]
             )
         );
     }
@@ -265,12 +271,12 @@ final class ResultCacheReader
 
     private function luaFetchVersionedResult(
         array $versionKeys, array $scheduledKeys,
-        string $resultPrefix, string $buildingPrefix,
+        string $resultPrefix, string $buildingPrefix, string $wakePrefix,
         string $hash, string $lockSuffix, string $lockToken
     ): array {
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_result'),
-            array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix]),
+            array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
             [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
         );
 

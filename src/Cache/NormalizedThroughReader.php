@@ -21,6 +21,7 @@ final class NormalizedThroughReader
         private readonly int $buildingLockTtl,
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
+        private readonly int $wakeTokenCount = 64,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ThroughCacheResult
@@ -39,6 +40,7 @@ final class NormalizedThroughReader
         $result = $this->luaFetchMultiVersionedThrough(
             $versionKeys, $scheduledKeys, $queryPrefix,
             $this->keys->buildingPrefix($classKey),
+            $this->keys->wakePrefix($classKey),
             $hash, $lockToken
         );
 
@@ -71,9 +73,13 @@ final class NormalizedThroughReader
         }
 
         if ($parsed === null) {
-            return $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
-                ? new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
-                : new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []);
+            if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+                $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
+
+                return new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+            }
+
+            return new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []);
         }
 
         $ids = $parsed['i'];
@@ -130,10 +136,24 @@ final class NormalizedThroughReader
             LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $queryKey, [], [], [], null, null, [], []),
             LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
             LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
-                ? new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
-                : new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
         };
+    }
+
+    private function claimMissAfterCorruptHit(
+        string $queryKey,
+        string $buildingKey,
+        string $lockToken,
+        array $versionKeys,
+        array $expectedVersions
+    ): ThroughCacheResult {
+        if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+            $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
+
+            return new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+        }
+
+        return new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []);
     }
 
     public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
@@ -160,7 +180,7 @@ final class NormalizedThroughReader
                 array_merge(
                     [(string) count($versionKeys), (string) $ttl],
                     $expectedVersions,
-                    [$payload, $buildingToken ?? '']
+                    [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
                 )
             );
 
@@ -193,12 +213,12 @@ final class NormalizedThroughReader
 
     private function luaFetchMultiVersionedThrough(
         array $versionKeys, array $scheduledKeys,
-        string $queryPrefix, string $buildingPrefix,
+        string $queryPrefix, string $buildingPrefix, string $wakePrefix,
         string $hash, string $lockToken,
     ): mixed {
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_through'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix]),
+            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $wakePrefix]),
             [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }

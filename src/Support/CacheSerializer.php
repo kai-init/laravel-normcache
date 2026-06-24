@@ -13,7 +13,7 @@ final class CacheSerializer
 
     public function serialize(mixed $value): mixed
     {
-        if ((is_int($value) || is_float($value)) && is_finite((float) $value)) {
+        if (is_int($value)) {
             return $value;
         }
 

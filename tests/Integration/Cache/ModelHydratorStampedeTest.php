@@ -74,7 +74,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey)],
+            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -96,7 +96,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey)],
+            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -119,7 +119,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey)],
+            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -145,7 +145,7 @@ class ModelHydratorStampedeTest extends TestCase
         $hits = [];
 
         $method = new \ReflectionMethod($hydrator, 'fetchMissedStatus');
-        $args = [[$author->id], Author::class, $classKey, null, null, $lockKey, 'token', &$hits];
+        $args = [[$author->id], Author::class, $classKey, null, null, $lockKey, $keys->wakeKey($classKey, 'test-lock'), 'token', &$hits];
         [$status, $missed] = $method->invokeArgs($hydrator, $args);
 
         $this->assertSame('hit', $status);
@@ -175,7 +175,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [...$modelKeys, $lockKey, $keys->verKey($classKey)],
+            [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -214,7 +214,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [...$modelKeys, $lockKey, $keys->verKey($classKey)],
+            [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 

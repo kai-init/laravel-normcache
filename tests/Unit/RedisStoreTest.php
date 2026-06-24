@@ -71,6 +71,16 @@ class RedisStoreTest extends TestCase
         $this->assertTrue($this->store->brpop('wake:foo', 1));
     }
 
+    public function test_release_building_pushes_configured_wake_tokens(): void
+    {
+        $store = new RedisStore('normcache-test', 'test:', false, '{nc}:', wakeTokenCount: 3);
+
+        $store->set('build:tokens', '1', 60);
+        $store->releaseBuilding('build:tokens', 'wake:tokens');
+
+        $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['wake:tokens']));
+    }
+
     public function test_it_can_get_many_values(): void
     {
         $this->store->set('foo', 'bar', 60);
@@ -154,6 +164,44 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('key:3'));
         $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('key:4'));
         $this->assertNull($this->store->getRaw('lock:2'), 'build lock should be released after the write');
+    }
+
+    public function test_set_many_tracked_if_version_handles_large_script_batches(): void
+    {
+        $this->store->delete(['member:large', 'ver:large']);
+        $this->store->setRaw('ver:large', '1', 60);
+
+        $attrs = [];
+        for ($i = 0; $i < 10000; $i++) {
+            $attrs["key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
+        }
+
+        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:large', 'ver:large', 1);
+
+        $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('key:large:9999'));
+        $this->assertSame(10000, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:large']));
+    }
+
+    public function test_set_many_tracked_script_chunks_sadd_internally(): void
+    {
+        $this->store->setRaw('ver:script-large', '1', 60);
+
+        $count = 8200;
+        $keys = [];
+        $values = [];
+        for ($i = 0; $i < $count; $i++) {
+            $keys[] = "key:script-large:{$i}";
+            $values[] = $this->store->serialize(['id' => $i]);
+        }
+
+        $result = $this->store->script(
+            RedisScripts::get('set_many_tracked_if_version'),
+            array_merge(['ver:script-large', 'member:script-large', '', ''], $keys),
+            array_merge(['1', '60', (string) $count, ''], $values)
+        );
+
+        $this->assertSame($count, (int) $result);
+        $this->assertSame($count, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:script-large']));
     }
 
     public function test_it_skips_write_but_still_releases_on_version_mismatch(): void

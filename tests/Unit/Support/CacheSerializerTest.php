@@ -25,6 +25,14 @@ class CacheSerializerTest extends TestCase
         $this->assertSame(3.14, $this->serializer->unserialize($this->serializer->serialize(3.14)));
     }
 
+    public function test_whole_number_float_roundtrip_preserves_float_type(): void
+    {
+        $this->assertSame(5.0, $this->serializer->unserialize($this->serializer->serialize(5.0)));
+        $this->assertSame(1500.0, $this->serializer->unserialize($this->serializer->serialize(1500.0)));
+        $this->assertSame(0.0, $this->serializer->unserialize($this->serializer->serialize(0.0)));
+        $this->assertSame(-2.0, $this->serializer->unserialize($this->serializer->serialize(-2.0)));
+    }
+
     public function test_array_roundtrip(): void
     {
         $data = ['name' => 'Alice', 'age' => 30];

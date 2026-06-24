@@ -13,9 +13,10 @@ final class CacheConfig
         public int $queryTtl,
         public int $cooldown = 0,
         public bool $enabled = true,
-        public bool $fallbackEnabled = false,
+        public bool $fallbackEnabled = true,
         public bool $dispatchEvents = true,
         public bool $cluster = false,
         public bool $slotting = false,
+        public int $stampedeWakeTokens = 64,
     ) {}
 }

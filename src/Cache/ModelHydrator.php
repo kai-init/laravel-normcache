@@ -108,12 +108,12 @@ final class ModelHydrator
 
         [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
 
-        [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+        [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
 
         if ($status === 'building' && $missed !== []) {
             $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
 
-            [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $token, $hits);
+            [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
         }
 
         if ($status === 'miss') {
@@ -170,6 +170,7 @@ final class ModelHydrator
         ?array $projection,
         ?Model $prototype,
         string $lockKey,
+        string $wakeKey,
         string $token,
         array &$hits,
     ): array {
@@ -177,7 +178,7 @@ final class ModelHydrator
 
         $result = $this->store->script(
             RedisScripts::get('fetch_model_build_status'),
-            [...$fetchKeys, $lockKey, $this->keys->verKey($classKey)],
+            [...$fetchKeys, $lockKey, $this->keys->verKey($classKey), $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );
 

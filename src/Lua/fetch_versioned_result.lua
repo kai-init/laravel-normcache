@@ -5,6 +5,7 @@
 -- KEYS[n+1..2n]    = scheduled keys (one per version key, same order)
 -- KEYS[2n+1]       = result key prefix  (result:{classKey}: or result:{classKey}:tag:)
 -- KEYS[2n+2]       = building key prefix  (building:{classKey}:)
+-- KEYS[2n+3]       = wake key prefix
 -- ARGV[1]          = query hash (used to look up the versioned result cache entry)
 -- ARGV[2]          = lock suffix (sha1 of tag+hash, used as building key suffix)
 -- ARGV[3]          = building lock TTL in seconds
@@ -12,7 +13,7 @@
 -- ARGV[5]          = building lock token
 --
 -- Returns: {'hit', seg, payload} | {'miss', seg, false} | {'building', seg, false}
-local n = (#KEYS - 2) / 2
+local n = (#KEYS - 3) / 2
 local now = tonumber(ARGV[4])
 
 local vers = {}
@@ -36,6 +37,7 @@ for i = 2, n do seg = seg .. ':v' .. vers[i] end
 
 local result_prefix   = KEYS[2 * n + 1]
 local building_prefix = KEYS[2 * n + 2]
+local wake_prefix     = KEYS[2 * n + 3]
 
 local data = redis.call('GET', result_prefix .. seg .. ':' .. ARGV[1])
 if data then
@@ -44,6 +46,7 @@ end
 
 local building_key = building_prefix .. seg .. ':' .. ARGV[2]
 if redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3])) then
+    redis.call('DEL', wake_prefix .. ARGV[2])
     return {'miss', seg, false, ARGV[5]}
 end
 return {'building', seg, false}

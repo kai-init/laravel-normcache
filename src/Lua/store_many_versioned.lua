@@ -12,18 +12,22 @@
 -- ARGV[4..n+3]     = expected version values
 -- ARGV[n+4..n+m+3] = serialized payloads
 -- ARGV[n+m+4]      = building lock token (optional; empty means release unconditionally)
+-- ARGV[n+m+5]      = wake token count (optional; defaults to 1)
 
 local n = tonumber(ARGV[1])
 local m = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 local token = ARGV[n + m + 4] or ''
+local wake_count = tonumber(ARGV[n + m + 5] or '1') or 1
 
 local function release_building()
     if KEYS[n + m + 1] == '' then return end
     if token ~= '' and redis.call('GET', KEYS[n + m + 1]) ~= token then return end
     redis.call('DEL', KEYS[n + m + 1])
     if KEYS[n + m + 2] ~= '' then
-        redis.call('LPUSH', KEYS[n + m + 2], '1')
+        for i = 1, wake_count do
+            redis.call('LPUSH', KEYS[n + m + 2], '1')
+        end
         redis.call('EXPIRE', KEYS[n + m + 2], 10)
     end
 end

@@ -24,6 +24,7 @@ final class RedisStore
         private string $keyPrefix,
         private bool $slotting,
         private string $slotPrefix = '',
+        private int $wakeTokenCount = 64,
     ) {
         $this->serializer = new CacheSerializer;
         $this->connection = Redis::connection($redisConnection);
@@ -100,7 +101,7 @@ final class RedisStore
         return (bool) $this->script(
             RedisScripts::get('release_building'),
             [$buildingKey, $wakeKey],
-            [$token ?? '']
+            [$token ?? '', (string) $this->wakeTokenCount]
         );
     }
 
@@ -120,7 +121,7 @@ final class RedisStore
         return (bool) $this->script(
             RedisScripts::get('store_if_versions_match_and_release'),
             [$key, $buildingKey, $wakeKey ?? ''],
-            ['0', (string) $ttl, $value, $token ?? '']
+            ['0', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
         );
     }
 
@@ -267,7 +268,8 @@ final class RedisStore
                 ),
                 array_merge(
                     [(string) $expectedVersion, (string) $ttl, (string) count($chunk), $isLast ? ($token ?? '') : ''],
-                    array_map(fn($attrs) => $this->serialize($attrs), array_values($chunk))
+                    array_map(fn($attrs) => $this->serialize($attrs), array_values($chunk)),
+                    [(string) $this->wakeTokenCount]
                 )
             );
         }

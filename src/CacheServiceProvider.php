@@ -37,18 +37,19 @@ class CacheServiceProvider extends ServiceProvider
             $cluster = (bool) config('normcache.cluster', false);
             $enabled = (bool) config('normcache.enabled', true);
             $events = (bool) config('normcache.events', false);
-            $fallback = (bool) config('normcache.fallback', false);
+            $fallback = (bool) config('normcache.fallback', true);
             $fireRetrieved = (bool) config('normcache.fire_retrieved', false);
             $buildingLockTtl = (int) config('normcache.building_lock_ttl', 5);
             $stampedeWaitMs = (int) config('normcache.stampede_wait_ms', 200);
+            $stampedeWakeTokens = (int) config('normcache.stampede_wake_tokens', 64);
             $staleDepth = (int) config('normcache.stale_version_depth', 3);
             $slotting = (bool) config('normcache.slotting', false);
 
             $slottingActive = $cluster && $slotting;
-            $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
+            $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
             $keys = new CacheKeyBuilder;
             $versions = new VersionTracker($store, $keys);
-            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive);
+            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
             $engine = new ExecutionEngine;
             $config = new CacheConfig(
                 ttl: $ttl,
@@ -59,12 +60,13 @@ class CacheServiceProvider extends ServiceProvider
                 dispatchEvents: $events,
                 cluster: $cluster,
                 slotting: $slottingActive,
+                stampedeWakeTokens: $stampedeWakeTokens,
             );
 
             return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive),
+                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
                 resultReader: $resultReader,
-                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
                 result: new ResultExecutor($engine, $resultReader, $config),
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
                 versions: $versions,

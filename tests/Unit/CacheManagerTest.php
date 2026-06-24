@@ -403,8 +403,10 @@ class CacheManagerTest extends TestCase
 
     public function test_rescue_rethrows_when_fallback_disabled(): void
     {
+        $manager = $this->buildManager(fallback: false);
+
         $this->expectException(\RuntimeException::class);
-        $this->manager->rescue(fn() => throw new \RuntimeException('boom'), fn() => null);
+        $manager->rescue(fn() => throw new \RuntimeException('boom'), fn() => null);
     }
 
     public function test_attempt_returns_true_on_success(): void
@@ -421,8 +423,10 @@ class CacheManagerTest extends TestCase
 
     public function test_attempt_rethrows_when_fallback_disabled(): void
     {
+        $manager = $this->buildManager(fallback: false);
+
         $this->expectException(\RuntimeException::class);
-        $this->manager->attempt(fn() => throw new \RuntimeException);
+        $manager->attempt(fn() => throw new \RuntimeException);
     }
 
     public function test_fallback_disables_manager_when_fallback_enabled(): void

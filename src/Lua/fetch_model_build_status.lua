@@ -4,12 +4,13 @@
 -- KEYS[1..n] = model keys to recheck
 -- KEYS[n+1]  = lock key
 -- KEYS[n+2]  = model-class version key
+-- KEYS[n+3]  = wake key
 -- ARGV[1] = lock token
 -- ARGV[2] = lock ttl
 --
 -- Returns: {status, lockTokenOrFalse, version, rawValues} — rawValues are the raw MGET results
 -- in KEYS[1..n] order; the caller unserializes/hydrates them.
-local n = #KEYS - 2
+local n = #KEYS - 3
 local chunkSize = 500
 local values = {}
 local allHit = true
@@ -40,6 +41,7 @@ if allHit then
 end
 
 if redis.call('SET', KEYS[n + 1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2])) then
+    redis.call('DEL', KEYS[n + 3])
     return {'miss', ARGV[1], version, values}
 end
 

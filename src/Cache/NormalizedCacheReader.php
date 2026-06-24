@@ -22,6 +22,7 @@ final class NormalizedCacheReader
         private readonly int $staleVersionDepth,
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
+        private readonly int $wakeTokenCount = 64,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult
@@ -89,9 +90,13 @@ final class NormalizedCacheReader
         }
 
         if ($parsed === null) {
-            return $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
-                ? new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
-                : new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+            if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+                $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
+
+                return new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+            }
+
+            return new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
         }
 
         if (empty($parsed)) {
@@ -144,10 +149,24 @@ final class NormalizedCacheReader
             LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
             LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
             LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)
-                ? new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions)
-                : new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
         };
+    }
+
+    private function claimMissAfterCorruptHit(
+        string $queryKey,
+        string $buildingKey,
+        string $lockToken,
+        array $versionKeys,
+        array $expectedVersions
+    ): QueryCacheResult {
+        if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
+            $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
+
+            return new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+        }
+
+        return new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
     }
 
     public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
@@ -172,7 +191,7 @@ final class NormalizedCacheReader
                 array_merge(
                     [(string) count($versionKeys), (string) $ttl],
                     $expectedVersions,
-                    [json_encode($ids, JSON_THROW_ON_ERROR), $buildingToken ?? '']
+                    [json_encode($ids, JSON_THROW_ON_ERROR), $buildingToken ?? '', (string) $this->wakeTokenCount]
                 )
             );
 
@@ -211,6 +230,7 @@ final class NormalizedCacheReader
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->buildingPrefix($classKey),
             $this->keys->modelPrefix($classKey),
+            $this->keys->wakePrefix($classKey),
         ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
     }
 
@@ -221,7 +241,7 @@ final class NormalizedCacheReader
     ): mixed {
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->modelPrefix($classKey)]),
+            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->modelPrefix($classKey), $this->keys->wakePrefix($classKey)]),
             [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }

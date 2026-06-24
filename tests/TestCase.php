@@ -176,6 +176,7 @@ abstract class TestCase extends OrchestraTestCase
         bool $fireRetrieved = false,
         int $buildingLockTtl = 5,
         int $stampedeWaitMs = 200,
+        int $stampedeWakeTokens = 64,
         int $staleDepth = 3,
         bool $slotting = false,
     ): CacheManager {
@@ -183,10 +184,10 @@ abstract class TestCase extends OrchestraTestCase
         $queryTtl ??= (int) config('normcache.query_ttl');
 
         $slottingActive = $cluster && $slotting;
-        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
+        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive);
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
         $engine = new ExecutionEngine;
         $config = new CacheConfig(
             ttl: $ttl,
@@ -197,12 +198,13 @@ abstract class TestCase extends OrchestraTestCase
             dispatchEvents: $dispatchEvents,
             cluster: $cluster,
             slotting: $slottingActive,
+            stampedeWakeTokens: $stampedeWakeTokens,
         );
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive),
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
             resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
             result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,

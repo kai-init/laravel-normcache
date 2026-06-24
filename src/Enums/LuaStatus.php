@@ -11,7 +11,7 @@ enum LuaStatus: string
     case Empty = 'empty';
     case Corrupt = 'corrupt';
 
-    // Degenerate/unrecognised input defaults to Miss: rebuild from DB
+    /** Degenerate/unrecognised input defaults to Miss: rebuild from DB */
     public static function fromLua(mixed $status): self
     {
         return self::tryFrom((string) $status) ?? self::Miss;
