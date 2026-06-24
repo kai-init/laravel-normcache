@@ -180,6 +180,10 @@ class LuaScriptConsistencyTest extends TestCase
 
     public function test_multi_dependency_query_stale_serve_reaches_three_versions_back(): void
     {
+        if ($this->cacheManager()->isSlotting()) {
+            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
+        }
+
         Author::create(['name' => 'Alice']);
 
         $ck = NormCache::classKey(Author::class);
@@ -236,6 +240,10 @@ class LuaScriptConsistencyTest extends TestCase
 
     public function test_through_query_stale_serve_reaches_three_versions_back(): void
     {
+        if ($this->cacheManager()->isSlotting()) {
+            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
+        }
+
         $country = Country::create(['name' => 'UK']);
         $alice = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
         Post::create(['title' => 'P1', 'author_id' => $alice->id]);
@@ -301,6 +309,10 @@ class LuaScriptConsistencyTest extends TestCase
 
     public function test_result_query_stale_serve_reaches_three_versions_back(): void
     {
+        if ($this->cacheManager()->isSlotting()) {
+            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
+        }
+
         Author::create(['name' => 'Alice']);
 
         Author::query()->dependsOn([Post::class])->count();
