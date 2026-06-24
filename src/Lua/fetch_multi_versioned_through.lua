@@ -13,8 +13,7 @@
 -- ARGV[4]       = building lock token
 --
 -- Returns: {status, seg, [raw_payload]}
--- On a hit, status is 'hit_raw' and the payload ({i, t}) is an undecoded JSON string — PHP
--- decodes it and handles corrupt JSON, since decoding here just to marshal it back out is slower.
+-- On a hit, payload is undecoded JSON; PHP parses it to avoid Lua bulk reply marshaling.
 local n = (#KEYS - 3) / 2
 local now = tonumber(ARGV[2])
 
@@ -50,4 +49,4 @@ if not raw_payload then
     return {'building', seg}
 end
 
-return {'hit_raw', seg, raw_payload}
+return {'hit', seg, raw_payload}

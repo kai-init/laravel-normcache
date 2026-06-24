@@ -36,14 +36,14 @@ final class NormalizedCacheReader
             $version = $this->versions->normalizeVersion($result[1]);
             $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
             $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
-            [$status, $ids, $models] = $this->resolveIdsAndModels($result, $queryKey);
+            [$status, $ids] = $this->resolveIds($result, $queryKey);
 
             return $this->toQueryResult(
                 $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
                 [$this->keys->verKey($classKey)],
                 [(string) $version],
                 $ids,
-                $models ?? (is_array($ids) ? $this->fetchModels($classKey, $ids) : null)
+                is_array($ids) ? $this->fetchModels($classKey, $ids) : null
             );
         }
 
@@ -65,13 +65,13 @@ final class NormalizedCacheReader
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
-        [$status, $ids, $models] = $this->resolveIdsAndModels($result, $queryKey);
+        [$status, $ids] = $this->resolveIds($result, $queryKey);
 
         return $this->toQueryResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
             $versionKeys, $expectedVersions,
             $ids,
-            $models ?? (is_array($ids) ? $this->fetchModels($classKey, $ids) : null)
+            is_array($ids) ? $this->fetchModels($classKey, $ids) : null
         );
     }
 
@@ -106,31 +106,41 @@ final class NormalizedCacheReader
         return new QueryCacheResult(CacheStatus::Hit, $queryKey, $parsed, $this->fetchModels($classKey, $parsed), null, null, [], []);
     }
 
-    private function resolveIdsAndModels(array $result, string $queryKey): array
+    private function resolveIds(array $result, string $queryKey): array
     {
-        $tag = $result[0] ?? null;
+        $status = LuaStatus::fromLua($result[0] ?? null);
 
-        if ($tag !== LuaStatus::Hit->value) {
-            $status = LuaStatus::fromLua($tag);
-
-            return [$status, $status->servesData() ? $result[2] : null, null];
+        if (!$status->hasPayload()) {
+            return [$status, null];
         }
 
-        $ids = json_decode($result[2], true);
+        if (!isset($result[2])) {
+            return [LuaStatus::Corrupt, null];
+        }
+
+        $ids = $this->resolveIdsPayload($result[2], $queryKey);
+        if ($ids === null) {
+            return [LuaStatus::Corrupt, null];
+        }
+
+        if (empty($ids)) {
+            return [LuaStatus::Empty, []];
+        }
+
+        return [$status, $ids];
+    }
+
+    private function resolveIdsPayload(mixed $payload, string $queryKey): ?array
+    {
+        $ids = is_string($payload) ? json_decode($payload, true) : $payload;
 
         if (!is_array($ids) || !array_is_list($ids)) {
             $this->store->delete($queryKey);
 
-            return [LuaStatus::Corrupt, null, null];
+            return null;
         }
 
-        if (empty($ids)) {
-            return [LuaStatus::Empty, [], null];
-        }
-
-        $models = $this->store->unserializeMany($result[3] ?? []);
-
-        return [LuaStatus::Hit, $ids, $models];
+        return $ids;
     }
 
     private function toQueryResult(
@@ -229,7 +239,6 @@ final class NormalizedCacheReader
             $this->keys->scheduledKey($classKey),
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->buildingPrefix($classKey),
-            $this->keys->modelPrefix($classKey),
             $this->keys->wakePrefix($classKey),
         ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
     }
@@ -241,7 +250,7 @@ final class NormalizedCacheReader
     ): mixed {
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->modelPrefix($classKey), $this->keys->wakePrefix($classKey)]),
+            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->wakePrefix($classKey)]),
             [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }

@@ -49,7 +49,7 @@ final class NormalizedThroughReader
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
         [$status, $ids, $throughKeys] = $this->resolveIdsAndThroughKeys($result, $queryKey);
-        $models = $status->servesData() ? $this->fetchModels($classKey, $ids) : null;
+        $models = $status->hasPayload() ? $this->fetchModels($classKey, $ids) : null;
 
         return $this->toThroughResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
@@ -94,14 +94,14 @@ final class NormalizedThroughReader
 
     private function resolveIdsAndThroughKeys(array $result, string $queryKey): array
     {
-        if (($result[0] ?? null) !== 'hit_raw') {
-            $status = LuaStatus::fromLua($result[0] ?? null);
+        $status = LuaStatus::fromLua($result[0] ?? null);
 
-            return [
-                $status,
-                $status->servesData() ? ($result[2] ?? []) : null,
-                $status->servesData() ? ($result[3] ?? []) : null,
-            ];
+        if (!$status->hasPayload()) {
+            return [$status, null, null];
+        }
+
+        if (!isset($result[2])) {
+            return [LuaStatus::Corrupt, null, null];
         }
 
         $parsed = json_decode($result[2], true);

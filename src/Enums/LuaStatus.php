@@ -17,8 +17,8 @@ enum LuaStatus: string
         return self::tryFrom((string) $status) ?? self::Miss;
     }
 
-    /** This status's payload carries servable data (ids + models). */
-    public function servesData(): bool
+    /** This status is expected to include a payload slot. */
+    public function hasPayload(): bool
     {
         return $this === self::Hit || $this === self::Stale;
     }
