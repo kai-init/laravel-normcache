@@ -22,6 +22,7 @@ final class NormalizedThroughReader
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
+        private readonly int $staleVersionDepth = 3,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ThroughCacheResult
@@ -171,14 +172,14 @@ final class NormalizedThroughReader
 
         if (!empty($versionKeys)) {
             $this->store->script(
-                RedisScripts::get('store_if_versions_match_and_release'),
+                RedisScripts::get('store_many_versioned'),
                 array_merge($versionKeys, [
                     $key,
                     $buildingKey ?? '',
                     $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '',
                 ]),
                 array_merge(
-                    [(string) count($versionKeys), (string) $ttl],
+                    [(string) count($versionKeys), '1', (string) $ttl],
                     $expectedVersions,
                     [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
                 )
@@ -217,9 +218,9 @@ final class NormalizedThroughReader
         string $hash, string $lockToken,
     ): mixed {
         return $this->store->script(
-            RedisScripts::get('fetch_multi_versioned_through'),
+            RedisScripts::get('fetch_multi_versioned_query'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken, $this->staleVersionDepth]
         );
     }
 }

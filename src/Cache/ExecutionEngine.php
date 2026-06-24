@@ -49,17 +49,29 @@ final class ExecutionEngine
 
     /**
      * @param  callable(): PivotCacheResult  $fetch
+     * @param  callable(): (PivotCacheResult|null)  $waitForBuild
+     * @param  callable(): Collection  $onBuild
      * @param  callable(): (Collection|array{Collection, Collection})  $onMiss
      * @param  callable(Collection, PivotCacheResult): void  $onStore
      * @param  callable(PivotCacheResult): Collection  $onHit
      */
     public function runPivot(
         callable $fetch,
+        callable $waitForBuild,
+        callable $onBuild,
         callable $onMiss,
         callable $onStore,
         callable $onHit,
     ): Collection {
         $result = $fetch();
+
+        if ($result->status === CacheStatus::Building) {
+            $result = $waitForBuild();
+
+            if ($result === null) {
+                return $onBuild();
+            }
+        }
 
         if (empty($result->missedIds())) {
             return $onHit($result);

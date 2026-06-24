@@ -145,6 +145,11 @@ class CacheManager
         return $this->resultReader->fetchPivot($parentClass, $relatedClass, $relation, $parentIds, $constraintHash, $pivotTableKey);
     }
 
+    public function waitForPivotBuild(string $parentClass, string $relatedClass, string $relation, array $parentIds, string $constraintHash, ?string $pivotTableKey): ?PivotCacheResult
+    {
+        return $this->resultReader->waitForPivotBuild($parentClass, $relatedClass, $relation, $parentIds, $constraintHash, $pivotTableKey);
+    }
+
     public function getResultCache(string $modelClass, array $depClasses, string $hash, ?string $tag = null, array $depTableKeys = [], string $namespace = CacheKeyBuilder::K_RESULT): ResultCacheResult
     {
         return $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);

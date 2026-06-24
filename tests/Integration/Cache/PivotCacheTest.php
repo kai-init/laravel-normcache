@@ -112,6 +112,34 @@ class PivotCacheTest extends TestCase
         $this->assertEmpty($queries);
     }
 
+    public function test_pivot_eager_load_falls_back_to_database_when_build_lock_is_held_elsewhere(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+
+        $constraintHash = $this->callConstraintHash($author->tags());
+        $pivotTableKey = NormCache::tableKey($author->getConnection()->getName(), 'author_tag');
+
+        // Claim the same build lock another concurrent request would, before the eager load runs.
+        $claimed = NormCache::getPivotCache(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
+        $this->assertNotNull($claimed->buildingKey);
+
+        DB::enableQueryLog();
+        $authors = Author::with('tags')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $pivotQueries = array_filter($queries, fn($q) => str_contains($q['query'], 'author_tag'));
+        $this->assertCount(1, $pivotQueries, 'Should fall back to a single direct DB query for the pivot relation while its build lock is held elsewhere');
+        $this->assertSame(['Fiction'], $authors->first()->tags->pluck('name')->all());
+        $this->assertSame(
+            $claimed->buildingToken,
+            NormCache::getStore()->getRaw($claimed->buildingKey),
+            'The foreign build lock must remain untouched'
+        );
+    }
+
     public function test_empty_relationship_is_cached(): void
     {
         Author::create(['name' => 'Alice']);

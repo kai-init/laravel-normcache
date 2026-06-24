@@ -2,6 +2,8 @@
 
 namespace NormCache\Values;
 
+use NormCache\Enums\CacheStatus;
+
 final readonly class PivotCacheResult
 {
     /**
@@ -12,6 +14,10 @@ final readonly class PivotCacheResult
         public array $data,
         public array $versionKeys,
         public array $expectedVersions,
+        public CacheStatus $status = CacheStatus::Hit,
+        public ?string $buildingKey = null,
+        public ?string $buildingToken = null,
+        public ?string $wakeKey = null,
     ) {}
 
     public function missedIds(): array

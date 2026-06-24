@@ -103,6 +103,10 @@ trait CachesPivotRelation
                     $constraintHash,
                     $this->pivotTableKey()
                 ),
+                waitForBuild: fn() => NormCache::waitForPivotBuild(
+                    $parentClass, $relatedClass, $this->relationName, $cacheParentIds, $constraintHash, $this->pivotTableKey()
+                ),
+                onBuild: fn() => $this->getFromPreparedPivotBuilder($prepared),
                 onMiss: function () use ($parentClass, $parentClassKey, $relatedClass, $cacheParentIds, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}",
                         $debugbarStart, ['parents' => $cacheParentIds, 'related' => $relatedClass], 'pivot miss');
@@ -126,7 +130,8 @@ trait CachesPivotRelation
                         }
                         $this->populatePivotCache(
                             $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
-                            $pivotResult->versionKeys, $pivotResult->expectedVersions, $ttl
+                            $pivotResult->versionKeys, $pivotResult->expectedVersions, $ttl,
+                            $pivotResult->buildingKey, $pivotResult->wakeKey, $pivotResult->buildingToken
                         );
                     });
                 },
@@ -206,8 +211,11 @@ trait CachesPivotRelation
         return [];
     }
 
-    private function populatePivotCache(Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels, array $versionKeys, array $expectedVersions, ?int $ttl = null): void
-    {
+    private function populatePivotCache(
+        Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels,
+        array $versionKeys, array $expectedVersions, ?int $ttl = null,
+        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null,
+    ): void {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
         $modelAttrs = [];
         $pivotPrefix = $this->accessor . '_';
@@ -240,7 +248,10 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        NormCache::storeManyVersionedResults($pivotEntriesByKey, ttl: $ttl, versionKeys: $versionKeys, expectedVersions: $expectedVersions);
+        NormCache::storeManyVersionedResults(
+            $pivotEntriesByKey, ttl: $ttl, versionKeys: $versionKeys, expectedVersions: $expectedVersions,
+            buildingKey: $buildingKey, wakeKey: $wakeKey, buildingToken: $buildingToken,
+        );
 
         NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
     }

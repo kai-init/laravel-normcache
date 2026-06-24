@@ -66,7 +66,7 @@ final class ResultExecutor
                         return ['value' => $compute(), 'cached' => false];
                     }
 
-                    CacheReporter::queryHit($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
+                    CacheReporter::queryHit($modelClass, $result->key ?? '', $debugbarStart, ['kind' => $kind->value]);
 
                     $value = $structuredPayload
                         ? $result->payload

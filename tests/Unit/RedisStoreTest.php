@@ -195,7 +195,7 @@ class RedisStoreTest extends TestCase
         }
 
         $result = $this->store->script(
-            RedisScripts::get('set_many_tracked_if_version'),
+            RedisScripts::get('store_many_tracked_if_version'),
             array_merge(['ver:script-large', 'member:script-large', '', ''], $keys),
             array_merge(['1', '60', (string) $count, ''], $values)
         );

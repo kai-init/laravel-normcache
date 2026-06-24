@@ -119,9 +119,9 @@ final class RedisStore
         }
 
         return (bool) $this->script(
-            RedisScripts::get('store_if_versions_match_and_release'),
+            RedisScripts::get('store_many_versioned'),
             [$key, $buildingKey, $wakeKey ?? ''],
-            ['0', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
+            ['0', '1', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
         );
     }
 
@@ -253,7 +253,7 @@ final class RedisStore
             return;
         }
 
-        $script = RedisScripts::get('set_many_tracked_if_version');
+        $script = RedisScripts::get('store_many_tracked_if_version');
         $chunks = array_chunk($attrsByKey, 500, true);
         $lastChunk = array_key_last($chunks);
 
@@ -448,6 +448,11 @@ final class RedisStore
     {
         return $this->connection instanceof PhpRedisClusterConnection
             || $this->connection instanceof PredisClusterConnection;
+    }
+
+    public function requiresSlotting(bool $slottingEnabled): bool
+    {
+        return $slottingEnabled || ($this->isCluster() && $this->slotPrefix === '');
     }
 
     private function isPhpRedis(): bool

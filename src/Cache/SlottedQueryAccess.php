@@ -7,7 +7,7 @@ trait SlottedQueryAccess
 {
     private function usesSlotting(): bool
     {
-        return $this->slotting || $this->store->isCluster();
+        return $this->store->requiresSlotting($this->slotting);
     }
 
     private function resolveSlotKeys(

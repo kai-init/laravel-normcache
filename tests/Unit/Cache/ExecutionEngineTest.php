@@ -121,6 +121,8 @@ class ExecutionEngineTest extends TestCase
 
         $this->executor->runPivot(
             fetch: fn() => $pivotResult,
+            waitForBuild: fn() => null,
+            onBuild: fn() => new Collection,
             onMiss: fn() => new Collection,
             onStore: fn($c, $r) => null,
             onHit: function ($r) use (&$hitCalled) {
@@ -141,6 +143,8 @@ class ExecutionEngineTest extends TestCase
 
         $this->executor->runPivot(
             fetch: fn() => $pivotResult,
+            waitForBuild: fn() => null,
+            onBuild: fn() => new Collection,
             onMiss: function () use (&$missCalled) {
                 $missCalled = true;
 
@@ -165,6 +169,8 @@ class ExecutionEngineTest extends TestCase
 
         $result = $this->executor->runPivot(
             fetch: fn() => $pivotResult,
+            waitForBuild: fn() => null,
+            onBuild: fn() => new Collection,
             onMiss: fn() => [$visible, $raw],
             onStore: function ($models) use (&$stored) {
                 $stored = $models;

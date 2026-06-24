@@ -12,13 +12,12 @@ class RedisScriptsTest extends TestCase
         'fetch_version_with_cooldown',
         'fetch_model_build_status',
         'fetch_multi_versioned_query',
-        'fetch_multi_versioned_through',
+        'fetch_pivot_build_status',
         'fetch_versioned_pivot',
         'fetch_versioned_query',
         'fetch_versioned_result',
         'release_building',
-        'set_many_tracked_if_version',
-        'store_if_versions_match_and_release',
+        'store_many_tracked_if_version',
         'store_many_versioned',
     ];
 
@@ -55,9 +54,9 @@ class RedisScriptsTest extends TestCase
         $this->assertArrayHasKey('fetch_versioned_query', $stored);
         $this->assertSame($first, $stored['fetch_versioned_query']);
 
-        RedisScripts::get('store_if_versions_match_and_release');
+        RedisScripts::get('store_many_versioned');
         $stored = $cache->getValue();
-        $this->assertArrayHasKey('store_if_versions_match_and_release', $stored);
+        $this->assertArrayHasKey('store_many_versioned', $stored);
     }
 
     public function test_it_throws_exception_for_missing_scripts(): void

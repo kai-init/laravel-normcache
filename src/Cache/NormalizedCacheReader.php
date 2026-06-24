@@ -192,14 +192,14 @@ final class NormalizedCacheReader
 
         if (!empty($versionKeys)) {
             $this->store->script(
-                RedisScripts::get('store_if_versions_match_and_release'),
+                RedisScripts::get('store_many_versioned'),
                 array_merge($versionKeys, [
                     $key,
                     $buildingKey ?? '',
                     $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '',
                 ]),
                 array_merge(
-                    [(string) count($versionKeys), (string) $ttl],
+                    [(string) count($versionKeys), '1', (string) $ttl],
                     $expectedVersions,
                     [json_encode($ids, JSON_THROW_ON_ERROR), $buildingToken ?? '', (string) $this->wakeTokenCount]
                 )
@@ -251,7 +251,7 @@ final class NormalizedCacheReader
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->wakePrefix($classKey)]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken, $this->staleVersionDepth]
         );
     }
 }

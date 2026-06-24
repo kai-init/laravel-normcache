@@ -21,11 +21,12 @@ final class ResultCacheReader
         private readonly int $stampedeWaitMs,
         private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
+        private readonly int $staleVersionDepth = 3,
     ) {}
 
     private function usesSlotting(): bool
     {
-        return $this->slotting || $this->store->isCluster();
+        return $this->store->requiresSlotting($this->slotting);
     }
 
     public function fetch(
@@ -85,10 +86,13 @@ final class ResultCacheReader
         bool $payloadAlreadyUnserialized = true,
         bool $alreadyClaimed = false
     ): ResultCacheResult {
-        if ($status === LuaStatus::Hit) {
+        if ($status === LuaStatus::Hit || $status === LuaStatus::Stale) {
             $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
             if (is_array($unserialized)) {
-                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+                $cacheStatus = $status === LuaStatus::Hit ? CacheStatus::Hit : CacheStatus::Stale;
+                $key = $status === LuaStatus::Hit ? $resultKey : null;
+
+                return new ResultCacheResult($cacheStatus, $key, $unserialized, null, null, null, $versionKeys, $expectedVersions);
             }
 
             // Corrupt payload (not an array), treat as miss.
@@ -143,12 +147,77 @@ final class ResultCacheReader
             $pivotKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
         }
 
-        return new PivotCacheResult(
-            $seg,
-            array_combine($parentIds, $this->store->getMany($pivotKeys)),
-            $versionKeys,
-            $this->keys->versionsFromSegment($seg),
+        $data = array_combine($parentIds, $this->store->getMany($pivotKeys));
+        $expectedVersions = $this->keys->versionsFromSegment($seg);
+        $missed = array_keys(array_filter($data, fn($payload) => !is_array($payload)));
+
+        if ($missed === []) {
+            return new PivotCacheResult($seg, $data, $versionKeys, $expectedVersions);
+        }
+
+        [$lockKey, $wakeKey] = $this->pivotLockKeys($relatedKey, $relation, $constraintHash, $parentIds, $seg);
+        $token = $this->versions->buildLockToken();
+
+        $missedKeys = [];
+        foreach ($missed as $id) {
+            $missedKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
+        }
+
+        $result = $this->store->script(
+            RedisScripts::get('fetch_pivot_build_status'),
+            [...$missedKeys, $lockKey, $wakeKey],
+            [$token, (string) $this->buildingLockTtl]
         );
+
+        $raw = $this->store->unserializeMany($result[2] ?? []);
+        foreach ($missed as $i => $id) {
+            if (isset($raw[$i]) && is_array($raw[$i])) {
+                $data[$id] = $raw[$i];
+            }
+        }
+
+        if (array_filter($data, fn($payload) => !is_array($payload)) === []) {
+            return new PivotCacheResult($seg, $data, $versionKeys, $expectedVersions);
+        }
+
+        if ($result[0] === 'miss') {
+            return new PivotCacheResult(
+                $seg, $data, $versionKeys, $expectedVersions,
+                CacheStatus::Miss, $lockKey, $token, $wakeKey
+            );
+        }
+
+        return new PivotCacheResult(
+            $seg, $data, $versionKeys, $expectedVersions,
+            CacheStatus::Building
+        );
+    }
+
+    public function waitForPivotBuild(
+        string $parentClass, string $relatedClass, string $relation,
+        array $parentIds, string $constraintHash, ?string $pivotTableKey
+    ): ?PivotCacheResult {
+        $relatedKey = $this->keys->classKey($relatedClass);
+        [, $wakeKey] = $this->pivotLockKeys($relatedKey, $relation, $constraintHash, $parentIds, null);
+
+        $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
+
+        $result = $this->fetchPivot($parentClass, $relatedClass, $relation, $parentIds, $constraintHash, $pivotTableKey);
+
+        return $result->status === CacheStatus::Building ? null : $result;
+    }
+
+    /** Lock key is segment-specific; the wake key is not, since waiters re-fetch to learn the current segment anyway. */
+    private function pivotLockKeys(string $relatedKey, string $relation, string $constraintHash, array $parentIds, ?string $seg): array
+    {
+        $sortedIds = $parentIds;
+        sort($sortedIds);
+        $lockSuffix = $this->keys->resultBuildIdentityHash('pivot', $relation, $constraintHash . ':' . implode(',', $sortedIds));
+
+        return [
+            $seg !== null ? $this->keys->resultBuildingKey($relatedKey, $seg, $lockSuffix) : null,
+            $this->keys->wakeKey($relatedKey, $lockSuffix),
+        ];
     }
 
     public function store(
@@ -216,14 +285,14 @@ final class ResultCacheReader
         }
 
         return (bool) $this->store->script(
-            RedisScripts::get('store_if_versions_match_and_release'),
+            RedisScripts::get('store_many_versioned'),
             array_merge($versionKeys, [
                 $key,
                 $buildingKey ?? '',
                 $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),
             ]),
             array_merge(
-                [(string) count($versionKeys), (string) $ttl],
+                [(string) count($versionKeys), '1', (string) $ttl],
                 $expectedVersions,
                 [$this->store->serialize($payload), $buildingToken ?? '', (string) $this->wakeTokenCount]
             )
@@ -277,7 +346,7 @@ final class ResultCacheReader
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_result'),
             array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
+            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken, (string) $this->staleVersionDepth]
         );
 
         return [LuaStatus::fromLua($result[0] ?? null), (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
