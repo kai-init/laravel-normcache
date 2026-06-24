@@ -1,6 +1,5 @@
 -- Fetch a versioned query result with cooldown and stale-serve support.
--- Small hits (<= ARGV[6] ids) also fetch model blobs inline, saving a round trip; larger
--- hits return ids only and let PHP MGET them separately.
+-- Hits also fetch model blobs inline, saving a round trip versus a separate PHP-side MGET.
 --
 -- KEYS[1] = ver key         (ver:{classKey}:)
 -- KEYS[2] = scheduled key   (scheduled:{classKey}:)
@@ -12,11 +11,10 @@
 -- ARGV[3] = building lock TTL in seconds
 -- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
 -- ARGV[5] = building lock token
--- ARGV[6] = inline model threshold (max ids to inline-fetch models for; <= 0 disables inlining)
 --
 -- Returns: {status, ver, [ids|ids_raw], [models]}
--- status is 'hit_raw' (ids only) or 'hit_inline' (4th element has models, same order as ids,
--- missing entries as false). Stale-serving isn't inlined.
+-- status is 'hit' (4th element has models, same order as ids, missing entries as false).
+-- Stale-serving isn't inlined.
 local function serve_stale(ver, hash, query_prefix, depth)
     if depth <= 0 then return nil end
     local ver_num = tonumber(ver)
@@ -57,16 +55,13 @@ if not ids_raw then
     return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
 end
 
-local threshold = tonumber(ARGV[6]) or 0
-if threshold > 0 then
-    local ok, ids = pcall(cjson.decode, ids_raw)
-    if ok and type(ids) == 'table' and #ids > 0 and #ids <= threshold then
-        local models = {}
-        for i = 1, #ids do
-            models[i] = redis.call('GET', KEYS[5] .. tostring(ids[i]))
-        end
-        return {'hit_inline', ver, ids_raw, models}
+local ok, ids = pcall(cjson.decode, ids_raw)
+if ok and type(ids) == 'table' and #ids > 0 then
+    local models = {}
+    for i = 1, #ids do
+        models[i] = redis.call('GET', KEYS[5] .. tostring(ids[i]))
     end
+    return {'hit', ver, ids_raw, models}
 end
 
-return {'hit_raw', ver, ids_raw}
+return {'hit', ver, ids_raw, {}}

@@ -16,5 +16,4 @@ return [
     'fire_retrieved' => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
     'stale_version_depth' => (int) env('NORMCACHE_STALE_VERSION_DEPTH', 3),
-    'inline_model_threshold' => (int) env('NORMCACHE_INLINE_MODEL_THRESHOLD', 50),
 ];

@@ -228,7 +228,6 @@ Publish `config/normcache.php` to tune these options (each is also configurable 
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
 - **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
-- **`inline_model_threshold`** — Max IDs in a query hit for which model attributes are fetched inline in the same Lua call, saving a round trip. Set to `0` to disable inlining. Default: 50.
 - **`cluster`** — Enable Redis Cluster-aware key routing and multi-slot Lua calls. Default: `false`.
 - **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
 - **`fallback`** — When `true`, Redis exceptions disable the cache for the request and queries fall back to the database silently.

@@ -22,7 +22,6 @@ final class NormalizedCacheReader
         private readonly int $staleVersionDepth,
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
-        private readonly int $inlineModelThreshold = 0,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult
@@ -106,7 +105,7 @@ final class NormalizedCacheReader
     {
         $tag = $result[0] ?? null;
 
-        if ($tag !== 'hit_raw' && $tag !== 'hit_inline') {
+        if ($tag !== LuaStatus::Hit->value) {
             $status = LuaStatus::fromLua($tag);
 
             return [$status, $status->servesData() ? $result[2] : null, null];
@@ -124,7 +123,7 @@ final class NormalizedCacheReader
             return [LuaStatus::Empty, [], null];
         }
 
-        $models = $tag === 'hit_inline' ? $this->store->unserializeMany($result[3] ?? []) : null;
+        $models = $this->store->unserializeMany($result[3] ?? []);
 
         return [LuaStatus::Hit, $ids, $models];
     }
@@ -212,7 +211,7 @@ final class NormalizedCacheReader
             $this->keys->queryPrefix($classKey, $tag),
             $this->keys->buildingPrefix($classKey),
             $this->keys->modelPrefix($classKey),
-        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken, $this->inlineModelThreshold]);
+        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $this->staleVersionDepth, $lockToken]);
     }
 
     private function luaFetchMultiVersionedQuery(
@@ -223,7 +222,7 @@ final class NormalizedCacheReader
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->modelPrefix($classKey)]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken, $this->inlineModelThreshold]
+            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }
 }

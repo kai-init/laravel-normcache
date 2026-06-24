@@ -43,7 +43,6 @@ class CacheServiceProvider extends ServiceProvider
             $stampedeWaitMs = (int) config('normcache.stampede_wait_ms', 200);
             $staleDepth = (int) config('normcache.stale_version_depth', 3);
             $slotting = (bool) config('normcache.slotting', false);
-            $inlineModelThreshold = (int) config('normcache.inline_model_threshold', 0);
 
             $slottingActive = $cluster && $slotting;
             $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:');
@@ -63,7 +62,7 @@ class CacheServiceProvider extends ServiceProvider
             );
 
             return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive, $inlineModelThreshold),
+                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive),
                 resultReader: $resultReader,
                 throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive),
                 result: new ResultExecutor($engine, $resultReader, $config),
