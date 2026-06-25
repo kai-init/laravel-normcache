@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.4.0] — 2026-06-25
+
+### Removed
+
+- Dropped stale-serving and the `stale_version_depth` config option. It did shave latency off reads during a rebuild, but readers already wait on a wake channel in that window — the added complexity wasn't worth maintaining for that marginal win, so the build-lock path is simpler now.
+
+### Fixed
+
+- A malformed scalar/count/result cache entry (wrong shape for its kind) no longer recomputes from the database on every single read until TTL expiry — the first read after corruption now repairs the entry.
+
+---
+
 ## [2.3.0] — 2026-06-24
 
 ### Added
