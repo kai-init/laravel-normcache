@@ -11,6 +11,7 @@ use NormCache\Support\QueryHasher;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CachePlan;
 use NormCache\Values\PreparedQuery;
+use NormCache\Values\ResultCacheResult;
 
 final class ResultExecutor
 {
@@ -48,22 +49,14 @@ final class ResultExecutor
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
 
-                    $payload = $value['value'];
-
-                    $this->resultReader->store(
-                        $result->key,
-                        is_array($payload) ? $payload : [$payload],
-                        $result->buildingKey,
-                        $ttl,
-                        $result->wakeKey,
-                        $result->versionKeys,
-                        $result->expectedVersions,
-                        $result->buildingToken
-                    );
+                    $this->storeResult($result, $value['value'], $ttl);
                 },
-                onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, $structuredPayload) {
+                onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, $structuredPayload, $ttl) {
                     if (!is_array($result->payload) || (!$structuredPayload && !array_key_exists(0, $result->payload))) {
-                        return ['value' => $compute(), 'cached' => false];
+                        $value = $compute();
+                        $this->storeResult($result, $value, $ttl);
+
+                        return ['value' => $value, 'cached' => false];
                     }
 
                     CacheReporter::queryHit($modelClass, $result->key ?? '', $debugbarStart, ['kind' => $kind->value]);
@@ -79,6 +72,20 @@ final class ResultExecutor
         );
 
         return [$execution['value'], $execution['cached']];
+    }
+
+    private function storeResult(ResultCacheResult $result, mixed $payload, ?int $ttl): void
+    {
+        $this->resultReader->store(
+            $result->key,
+            is_array($payload) ? $payload : [$payload],
+            $result->buildingKey,
+            $ttl,
+            $result->wakeKey,
+            $result->versionKeys,
+            $result->expectedVersions,
+            $result->buildingToken
+        );
     }
 
     private function resolveNamespace(ResultKind $kind): string

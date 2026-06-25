@@ -759,6 +759,84 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('Alice', $results->first()->name);
     }
 
+    public function test_malformed_count_cache_payload_is_recomputed_and_repaired(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        $this->assertSame(2, Author::count());
+
+        $countKey = collect($this->redisKeys('test:count:*'))->first();
+        $this->assertNotNull($countKey);
+        $this->corruptResultCacheEntry($countKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertSame(2, Author::count());
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertSame(2, Author::count());
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    public function test_malformed_exists_cache_payload_is_recomputed_and_repaired(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        $this->assertTrue(Author::exists());
+
+        $scalarKey = collect($this->redisKeys('test:scalar:*'))->first();
+        $this->assertNotNull($scalarKey);
+        $this->corruptResultCacheEntry($scalarKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertTrue(Author::exists());
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertTrue(Author::exists());
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    public function test_malformed_scalar_cache_payload_is_recomputed_and_repaired(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id, 'views' => 10]);
+
+        $this->assertSame(10, Post::sum('views'));
+
+        $scalarKey = collect($this->redisKeys('test:scalar:*'))->first();
+        $this->assertNotNull($scalarKey);
+        $this->corruptResultCacheEntry($scalarKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertSame(10, Post::sum('views'));
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertSame(10, Post::sum('views'));
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.
+    private function corruptResultCacheEntry(string $key): void
+    {
+        $serialized = $this->cacheManager()->getStore()->serialize([]);
+        Redis::connection('normcache-test')->set($key, $serialized);
+    }
+
     public function test_normalized_cache_preserves_wildcard_plus_alias_projection(): void
     {
         $author = Author::create(['name' => 'Alice']);
