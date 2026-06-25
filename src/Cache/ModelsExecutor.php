@@ -5,7 +5,6 @@ namespace NormCache\Cache;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use NormCache\Enums\CacheStatus;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
@@ -74,10 +73,8 @@ final class ModelsExecutor
                     $prepared
                 );
             },
-            onHit: function ($result) use ($prepared, $executionBuilder, $model, $hash, $selectedCols, $debugbarStart, $prototype) {
-                $key = $result->status === CacheStatus::Stale ? "stale:{$hash}" : $result->key;
-
-                CacheReporter::queryHit($model, $key, $debugbarStart, [
+            onHit: function ($result) use ($prepared, $executionBuilder, $model, $selectedCols, $debugbarStart, $prototype) {
+                CacheReporter::queryHit($model, $result->key, $debugbarStart, [
                     'kind' => 'ids + models',
                     'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result->ids) . ' ids)',
                     'contains_model' => $result->ids,

@@ -11,8 +11,7 @@ use NormCache\Tests\TestCase;
 
 /**
  * Behavioral tests: Lua script edge cases — corrupt query entries are deleted and
- * re-queried, stale results are served while a build lock is active, and
- * cooldown-deferred version bumps fire on the next read.
+ * re-queried, and cooldown-deferred version bumps fire on the next read.
  */
 class LuaScriptBehaviorTest extends TestCase
 {
@@ -65,30 +64,6 @@ class LuaScriptBehaviorTest extends TestCase
         $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
         $this->assertIsArray(json_decode($this->getKey("query:{{$ck}}:v{$version}:{$hash}"), true));
-    }
-
-    public function test_stale_result_served_when_building_key_is_active(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $hash = $this->authorQueryHash();
-
-        Author::get();
-
-        $this->redis()->incr("test:ver:{{$ck}}:");
-        $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::get();
-
-        $this->assertSame(0, $queryCount);
-        $this->assertCount(1, $results);
-        $this->assertSame('Alice', $results->first()->name);
     }
 
     // luaFetchVersionedQuery — cooldown firing

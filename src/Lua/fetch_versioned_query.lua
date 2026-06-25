@@ -1,4 +1,4 @@
--- Fetch a versioned query result with cooldown and stale-serve support.
+-- Fetch a versioned query result with cooldown, claiming the build lock on a miss.
 --
 -- KEYS[1] = ver key         (ver:{classKey}:)
 -- KEYS[2] = scheduled key   (scheduled:{classKey}:)
@@ -8,23 +8,9 @@
 -- ARGV[1] = hash
 -- ARGV[2] = current timestamp in ms
 -- ARGV[3] = building lock TTL in seconds
--- ARGV[4] = stale version depth (how many old versions to try; 0 disables stale serving)
--- ARGV[5] = building lock token
+-- ARGV[4] = building lock token
 --
 -- Returns: {status, ver, [ids|ids_raw]}
-local function serve_stale(ver, hash, query_prefix, depth)
-    if depth <= 0 then return nil end
-    local ver_num = tonumber(ver)
-    for i = 1, depth do
-        local stale_ver = ver_num - i
-        if stale_ver < 0 then break end
-        local stale_raw = redis.call('GET', query_prefix .. tostring(stale_ver) .. ':' .. hash)
-        if stale_raw then
-            return {'stale', ver, stale_raw}
-        end
-    end
-    return nil
-end
 
 local now = tonumber(ARGV[2])
 local due_at = redis.call('GET', KEYS[2])
@@ -44,12 +30,12 @@ local query_key = KEYS[3] .. ver .. ':' .. ARGV[1]
 local ids_raw = redis.call('GET', query_key)
 if not ids_raw then
     local building_key = KEYS[4] .. ARGV[1]
-    local claimed = redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3]))
+    local claimed = redis.call('SET', building_key, ARGV[4], 'NX', 'EX', tonumber(ARGV[3]))
     if claimed then
         redis.call('DEL', KEYS[5] .. ARGV[1])
-        return {'miss', ver, ARGV[5]}
+        return {'miss', ver, ARGV[4]}
     end
-    return serve_stale(ver, ARGV[1], KEYS[3], tonumber(ARGV[4]) or 3) or {'building', ver}
+    return {'building', ver}
 end
 
 return {'hit', ver, ids_raw}

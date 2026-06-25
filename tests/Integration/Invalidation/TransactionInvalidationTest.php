@@ -131,7 +131,7 @@ class TransactionInvalidationTest extends TestCase
         $this->assertSame($versionBefore, $versionDuringTx);
     }
 
-    public function test_bulk_update_rollback_does_not_leave_stale_version(): void
+    public function test_bulk_update_rollback_does_not_leave_orphaned_version(): void
     {
         Author::create(['name' => 'Alice']);
         Author::all();
@@ -174,7 +174,7 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
-    public function test_committed_transaction_invalidates_stale_query_cache(): void
+    public function test_committed_transaction_invalidates_outdated_query_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Author::all();

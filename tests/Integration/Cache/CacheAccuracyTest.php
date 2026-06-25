@@ -22,7 +22,7 @@ use ReflectionProperty;
 
 /**
  * Behavioral tests: verifies that column aliasing, subclass hydration, join artifacts from
- * through/pivot relations, and mixed-PK bulk updates never serve stale or mismatched data.
+ * through/pivot relations, and mixed-PK bulk updates never serve outdated or mismatched data.
  */
 class CacheAccuracyTest extends TestCase
 {
@@ -184,7 +184,7 @@ class CacheAccuracyTest extends TestCase
         $this->assertSame([$tag->id], $warm->modelKeys());
     }
 
-    public function test_mixed_pk_and_non_pk_bulk_update_does_not_leave_stale_model_cache_entries(): void
+    public function test_mixed_pk_and_non_pk_bulk_update_does_not_leave_outdated_model_cache_entries(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);

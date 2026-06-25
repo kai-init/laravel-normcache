@@ -114,7 +114,7 @@ class DependsOnTest extends TestCase
 
         $secondKeys = $this->redisKeys('test:count:*');
 
-        // two distinct versioned count keys: the stale orphan and the new one
+        // two distinct versioned count keys: the orphaned (old) one and the new one
         $this->assertCount(2, $secondKeys);
         $this->assertNotEmpty(array_diff($secondKeys, $firstKeys));
     }

@@ -11,34 +11,8 @@
 -- ARGV[3]          = building lock TTL in seconds
 -- ARGV[4]          = current timestamp in ms
 -- ARGV[5]          = building lock token
--- ARGV[6]          = stale version depth (per dependency; 0 disables stale serving)
 --
--- Returns: {'hit', seg, payload} | {'stale', seg, payload} | {'miss', seg, false, token} | {'building', seg, false}
-
--- Steps one dependency's version back at a time, holding the rest at their current value.
-local function serve_stale(vers, n, prefix, suffix, depth)
-    if depth <= 0 then return nil end
-
-    for i = 1, n do
-        local ver_num = tonumber(vers[i])
-
-        for step = 1, depth do
-            local stale_ver = ver_num - step
-            if stale_ver < 0 then break end
-
-            local seg = ''
-            for j = 1, n do
-                local v = j == i and tostring(stale_ver) or vers[j]
-                seg = seg .. (j == 1 and 'v' .. v or ':v' .. v)
-            end
-
-            local raw = redis.call('GET', prefix .. seg .. suffix)
-            if raw then return raw end
-        end
-    end
-
-    return nil
-end
+-- Returns: {'hit', seg, payload} | {'miss', seg, false, token} | {'building', seg, false}
 
 local n = (#KEYS - 3) / 2
 local now = tonumber(ARGV[4])
@@ -76,11 +50,6 @@ local building_key = building_prefix .. seg .. ':' .. ARGV[2]
 if redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3])) then
     redis.call('DEL', wake_prefix .. ARGV[2])
     return {'miss', seg, false, ARGV[5]}
-end
-
-local stale_raw = serve_stale(vers, n, result_prefix, suffix, tonumber(ARGV[6]) or 3)
-if stale_raw then
-    return {'stale', seg, stale_raw}
 end
 
 return {'building', seg, false}

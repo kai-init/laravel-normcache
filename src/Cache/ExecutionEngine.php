@@ -119,8 +119,6 @@ final class ExecutionEngine
     }
 
     /**
-     * Hit and Stale both route to onHit; storing is handled inside onMiss.
-     *
      * @param  callable(): QueryCacheResult  $fetch
      * @param  callable(): (QueryCacheResult|null)  $waitForBuild
      * @param  callable(): Collection  $onBuild

@@ -39,7 +39,7 @@ Version 2 extends Normcache beyond normalized caching into a full read-path cach
 
 - **`dependsOn([Model::class])`** and **`dependsOnTables(['table'])`** — cache cross-table queries by declaring what should invalidate them. Simple cases stay normalized; complex shapes use a versioned result cache.
 - **Scalar and aggregate caching** — `count`, `sum`, `avg`, `withCount`, `withSum`, and friends are cached automatically under versioned keys.
-- **Stampede protection** — waiters serve stale data or block on a wake channel instead of storming the database during a rebuild.
+- **Stampede protection** — waiters block on a wake channel instead of storming the database during a rebuild.
 - **Redis Cluster support** — single-slot mode by default; opt into per-model slot sharding with `slotting`.
 - **Tag-based flushing** — group query entries under a tag and flush them together on deploy or config change.
 - **Debugbar integration** — hits, misses, and bypasses appear on the request timeline when Debugbar is installed.
@@ -228,7 +228,6 @@ Publish `config/normcache.php` to tune these options (each is also configurable 
 - **`building_lock_ttl`** — How long a cache-build lock is held before it expires and another request can take over.
 - **`stampede_wait_ms`** — How long a waiter blocks on a wake channel before falling back to the database. Requires Redis 6.0+ for sub-second precision.
 - **`stampede_wake_tokens`** — How many list wake tokens to push when a cache build completes. Higher values wake more concurrent waiters immediately; old tokens are cleared when a new build lock is claimed.
-- **`stale_version_depth`** — How many old query-cache versions to serve as stale data while a rebuild is in progress. Set to `0` to disable stale serving.
 - **`cluster`** — Enable Redis Cluster-aware key routing and multi-slot Lua calls. Default: `false`.
 - **`events`** — Set to `false` to skip hit/miss event dispatches on hot paths.
 - **`fallback`** — Default: `true` (fail open). When `true`, Redis exceptions disable the cache for the request/job and queries fall back to the database silently; during a Redis outage this shifts load to the database. Set to `false` to fail closed and re-throw Redis exceptions.
@@ -271,7 +270,7 @@ By default, Redis Cluster support uses single-slot mode. With `cluster` enabled 
 
 Set `slotting` to `true` only when you want Redis Cluster slot sharding across model groups. In sharded mode, single-model operations keep keys on one slot via per-model hash tags (`{posts}`, `{analytics:posts}`). Cross-model operations (`dependsOn`, pivot, through, `withCount`) resolve each model's version key with separate single-slot Lua calls, then read or write on the primary model's slot.
 
-**Consistency note:** sharded cross-model version resolution is not atomic. A writer that bumps a dependency version between version reads may cause stale response before the next request uses the new version. This is the same eventually-consistent trade-off accepted by most distributed caches.
+**Consistency note:** sharded cross-model version resolution is not atomic. A writer that bumps a dependency version between version reads may cause an outdated response before the next request uses the new version. This is the same eventually-consistent trade-off accepted by most distributed caches.
 
 `flushAll()` is supported.
 
@@ -307,17 +306,13 @@ Simple `whereHas` and plain `join()` with an explicit root-table projection are 
 - **Single Node / Hash Tagging:** Provides strong multi-key atomicity.
 - **Slotting Mode:** Offers better distribution but weaker cross-key atomicity. Multi-dependency queries are automatically routed to the result cache in slotting mode to prevent cross-slot consistency errors.
 
-### Stale Serving
-
-To prevent cache stampedes, NormCache may serve slightly stale data (up to the configured stale depth) while a background writer rebuilds the cache. This guarantees high availability under extreme load at the cost of immediate read-your-writes consistency.
-
 ---
 
 ## Performance
 
 - **Single round trip on cache hit** — version check + ID fetch + model `MGET` in one Lua `EVAL`.
 - **`MGET` for bulk reads** — all model attributes for a result set in one Redis call.
-- **No scanning on invalidation** — version bump makes stale keys unreachable; TTL handles eviction. (Manual operations like `flushAll()` and tag flushing do use `SCAN`).
+- **No scanning on invalidation** — version bump makes old keys unreachable; TTL handles eviction. (Manual operations like `flushAll()` and tag flushing do use `SCAN`).
 - **Stampede protection** — waiters `BRPOP` a wake channel (200ms) instead of storming the DB. Requires Redis 6.0+ for sub-second precision; both PhpRedis and Predis support this.
 - **igbinary support** — smaller payloads and faster serialization when the extension is installed.
 

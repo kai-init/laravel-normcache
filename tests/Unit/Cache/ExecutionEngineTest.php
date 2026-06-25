@@ -206,26 +206,6 @@ class ExecutionEngineTest extends TestCase
         $this->assertSame($hit, $received);
     }
 
-    public function test_run_normalized_stale_routes_to_on_hit(): void
-    {
-        $stale = new QueryCacheResult(CacheStatus::Stale, null, [3], null, null, null, [], []);
-        $hitCalled = false;
-
-        $this->executor->runNormalized(
-            fetch: fn() => $stale,
-            waitForBuild: fn() => null,
-            onHit: function ($r) use (&$hitCalled) {
-                $hitCalled = true;
-
-                return new Collection;
-            },
-            onMiss: fn($r) => new Collection,
-            onBuild: fn() => new Collection,
-        );
-
-        $this->assertTrue($hitCalled);
-    }
-
     public function test_run_normalized_calls_on_miss_with_result(): void
     {
         $miss = new QueryCacheResult(CacheStatus::Miss, 'k', null, null, 'bk', 'tok', ['ver:k:'], ['5']);

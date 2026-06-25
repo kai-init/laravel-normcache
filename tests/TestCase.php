@@ -177,7 +177,6 @@ abstract class TestCase extends OrchestraTestCase
         int $buildingLockTtl = 5,
         int $stampedeWaitMs = 200,
         int $stampedeWakeTokens = 64,
-        int $staleDepth = 3,
         bool $slotting = false,
     ): CacheManager {
         $ttl ??= (int) config('normcache.ttl');
@@ -187,7 +186,7 @@ abstract class TestCase extends OrchestraTestCase
         $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens, $staleDepth);
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
         $engine = new ExecutionEngine;
         $config = new CacheConfig(
             ttl: $ttl,
@@ -202,9 +201,9 @@ abstract class TestCase extends OrchestraTestCase
         );
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $staleDepth, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
             resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens, $staleDepth),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
             result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,

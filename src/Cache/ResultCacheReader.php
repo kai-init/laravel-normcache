@@ -21,7 +21,6 @@ final class ResultCacheReader
         private readonly int $stampedeWaitMs,
         private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
-        private readonly int $staleVersionDepth = 3,
     ) {}
 
     private function usesSlotting(): bool
@@ -86,13 +85,10 @@ final class ResultCacheReader
         bool $payloadAlreadyUnserialized = true,
         bool $alreadyClaimed = false
     ): ResultCacheResult {
-        if ($status === LuaStatus::Hit || $status === LuaStatus::Stale) {
+        if ($status === LuaStatus::Hit) {
             $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
             if (is_array($unserialized)) {
-                $cacheStatus = $status === LuaStatus::Hit ? CacheStatus::Hit : CacheStatus::Stale;
-                $key = $status === LuaStatus::Hit ? $resultKey : null;
-
-                return new ResultCacheResult($cacheStatus, $key, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
             }
 
             // Corrupt payload (not an array), treat as miss.
@@ -346,7 +342,7 @@ final class ResultCacheReader
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_result'),
             array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken, (string) $this->staleVersionDepth]
+            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
         );
 
         return [LuaStatus::fromLua($result[0] ?? null), (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];

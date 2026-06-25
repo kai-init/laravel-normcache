@@ -81,7 +81,7 @@ class CacheEventsTest extends TestCase
 
         Event::fake([ModelCacheHit::class, ModelCacheMiss::class]);
 
-        // query cache is stale (version bumped by Bob's insert), so both IDs are fetched via MGET
+        // query cache is outdated (version bumped by Bob's insert), so both IDs are fetched via MGET
         Author::all();
 
         Event::assertDispatched(ModelCacheHit::class);

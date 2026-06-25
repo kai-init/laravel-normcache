@@ -46,7 +46,4 @@ return [
 
     // Register the Laravel Debugbar collector for local cache inspection.
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
-
-    // Previous query versions to try while the current version rebuilds; 0 disables stale reads.
-    'stale_version_depth' => (int) env('NORMCACHE_STALE_VERSION_DEPTH', 3),
 ];

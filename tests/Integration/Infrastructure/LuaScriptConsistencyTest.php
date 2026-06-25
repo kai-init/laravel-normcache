@@ -5,7 +5,6 @@ namespace NormCache\Tests\Integration\Infrastructure;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
-use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -15,8 +14,7 @@ use NormCache\Tests\TestCase;
 
 /**
  * Behavioral tests: Lua script consistency under concurrent writes — result and pivot
- * cache writes are skipped when a dependency version changes during the build window;
- * stale serving reaches the configured depth but no further.
+ * cache writes are skipped when a dependency version changes during the build window.
  */
 class LuaScriptConsistencyTest extends TestCase
 {
@@ -59,14 +57,6 @@ class LuaScriptConsistencyTest extends TestCase
         return QueryHasher::forNormalizedQuery($query, $query->toBase());
     }
 
-    /** Pulls the hash off the tail of a cache data key, e.g. "test:through:{posts}:v1:v2:abc123" -> "abc123". */
-    private function lastSegment(string $key): string
-    {
-        $parts = explode(':', $key);
-
-        return end($parts);
-    }
-
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
     {
         $ck = NormCache::classKey(Author::class);
@@ -98,7 +88,7 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
     }
 
-    // dependsOn blob — building key causes DB fallthrough (luaFetchQueryWithDeps has no stale path)
+    // dependsOn blob — building key causes DB fallthrough
 
     public function test_building_key_in_deps_query_causes_db_fallthrough(): void
     {
@@ -120,257 +110,6 @@ class LuaScriptConsistencyTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(1, $results);
-    }
-
-    // luaFetchVersionedQuery — stale serving depth boundary (walks back at most 3 versions)
-
-    public function test_stale_serve_reaches_three_versions_back(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $hash = $this->authorQueryHash();
-
-        Author::get();
-
-        // serve_stale() walks back at most 3 versions; 3 bumps puts the entry at exactly the boundary
-        $this->bumpVersionInRedis($ck, 3);
-
-        // Building lock must be held so the Lua script attempts stale serving rather than a fresh miss
-        $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::get();
-
-        $this->assertSame(0, $queryCount);
-        $this->assertCount(1, $results);
-        $this->assertSame('Alice', $results->first()->name);
-    }
-
-    public function test_stale_serve_does_not_reach_four_versions_back(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $hash = $this->authorQueryHash();
-
-        Author::get();
-
-        // 4 bumps puts the entry one past the stale-serve depth limit of 3
-        $this->bumpVersionInRedis($ck, 4);
-
-        $this->setKey("building:{{$ck}}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::get();
-
-        $this->assertGreaterThan(0, $queryCount);
-        $this->assertCount(1, $results);
-    }
-
-    // fetch_multi_versioned_query — same stale-serve boundary, generalized across dependencies
-
-    public function test_multi_dependency_query_stale_serve_reaches_three_versions_back(): void
-    {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
-        }
-
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $postKey = NormCache::classKey(Post::class);
-        $hash = $this->authorQueryHash();
-
-        Author::query()->dependsOn([Post::class])->get();
-
-        $authorVer = NormCache::currentVersion(Author::class);
-        $this->bumpVersionInRedis($postKey, 3);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::query()->dependsOn([Post::class])->get();
-
-        $this->assertSame(0, $queryCount);
-        $this->assertCount(1, $results);
-    }
-
-    public function test_multi_dependency_query_stale_serve_does_not_reach_four_versions_back(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::classKey(Author::class);
-        $postKey = NormCache::classKey(Post::class);
-        $hash = $this->authorQueryHash();
-
-        Author::query()->dependsOn([Post::class])->get();
-
-        $authorVer = NormCache::currentVersion(Author::class);
-        $this->bumpVersionInRedis($postKey, 4);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::query()->dependsOn([Post::class])->get();
-
-        $this->assertGreaterThan(0, $queryCount);
-        $this->assertCount(1, $results);
-    }
-
-    // fetch_multi_versioned_query (shared with HasManyThrough) — same stale-serve boundary
-
-    public function test_through_query_stale_serve_reaches_three_versions_back(): void
-    {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
-        }
-
-        $country = Country::create(['name' => 'UK']);
-        $alice = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
-        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
-
-        Country::with('posts')->find($country->id);
-
-        $queryKey = collect($this->redisKeys('test:through:*'))->first();
-        $this->assertNotNull($queryKey);
-        $hash = $this->lastSegment($queryKey);
-
-        $postKey = NormCache::classKey(Post::class);
-        $authorKey = NormCache::classKey(Author::class);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $this->bumpVersionInRedis($authorKey, 3);
-        $authorVer = NormCache::currentVersion(Author::class);
-
-        $this->setKey("building:{{$postKey}}:v{$postVer}:v{$authorVer}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $result = Country::with('posts')->find($country->id);
-
-        $this->assertSame(0, $queryCount);
-        $this->assertCount(1, $result->posts);
-    }
-
-    public function test_through_query_stale_serve_does_not_reach_four_versions_back(): void
-    {
-        $country = Country::create(['name' => 'UK']);
-        $alice = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
-        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
-
-        Country::with('posts')->find($country->id);
-
-        $queryKey = collect($this->redisKeys('test:through:*'))->first();
-        $this->assertNotNull($queryKey);
-        $hash = $this->lastSegment($queryKey);
-
-        $postKey = NormCache::classKey(Post::class);
-        $authorKey = NormCache::classKey(Author::class);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $this->bumpVersionInRedis($authorKey, 4);
-        $authorVer = NormCache::currentVersion(Author::class);
-
-        $this->setKey("building:{{$postKey}}:v{$postVer}:v{$authorVer}:{$hash}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        Country::with('posts')->find($country->id);
-
-        $this->assertGreaterThan(0, $queryCount);
-    }
-
-    // fetch_versioned_result — same stale-serve boundary for result/aggregate cache
-
-    public function test_result_query_stale_serve_reaches_three_versions_back(): void
-    {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('Stale-serve is not supported on the per-key path in slotting mode — see ClusterModeTest');
-        }
-
-        Author::create(['name' => 'Alice']);
-
-        Author::query()->dependsOn([Post::class])->count();
-
-        $queryKey = collect($this->redisKeys('test:count:*'))->first();
-        $this->assertNotNull($queryKey);
-        $hash = $this->lastSegment($queryKey);
-
-        $ck = NormCache::classKey(Author::class);
-        $postKey = NormCache::classKey(Post::class);
-        $authorVer = NormCache::currentVersion(Author::class);
-
-        $this->bumpVersionInRedis($postKey, 3);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $lockSuffix = (new CacheKeyBuilder)->resultBuildIdentityHash(CacheKeyBuilder::K_COUNT, null, $hash);
-        $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$lockSuffix}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $count = Author::query()->dependsOn([Post::class])->count();
-
-        $this->assertSame(0, $queryCount);
-        $this->assertSame(1, $count);
-    }
-
-    public function test_result_query_stale_serve_does_not_reach_four_versions_back(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        Author::query()->dependsOn([Post::class])->count();
-
-        $queryKey = collect($this->redisKeys('test:count:*'))->first();
-        $this->assertNotNull($queryKey);
-        $hash = $this->lastSegment($queryKey);
-
-        $ck = NormCache::classKey(Author::class);
-        $postKey = NormCache::classKey(Post::class);
-        $authorVer = NormCache::currentVersion(Author::class);
-
-        $this->bumpVersionInRedis($postKey, 4);
-        $postVer = NormCache::currentVersion(Post::class);
-
-        $lockSuffix = (new CacheKeyBuilder)->resultBuildIdentityHash(CacheKeyBuilder::K_COUNT, null, $hash);
-        $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$lockSuffix}", '1', 30);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $count = Author::query()->dependsOn([Post::class])->count();
-
-        $this->assertGreaterThan(0, $queryCount);
-        $this->assertSame(1, $count);
     }
 
     // Cooldown invalidation across cache families
@@ -417,7 +156,7 @@ class LuaScriptConsistencyTest extends TestCase
 
         $manager->storeResultCache(
             $miss->key,
-            [['id' => 1, 'name' => 'Stale']],
+            [['id' => 1, 'name' => 'Old']],
             $miss->buildingKey,
             60,
             $miss->wakeKey,
@@ -479,7 +218,7 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->versionKeys,
             $cache->expectedVersions,
         )) {
-            $manager->cacheModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Stale']]);
+            $manager->cacheModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Old']]);
         }
 
         $this->assertNull($this->modelCacheEntry(Post::class, 1));
@@ -525,7 +264,7 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->versionKeys,
             $cache->expectedVersions,
         )) {
-            $manager->cacheModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Stale']]);
+            $manager->cacheModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Old']]);
         }
 
         $this->assertNull($this->modelCacheEntry(Tag::class, 1));
@@ -604,7 +343,7 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
     }
 
-    public function test_late_writer_does_not_commit_stale_version_as_current(): void
+    public function test_late_writer_does_not_commit_outdated_version_as_current(): void
     {
         $author = Author::create(['name' => 'Alice']);
 
@@ -619,7 +358,7 @@ class LuaScriptConsistencyTest extends TestCase
 
         $committed = NormCache::storeResultCache(
             $buildLock->key,
-            ['data' => 'stale'],
+            ['data' => 'outdated'],
             $buildLock->buildingKey,
             null,
             $buildLock->wakeKey,
@@ -636,6 +375,6 @@ class LuaScriptConsistencyTest extends TestCase
             'test-hash'
         );
 
-        $this->assertNotSame(['data' => 'stale'], $freshRead->payload ?? null, 'Late writer must not poison the current fresh cache');
+        $this->assertNotSame(['data' => 'outdated'], $freshRead->payload ?? null, 'Late writer must not poison the current fresh cache');
     }
 }

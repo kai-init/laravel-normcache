@@ -126,7 +126,7 @@ trait Cacheable
         NormCache::flushInstance($this);
     }
 
-    // Evict before save so observers do not read a stale model payload.
+    // Evict before save so observers do not read an outdated model payload.
     private function evictBeforeSaveForObservers(bool $existsBefore, mixed $originalKey = null): void
     {
         if (!$existsBefore) {

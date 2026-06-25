@@ -22,7 +22,6 @@ final class NormalizedThroughReader
         private readonly int $stampedeWaitMs = 200,
         private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
-        private readonly int $staleVersionDepth = 3,
     ) {}
 
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ThroughCacheResult
@@ -133,7 +132,6 @@ final class NormalizedThroughReader
     ): ThroughCacheResult {
         return match ($status) {
             LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $throughKeys, $models ?? [], null, null, [], []),
-            LuaStatus::Stale => new ThroughCacheResult(CacheStatus::Stale, null, $ids, $throughKeys, $models ?? [], null, null, [], []),
             LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $queryKey, [], [], [], null, null, [], []),
             LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
             LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
@@ -220,7 +218,7 @@ final class NormalizedThroughReader
         return $this->store->script(
             RedisScripts::get('fetch_multi_versioned_query'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken, $this->staleVersionDepth]
+            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }
 }

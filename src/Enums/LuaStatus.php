@@ -6,7 +6,6 @@ enum LuaStatus: string
 {
     case Hit = 'hit';
     case Miss = 'miss';
-    case Stale = 'stale';
     case Building = 'building';
     case Empty = 'empty';
     case Corrupt = 'corrupt';
@@ -20,6 +19,6 @@ enum LuaStatus: string
     // This status is expected to include a payload slot.
     public function hasPayload(): bool
     {
-        return $this === self::Hit || $this === self::Stale;
+        return $this === self::Hit;
     }
 }

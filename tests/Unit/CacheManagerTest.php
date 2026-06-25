@@ -270,8 +270,8 @@ class CacheManagerTest extends TestCase
 
         $this->cacheManager()->storeQueryIds($queryKey, [7, 8, 9], 3600, $buildingKey, [$versionKey], ['5'], 'old-owner');
 
-        $this->assertNull($store->getRaw($queryKey), 'Stale builder must not write when lock token changed');
-        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
+        $this->assertNull($store->getRaw($queryKey), 'Outdated builder must not write when lock token changed');
+        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Outdated builder must not release a newer lock');
     }
 
     // -------------------------------------------------------------------------
@@ -360,7 +360,7 @@ class CacheManagerTest extends TestCase
 
         $written = $this->cacheManager()->storeVersionedResult(
             $resultKey,
-            [['id' => 1, 'name' => 'Stale']],
+            [['id' => 1, 'name' => 'Old']],
             3600,
             [$versionKey],
             ['5'],
@@ -370,9 +370,9 @@ class CacheManagerTest extends TestCase
         );
 
         $this->assertFalse($written);
-        $this->assertNull($store->getRaw($resultKey), 'Stale builder must not write when lock token changed');
-        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Stale builder must not release a newer lock');
-        $this->assertNull($store->getRaw($wakeKey), 'Stale builder must not wake waiters for a lock it no longer owns');
+        $this->assertNull($store->getRaw($resultKey), 'Outdated builder must not write when lock token changed');
+        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Outdated builder must not release a newer lock');
+        $this->assertNull($store->getRaw($wakeKey), 'Outdated builder must not wake waiters for a lock it no longer owns');
     }
 
     // -------------------------------------------------------------------------

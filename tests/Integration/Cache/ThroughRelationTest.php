@@ -224,7 +224,7 @@ class ThroughRelationTest extends TestCase
         $this->assertEmpty($this->redisKeys('test:through:*'));
     }
 
-    public function test_stale_through_cache_entry_can_remain_after_through_model_version_bump(): void
+    public function test_outdated_through_cache_entry_can_remain_after_through_model_version_bump(): void
     {
         $country = Country::create(['name' => 'Australia']);
         $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
@@ -232,16 +232,16 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        $stalePostVersion = NormCache::currentVersion(Post::class);
-        $staleAuthorVersion = NormCache::currentVersion(Author::class);
+        $oldPostVersion = NormCache::currentVersion(Post::class);
+        $oldAuthorVersion = NormCache::currentVersion(Author::class);
 
         $author->update(['name' => 'Alice Updated']);
 
-        $this->assertGreaterThan($staleAuthorVersion, NormCache::currentVersion(Author::class));
+        $this->assertGreaterThan($oldAuthorVersion, NormCache::currentVersion(Author::class));
 
-        $staleKeys = $this->redisKeys("test:through:*:v{$stalePostVersion}:v{$staleAuthorVersion}:*");
+        $orphanedKeys = $this->redisKeys("test:through:*:v{$oldPostVersion}:v{$oldAuthorVersion}:*");
 
-        $this->assertNotEmpty($staleKeys);
+        $this->assertNotEmpty($orphanedKeys);
         $this->assertSame(['Hello'], $country->posts()->get()->pluck('title')->all());
     }
 
@@ -253,7 +253,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        // The version bump here makes the through cache stale, but withoutCache() must skip it regardless.
+        // The version bump here makes the through cache entry outdated, but withoutCache() must skip it regardless.
         Post::create(['title' => 'Post B', 'author_id' => $author->id]);
 
         DB::enableQueryLog();
@@ -283,7 +283,7 @@ class ThroughRelationTest extends TestCase
         $this->assertSame(['B'], $second->pluck('title')->all());
     }
 
-    public function test_through_relation_subquery_where_does_not_go_stale(): void
+    public function test_through_relation_subquery_where_does_not_serve_outdated_data(): void
     {
         $country = Country::create(['name' => 'Australia']);
         $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
