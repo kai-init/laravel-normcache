@@ -30,11 +30,14 @@ final class NormalizedThroughReader
 
         $lockToken = $this->versions->buildLockToken();
 
-        $result = $this->luaFetchMultiVersionedThrough(
-            $versionKeys, $scheduledKeys, $queryPrefix,
-            $this->keys->buildingPrefix($classKey),
-            $this->keys->wakePrefix($classKey),
-            $hash, $lockToken
+        $result = $this->store->script(
+            RedisScripts::get('fetch_versioned_payload'),
+            array_merge($versionKeys, $scheduledKeys, [
+                $queryPrefix,
+                $this->keys->buildingPrefix($classKey),
+                $this->keys->wakePrefix($classKey),
+            ]),
+            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
 
         $seg = (string) ($result[1] ?? '');
@@ -174,15 +177,4 @@ final class NormalizedThroughReader
         return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
     }
 
-    private function luaFetchMultiVersionedThrough(
-        array $versionKeys, array $scheduledKeys,
-        string $queryPrefix, string $buildingPrefix, string $wakePrefix,
-        string $hash, string $lockToken,
-    ): mixed {
-        return $this->store->script(
-            RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
-        );
-    }
 }

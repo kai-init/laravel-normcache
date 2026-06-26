@@ -225,19 +225,7 @@ final class ResultCacheReader
         array $versionKeys, array $expectedVersions,
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
-        return (bool) $this->store->script(
-            RedisScripts::get('store_many_versioned'),
-            array_merge($versionKeys, [
-                $key,
-                $buildingKey ?? '',
-                $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),
-            ]),
-            array_merge(
-                [(string) count($versionKeys), '1', (string) $ttl],
-                $expectedVersions,
-                [$this->store->serialize($payload), $buildingToken ?? '', (string) $this->wakeTokenCount]
-            )
-        );
+        return $this->storeMany([$key => $payload], $ttl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
     }
 
     public function waitForBuild(

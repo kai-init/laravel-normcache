@@ -27,37 +27,6 @@ final class VersionTracker
         );
     }
 
-    public function resolveVersions(array $versionKeys, array $scheduledKeys): array
-    {
-        $script = RedisScripts::get('fetch_version_with_cooldown');
-        $nowMs = (string) (int) floor(microtime(true) * 1000);
-        $map = [];
-
-        foreach ($versionKeys as $i => $verKey) {
-            if (!isset($map[$verKey])) {
-                $map[$verKey] = (string) ($this->store->script($script, [$verKey, $scheduledKeys[$i]], [$nowMs]) ?? '0');
-            }
-        }
-
-        return $map;
-    }
-
-    public function expectedVersions(array $versionKeys, array $resolvedVersions): array
-    {
-        return array_map(static fn($key) => $resolvedVersions[$key], $versionKeys);
-    }
-
-    public function versionsStillMatch(array $versionKeys, array $expectedVersions): bool
-    {
-        foreach ($this->store->getRawMany($versionKeys) as $i => $version) {
-            if ((string) ($version ?? '0') !== (string) $expectedVersions[$i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     public function buildLockToken(): string
     {
         return hash('xxh3', microtime(true) . mt_rand());
