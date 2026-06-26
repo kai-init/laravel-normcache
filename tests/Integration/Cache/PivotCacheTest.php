@@ -114,10 +114,6 @@ class PivotCacheTest extends TestCase
 
     public function test_pivot_eager_load_falls_back_to_database_when_build_lock_is_held_elsewhere(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('Pivot caching does not claim a build lock in slotting mode — see ClusterModeTest');
-        }
-
         $author = Author::create(['name' => 'Alice']);
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);

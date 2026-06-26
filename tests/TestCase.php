@@ -90,7 +90,6 @@ abstract class TestCase extends OrchestraTestCase
                     'password' => env('REDIS_PASSWORD', null),
                 ];
             }, $nodes));
-            $app['config']->set('normcache.cluster', true);
         } else {
             $app['config']->set('database.redis.normcache-test', [
                 'host' => env('REDIS_HOST', '127.0.0.1'),
@@ -104,7 +103,6 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
-        $app['config']->set('normcache.slotting', true);
         $app['config']->set('normcache.ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
         $app['config']->set('normcache.cooldown', 0);
@@ -144,7 +142,9 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function redisKeys(string $pattern = '*'): array
     {
-        return $this->cacheManager()->getStore()->scanPattern($pattern);
+        $store = $this->cacheManager()->getStore();
+
+        return $store->scanPattern($store->hashTagPrefix() . $pattern);
     }
 
     protected function cacheManager(): CacheManager
@@ -156,12 +156,11 @@ abstract class TestCase extends OrchestraTestCase
     {
         $this->app->forgetInstance(CacheManager::class);
         $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => $enabled]);
     }
 
     /**
      * Build a standalone CacheManager (not bound in the container) for tests
-     * that need specific construction parameters like cooldown or slotting.
+     * that need specific construction parameters like cooldown.
      */
     protected function buildManager(
         string $connection = 'normcache-test',
@@ -169,7 +168,6 @@ abstract class TestCase extends OrchestraTestCase
         ?int $queryTtl = null,
         string $keyPrefix = 'test:',
         int $cooldown = 0,
-        bool $cluster = false,
         bool $enabled = true,
         bool $dispatchEvents = true,
         bool $fallback = false,
@@ -177,16 +175,14 @@ abstract class TestCase extends OrchestraTestCase
         int $buildingLockTtl = 5,
         int $stampedeWaitMs = 200,
         int $stampedeWakeTokens = 64,
-        bool $slotting = false,
     ): CacheManager {
         $ttl ??= (int) config('normcache.ttl');
         $queryTtl ??= (int) config('normcache.query_ttl');
 
-        $slottingActive = $cluster && $slotting;
-        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
+        $store = new RedisStore($connection, $keyPrefix, '{nc}:', $stampedeWakeTokens);
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens);
         $engine = new ExecutionEngine;
         $config = new CacheConfig(
             ttl: $ttl,
@@ -195,15 +191,13 @@ abstract class TestCase extends OrchestraTestCase
             enabled: $enabled,
             fallbackEnabled: $fallback,
             dispatchEvents: $dispatchEvents,
-            cluster: $cluster,
-            slotting: $slottingActive,
             stampedeWakeTokens: $stampedeWakeTokens,
         );
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens),
             resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens),
             result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,

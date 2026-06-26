@@ -18,18 +18,12 @@ class RedisStoreTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->store = new RedisStore('normcache-test', 'test:', false, '{nc}:');
+        $this->store = new RedisStore('normcache-test', 'test:', '{nc}:');
     }
 
     public function test_it_prefixes_keys(): void
     {
         $this->assertSame('{nc}:test:foo', $this->store->prefix('foo'));
-    }
-
-    public function test_it_prefixes_keys_in_slotting_mode(): void
-    {
-        $store = new RedisStore('normcache-test', 'test:', true, '');
-        $this->assertSame('test:foo', $store->prefix('foo'));
     }
 
     public function test_it_can_set_and_get_values(): void
@@ -73,7 +67,7 @@ class RedisStoreTest extends TestCase
 
     public function test_release_building_pushes_configured_wake_tokens(): void
     {
-        $store = new RedisStore('normcache-test', 'test:', false, '{nc}:', wakeTokenCount: 3);
+        $store = new RedisStore('normcache-test', 'test:', '{nc}:', wakeTokenCount: 3);
 
         $store->set('build:tokens', '1', 60);
         $store->releaseBuilding('build:tokens', 'wake:tokens');
@@ -97,23 +91,6 @@ class RedisStoreTest extends TestCase
 
         $this->assertSame('bar', $this->store->get('foo'));
         $this->assertSame('qux', $this->store->get('baz'));
-    }
-
-    public function test_it_can_group_keys_by_tag_in_slotting_mode(): void
-    {
-        $store = new RedisStore('normcache-test', 'test:', true, '');
-
-        $method = new \ReflectionMethod(RedisStore::class, 'groupByTag');
-        $method->setAccessible(true);
-
-        $keys = ['{user:1}:a', '{user:1}:b', '{user:2}:c', 'no-tag'];
-        $groups = $method->invoke($store, $keys);
-
-        $this->assertSame([
-            'user:1' => ['{user:1}:a', '{user:1}:b'],
-            'user:2' => ['{user:2}:c'],
-            'no-tag' => ['no-tag'],
-        ], $groups);
     }
 
     public function test_it_can_run_lua_scripts(): void
@@ -330,8 +307,8 @@ class RedisStoreTest extends TestCase
                         $cursor = 0;
 
                         return match ([$pattern, $node, $prev]) {
-                            ['laravel:test:model:*', 'node-a', null] => ['laravel:test:model:{testing:posts}:1'],
-                            ['laravel:test:query:*', 'node-b', null] => ['laravel:test:query:{testing:posts}:v1:abc'],
+                            ['laravel:{nc}:test:model:*', 'node-a', null] => ['laravel:{nc}:test:model:{testing:posts}:1'],
+                            ['laravel:{nc}:test:query:*', 'node-b', null] => ['laravel:{nc}:test:query:{testing:posts}:v1:abc'],
                             default => [],
                         };
                     }
@@ -346,15 +323,15 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', 'test:', true);
+        $store = new RedisStore('normcache-test', 'test:', '{nc}:');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $deleted = $store->flushByPatterns(['model:*', 'query:*']);
 
         $this->assertSame(2, $deleted);
         $this->assertSame([
-            ['test:model:{testing:posts}:1'],
-            ['test:query:{testing:posts}:v1:abc'],
+            ['{nc}:test:model:{testing:posts}:1'],
+            ['{nc}:test:query:{testing:posts}:v1:abc'],
         ], $connection->unlinked);
     }
 

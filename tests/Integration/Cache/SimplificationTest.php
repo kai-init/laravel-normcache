@@ -34,10 +34,6 @@ class SimplificationTest extends TestCase
 
     public function test_simple_query_with_depends_on_keeps_normalized_cache_and_honors_versions(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('In slotting mode, multi-dependency queries route to result cache — see ClusterModeTest');
-        }
-
         $author = Author::create(['name' => 'Alice']);
 
         // First call - miss

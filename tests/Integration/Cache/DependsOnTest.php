@@ -19,10 +19,6 @@ class DependsOnTest extends TestCase
 {
     public function test_simple_depends_on_query_uses_normalized_query_cache(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('In slotting mode, multi-dependency queries route to result cache — see ClusterModeTest');
-        }
-
         Author::create(['name' => 'Alice']);
 
         Author::query()->dependsOn([Post::class])->get();

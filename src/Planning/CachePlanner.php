@@ -233,16 +233,12 @@ final class CachePlanner
         }
 
         if ($normalizable && $dependencies->safe) {
-            $isMultiDependency = count($dependencies->models) + count($dependencies->tables) > 1;
-
-            if (!NormCache::isSlotting() || !$isMultiDependency) {
-                return CachePlan::normalized(
-                    operation: $context->operation,
-                    dependencies: $dependencies,
-                    columns: $context->columns,
-                    primaryKeys: $inspection->primaryKeys,
-                );
-            }
+            return CachePlan::normalized(
+                operation: $context->operation,
+                dependencies: $dependencies,
+                columns: $context->columns,
+                primaryKeys: $inspection->primaryKeys,
+            );
         }
 
         if ($dependencies->safe && $this->hasResultDependencies($context, $hasExplicit)) {

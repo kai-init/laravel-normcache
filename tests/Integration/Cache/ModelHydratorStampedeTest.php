@@ -14,7 +14,7 @@ class ModelHydratorStampedeTest extends TestCase
 {
     public function test_acquires_lock_fetches_once_caches_and_releases_lock_on_miss(): void
     {
-        $manager = $this->buildManager(buildingLockTtl: 5, stampedeWaitMs: 50, slotting: true);
+        $manager = $this->buildManager(buildingLockTtl: 5, stampedeWaitMs: 50);
         $author = Author::create(['name' => 'Alice']);
         $this->evictModelCache(Author::class, $author->id);
 
@@ -38,7 +38,7 @@ class ModelHydratorStampedeTest extends TestCase
 
     public function test_falls_back_to_database_without_releasing_someone_elses_lock(): void
     {
-        $manager = $this->buildManager(buildingLockTtl: 5, stampedeWaitMs: 50, slotting: true);
+        $manager = $this->buildManager(buildingLockTtl: 5, stampedeWaitMs: 50);
         $author = Author::create(['name' => 'Bob']);
         $this->evictModelCache(Author::class, $author->id);
 

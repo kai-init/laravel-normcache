@@ -11,9 +11,8 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
 /**
- * Verifies that cross-model cache operations produce correct results when cluster mode is
- * enabled. A single Redis instance is used — the per-slot version resolution logic is
- * exercised even though all keys happen to land on the same node.
+ * Verifies that cross-model cache operations produce correct results when a Redis Cluster
+ * connection is used. All keys share the {nc} hash tag, preserving Lua atomicity.
  */
 class ClusterModeTest extends TestCase
 {
@@ -23,30 +22,16 @@ class ClusterModeTest extends TestCase
         $this->setClusterMode(true);
     }
 
-    // dependsOn result cache
+    // dependsOn — multi-dependency normalized query stays normalized (no forced result cache)
 
-    public function test_multi_dependency_normalized_query_routes_to_result_when_slotting_is_enabled(): void
+    public function test_multi_dependency_normalized_query_stays_normalized_in_cluster_mode(): void
     {
         Author::create(['name' => 'Alice']);
 
         Author::query()->dependsOn([Post::class, Tag::class])->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'), 'Slotting mode should avoid multi-dependency normalized query keys');
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Slotting mode should use result cache for multi-dependency queries');
-    }
-
-    public function test_multi_dependency_normalized_query_stays_normalized_when_cluster_uses_fixed_hash_tag(): void
-    {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
-
-        Author::create(['name' => 'Alice']);
-
-        Author::query()->dependsOn([Post::class, Tag::class])->get();
-
-        $this->assertNotEmpty($this->redisKeys('{nc}:test:query:*'), 'Fixed hash tag cluster mode should allow normalized query keys');
-        $this->assertEmpty($this->redisKeys('{nc}:test:result:*'), 'Fixed hash tag cluster mode should not force result cache');
+        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'Multi-dependency normalized queries should use query keys in cluster mode');
+        $this->assertEmpty($this->redisKeys('test:result:*'), 'Multi-dependency normalized queries should not fall back to result cache');
     }
 
     public function test_depends_on_returns_correct_results_in_cluster_mode(): void
@@ -271,8 +256,8 @@ class ClusterModeTest extends TestCase
             }
 
             $this->cacheManager()->flushTag(Author::class, 'homepage');
-            $this->assertEmpty($this->redisKeys('test:query:{testing:authors}:homepage:*'));
-            $this->assertNotEmpty($this->redisKeys('test:query:{testing:posts}:homepage:*'));
+            $this->assertEmpty($this->redisKeys('test:query:{testing:authors}:homepage:*'), 'author tagged keys must be gone');
+            $this->assertNotEmpty($this->redisKeys('test:query:{testing:posts}:homepage:*'), 'post tagged keys must survive');
 
             $this->cacheManager()->flushTagAcrossModels('homepage');
             $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'));
@@ -325,25 +310,8 @@ class ClusterModeTest extends TestCase
 
     // Version key TTL — incrementAndExpire cluster-safety (ensures hash tags route EVAL to owning node)
 
-    public function test_version_key_has_ttl_in_slotting_cluster_mode(): void
+    public function test_version_key_has_ttl_in_cluster_mode(): void
     {
-        Author::create(['name' => 'Alice']);
-
-        $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->classKey(Author::class);
-        $verKey = 'test:ver:{' . $classKey . '}:';
-
-        $ttl = $redis->ttl($verKey);
-
-        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in slotting cluster mode');
-    }
-
-    public function test_version_key_has_ttl_in_fixed_hashtag_cluster_mode(): void
-    {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
-
         Author::create(['name' => 'Alice']);
 
         $redis = Redis::connection('normcache-test');
@@ -352,7 +320,7 @@ class ClusterModeTest extends TestCase
 
         $ttl = $redis->ttl($verKey);
 
-        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in fixed-hashtag cluster mode');
+        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in cluster mode');
     }
 
     // count() pagination total (getNamespacedCache)

@@ -72,16 +72,6 @@ class CacheManager
         return $this->config->dispatchEvents;
     }
 
-    public function isCluster(): bool
-    {
-        return $this->config->cluster;
-    }
-
-    public function isSlotting(): bool
-    {
-        return $this->config->slotting;
-    }
-
     public function enable(): void
     {
         $this->config->enabled = true;

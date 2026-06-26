@@ -11,8 +11,6 @@ use NormCache\Values\QueryCacheResult;
 
 final class NormalizedCacheReader
 {
-    use SlottedQueryAccess;
-
     public function __construct(
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
@@ -20,7 +18,6 @@ final class NormalizedCacheReader
         private readonly int $queryTtl,
         private readonly int $buildingLockTtl,
         private readonly int $stampedeWaitMs = 200,
-        private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
     ) {}
 
@@ -50,10 +47,6 @@ final class NormalizedCacheReader
         $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
 
-        if ($this->usesSlotting()) {
-            return $this->fetchSlotted($classKey, $hash, $queryPrefix, $versionKeys, $scheduledKeys, $lockToken);
-        }
-
         $result = $this->luaFetchMultiVersionedQuery(
             $versionKeys, $scheduledKeys, $queryPrefix,
             $this->keys->buildingPrefix($classKey), $classKey,
@@ -72,37 +65,6 @@ final class NormalizedCacheReader
             $ids,
             is_array($ids) ? $this->fetchModels($classKey, $ids) : null
         );
-    }
-
-    private function fetchSlotted(
-        string $classKey, string $hash, string $queryPrefix,
-        array $versionKeys, array $scheduledKeys, string $lockToken
-    ): QueryCacheResult {
-        [$queryKey, $buildingKey, $expectedVersions] = $this->resolveSlotKeys($classKey, $hash, $queryPrefix, $versionKeys, $scheduledKeys);
-
-        $raw = $this->store->getRaw($queryKey);
-        $parsed = $raw !== null ? json_decode($raw, true) : null;
-
-        if ($raw !== null && (!is_array($parsed) || !array_is_list($parsed))) {
-            $this->store->delete($queryKey);
-            $parsed = null;
-        }
-
-        if ($parsed === null) {
-            if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-                $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
-
-                return new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
-            }
-
-            return new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-        }
-
-        if (empty($parsed)) {
-            return new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []);
-        }
-
-        return new QueryCacheResult(CacheStatus::Hit, $queryKey, $parsed, $this->fetchModels($classKey, $parsed), null, null, [], []);
     }
 
     private function resolveIds(array $result, string $queryKey): array
@@ -182,12 +144,6 @@ final class NormalizedCacheReader
         $ids = array_map('strval', $ids);
         $ttl ??= $this->queryTtl;
 
-        if ($this->usesSlotting() && !empty($versionKeys)) {
-            $this->storeSlottingGuarded($key, json_encode($ids, JSON_THROW_ON_ERROR), $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
-
-            return;
-        }
-
         if (!empty($versionKeys)) {
             $this->store->script(
                 RedisScripts::get('store_many_versioned'),
@@ -228,6 +184,17 @@ final class NormalizedCacheReader
         $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
 
         return $result->status === CacheStatus::Building ? null : $result;
+    }
+
+    private function fetchModels(string $classKey, array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $modelPrefix = $this->keys->modelPrefix($classKey);
+
+        return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
     }
 
     private function luaFetchVersionedQuery(string $classKey, string $hash, ?string $tag, string $lockToken): mixed

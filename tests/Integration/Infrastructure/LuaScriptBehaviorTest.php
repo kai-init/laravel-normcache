@@ -24,7 +24,7 @@ class LuaScriptBehaviorTest extends TestCase
 
     private function setKey(string $key, string $value, ?int $ttl = null): void
     {
-        $prefixed = 'test:' . $key;
+        $prefixed = '{nc}:test:' . $key;
         $ttl !== null
             ? $this->redis()->setex($prefixed, $ttl, $value)
             : $this->redis()->set($prefixed, $value);
@@ -32,7 +32,7 @@ class LuaScriptBehaviorTest extends TestCase
 
     private function getKey(string $key): mixed
     {
-        return $this->redis()->get('test:' . $key);
+        return $this->redis()->get('{nc}:test:' . $key);
     }
 
     private function authorQueryHash(): string

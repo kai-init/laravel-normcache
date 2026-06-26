@@ -15,8 +15,6 @@ final class CacheConfig
         public bool $enabled = true,
         public bool $fallbackEnabled = true,
         public bool $dispatchEvents = true,
-        public bool $cluster = false,
-        public bool $slotting = false,
         public int $stampedeWakeTokens = 64,
     ) {}
 }

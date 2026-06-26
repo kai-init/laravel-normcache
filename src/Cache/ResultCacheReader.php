@@ -19,14 +19,8 @@ final class ResultCacheReader
         private readonly int $queryTtl,
         private readonly int $buildingLockTtl,
         private readonly int $stampedeWaitMs,
-        private readonly bool $slotting = false,
         private readonly int $wakeTokenCount = 64,
     ) {}
-
-    private function usesSlotting(): bool
-    {
-        return $this->store->requiresSlotting($this->slotting);
-    }
 
     public function fetch(
         string $modelClass, array $depClasses, string $hash,
@@ -38,22 +32,6 @@ final class ResultCacheReader
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $lockToken = $this->versions->buildLockToken();
-
-        if ($this->usesSlotting()) {
-            $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
-            $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
-            $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
-            $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
-            $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
-
-            $payload = $this->store->get($resultKey);
-            $status = $payload !== null ? LuaStatus::Hit : LuaStatus::Miss;
-
-            return $this->toResultCacheResult(
-                $status, $resultKey, $buildingKey, $lockToken, $wakeKey,
-                $versionKeys, $expectedVersions, $payload, true, false
-            );
-        }
 
         $result = $this->luaFetchVersionedResult(
             $versionKeys, $scheduledKeys,
@@ -120,23 +98,6 @@ final class ResultCacheReader
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass);
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($relatedKey, [], [$pivotTableKey ?? $parentKey]);
-
-        if ($this->usesSlotting()) {
-            $resolvedVersions = $this->versions->resolveVersions($versionKeys, $scheduledKeys);
-            $seg = $this->keys->versionSegment($versionKeys, $resolvedVersions);
-            $expectedVersions = $this->versions->expectedVersions($versionKeys, $resolvedVersions);
-            $pivotKeys = [];
-            foreach ($parentIds as $id) {
-                $pivotKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
-            }
-
-            return new PivotCacheResult(
-                $seg,
-                array_combine($parentIds, $this->store->getMany($pivotKeys)),
-                $versionKeys,
-                $expectedVersions,
-            );
-        }
 
         $seg = $this->luaFetchVersionedPivotSegment($versionKeys, $scheduledKeys);
 
@@ -241,18 +202,7 @@ final class ResultCacheReader
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
         if (empty($entries)) {
-            if ($this->usesSlotting() && $buildingKey !== null) {
-                $this->store->releaseBuilding($buildingKey, $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey), $buildingToken);
-            }
-
             return true;
-        }
-
-        if ($this->usesSlotting()) {
-            return $this->storeSlottingGuarded(
-                fn() => $this->store->setMany($entries, $ttl),
-                $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken
-            );
         }
 
         return (bool) $this->store->script(
@@ -275,13 +225,6 @@ final class ResultCacheReader
         array $versionKeys, array $expectedVersions,
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
     ): bool {
-        if ($this->usesSlotting()) {
-            return $this->storeSlottingGuarded(
-                fn() => $this->store->set($key, $payload, $ttl),
-                $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken
-            );
-        }
-
         return (bool) $this->store->script(
             RedisScripts::get('store_many_versioned'),
             array_merge($versionKeys, [
@@ -295,31 +238,6 @@ final class ResultCacheReader
                 [$this->store->serialize($payload), $buildingToken ?? '', (string) $this->wakeTokenCount]
             )
         );
-    }
-
-    private function storeSlottingGuarded(
-        callable $write,
-        array $versionKeys, array $expectedVersions,
-        ?string $buildingKey, ?string $wakeKey, ?string $buildingToken
-    ): bool {
-        if ($buildingKey !== null && $buildingToken !== null && $this->store->getRaw($buildingKey) !== $buildingToken) {
-            return false;
-        }
-
-        $written = $this->versions->versionsStillMatch($versionKeys, $expectedVersions);
-        if ($written) {
-            $write();
-        }
-
-        if ($buildingKey !== null) {
-            $this->store->releaseBuilding(
-                $buildingKey,
-                $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey),
-                $buildingToken
-            );
-        }
-
-        return $written;
     }
 
     public function waitForBuild(

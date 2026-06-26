@@ -22,8 +22,7 @@ final class RedisStore
     public function __construct(
         string $redisConnection,
         private string $keyPrefix,
-        private bool $slotting,
-        private string $slotPrefix = '',
+        private string $hashTagPrefix = '{nc}:',
         private int $wakeTokenCount = 64,
     ) {
         $this->serializer = new CacheSerializer;
@@ -36,8 +35,12 @@ final class RedisStore
 
     public function prefix(string $key): string
     {
-        // Follow the expected order: slotPrefix then keyPrefix.
-        return $this->slotPrefix . $this->keyPrefix . $key;
+        return $this->hashTagPrefix . $this->keyPrefix . $key;
+    }
+
+    public function hashTagPrefix(): string
+    {
+        return $this->hashTagPrefix;
     }
 
     public function get(string $key): mixed
@@ -157,51 +160,27 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    // MGET in input order, with null for missing keys; groups by hash tag when slotting or on a real cluster.
+    // MGET in input order, with null for missing keys. All keys share the same hash tag so
+    // a plain MGET is safe on Redis Cluster (same slot guaranteed).
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {
             return [];
         }
 
-        if (!$this->slotting && !$this->isCluster()) {
-            $prefixed = [];
-            foreach ($keys as $key) {
-                $prefixed[] = $this->prefix($key);
-            }
-
-            $raw = $this->connection->mget($prefixed);
-            $values = [];
-
-            foreach ($raw as $i => $value) {
-                $values[$i] = $this->mgetValue($value, $unserialize);
-            }
-
-            return $values;
-        }
-
-        $results = [];
-
-        foreach ($this->groupByTag($keys) as $groupKeys) {
-            $prefixed = [];
-            foreach ($groupKeys as $key) {
-                $prefixed[] = $this->prefix($key);
-            }
-
-            $raw = $this->connection->mget($prefixed);
-
-            $idx = 0;
-            foreach ($groupKeys as $key) {
-                $results[$key] = $this->mgetValue($raw[$idx++], $unserialize);
-            }
-        }
-
-        $ordered = [];
+        $prefixed = [];
         foreach ($keys as $key) {
-            $ordered[] = $results[$key];
+            $prefixed[] = $this->prefix($key);
         }
 
-        return $ordered;
+        $raw = $this->connection->mget($prefixed);
+        $values = [];
+
+        foreach ($raw as $i => $value) {
+            $values[$i] = $this->mgetValue($value, $unserialize);
+        }
+
+        return $values;
     }
 
     private function mgetValue(mixed $value, bool $unserialize): mixed
@@ -315,18 +294,8 @@ final class RedisStore
             return;
         }
 
-        if (!$this->slotting) {
-            foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
-                $this->del($chunk);
-            }
-
-            return;
-        }
-
-        foreach ($this->groupByTag($prefixedKeys) as $keys) {
-            foreach (array_chunk($keys, 1000) as $chunk) {
-                $this->del($chunk);
-            }
+        foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
+            $this->del($chunk);
         }
     }
 
@@ -367,20 +336,10 @@ final class RedisStore
         }
 
         if ($this->isCluster()) {
-            $tag = null;
-            foreach ($prefixedKeys as $pk) {
-                $hashTag = $this->hashTag($pk, includeBraces: true);
-                if ($hashTag !== null) {
-                    $tag = $hashTag;
-                    break;
-                }
-            }
-
-            if ($tag !== null) {
-                foreach ($prefixedKeys as $i => $prefixedKey) {
-                    if ($prefixedKey === '') {
-                        $prefixedKeys[$i] = "{$tag}:null";
-                    }
+            $nullKey = rtrim($this->hashTagPrefix, ':') . ':null';
+            foreach ($prefixedKeys as $i => $prefixedKey) {
+                if ($prefixedKey === '') {
+                    $prefixedKeys[$i] = $nullKey;
                 }
             }
         }
@@ -450,46 +409,10 @@ final class RedisStore
             || $this->connection instanceof PredisClusterConnection;
     }
 
-    public function requiresSlotting(bool $slottingEnabled): bool
-    {
-        return $slottingEnabled || ($this->isCluster() && $this->slotPrefix === '');
-    }
-
     private function isPhpRedis(): bool
     {
         // PhpRedisClusterConnection extends PhpRedisConnection, so this covers both.
         return $this->connection instanceof PhpRedisConnection;
-    }
-
-    private function groupByTag(array $keys): array
-    {
-        $groups = [];
-
-        foreach ($keys as $key) {
-            $tag = $this->hashTag($key) ?? $key;
-            $groups[$tag][] = $key;
-        }
-
-        return $groups;
-    }
-
-    private function hashTag(string $key, bool $includeBraces = false): ?string
-    {
-        $start = strpos($key, '{');
-
-        if ($start === false) {
-            return null;
-        }
-
-        $end = strpos($key, '}', $start + 1);
-
-        if ($end === false || $end === $start + 1) {
-            return null;
-        }
-
-        return $includeBraces
-            ? substr($key, $start, $end - $start + 1)
-            : substr($key, $start + 1, $end - $start - 1);
     }
 
     private function connectionPrefix(): string
