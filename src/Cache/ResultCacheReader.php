@@ -123,12 +123,12 @@ final class ResultCacheReader
         }
 
         $result = $this->store->script(
-            RedisScripts::get('fetch_pivot_build_status'),
-            [...$missedKeys, $lockKey, $wakeKey],
+            RedisScripts::get('fetch_batch_build_status'),
+            [...$missedKeys, $lockKey, '', $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );
 
-        $raw = $this->store->unserializeMany($result[2] ?? []);
+        $raw = $this->store->unserializeMany($result[3] ?? []);
         foreach ($missed as $i => $id) {
             if (isset($raw[$i]) && is_array($raw[$i])) {
                 $data[$id] = $raw[$i];
@@ -260,9 +260,9 @@ final class ResultCacheReader
         string $hash, string $lockSuffix, string $lockToken
     ): array {
         return $this->store->script(
-            RedisScripts::get('fetch_versioned_result'),
+            RedisScripts::get('fetch_versioned_payload'),
             array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
+            [$hash, $lockSuffix, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }
 

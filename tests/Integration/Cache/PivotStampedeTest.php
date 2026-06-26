@@ -84,8 +84,8 @@ class PivotStampedeTest extends TestCase
         $pivotKey = 'pivot:missing:1';
 
         $result = $store->script(
-            RedisScripts::get('fetch_pivot_build_status'),
-            [$pivotKey, $lockKey, $wakeKey],
+            RedisScripts::get('fetch_batch_build_status'),
+            [$pivotKey, $lockKey, '', $wakeKey],
             ['token', '5']
         );
 
@@ -106,8 +106,8 @@ class PivotStampedeTest extends TestCase
         $store->setNxEx($lockKey, 'other-token', 5);
 
         $result = $store->script(
-            RedisScripts::get('fetch_pivot_build_status'),
-            [$pivotKey, $lockKey, $wakeKey],
+            RedisScripts::get('fetch_batch_build_status'),
+            [$pivotKey, $lockKey, '', $wakeKey],
             ['token', '5']
         );
 
@@ -128,8 +128,8 @@ class PivotStampedeTest extends TestCase
         $store->setRaw($pivotKey, $store->serialize([['id' => 1]]), 60);
 
         $result = $store->script(
-            RedisScripts::get('fetch_pivot_build_status'),
-            [$pivotKey, $lockKey, $wakeKey],
+            RedisScripts::get('fetch_batch_build_status'),
+            [$pivotKey, $lockKey, '', $wakeKey],
             ['token', '5']
         );
 

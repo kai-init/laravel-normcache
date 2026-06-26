@@ -50,7 +50,7 @@ class CacheKeyBuilder
     {
         $base = self::K_QUERY . ':{' . $classKey . '}:';
 
-        return $tag !== null ? $base . $tag . ':v' : $base . 'v';
+        return $tag !== null ? $base . $tag . ':' : $base;
     }
 
     public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
@@ -138,7 +138,7 @@ class CacheKeyBuilder
 
     public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash): string
     {
-        return $this->queryPrefix($classKey, $tag) . $version . ':' . $hash;
+        return $this->queryPrefix($classKey, $tag) . 'v' . $version . ':' . $hash;
     }
 
     public function namespacedKey(string $namespace, string $classKey, ?string $tag, string $seg, string $hash): string

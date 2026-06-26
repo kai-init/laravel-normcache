@@ -180,9 +180,9 @@ final class NormalizedThroughReader
         string $hash, string $lockToken,
     ): mixed {
         return $this->store->script(
-            RedisScripts::get('fetch_multi_versioned_query'),
+            RedisScripts::get('fetch_versioned_payload'),
             array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
     }
 }

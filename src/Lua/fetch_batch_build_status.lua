@@ -1,15 +1,15 @@
--- Re-checks still-missing model keys and atomically claims the build lock if anything's still
--- missing. See ModelHydrator::fetchMissedStatus().
+-- Re-checks still-missing model/pivot keys and atomically claims the build lock if
+-- anything is still missing. Used for both model attributes (with version) and pivot
+-- payloads (without version).
 --
--- KEYS[1..n] = model keys to recheck
--- KEYS[n+1]  = lock key
--- KEYS[n+2]  = model-class version key
+-- KEYS[1..n] = model/pivot keys to re-check
+-- KEYS[n+1]  = building lock key
+-- KEYS[n+2]  = version key ('' to skip — pivot case)
 -- KEYS[n+3]  = wake key
 -- ARGV[1] = lock token
--- ARGV[2] = lock ttl
+-- ARGV[2] = lock TTL in seconds
 --
--- Returns: {status, lockTokenOrFalse, version, rawValues} — rawValues are the raw MGET results
--- in KEYS[1..n] order; the caller unserializes/hydrates them.
+-- Returns: {status, lockTokenOrFalse, version|false, rawValues}
 local n = #KEYS - 3
 local chunkSize = 500
 local values = {}
@@ -34,7 +34,7 @@ for start = 1, n, chunkSize do
     end
 end
 
-local version = redis.call('GET', KEYS[n + 2]) or '0'
+local version = KEYS[n + 2] ~= '' and (redis.call('GET', KEYS[n + 2]) or '0') or false
 
 if allHit then
     return {'hit', false, version, values}

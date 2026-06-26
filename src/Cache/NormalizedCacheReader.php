@@ -24,33 +24,18 @@ final class NormalizedCacheReader
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult
     {
         $classKey = $this->keys->classKey($modelClass);
-
-        if (empty($depClasses) && empty($depTableKeys)) {
-            $lockToken = $this->versions->buildLockToken();
-            $result = $this->luaFetchVersionedQuery($classKey, $hash, $tag, $lockToken);
-
-            $version = $this->versions->normalizeVersion($result[1]);
-            $queryKey = $this->keys->queryKey($classKey, $tag, $version, $hash);
-            $buildingKey = $this->keys->buildingPrefix($classKey) . $hash;
-            [$status, $ids] = $this->resolveIds($result, $queryKey);
-
-            return $this->toQueryResult(
-                $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
-                [$this->keys->verKey($classKey)],
-                [(string) $version],
-                $ids,
-                is_array($ids) ? $this->fetchModels($classKey, $ids) : null
-            );
-        }
-
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $queryPrefix = $this->keys->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
 
-        $result = $this->luaFetchMultiVersionedQuery(
-            $versionKeys, $scheduledKeys, $queryPrefix,
-            $this->keys->buildingPrefix($classKey), $classKey,
-            $hash, $lockToken
+        $result = $this->store->script(
+            RedisScripts::get('fetch_versioned_payload'),
+            array_merge($versionKeys, $scheduledKeys, [
+                $queryPrefix,
+                $this->keys->buildingPrefix($classKey),
+                $this->keys->wakePrefix($classKey),
+            ]),
+            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
         );
 
         $seg = (string) ($result[1] ?? '');
@@ -195,28 +180,5 @@ final class NormalizedCacheReader
         $modelPrefix = $this->keys->modelPrefix($classKey);
 
         return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
-    }
-
-    private function luaFetchVersionedQuery(string $classKey, string $hash, ?string $tag, string $lockToken): mixed
-    {
-        return $this->store->script(RedisScripts::get('fetch_versioned_query'), [
-            $this->keys->verKey($classKey),
-            $this->keys->scheduledKey($classKey),
-            $this->keys->queryPrefix($classKey, $tag),
-            $this->keys->buildingPrefix($classKey),
-            $this->keys->wakePrefix($classKey),
-        ], [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]);
-    }
-
-    private function luaFetchMultiVersionedQuery(
-        array $versionKeys, array $scheduledKeys,
-        string $queryPrefix, string $buildingPrefix, string $classKey,
-        string $hash, string $lockToken,
-    ): mixed {
-        return $this->store->script(
-            RedisScripts::get('fetch_multi_versioned_query'),
-            array_merge($versionKeys, $scheduledKeys, [$queryPrefix, $buildingPrefix, $this->keys->wakePrefix($classKey)]),
-            [$hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
-        );
     }
 }

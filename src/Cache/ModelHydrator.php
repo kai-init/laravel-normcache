@@ -177,7 +177,7 @@ final class ModelHydrator
         $fetchKeys = $this->modelKeysFor($classKey, $idsToFetch);
 
         $result = $this->store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [...$fetchKeys, $lockKey, $this->keys->verKey($classKey), $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );

@@ -73,7 +73,7 @@ class ModelHydratorStampedeTest extends TestCase
         $modelKey = $keys->modelPrefix($classKey) . 'missing-id';
 
         $result = $store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
@@ -95,7 +95,7 @@ class ModelHydratorStampedeTest extends TestCase
         $store->setNxEx($lockKey, 'other-token', 5);
 
         $result = $store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
@@ -118,7 +118,7 @@ class ModelHydratorStampedeTest extends TestCase
         $store->set($modelKey, ['id' => 1, 'name' => 'Present'], 60);
 
         $result = $store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
@@ -174,7 +174,7 @@ class ModelHydratorStampedeTest extends TestCase
         }
 
         $result = $store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
@@ -213,7 +213,7 @@ class ModelHydratorStampedeTest extends TestCase
         }
 
         $result = $store->script(
-            RedisScripts::get('fetch_model_build_status'),
+            RedisScripts::get('fetch_batch_build_status'),
             [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
