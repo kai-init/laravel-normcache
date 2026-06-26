@@ -55,7 +55,7 @@ final class ResultCacheReader
             );
         }
 
-        [$status, $seg, $payload, $claimedToken] = $this->luaFetchVersionedResult(
+        $result = $this->luaFetchVersionedResult(
             $versionKeys, $scheduledKeys,
             $this->keys->namespacedPrefix($namespace, $classKey, $tag),
             $this->keys->buildingPrefix($classKey),
@@ -63,13 +63,15 @@ final class ResultCacheReader
             $hash, $lockSuffix, $lockToken
         );
 
+        $status = LuaStatus::fromLua($result[0] ?? null);
+        $seg = (string) ($result[1] ?? '');
         $resultKey = $this->keys->namespacedKey($namespace, $classKey, $tag, $seg, $hash);
         $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $lockSuffix);
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         return $this->toResultCacheResult(
-            $status, $resultKey, $buildingKey, (string) ($claimedToken ?? $lockToken), $wakeKey,
-            $versionKeys, $expectedVersions, $payload, false, $status === LuaStatus::Miss
+            $status, $resultKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken), $wakeKey,
+            $versionKeys, $expectedVersions, $result[2] ?? null, false, $status === LuaStatus::Miss
         );
     }
 
@@ -339,13 +341,11 @@ final class ResultCacheReader
         string $resultPrefix, string $buildingPrefix, string $wakePrefix,
         string $hash, string $lockSuffix, string $lockToken
     ): array {
-        $result = $this->store->script(
+        return $this->store->script(
             RedisScripts::get('fetch_versioned_result'),
             array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
             [$hash, $lockSuffix, (string) $this->buildingLockTtl, (string) (int) floor(microtime(true) * 1000), $lockToken]
         );
-
-        return [LuaStatus::fromLua($result[0] ?? null), (string) ($result[1] ?? ''), $result[2] ?? null, $result[3] ?? null];
     }
 
     private function luaFetchVersionedPivotSegment(array $versionKeys, array $scheduledKeys): string

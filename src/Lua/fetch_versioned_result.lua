@@ -12,7 +12,7 @@
 -- ARGV[4]          = current timestamp in ms
 -- ARGV[5]          = building lock token
 --
--- Returns: {'hit', seg, payload} | {'miss', seg, false, token} | {'building', seg, false}
+-- Returns: {'hit', seg, payload} | {'miss', seg, token} | {'building', seg}
 
 local n = (#KEYS - 3) / 2
 local now = tonumber(ARGV[4])
@@ -49,7 +49,7 @@ end
 local building_key = building_prefix .. seg .. ':' .. ARGV[2]
 if redis.call('SET', building_key, ARGV[5], 'NX', 'EX', tonumber(ARGV[3])) then
     redis.call('DEL', wake_prefix .. ARGV[2])
-    return {'miss', seg, false, ARGV[5]}
+    return {'miss', seg, ARGV[5]}
 end
 
-return {'building', seg, false}
+return {'building', seg}
