@@ -214,10 +214,9 @@ final class RedisStore
     }
 
     // CAS write of model attribute entries; releases the build lock as part of the write when given.
-    public function setManyTrackedIfVersion(
+    public function setManyIfVersion(
         array $attrsByKey,
         int $ttl,
-        string $memberKey,
         string $versionKey,
         int $expectedVersion,
         ?string $buildingKey = null,
@@ -232,7 +231,7 @@ final class RedisStore
             return;
         }
 
-        $script = RedisScripts::get('store_many_tracked_if_version');
+        $script = RedisScripts::get('store_many_if_version');
         $chunks = array_chunk($attrsByKey, 500, true);
         $lastChunk = array_key_last($chunks);
 
@@ -242,7 +241,7 @@ final class RedisStore
             $this->script(
                 $script,
                 array_merge(
-                    [$versionKey, $memberKey, $isLast ? ($buildingKey ?? '') : '', $isLast ? ($wakeKey ?? '') : ''],
+                    [$versionKey, $isLast ? ($buildingKey ?? '') : '', $isLast ? ($wakeKey ?? '') : ''],
                     array_keys($chunk)
                 ),
                 array_merge(
@@ -252,40 +251,6 @@ final class RedisStore
                 )
             );
         }
-    }
-
-    // Delete a key and remove it from a tracking set in one atomic operation.
-    public function deleteFromSet(string $key, string $memberKey): void
-    {
-        $this->script(
-            "redis.call('DEL', KEYS[1]); redis.call('SREM', KEYS[2], KEYS[1])",
-            [$key, $memberKey]
-        );
-    }
-
-    public function sscanAndFlushSet(string $prefixedMemberKey): void
-    {
-        // SSCAN members already include the connection prefix; strip it before asyncDel adds it again.
-        $connectionPrefix = $this->connectionPrefix();
-
-        $this->executeScan(
-            function (&$cursor) use ($prefixedMemberKey) {
-                return $this->isPhpRedis()
-                    ? $this->connection->client()->sscan($prefixedMemberKey, $cursor, '*', 1000)
-                    : $this->connection->sscan($prefixedMemberKey, $cursor, ['match' => '*', 'count' => 1000]);
-            },
-            function ($members) use ($connectionPrefix) {
-                if ($connectionPrefix !== '') {
-                    $members = array_map(
-                        static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
-                        $members
-                    );
-                }
-                $this->asyncDel($members);
-            }
-        );
-
-        $this->connection->del($prefixedMemberKey);
     }
 
     public function asyncDel(array $prefixedKeys): void

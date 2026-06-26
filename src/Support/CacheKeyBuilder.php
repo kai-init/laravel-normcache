@@ -4,6 +4,7 @@ namespace NormCache\Support;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\ModelHydrator;
 
 class CacheKeyBuilder
 {
@@ -16,8 +17,6 @@ class CacheKeyBuilder
     public const K_MODEL = 'model';
 
     public const K_BUILDING = 'building';
-
-    public const K_MEMBERS = 'members:model';
 
     public const K_COUNT = 'count';
 
@@ -37,13 +36,15 @@ class CacheKeyBuilder
 
     private static array $deletedAtColumns = [];
 
+    private static array $singleDepPairs = [];
+
     // -------------------------------------------------------------------------
     // Prefixes
     // -------------------------------------------------------------------------
 
-    public function modelPrefix(string $classKey): string
+    public function modelPrefix(string $classKey, int|string $version): string
     {
-        return self::K_MODEL . ':{' . $classKey . '}:';
+        return self::K_MODEL . ':{' . $classKey . '}:v' . $version . ':';
     }
 
     public function queryPrefix(string $classKey, ?string $tag = null): string
@@ -93,6 +94,9 @@ class CacheKeyBuilder
         self::$classKeys = [];
         self::$prototypes = [];
         self::$deletedAtColumns = [];
+        self::$singleDepPairs = [];
+
+        ModelHydrator::reset();
     }
 
     public static function prototype(string $class): Model
@@ -120,11 +124,6 @@ class CacheKeyBuilder
     public function scheduledKey(string $classKey): string
     {
         return self::K_SCHEDULED . ':{' . $classKey . '}:';
-    }
-
-    public function membersKey(string $classKey): string
-    {
-        return self::K_MEMBERS . ':{' . $classKey . '}';
     }
 
     public function wakeKey(string $classKey, string $lockSuffix): string
@@ -156,10 +155,7 @@ class CacheKeyBuilder
         return $this->pivotPrefix($parentKey, $relatedKey, $relation, $constraintHash, $seg) . $parentId;
     }
 
-    public function modelKey(string $modelClass, string $id): string
-    {
-        return $this->modelPrefix($this->classKey($modelClass)) . $id;
-    }
+
 
     // -------------------------------------------------------------------------
     // Versioning Helpers
@@ -206,7 +202,7 @@ class CacheKeyBuilder
     public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = []): array
     {
         if ($depClasses === [] && $depTableKeys === []) {
-            return [
+            return self::$singleDepPairs[$classKey] ??= [
                 [$this->verKey($classKey)],
                 [$this->scheduledKey($classKey)],
             ];

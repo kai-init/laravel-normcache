@@ -45,7 +45,10 @@ final class NormalizedThroughReader
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
         [$status, $ids, $throughKeys] = $this->resolveIdsAndThroughKeys($result, $queryKey);
-        $models = $status->hasPayload() ? $this->fetchModels($classKey, $ids) : null;
+        $modelVersion = $status->hasPayload()
+            ? $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)))
+            : 0;
+        $models = $status->hasPayload() ? $this->fetchModels($classKey, $modelVersion, $ids) : null;
 
         return $this->toThroughResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
@@ -166,13 +169,13 @@ final class NormalizedThroughReader
         return $result->status === CacheStatus::Building ? null : $result;
     }
 
-    private function fetchModels(string $classKey, array $ids): array
+    private function fetchModels(string $classKey, int $modelVersion, array $ids): array
     {
         if ($ids === []) {
             return [];
         }
 
-        $modelPrefix = $this->keys->modelPrefix($classKey);
+        $modelPrefix = $this->keys->modelPrefix($classKey, $modelVersion);
 
         return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
     }

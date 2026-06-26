@@ -122,22 +122,31 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function modelCacheEntry(string $class, mixed $id): mixed
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
+        $classKey = $manager->classKey($class);
+        $version = $manager->currentVersion($class);
+        $key = 'model:{' . $classKey . '}:v' . $version . ':' . $id;
 
-        return $this->cacheManager()->getStore()->get($key);
+        return $manager->getStore()->get($key);
     }
 
     protected function evictModelCache(string $class, mixed $id): void
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
-        $this->cacheManager()->getStore()->delete($key);
+        $manager = $this->cacheManager();
+        $classKey = $manager->classKey($class);
+        $version = $manager->currentVersion($class);
+        $key = 'model:{' . $classKey . '}:v' . $version . ':' . $id;
+        $manager->getStore()->delete($key);
     }
 
     protected function prefixedModelKey(string $class, mixed $id): string
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
+        $classKey = $manager->classKey($class);
+        $version = $manager->currentVersion($class);
+        $key = 'model:{' . $classKey . '}:v' . $version . ':' . $id;
 
-        return $this->cacheManager()->getStore()->prefix($key);
+        return $manager->getStore()->prefix($key);
     }
 
     protected function redisKeys(string $pattern = '*'): array

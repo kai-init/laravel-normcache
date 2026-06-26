@@ -14,7 +14,7 @@ class RedisScriptsTest extends TestCase
         'fetch_versioned_payload',
         'fetch_versioned_pivot',
         'release_building',
-        'store_many_tracked_if_version',
+        'store_many_if_version',
         'store_many_versioned',
     ];
 
