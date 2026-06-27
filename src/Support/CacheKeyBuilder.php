@@ -272,6 +272,12 @@ class CacheKeyBuilder
         $model = self::prototype($class);
         $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
+        if (str_contains($connection, ':')) {
+            throw new \InvalidArgumentException(
+                "NormCache connection name [{$connection}] must not contain a colon; the class key is colon-delimited."
+            );
+        }
+
         return "{$connection}:{$model->getTable()}";
     }
 
