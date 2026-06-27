@@ -4,7 +4,6 @@ namespace NormCache\Planning;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
@@ -38,6 +37,7 @@ final class CachePlanner
 
     public function __construct(
         private readonly QueryAnalyzer $analyzer = new QueryAnalyzer,
+        private readonly DependencyResolver $dependencies = new DependencyResolver,
     ) {}
 
     public function plan(
@@ -88,7 +88,7 @@ final class CachePlanner
 
         return CachePlan::bypass(
             operation: $context->operation,
-            dependencies: $this->baseDependencies($builder, $model, $context),
+            dependencies: $this->dependencies->resolveBase($builder, $model, $context),
             reasons: $reasons,
             bypassReasons: ['opted_out' => $reasons],
         );
@@ -103,7 +103,7 @@ final class CachePlanner
 
         return CachePlan::bypass(
             operation: $context->operation,
-            dependencies: $this->baseDependencies($builder, $model, $context),
+            dependencies: $this->dependencies->resolveBase($builder, $model, $context),
             reasons: $reasons,
             bypassReasons: ['safety' => $reasons],
         );
@@ -205,7 +205,7 @@ final class CachePlanner
 
         $dependencies = $this->dependsOnPrimaryModelOnly($hasExplicit, $inferred, $hasDependencyBypass, $hasContextDependencyBypass)
             ? DependencySet::singleModel($modelClass)
-            : $this->resolveDependencies(
+            : $this->dependencies->resolve(
                 $modelClass,
                 $context,
                 $inspection,
@@ -243,7 +243,7 @@ final class CachePlanner
 
         if ($dependencies->safe && $this->hasResultDependencies($context, $hasExplicit)) {
             if ($this->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
-                $this->warnUnderDeclaredDependencies($modelTable, $base, $inspection, $dependencies);
+                $this->dependencies->warnUnderDeclared($modelTable, $base, $inspection, $dependencies);
                 $reasons = ['join_result_requires_explicit_select'];
 
                 return CachePlan::bypass(
@@ -282,7 +282,7 @@ final class CachePlanner
         $inferred = $context->inferredDependencies;
 
         $inspection = $this->inspect($model, $base, $context, collectTables: $explain);
-        $dependencies = $this->resolveDependencies(
+        $dependencies = $this->dependencies->resolve(
             $modelClass,
             $context,
             $inspection,
@@ -402,71 +402,6 @@ final class CachePlanner
             && !$hasContextDependencyBypass;
     }
 
-    private function resolveDependencies(
-        string $modelClass,
-        CachePlanContext $context,
-        ?QueryInspection $inspection,
-        ?array $explicitModels,
-        array $explicitTables,
-        bool $hasExplicit,
-    ): DependencySet {
-        $inferred = $context->inferredDependencies;
-
-        if ($hasExplicit) {
-            return new DependencySet(
-                models: array_keys(array_flip([
-                    $modelClass,
-                    ...$inferred->models,
-                    ...($explicitModels ?? []),
-                ])),
-                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
-            );
-        }
-
-        $hasDependencyBypass = $inspection !== null && $inspection->hasDependencyBypass();
-
-        // EXISTS_WHERE-only bypasses are exempt if inferred dependencies are safe and non-empty.
-        $exempt = $hasDependencyBypass
-            && $inspection->hasOnlyExistsDependencyBypass()
-            && $inferred->safe
-            && !$inferred->hasNoDependencies();
-
-        if (($hasDependencyBypass && !$exempt)
-            || isset($context->contextReasons['dependency'])
-            || !$inferred->safe) {
-            return DependencySet::unsafe(array_values(array_unique([
-                ...($inspection !== null ? BypassReasons::fromInspection($inspection)['dependency'] ?? [] : []),
-                ...($context->contextReasons['dependency'] ?? []),
-                ...$inferred->reasons,
-            ])));
-        }
-
-        if ($inferred->hasNoDependencies()) {
-            return DependencySet::singleModel($modelClass);
-        }
-
-        return new DependencySet(
-            models: array_keys(array_flip([$modelClass, ...$inferred->models])),
-            tables: $inferred->tables,
-        );
-    }
-
-    // Dependencies for plans made without query inspection (global/transaction bypasses).
-    private function baseDependencies(
-        CacheableBuilder $builder,
-        Model $model,
-        CachePlanContext $context,
-    ): DependencySet {
-        return $this->resolveDependencies(
-            $model::class,
-            $context,
-            null,
-            $builder->explicitDependencies(),
-            $builder->explicitTableDependencies(),
-            $builder->hasExplicitDependencies(),
-        );
-    }
-
     private function safetyBypass(
         CachePlanContext $context,
         QueryInspection $inspection,
@@ -516,7 +451,7 @@ final class CachePlanner
         DependencySet $dependencies,
         bool $normalizable = false,
     ): CachePlan {
-        $this->warnUnderDeclaredDependencies($modelTable, $base, $inspection, $dependencies);
+        $this->dependencies->warnUnderDeclared($modelTable, $base, $inspection, $dependencies);
 
         return CachePlan::result(
             operation: $context->operation,
@@ -561,57 +496,6 @@ final class CachePlanner
             ])),
             bypassReasons: $bypassReasons,
         );
-    }
-
-    private function warnUnderDeclaredDependencies(
-        string $modelTable,
-        QueryBuilder $base,
-        QueryInspection $inspection,
-        DependencySet $dependencies,
-    ): void {
-        if (!config('app.debug', false)) {
-            return;
-        }
-
-        if ($inspection->has(QueryInspection::EXISTS_WHERE | QueryInspection::SUBQUERY_WHERE)) {
-            Log::warning(
-                'NormCache Warning: Query contains subquery/exists predicates. NormCache cannot verify all touched tables; ensure dependsOn()/dependsOnTables() includes every table read by the subquery.'
-            );
-        }
-
-        $this->checkDependencyCompleteness(
-            $inspection->tables ?? $this->analyzer->extractTables($base, $modelTable),
-            $dependencies,
-            $modelTable,
-        );
-    }
-
-    private function checkDependencyCompleteness(array $queryTables, DependencySet $dependencies, string $baseTable): void
-    {
-        // Strip connection prefix from table keys ("conn:table" → "table").
-        $declaredTables = array_map(
-            fn($key) => str_contains($key, ':') ? substr($key, strpos($key, ':') + 1) : $key,
-            $dependencies->tables
-        );
-
-        // Map declared models to their tables.
-        foreach ($dependencies->models as $modelClass) {
-            if (class_exists($modelClass) && is_subclass_of($modelClass, Model::class)) {
-                $declaredTables[] = (new $modelClass)->getTable();
-            }
-        }
-
-        // Add the base table to the declared list so it doesn't get flagged as missing.
-        $declaredTables[] = $baseTable;
-
-        $missing = array_diff($queryTables, $declaredTables);
-
-        if (!empty($missing)) {
-            $tablesStr = implode(', ', $missing);
-            Log::warning(
-                "NormCache Warning: Query touches tables ({$tablesStr}) that are not present in dependsOn()/dependsOnTables(). This is an under-declared dependency and can lead to outdated cache reads."
-            );
-        }
     }
 
     private function mergedBypassReasons(

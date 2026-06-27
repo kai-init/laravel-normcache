@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Support\Facades\Log;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Planning\CachePlanner;
+use NormCache\Planning\DependencyResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -23,13 +24,13 @@ class CachePlannerTest extends TestCase
                 return str_contains($message, 'under-declared dependency') && str_contains($message, 'authors');
             });
 
-        $planner = new CachePlanner;
+        $resolver = new DependencyResolver;
 
         $dependencies = new DependencySet([], ['posts']);
 
-        $reflection = new \ReflectionMethod($planner, 'checkDependencyCompleteness');
+        $reflection = new \ReflectionMethod($resolver, 'checkDependencyCompleteness');
         $reflection->setAccessible(true);
-        $reflection->invoke($planner, ['posts', 'authors'], $dependencies, 'posts');
+        $reflection->invoke($resolver, ['posts', 'authors'], $dependencies, 'posts');
     }
 
     public function test_successful_hot_plan_does_not_build_reason_strings(): void

@@ -5,57 +5,22 @@ namespace NormCache\Cache;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
-use NormCache\Support\RedisStore;
 use NormCache\Values\ThroughCacheResult;
 
-final class NormalizedThroughReader
+/**
+ * Through cache (HasManyThrough/HasOneThrough): payload is `{i, t}` — id list
+ * plus per-row through keys Eloquent needs to re-stitch the relation.
+ *
+ * @extends NormalizedReader<ThroughCacheResult>
+ */
+final class NormalizedThroughReader extends NormalizedReader
 {
-    public function __construct(
-        private readonly RedisStore $store,
-        private readonly CacheKeyBuilder $keys,
-        private readonly VersionTracker $versions,
-        private readonly int $queryTtl,
-        private readonly int $buildingLockTtl,
-        private readonly int $stampedeWaitMs = 200,
-        private readonly int $wakeTokenCount = 64,
-    ) {}
-
-    public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ThroughCacheResult
+    protected function queryPrefix(string $classKey, ?string $tag): string
     {
-        $classKey = $this->keys->classKey($modelClass);
-
-        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
-        $queryPrefix = $this->keys->namespacedPrefix(CacheKeyBuilder::K_THROUGH, $classKey, $tag);
-
-        $lockToken = $this->versions->buildLockToken();
-
-        $result = $this->store->script(
-            RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $scheduledKeys, [
-                $queryPrefix,
-                $this->keys->buildingPrefix($classKey),
-                $this->keys->wakePrefix($classKey),
-            ]),
-            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
-        );
-
-        $seg = (string) ($result[1] ?? '');
-        $queryKey = $queryPrefix . $seg . ':' . $hash;
-        $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
-        $expectedVersions = $this->keys->versionsFromSegment($seg);
-        [$status, $ids, $throughKeys] = $this->resolveIdsAndThroughKeys($result, $queryKey);
-        $modelVersion = $status->hasPayload() ? (int) ($expectedVersions[0] ?? 0) : 0;
-        $models = $status->hasPayload() ? $this->fetchModels($classKey, $modelVersion, $ids) : null;
-
-        return $this->toThroughResult(
-            $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
-            $versionKeys, $expectedVersions,
-            $ids, $throughKeys, $models
-        );
+        return $this->keys->namespacedPrefix(CacheKeyBuilder::K_THROUGH, $classKey, $tag);
     }
 
-    private function resolveIdsAndThroughKeys(array $result, string $queryKey): array
+    protected function decodePayload(array $result, string $queryKey): array
     {
         $status = LuaStatus::fromLua($result[0] ?? null);
 
@@ -82,19 +47,19 @@ final class NormalizedThroughReader
         return [LuaStatus::Hit, $parsed['i'], $parsed['t']];
     }
 
-    private function toThroughResult(
+    protected function buildResult(
         LuaStatus $status,
         string $queryKey,
         string $buildingKey,
         string $lockToken,
         array $versionKeys,
         array $expectedVersions,
-        ?array $ids,
-        ?array $throughKeys,
-        ?array $models
+        ?array $ids = null,
+        mixed $extra = null,
+        ?array $models = null,
     ): ThroughCacheResult {
         return match ($status) {
-            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $throughKeys, $models ?? [], null, null, [], []),
+            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $extra, $models ?? [], null, null, [], []),
             LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $queryKey, [], [], [], null, null, [], []),
             LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
             LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
@@ -102,80 +67,19 @@ final class NormalizedThroughReader
         };
     }
 
-    private function claimMissAfterCorruptHit(
-        string $queryKey,
-        string $buildingKey,
-        string $lockToken,
-        array $versionKeys,
-        array $expectedVersions
-    ): ThroughCacheResult {
-        if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-            $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
-
-            return new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
-        }
-
-        return new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []);
-    }
-
     public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
     {
         $ids = array_map('strval', $ids);
-        $ttl ??= $this->queryTtl;
-
         $payload = json_encode(['i' => $ids, 't' => $throughKeys], JSON_THROW_ON_ERROR);
 
-        if (!empty($versionKeys)) {
-            $this->store->script(
-                RedisScripts::get('store_versioned_payload'),
-                array_merge($versionKeys, [
-                    $key,
-                    $buildingKey ?? '',
-                    $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '',
-                ]),
-                array_merge(
-                    [(string) count($versionKeys), '1', (string) $ttl],
-                    $expectedVersions,
-                    [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
-                )
-            );
-
-            return;
-        }
-
-        if ($buildingKey === null) {
-            return;
-        }
-
-        $this->store->storeRawAndRelease(
+        $this->storePayload(
             $key,
             $payload,
             $ttl,
             $buildingKey,
-            $this->keys->buildingToWakeKey($buildingKey),
-            $buildingToken
+            $versionKeys,
+            $expectedVersions,
+            $buildingToken,
         );
     }
-
-    public function waitForBuild(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): ?ThroughCacheResult
-    {
-        $classKey = $this->keys->classKey($modelClass);
-        $this->store->brpop($this->keys->wakePrefix($classKey) . $hash, $this->stampedeWaitMs / 1000.0);
-
-        $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
-
-        return $result->status === CacheStatus::Building ? null : $result;
-    }
-
-    private function fetchModels(string $classKey, int $modelVersion, array $ids): array
-    {
-        if ($ids === []) {
-            return [];
-        }
-
-        $modelPrefix = $this->keys->modelPrefix($classKey, $modelVersion);
-
-        return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
-    }
-
 }
