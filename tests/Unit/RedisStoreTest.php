@@ -171,7 +171,7 @@ class RedisStoreTest extends TestCase
         }
 
         $result = $this->store->script(
-            RedisScripts::get('store_many_if_version'),
+            RedisScripts::get('store_model_attrs'),
             array_merge(['ver:script-large', '', ''], $keys),
             array_merge(['1', '60', (string) $count, ''], $values)
         );

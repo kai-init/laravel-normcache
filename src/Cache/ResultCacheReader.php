@@ -206,7 +206,7 @@ final class ResultCacheReader
         }
 
         return (bool) $this->store->script(
-            RedisScripts::get('store_many_versioned'),
+            RedisScripts::get('store_versioned_payload'),
             array_merge($versionKeys, array_keys($entries), [
                 $buildingKey ?? '',
                 $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),

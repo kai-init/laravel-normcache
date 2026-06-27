@@ -14,8 +14,8 @@ class RedisScriptsTest extends TestCase
         'fetch_versioned_payload',
         'fetch_versioned_pivot',
         'release_building',
-        'store_many_if_version',
-        'store_many_versioned',
+        'store_model_attrs',
+        'store_versioned_payload',
     ];
 
     protected function setUp(): void
@@ -51,9 +51,9 @@ class RedisScriptsTest extends TestCase
         $this->assertArrayHasKey('fetch_versioned_payload', $stored);
         $this->assertSame($first, $stored['fetch_versioned_payload']);
 
-        RedisScripts::get('store_many_versioned');
+        RedisScripts::get('store_versioned_payload');
         $stored = $cache->getValue();
-        $this->assertArrayHasKey('store_many_versioned', $stored);
+        $this->assertArrayHasKey('store_versioned_payload', $stored);
     }
 
     public function test_it_throws_exception_for_missing_scripts(): void

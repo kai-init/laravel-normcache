@@ -122,7 +122,7 @@ final class RedisStore
         }
 
         return (bool) $this->script(
-            RedisScripts::get('store_many_versioned'),
+            RedisScripts::get('store_versioned_payload'),
             [$key, $buildingKey, $wakeKey ?? ''],
             ['0', '1', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
         );
@@ -231,7 +231,7 @@ final class RedisStore
             return;
         }
 
-        $script = RedisScripts::get('store_many_if_version');
+        $script = RedisScripts::get('store_model_attrs');
         $chunks = array_chunk($attrsByKey, 500, true);
         $lastChunk = array_key_last($chunks);
 

@@ -127,7 +127,7 @@ final class NormalizedThroughReader
 
         if (!empty($versionKeys)) {
             $this->store->script(
-                RedisScripts::get('store_many_versioned'),
+                RedisScripts::get('store_versioned_payload'),
                 array_merge($versionKeys, [
                     $key,
                     $buildingKey ?? '',
