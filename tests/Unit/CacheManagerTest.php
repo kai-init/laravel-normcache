@@ -62,7 +62,7 @@ class CacheManagerTest extends TestCase
         $manager = $this->buildManager(cooldown: 60);
         $redis = Redis::connection('normcache-test');
         $classKey = $manager->classKey(Author::class);
-        $scheduledKey = "{nc}:test:scheduled:{{$classKey}}:";
+        $scheduledKey = "{nc}:test:scheduled:{$classKey}:";
 
         $manager->invalidateVersion(new Author);
         $firstDueAt = $redis->get($scheduledKey);
@@ -81,7 +81,7 @@ class CacheManagerTest extends TestCase
 
         $classKey = $manager->classKey(Author::class);
         Redis::connection('normcache-test')->set(
-            "{nc}:test:scheduled:{{$classKey}}:",
+            "{nc}:test:scheduled:{$classKey}:",
             (string) ((int) floor(microtime(true) * 1000) - 1000)
         );
 
@@ -90,7 +90,7 @@ class CacheManagerTest extends TestCase
 
     public function test_current_version_always_reads_from_redis(): void
     {
-        Redis::connection('normcache-test')->set('{nc}:test:ver:{' . DB::getDefaultConnection() . ':posts}:', 99);
+        Redis::connection('normcache-test')->set('{nc}:test:ver:' . DB::getDefaultConnection() . ':posts:', 99);
 
         $this->assertSame(99, $this->manager->currentVersion(Post::class));
     }
@@ -102,10 +102,10 @@ class CacheManagerTest extends TestCase
         $classKey = $manager->classKey(Author::class);
         $store = $manager->getStore();
 
-        $store->set("ver:{{$classKey}}:", 7, 60);
+        $store->set("ver:{$classKey}:", 7, 60);
 
-        $this->assertSame("{nc}:test:ver:{{$classKey}}:", $store->prefix("ver:{{$classKey}}:"));
-        $this->assertSame('7', Redis::connection('normcache-test')->get("{nc}:test:ver:{{$classKey}}:"));
+        $this->assertSame("{nc}:test:ver:{$classKey}:", $store->prefix("ver:{$classKey}:"));
+        $this->assertSame('7', Redis::connection('normcache-test')->get("{nc}:test:ver:{$classKey}:"));
         $this->assertSame(7, $manager->currentVersion(Author::class));
     }
 
@@ -202,7 +202,7 @@ class CacheManagerTest extends TestCase
 
         $model = new Author;
         $classKey = $manager->classKey(Author::class);
-        $scheduledKey = "{nc}:test:scheduled:{{$classKey}}:";
+        $scheduledKey = "{nc}:test:scheduled:{$classKey}:";
         $redis = Redis::connection('normcache-test');
 
         $manager->invalidateVersion($model);

@@ -88,11 +88,11 @@ class RelationOverrideTest extends TestCase
         $this->assertCount(1, $first->posts);
 
         $this->assertNotEmpty(
-            $this->redisKeys('test:query:{*posts}:*'),
+            $this->redisKeys('test:query:*:posts:*'),
             'Expected simple hasMany eager load to populate the normalized query-id cache'
         );
         $this->assertNotEmpty(
-            $this->redisKeys('test:model:{*posts}:*'),
+            $this->redisKeys('test:model:*:posts:*'),
             'Expected simple hasMany eager load to populate the per-id model cache'
         );
     }

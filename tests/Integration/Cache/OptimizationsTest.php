@@ -103,7 +103,7 @@ class OptimizationsTest extends TestCase
 
         $store = app('normcache')->getStore();
         Redis::connection(config('normcache.connection'))->set(
-            $store->prefix("query:{{$classKey}}:v{$version}:{$hash}"),
+            $store->prefix("query:{$classKey}:v{$version}:{$hash}"),
             '{not-json'
         );
 
@@ -114,7 +114,7 @@ class OptimizationsTest extends TestCase
         $this->assertCount(1, $found);
         Event::assertDispatched(QueryCacheMiss::class);
 
-        $raw = app('normcache')->getStore()->getRaw("query:{{$classKey}}:v{$version}:{$hash}");
+        $raw = app('normcache')->getStore()->getRaw("query:{$classKey}:v{$version}:{$hash}");
         $repaired = $raw !== null ? json_decode($raw, true) : null;
         $this->assertSame([(string) $found->first()->id], $repaired);
     }

@@ -62,7 +62,7 @@ class ProjectionBypassTest extends TestCase
             ->map(fn($p) => $p->author?->name)->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:query:{authors}:*'), 'bypassed BelongsTo must not write query cache');
+        $this->assertEmpty($this->redisKeys('test:query:testing:authors:*'), 'bypassed BelongsTo must not write query cache');
     }
 
     public function test_belongs_to_bypasses_when_owner_key_is_aliased(): void
@@ -80,7 +80,7 @@ class ProjectionBypassTest extends TestCase
             ->get()->map(fn($p) => $p->author?->name)->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:query:{authors}:*'));
+        $this->assertEmpty($this->redisKeys('test:query:testing:authors:*'));
     }
 
     // ── BelongsToMany ─────────────────────────────────────────────────────────

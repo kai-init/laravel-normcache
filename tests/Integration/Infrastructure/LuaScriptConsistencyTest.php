@@ -41,7 +41,7 @@ class LuaScriptConsistencyTest extends TestCase
     private function bumpVersionInRedis(string $classKey, int $times = 1): void
     {
         for ($i = 0; $i < $times; $i++) {
-            $this->redis()->incr("{nc}:test:ver:{{$classKey}}:");
+            $this->redis()->incr("{nc}:test:ver:{$classKey}:");
         }
     }
 
@@ -61,31 +61,31 @@ class LuaScriptConsistencyTest extends TestCase
     {
         $ck = NormCache::classKey(Author::class);
 
-        $this->setKey("ver:{{$ck}}:", '3');
+        $this->setKey("ver:{$ck}:", '3');
         $pastMs = (int) (microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$ck}}:", (string) $pastMs);
+        $this->setKey("scheduled:{$ck}:", (string) $pastMs);
 
         $this->setCooldown(1);
 
         $version = NormCache::currentVersion(Author::class);
 
         $this->assertSame(4, $version);
-        $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
+        $this->assertNull($this->getKey("scheduled:{$ck}:"));
     }
 
     public function test_non_numeric_scheduled_key_cleaned_on_standalone_version_resolution(): void
     {
         $ck = NormCache::classKey(Author::class);
 
-        $this->setKey("ver:{{$ck}}:", '3');
-        $this->setKey("scheduled:{{$ck}}:", 'garbage');
+        $this->setKey("ver:{$ck}:", '3');
+        $this->setKey("scheduled:{$ck}:", 'garbage');
 
         $this->setCooldown(1);
 
         $version = NormCache::currentVersion(Author::class);
 
         $this->assertSame(3, $version);
-        $this->assertNull($this->getKey("scheduled:{{$ck}}:"));
+        $this->assertNull($this->getKey("scheduled:{$ck}:"));
     }
 
     // dependsOn blob — building key causes DB fallthrough
@@ -99,7 +99,7 @@ class LuaScriptConsistencyTest extends TestCase
         $authorVer = NormCache::currentVersion(Author::class);
         $postVer = NormCache::currentVersion(Post::class);
 
-        $this->setKey("building:{{$ck}}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
+        $this->setKey("building:{$ck}:v{$authorVer}:v{$postVer}:{$hash}", '1', 30);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -133,14 +133,14 @@ class LuaScriptConsistencyTest extends TestCase
 
         $postClassKey = NormCache::classKey(Post::class);
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{$postClassKey}:", (string) $pastMs);
 
         // Post version is still 0 (never bumped) — the scheduled key is what triggers the bump
-        $this->assertSame('0', (string) ($this->getKey("ver:{{$postClassKey}}:") ?? '0'));
+        $this->assertSame('0', (string) ($this->getKey("ver:{$postClassKey}:") ?? '0'));
 
         $this->assertCount(0, $query());
-        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
-        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
+        $this->assertSame('1', (string) $this->getKey("ver:{$postClassKey}:"));
+        $this->assertNull($this->getKey("scheduled:{$postClassKey}:"));
     }
 
     public function test_result_cache_write_is_skipped_when_dependency_version_changes_during_build(): void
@@ -231,7 +231,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
+        $pivotKey = "pivot:{$authorKey}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
 
         $this->bumpVersionInRedis($pivotTableKey);
 
@@ -253,7 +253,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{{$authorKey}}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
+        $pivotKey = "pivot:{$authorKey}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
 
         $this->bumpVersionInRedis($tagKey);
 
@@ -290,11 +290,11 @@ class LuaScriptConsistencyTest extends TestCase
 
         $postClassKey = NormCache::classKey(Post::class);
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{$postClassKey}:", (string) $pastMs);
 
         $this->assertSame(0, $query());
-        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
-        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
+        $this->assertSame('1', (string) $this->getKey("ver:{$postClassKey}:"));
+        $this->assertNull($this->getKey("scheduled:{$postClassKey}:"));
     }
 
     public function test_cooldown_due_invalidation_applies_to_pivot_cache(): void
@@ -315,7 +315,7 @@ class LuaScriptConsistencyTest extends TestCase
 
         $pivotTableKey = NormCache::tableKey($author->getConnection()->getName(), 'author_tag');
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$pivotTableKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{$pivotTableKey}:", (string) $pastMs);
 
         $this->assertSame(['new'], $author->tags()->get()->pluck('name')->all());
     }
@@ -336,11 +336,11 @@ class LuaScriptConsistencyTest extends TestCase
 
         $postClassKey = NormCache::classKey(Post::class);
         $pastMs = (int) floor(microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{{$postClassKey}}:", (string) $pastMs);
+        $this->setKey("scheduled:{$postClassKey}:", (string) $pastMs);
 
         $this->assertSame(3, $query()->posts_count);
-        $this->assertSame('1', (string) $this->getKey("ver:{{$postClassKey}}:"));
-        $this->assertNull($this->getKey("scheduled:{{$postClassKey}}:"));
+        $this->assertSame('1', (string) $this->getKey("ver:{$postClassKey}:"));
+        $this->assertNull($this->getKey("scheduled:{$postClassKey}:"));
     }
 
     public function test_late_writer_does_not_commit_outdated_version_as_current(): void

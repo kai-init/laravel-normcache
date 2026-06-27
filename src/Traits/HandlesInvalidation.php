@@ -115,11 +115,11 @@ trait HandlesInvalidation
         $classKey = $this->keys->classKey($modelClass);
 
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RESULT . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_THROUGH . ':{' . $classKey . '}:' . $tag . ':*',
+            CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*',
         ]);
     }
 

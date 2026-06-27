@@ -256,8 +256,8 @@ class ClusterModeTest extends TestCase
             }
 
             $this->cacheManager()->flushTag(Author::class, 'homepage');
-            $this->assertEmpty($this->redisKeys('test:query:{testing:authors}:homepage:*'), 'author tagged keys must be gone');
-            $this->assertNotEmpty($this->redisKeys('test:query:{testing:posts}:homepage:*'), 'post tagged keys must survive');
+            $this->assertEmpty($this->redisKeys('test:query:testing:authors:homepage:*'), 'author tagged keys must be gone');
+            $this->assertNotEmpty($this->redisKeys('test:query:testing:posts:homepage:*'), 'post tagged keys must survive');
 
             $this->cacheManager()->flushTagAcrossModels('homepage');
             $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'));
@@ -316,7 +316,7 @@ class ClusterModeTest extends TestCase
 
         $redis = Redis::connection('normcache-test');
         $classKey = $this->cacheManager()->classKey(Author::class);
-        $verKey = '{nc}:test:ver:{' . $classKey . '}:';
+        $verKey = '{nc}:test:ver:' . $classKey . ':';
 
         $ttl = $redis->ttl($verKey);
 

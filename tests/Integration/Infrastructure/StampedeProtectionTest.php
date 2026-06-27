@@ -51,12 +51,12 @@ class StampedeProtectionTest extends TestCase
 
         Author::get();
 
-        $this->redis()->incr("{nc}:test:ver:{{$ck}}:");
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
         $newVersion = NormCache::currentVersion(Author::class);
 
-        $this->redis()->set("{nc}:test:building:{{$ck}}:v{$newVersion}:{$hash}", '1');
-        $this->redis()->lpush("{nc}:test:wake:{{$ck}}:{$hash}", '1');
-        $this->setKey("query:{{$ck}}:v{$newVersion}:{$hash}", json_encode([(string) Author::first()->id], JSON_THROW_ON_ERROR), 60);
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
+        $this->redis()->lpush("{nc}:test:wake:{$ck}:{$hash}", '1');
+        $this->setKey("query:{$ck}:v{$newVersion}:{$hash}", json_encode([(string) Author::first()->id], JSON_THROW_ON_ERROR), 60);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -76,9 +76,9 @@ class StampedeProtectionTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        $this->redis()->incr("{nc}:test:ver:{{$ck}}:");
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
         $newVersion = NormCache::currentVersion(Author::class);
-        $this->redis()->set("{nc}:test:building:{{$ck}}:v{$newVersion}:{$hash}", '1');
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -98,9 +98,9 @@ class StampedeProtectionTest extends TestCase
         $ck = NormCache::classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        $this->redis()->incr("{nc}:test:ver:{{$ck}}:");
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
         $newVersion = NormCache::currentVersion(Author::class);
-        $this->redis()->set("{nc}:test:building:{{$ck}}:v{$newVersion}:{$hash}", '1');
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -130,7 +130,7 @@ class StampedeProtectionTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(2, $results);
-        $this->assertGreaterThan(0, $this->redis()->llen("{nc}:test:wake:{{$ck}}:{$hash}"));
+        $this->assertGreaterThan(0, $this->redis()->llen("{nc}:test:wake:{$ck}:{$hash}"));
 
         $queryCount = 0;
         Author::get();

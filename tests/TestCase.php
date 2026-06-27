@@ -142,7 +142,7 @@ abstract class TestCase extends OrchestraTestCase
         $classKey = $manager->classKey($class);
         $version = $manager->currentVersion($class);
 
-        return 'model:{' . $classKey . '}:v' . $version . ':' . $id;
+        return 'model:' . $classKey . ':v' . $version . ':' . $id;
     }
 
     protected function redisKeys(string $pattern = '*'): array

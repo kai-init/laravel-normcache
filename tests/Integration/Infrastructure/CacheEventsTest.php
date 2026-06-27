@@ -98,7 +98,7 @@ class CacheEventsTest extends TestCase
         Author::all();
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
-            return str_starts_with($e->key, 'query:{' . app('normcache')->classKey(Author::class) . '}:v');
+            return str_starts_with($e->key, 'query:' . app('normcache')->classKey(Author::class) . ':v');
         });
     }
 
@@ -124,7 +124,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:' . app('normcache')->classKey(Author::class) . ':');
         });
     }
 
@@ -152,7 +152,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Post::class
-                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+                && str_starts_with($e->key, 'through:' . app('normcache')->classKey(Post::class) . ':');
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -161,7 +161,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Post::class
-                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+                && str_starts_with($e->key, 'through:' . app('normcache')->classKey(Post::class) . ':');
         });
     }
 
@@ -176,7 +176,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:' . app('normcache')->classKey(Author::class) . ':');
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -185,7 +185,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, 'result:' . app('normcache')->classKey(Author::class) . ':');
         });
     }
 }

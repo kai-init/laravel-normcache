@@ -44,24 +44,24 @@ class CacheKeyBuilder
 
     public function modelPrefix(string $classKey, int|string $version): string
     {
-        return self::K_MODEL . ':{' . $classKey . '}:v' . $version . ':';
+        return self::K_MODEL . ':' . $classKey . ':v' . $version . ':';
     }
 
     public function queryPrefix(string $classKey, ?string $tag = null): string
     {
-        $base = self::K_QUERY . ':{' . $classKey . '}:';
+        $base = self::K_QUERY . ':' . $classKey . ':';
 
         return $tag !== null ? $base . $tag . ':' : $base;
     }
 
     public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
     {
-        return "{$namespace}:{{$classKey}}:" . $this->tagSegment($tag);
+        return "{$namespace}:{$classKey}:" . $this->tagSegment($tag);
     }
 
     public function pivotBasePrefix(string $parentKey, string $relatedKey): string
     {
-        return self::K_PIVOT . ':{' . $parentKey . '}:' . $relatedKey . ':';
+        return self::K_PIVOT . ':' . $parentKey . ':' . $relatedKey . ':';
     }
 
     public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
@@ -71,12 +71,12 @@ class CacheKeyBuilder
 
     public function buildingPrefix(string $classKey): string
     {
-        return self::K_BUILDING . ':{' . $classKey . '}:';
+        return self::K_BUILDING . ':' . $classKey . ':';
     }
 
     public function wakePrefix(string $classKey): string
     {
-        return self::K_WAKE . ':{' . $classKey . '}:';
+        return self::K_WAKE . ':' . $classKey . ':';
     }
 
     // -------------------------------------------------------------------------
@@ -118,17 +118,17 @@ class CacheKeyBuilder
 
     public function verKey(string $classKey): string
     {
-        return self::K_VER . ':{' . $classKey . '}:';
+        return self::K_VER . ':' . $classKey . ':';
     }
 
     public function scheduledKey(string $classKey): string
     {
-        return self::K_SCHEDULED . ':{' . $classKey . '}:';
+        return self::K_SCHEDULED . ':' . $classKey . ':';
     }
 
     public function wakeKey(string $classKey, string $lockSuffix): string
     {
-        return self::K_WAKE . ':{' . $classKey . '}:' . $lockSuffix;
+        return self::K_WAKE . ':' . $classKey . ':' . $lockSuffix;
     }
 
     // -------------------------------------------------------------------------
@@ -183,11 +183,9 @@ class CacheKeyBuilder
 
     public function buildingToWakeKey(string $buildingKey): string
     {
-        $classKeyEnd = strpos($buildingKey, '}:') + 2;
+        $parts = explode(':', $buildingKey);
 
-        return self::K_WAKE
-            . substr($buildingKey, strlen(self::K_BUILDING), $classKeyEnd - strlen(self::K_BUILDING))
-            . substr(strrchr($buildingKey, ':'), 1);
+        return self::K_WAKE . ':' . $parts[1] . ':' . $parts[2] . ':' . end($parts);
     }
 
     // -------------------------------------------------------------------------
