@@ -21,7 +21,7 @@ class CrossTableDependencySafetyTest extends TestCase
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->count();
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_join_count_with_depends_on_caches(): void
@@ -34,7 +34,7 @@ class CrossTableDependencySafetyTest extends TestCase
             ->dependsOn([Post::class])
             ->count();
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_join_count_with_depends_on_invalidates_on_dep_change(): void
@@ -65,7 +65,7 @@ class CrossTableDependencySafetyTest extends TestCase
             ->select('authors.*')
             ->paginate(10);
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_join_paginate_with_depends_on_caches_count(): void
@@ -79,7 +79,7 @@ class CrossTableDependencySafetyTest extends TestCase
             ->dependsOn([Post::class])
             ->paginate(10);
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_simple_count_without_join_still_caches(): void
@@ -88,7 +88,7 @@ class CrossTableDependencySafetyTest extends TestCase
 
         Author::query()->count();
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_count_with_group_by_single_table_still_caches(): void
@@ -97,7 +97,7 @@ class CrossTableDependencySafetyTest extends TestCase
 
         Author::query()->groupBy('name')->count('name');
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_aggregate_constraint_with_join_disables_tracking_and_bypasses(): void
@@ -109,7 +109,7 @@ class CrossTableDependencySafetyTest extends TestCase
             'posts' => fn($q) => $q->join('authors', 'authors.id', '=', 'posts.author_id'),
         ])->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_simple_aggregate_constraint_still_infers_dependencies(): void
@@ -119,7 +119,7 @@ class CrossTableDependencySafetyTest extends TestCase
 
         Author::withCount(['posts' => fn($q) => $q->where('title', 'Hello')])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_aggregate_constraint_with_wherehas_disables_tracking(): void
@@ -131,7 +131,7 @@ class CrossTableDependencySafetyTest extends TestCase
             'posts' => fn($q) => $q->whereHas('author'),
         ])->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_aliased_from_query_bypasses_normalized_cache(): void
@@ -140,7 +140,7 @@ class CrossTableDependencySafetyTest extends TestCase
 
         Author::from('authors as a')->where('a.name', 'Alice')->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_aliased_from_with_depends_on_uses_result_cache(): void
@@ -152,7 +152,7 @@ class CrossTableDependencySafetyTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_canonical_from_still_uses_normalized_cache(): void
@@ -161,7 +161,7 @@ class CrossTableDependencySafetyTest extends TestCase
 
         Author::from('authors')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('query:*'));
     }
 
     public function test_pluck_with_falsey_key_hashes_differently_from_no_key(): void
@@ -170,11 +170,11 @@ class CrossTableDependencySafetyTest extends TestCase
 
         // Warm cache for pluck without a key
         Author::query()->pluck('name');
-        $noKeyCache = $this->redisKeys('test:scalar:*');
+        $noKeyCache = $this->redisKeys('scalar:*');
 
         // Pluck with an integer key (falsey: 0)
         Author::query()->pluck('name', 'id');
-        $withKeyCache = $this->redisKeys('test:scalar:*');
+        $withKeyCache = $this->redisKeys('scalar:*');
 
         // Should have two separate cache entries, not share one
         $this->assertCount(2, $withKeyCache);
@@ -186,10 +186,10 @@ class CrossTableDependencySafetyTest extends TestCase
         Author::create(['name' => 'Alice']);
 
         Author::query()->pluck('name', null);
-        $nullKeyCache = $this->redisKeys('test:scalar:*');
+        $nullKeyCache = $this->redisKeys('scalar:*');
 
         Author::query()->pluck('name');
-        $noKeyCache = $this->redisKeys('test:scalar:*');
+        $noKeyCache = $this->redisKeys('scalar:*');
 
         // null key should hash the same as no key (both use only [$column])
         $this->assertCount(1, $noKeyCache);

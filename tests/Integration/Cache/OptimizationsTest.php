@@ -57,9 +57,9 @@ class OptimizationsTest extends TestCase
         Author::where('name', 'Lua Author')->get();
 
         $redis = Redis::connection(config('normcache.connection'));
-        $store = app('normcache')->getStore();
+        $manager = app('normcache');
 
-        $keys = $redis->keys($store->prefix('query:*'));
+        $keys = $redis->keys($manager->keys()->prefixed('query:*'));
         $this->assertNotEmpty($keys);
 
         $value = $redis->get($keys[0]);
@@ -101,9 +101,11 @@ class OptimizationsTest extends TestCase
         $classKey = app('normcache')->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 
-        $store = app('normcache')->getStore();
+        $manager = app('normcache');
+        $store = $manager->getStore();
+        $fullQueryKey = $manager->keys()->prefixed("query:{$classKey}:v{$version}:{$hash}");
         Redis::connection(config('normcache.connection'))->set(
-            $store->prefix("query:{$classKey}:v{$version}:{$hash}"),
+            $fullQueryKey,
             '{not-json'
         );
 
@@ -114,7 +116,7 @@ class OptimizationsTest extends TestCase
         $this->assertCount(1, $found);
         Event::assertDispatched(QueryCacheMiss::class);
 
-        $raw = app('normcache')->getStore()->getRaw("query:{$classKey}:v{$version}:{$hash}");
+        $raw = $store->getRaw($fullQueryKey);
         $repaired = $raw !== null ? json_decode($raw, true) : null;
         $this->assertSame([(string) $found->first()->id], $repaired);
     }
@@ -136,7 +138,7 @@ class OptimizationsTest extends TestCase
 
         Author::query()->dependsOn([Post::class])->get();
 
-        $queryKey = collect($this->redisKeys('test:query:*'))->first();
+        $queryKey = collect($this->redisKeys('query:*'))->first();
         $this->assertNotNull($queryKey);
 
         Redis::connection(config('normcache.connection'))->set($queryKey, '{not-json');
@@ -149,9 +151,7 @@ class OptimizationsTest extends TestCase
         Event::assertDispatched(QueryCacheMiss::class);
 
         $store = app('normcache')->getStore();
-        $raw = $store->getRaw(
-            str_replace($store->prefix(''), '', $queryKey)
-        );
+        $raw = $store->getRaw($queryKey);
         $repaired = $raw !== null ? json_decode($raw, true) : null;
         $this->assertSame([(string) $found->first()->id], $repaired);
     }
@@ -246,6 +246,6 @@ class OptimizationsTest extends TestCase
         $builder = Author::whereKey($a1->id)->dependsOn([Post::class]);
         $builder->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
+        $this->assertNotEmpty($this->redisKeys('query:*'));
     }
 }

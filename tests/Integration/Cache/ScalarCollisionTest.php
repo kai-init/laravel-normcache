@@ -73,7 +73,7 @@ class ScalarCollisionTest extends TestCase
         $sum = Post::sum(DB::raw('views + 1'));
         $this->assertEquals(11, $sum);
 
-        $this->assertEmpty($this->redisKeys('test:scalar:*'));
+        $this->assertEmpty($this->redisKeys('scalar:*'));
     }
 
     public function test_sum_and_avg_same_column_do_not_share_cache_entry(): void

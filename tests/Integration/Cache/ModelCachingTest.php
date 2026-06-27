@@ -20,7 +20,7 @@ class ModelCachingTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_flush_command_without_model_flushes_all_keys(): void
@@ -28,11 +28,11 @@ class ModelCachingTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all();
 
-        $this->assertNotEmpty($this->redisKeys('test:*'));
+        $this->assertNotEmpty($this->redisKeys('*'));
 
         $this->artisan('normcache:flush')->assertSuccessful();
 
-        $this->assertEmpty($this->redisKeys('test:*'));
+        $this->assertEmpty($this->redisKeys('*'));
     }
 
     public function test_flush_command_with_model_flushes_only_that_model(): void

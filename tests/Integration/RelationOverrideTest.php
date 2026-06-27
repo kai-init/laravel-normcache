@@ -88,11 +88,11 @@ class RelationOverrideTest extends TestCase
         $this->assertCount(1, $first->posts);
 
         $this->assertNotEmpty(
-            $this->redisKeys('test:query:*:posts:*'),
+            $this->redisKeys('query:*:posts:*'),
             'Expected simple hasMany eager load to populate the normalized query-id cache'
         );
         $this->assertNotEmpty(
-            $this->redisKeys('test:model:*:posts:*'),
+            $this->redisKeys('model:*:posts:*'),
             'Expected simple hasMany eager load to populate the per-id model cache'
         );
     }
@@ -161,7 +161,7 @@ class RelationOverrideTest extends TestCase
 
         $first = $query();
         $this->assertSame(1, $first->posts->first()->comments_count);
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
 
         $warm = $query();
         $this->assertSame(1, $warm->posts->first()->comments_count);
@@ -185,7 +185,7 @@ class RelationOverrideTest extends TestCase
             ->get();
 
         $this->assertSame(['Post 1'], $posts->pluck('title')->all());
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_eager_morph_many_relation_is_served_from_cache_and_invalidated(): void

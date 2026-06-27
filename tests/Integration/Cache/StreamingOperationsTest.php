@@ -24,7 +24,7 @@ class StreamingOperationsTest extends TestCase
 
         Author::orderBy('id')->chunk(1, fn() => null);
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_chunk_sees_fresh_data_after_version_bump(): void
@@ -96,6 +96,6 @@ class StreamingOperationsTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::where('name', 'Alice')->sole();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 }

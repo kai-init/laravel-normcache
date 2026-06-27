@@ -34,7 +34,7 @@ class PivotStampedeTest extends TestCase
         $miss = $manager->getPivotCache(Author::class, Tag::class, 'tags', [$author->id]);
         $this->assertSame(CacheStatus::Miss, $miss->status);
 
-        $keys = new CacheKeyBuilder;
+        $keys = $manager->keys();
         $pivotKey = $keys->pivotKey($keys->classKey(Author::class), $keys->classKey(Tag::class), 'tags', 'nc', $miss->seg, $author->id);
 
         $manager->storeManyVersionedResults(

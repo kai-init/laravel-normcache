@@ -127,7 +127,7 @@ class LuaScriptConsistencyTest extends TestCase
             ->get();
 
         $this->assertCount(1, $query());
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
 
         $post->update(['published' => false]);
 
@@ -283,8 +283,8 @@ class LuaScriptConsistencyTest extends TestCase
             ->count();
 
         $this->assertSame(1, $query());
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
 
         $post->update(['published' => false]);
 
@@ -308,7 +308,7 @@ class LuaScriptConsistencyTest extends TestCase
         $author->tags()->attach($old->id);
 
         $this->assertSame(['old'], $author->tags()->get()->pluck('name')->all());
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
 
         $author->tags()->detach($old->id);
         $author->tags()->attach($new->id);

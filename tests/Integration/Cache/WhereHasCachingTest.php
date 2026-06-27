@@ -41,7 +41,7 @@ class WhereHasCachingTest extends TestCase
             fn() => Author::withoutCache()->whereHas('posts')->get(),
         );
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_simple_wherehas_hasmany_invalidates_on_new_related_row(): void
@@ -72,7 +72,7 @@ class WhereHasCachingTest extends TestCase
             fn() => Author::withoutCache()->whereHas('posts', fn($q) => $q->where('published', true))->get(),
         );
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_wherehas_with_safe_constraint_invalidates_on_dependency_change(): void
@@ -195,7 +195,7 @@ class WhereHasCachingTest extends TestCase
             fn() => Author::withoutCache()->whereHas('comments')->get(),
         );
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_wherehas_morphto_bails(): void

@@ -134,7 +134,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         $manager = $this->cacheManager();
 
-        return $manager->getStore()->prefix($this->currentModelKey($manager, $class, $id));
+        return $this->currentModelKey($manager, $class, $id);
     }
 
     private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
@@ -142,14 +142,14 @@ abstract class TestCase extends OrchestraTestCase
         $classKey = $manager->classKey($class);
         $version = $manager->currentVersion($class);
 
-        return 'model:' . $classKey . ':v' . $version . ':' . $id;
+        return $manager->keys()->modelPrefix($classKey, $version) . $id;
     }
 
     protected function redisKeys(string $pattern = '*'): array
     {
-        $store = $this->cacheManager()->getStore();
+        $manager = $this->cacheManager();
 
-        return $store->scanPattern($store->hashTagPrefix() . $pattern);
+        return $manager->getStore()->scanPattern($manager->keys()->prefixed($pattern));
     }
 
     protected function cacheManager(): CacheManager
@@ -184,8 +184,8 @@ abstract class TestCase extends OrchestraTestCase
         $ttl ??= (int) config('normcache.ttl');
         $queryTtl ??= (int) config('normcache.query_ttl');
 
-        $store = new RedisStore($connection, $keyPrefix, '{nc}:', $stampedeWakeTokens);
-        $keys = new CacheKeyBuilder;
+        $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
+        $store = new RedisStore($connection, $keys->nullKey(), $stampedeWakeTokens);
         $versions = new VersionTracker($store, $keys);
         $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens);
         $engine = new ExecutionEngine;

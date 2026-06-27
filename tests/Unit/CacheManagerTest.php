@@ -100,11 +100,13 @@ class CacheManagerTest extends TestCase
         $manager = $this->buildManager();
 
         $classKey = $manager->classKey(Author::class);
-        $store = $manager->getStore();
+        $keys = $manager->keys();
 
-        $store->set("ver:{$classKey}:", 7, 60);
+        $fullVerKey = $keys->verKey($classKey);
+        $this->assertSame("{nc}:test:ver:{$classKey}:", $fullVerKey);
 
-        $this->assertSame("{nc}:test:ver:{$classKey}:", $store->prefix("ver:{$classKey}:"));
+        $manager->getStore()->set($fullVerKey, 7, 60);
+
         $this->assertSame('7', Redis::connection('normcache-test')->get("{nc}:test:ver:{$classKey}:"));
         $this->assertSame(7, $manager->currentVersion(Author::class));
     }
@@ -140,17 +142,17 @@ class CacheManagerTest extends TestCase
         $store = $this->manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
 
-        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
-        $store->set("model:{{$postsKey}}:v0:1", ['id' => 1], 3600);
-        $store->set("ver:{{$postsKey}}:", 3, 3600);
-        $store->set("through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
-        $store->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
-        $store->set("building:query:{{$postsKey}}:v1:abc", 1, 3600);
+        $store->set("{nc}:test:query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("{nc}:test:model:{{$postsKey}}:v0:1", ['id' => 1], 3600);
+        $store->set("{nc}:test:ver:{{$postsKey}}:", 3, 3600);
+        $store->set("{nc}:test:through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
+        $store->set("{nc}:test:scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
+        $store->set("{nc}:test:building:query:{{$postsKey}}:v1:abc", 1, 3600);
 
         $deleted = $this->manager->flushAll();
 
         $this->assertSame(6, $deleted);
-        $this->assertEmpty($this->redisKeys('test:*'));
+        $this->assertEmpty($this->redisKeys('*'));
     }
 
     public function test_flush_all_returns_zero_when_cache_is_empty(): void
@@ -168,9 +170,9 @@ class CacheManagerTest extends TestCase
         $store = $manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
 
-        $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
-        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
-        $store->set("ver:{{$postsKey}}:", 3, 3600);
+        $store->set("{nc}:test:query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+        $store->set("{nc}:test:model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("{nc}:test:ver:{{$postsKey}}:", 3, 3600);
 
         $deleted = $manager->flushAll();
 

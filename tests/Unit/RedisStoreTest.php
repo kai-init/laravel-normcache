@@ -18,12 +18,7 @@ class RedisStoreTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->store = new RedisStore('normcache-test', 'test:', '{nc}:');
-    }
-
-    public function test_it_prefixes_keys(): void
-    {
-        $this->assertSame('{nc}:test:foo', $this->store->prefix('foo'));
+        $this->store = new RedisStore('normcache-test');
     }
 
     public function test_it_can_set_and_get_values(): void
@@ -67,7 +62,7 @@ class RedisStoreTest extends TestCase
 
     public function test_release_building_pushes_configured_wake_tokens(): void
     {
-        $store = new RedisStore('normcache-test', 'test:', '{nc}:', wakeTokenCount: 3);
+        $store = new RedisStore('normcache-test', wakeTokenCount: 3);
 
         $store->set('build:tokens', '1', 60);
         $store->releaseBuilding('build:tokens', 'wake:tokens');
@@ -227,10 +222,10 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', '');
-            $store->set('query:abc', [1], 60);
-            $store->set('query:def', [2], 60);
-            $store->set('model:1', ['id' => 1], 60);
+            $store = new RedisStore('normcache-test');
+            $store->set('test:query:abc', [1], 60);
+            $store->set('test:query:def', [2], 60);
+            $store->set('test:model:1', ['id' => 1], 60);
 
             $keys = $store->scanPattern('test:query:*');
 
@@ -255,17 +250,17 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', '');
-            $store->set('query:1', 'a', 60);
-            $store->set('query:2', 'b', 60);
-            $store->set('model:1', 'c', 60);
+            $store = new RedisStore('normcache-test');
+            $store->set('test:query:1', 'a', 60);
+            $store->set('test:query:2', 'b', 60);
+            $store->set('test:model:1', 'c', 60);
 
-            $count = $store->flushByPatterns(['query:*']);
+            $count = $store->flushByPatterns(['test:query:*']);
 
             $this->assertSame(2, $count);
-            $this->assertNull($store->get('query:1'));
-            $this->assertNull($store->get('query:2'));
-            $this->assertSame('c', $store->get('model:1'));
+            $this->assertNull($store->get('test:query:1'));
+            $this->assertNull($store->get('test:query:2'));
+            $this->assertSame('c', $store->get('test:model:1'));
         } finally {
             Redis::purge('normcache-test');
             config()->set('database.redis.options.prefix', '');
@@ -321,10 +316,10 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', 'test:', '{nc}:');
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
-        $deleted = $store->flushByPatterns(['model:*', 'query:*']);
+        $deleted = $store->flushByPatterns(['{nc}:test:model:*', '{nc}:test:query:*']);
 
         $this->assertSame(2, $deleted);
         $this->assertSame([
@@ -353,23 +348,23 @@ class RedisStoreTest extends TestCase
         $directClient = new PredisClient($standaloneConn);
 
         for ($i = 0; $i < 2500; $i++) {
-            $directClient->setex("testscan:model:{posts}:{$i}", 60, 'x');
+            $directClient->setex("model:{posts}:{$i}", 60, 'x');
         }
 
-        $this->assertCount(2500, $directClient->keys('testscan:*'));
+        $this->assertCount(2500, $directClient->keys('model:*'));
 
         // Use 'predis' cluster type so the client iterates over configured nodes
         // without requiring CLUSTER SLOTS (which standalone Redis doesn't support).
         $predisClient = new PredisClient([$standaloneConn], ['cluster' => 'predis']);
         $clusterConnection = new PredisClusterConnection($predisClient);
 
-        $store = new RedisStore('normcache-test', 'testscan:', '');
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $clusterConnection);
 
         $deleted = $store->flushByPatterns(['model:{posts}:*']);
 
         $this->assertSame(2500, $deleted);
-        $this->assertEmpty($directClient->keys('testscan:*'));
+        $this->assertEmpty($directClient->keys('model:*'));
     }
 
     public function test_predis_cluster_scan_deduplicates_keys_returned_by_multiple_nodes(): void
@@ -413,7 +408,7 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', '', '');
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $this->assertSame(
@@ -428,7 +423,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', '');
+        $store = new RedisStore('normcache-test');
         $data = ['x' => 1];
 
         $this->assertSame($data, $store->unserialize(igbinary_serialize($data)));
@@ -452,7 +447,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', '');
+        $store = new RedisStore('normcache-test');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
@@ -466,7 +461,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', '');
+        $store = new RedisStore('normcache-test');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
@@ -485,7 +480,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', '');
+        $store = new RedisStore('normcache-test');
         $serializer = (new ReflectionProperty($store, 'serializer'))->getValue($store);
         (new ReflectionProperty($serializer, 'igbinary'))->setValue($serializer, false);
 

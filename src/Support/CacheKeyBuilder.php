@@ -38,30 +38,50 @@ class CacheKeyBuilder
 
     private static array $singleDepPairs = [];
 
+    public function __construct(
+        private readonly string $hashTagPrefix = '{nc}:',
+        private readonly string $keyPrefix = '',
+    ) {}
+
+    private function full(string $body): string
+    {
+        return $this->hashTagPrefix . $this->keyPrefix . $body;
+    }
+
+    public function prefixed(string $pattern): string
+    {
+        return $this->full($pattern);
+    }
+
+    public function nullKey(): string
+    {
+        return $this->hashTagPrefix . 'null';
+    }
+
     // -------------------------------------------------------------------------
     // Prefixes
     // -------------------------------------------------------------------------
 
     public function modelPrefix(string $classKey, int|string $version): string
     {
-        return self::K_MODEL . ':' . $classKey . ':v' . $version . ':';
+        return $this->full(self::K_MODEL . ':' . $classKey . ':v' . $version . ':');
     }
 
     public function queryPrefix(string $classKey, ?string $tag = null): string
     {
         $base = self::K_QUERY . ':' . $classKey . ':';
 
-        return $tag !== null ? $base . $tag . ':' : $base;
+        return $this->full($tag !== null ? $base . $tag . ':' : $base);
     }
 
     public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
     {
-        return "{$namespace}:{$classKey}:" . $this->tagSegment($tag);
+        return $this->full("{$namespace}:{$classKey}:" . $this->tagSegment($tag));
     }
 
     public function pivotBasePrefix(string $parentKey, string $relatedKey): string
     {
-        return self::K_PIVOT . ':' . $parentKey . ':' . $relatedKey . ':';
+        return $this->full(self::K_PIVOT . ':' . $parentKey . ':' . $relatedKey . ':');
     }
 
     public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
@@ -71,12 +91,12 @@ class CacheKeyBuilder
 
     public function buildingPrefix(string $classKey): string
     {
-        return self::K_BUILDING . ':' . $classKey . ':';
+        return $this->full(self::K_BUILDING . ':' . $classKey . ':');
     }
 
     public function wakePrefix(string $classKey): string
     {
-        return self::K_WAKE . ':' . $classKey . ':';
+        return $this->full(self::K_WAKE . ':' . $classKey . ':');
     }
 
     // -------------------------------------------------------------------------
@@ -118,17 +138,17 @@ class CacheKeyBuilder
 
     public function verKey(string $classKey): string
     {
-        return self::K_VER . ':' . $classKey . ':';
+        return $this->full(self::K_VER . ':' . $classKey . ':');
     }
 
     public function scheduledKey(string $classKey): string
     {
-        return self::K_SCHEDULED . ':' . $classKey . ':';
+        return $this->full(self::K_SCHEDULED . ':' . $classKey . ':');
     }
 
     public function wakeKey(string $classKey, string $lockSuffix): string
     {
-        return self::K_WAKE . ':' . $classKey . ':' . $lockSuffix;
+        return $this->full(self::K_WAKE . ':' . $classKey . ':' . $lockSuffix);
     }
 
     // -------------------------------------------------------------------------
@@ -183,9 +203,19 @@ class CacheKeyBuilder
 
     public function buildingToWakeKey(string $buildingKey): string
     {
-        $parts = explode(':', $buildingKey);
+        $keyword = self::K_BUILDING . ':';
+        $pos = strpos($buildingKey, $keyword);
+        $afterKeyword = $pos + strlen($keyword);
 
-        return self::K_WAKE . ':' . $parts[1] . ':' . $parts[2] . ':' . end($parts);
+        $connEnd = strpos($buildingKey, ':', $afterKeyword);
+        $tableEnd = strpos($buildingKey, ':', $connEnd + 1);
+
+        $head = substr($buildingKey, 0, $tableEnd);
+        $head = substr_replace($head, self::K_WAKE, $pos, strlen(self::K_BUILDING));
+
+        $hash = substr(strrchr($buildingKey, ':'), 1);
+
+        return $head . ':' . $hash;
     }
 
     // -------------------------------------------------------------------------

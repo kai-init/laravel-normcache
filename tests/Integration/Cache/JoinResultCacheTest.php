@@ -27,7 +27,7 @@ class JoinResultCacheTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_join_with_depends_on_and_no_explicit_select_returns_correct_results(): void
@@ -54,7 +54,7 @@ class JoinResultCacheTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_join_with_explicit_select_serves_subsequent_calls_from_cache(): void
@@ -94,7 +94,7 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_plain_join_without_explicit_root_select_bypasses_despite_inferred_tables(): void
@@ -106,8 +106,8 @@ class JoinResultCacheTest extends TestCase
             ->join('posts', 'posts.author_id', '=', 'authors.id')
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_inferred_join_invalidates_when_joined_table_is_written(): void
@@ -142,7 +142,7 @@ class JoinResultCacheTest extends TestCase
             ->get('*');
 
         $this->assertCount(1, $results);
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_expression_join_bypasses_inferred_dependency(): void
@@ -155,7 +155,7 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_join_with_where_exists_clause_bypasses_auto_inference(): void
@@ -181,7 +181,7 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_join_with_raw_clause_bypasses_auto_inference(): void
@@ -197,7 +197,7 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_implicit_join_alias_bypasses_auto_inference(): void
@@ -229,7 +229,7 @@ class JoinResultCacheTest extends TestCase
             ->get();
         $this->assertCount(1, $first);
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
 
         $country->update(['name' => 'NZ']);
 
@@ -296,7 +296,7 @@ class JoinResultCacheTest extends TestCase
             ->select('authors.*')
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_corrupt_result_cache_payload_is_treated_as_miss(): void
@@ -307,7 +307,7 @@ class JoinResultCacheTest extends TestCase
         $query = Author::query()->whereHas('posts')->dependsOn([Post::class]);
         $query->get(); // warm
 
-        $resultKey = collect($this->redisKeys('test:result:*'))->first();
+        $resultKey = collect($this->redisKeys('result:*'))->first();
         Redis::connection('normcache-test')->set($resultKey, 'CORRUPT');
 
         $results = $query->get();

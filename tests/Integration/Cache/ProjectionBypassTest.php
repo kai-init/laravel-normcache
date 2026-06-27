@@ -62,7 +62,7 @@ class ProjectionBypassTest extends TestCase
             ->map(fn($p) => $p->author?->name)->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:query:testing:authors:*'), 'bypassed BelongsTo must not write query cache');
+        $this->assertEmpty($this->redisKeys('query:testing:authors:*'), 'bypassed BelongsTo must not write query cache');
     }
 
     public function test_belongs_to_bypasses_when_owner_key_is_aliased(): void
@@ -80,7 +80,7 @@ class ProjectionBypassTest extends TestCase
             ->get()->map(fn($p) => $p->author?->name)->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:query:testing:authors:*'));
+        $this->assertEmpty($this->redisKeys('query:testing:authors:*'));
     }
 
     // ── BelongsToMany ─────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ class ProjectionBypassTest extends TestCase
             ->map(fn($a) => $a->tags->pluck('name')->all())->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:pivot:*'), 'bypassed pivot must not write pivot cache');
+        $this->assertEmpty($this->redisKeys('pivot:*'), 'bypassed pivot must not write pivot cache');
     }
 
     public function test_pivot_uses_cache_when_qualified_related_pk_present(): void
@@ -115,7 +115,7 @@ class ProjectionBypassTest extends TestCase
         $cold = Author::with(['tags' => fn($q) => $q->select('tags.id', 'name')])->get()
             ->map(fn($a) => $a->tags->pluck('name')->all())->all();
 
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'), 'qualified PK projection must populate pivot cache');
+        $this->assertNotEmpty($this->redisKeys('pivot:*'), 'qualified PK projection must populate pivot cache');
         $this->assertSame($native, $cold);
 
         $warm = Author::with(['tags' => fn($q) => $q->select('tags.id', 'name')])->get()
@@ -140,7 +140,7 @@ class ProjectionBypassTest extends TestCase
             ->map(fn($c) => $c->posts->pluck('title')->all())->all();
 
         $this->assertSame($native, $result);
-        $this->assertEmpty($this->redisKeys('test:through:*'), 'bypassed through must not write through cache');
+        $this->assertEmpty($this->redisKeys('through:*'), 'bypassed through must not write through cache');
     }
 
     public function test_through_uses_cache_when_qualified_related_pk_present(): void
@@ -156,7 +156,7 @@ class ProjectionBypassTest extends TestCase
         $cold = Country::with(['posts' => fn($q) => $q->select('posts.id', 'posts.title')])->get()
             ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
 
-        $this->assertNotEmpty($this->redisKeys('test:through:*'), 'qualified PK projection must populate through cache');
+        $this->assertNotEmpty($this->redisKeys('through:*'), 'qualified PK projection must populate through cache');
         $this->assertSame($native, $cold);
 
         $warm = Country::with(['posts' => fn($q) => $q->select('posts.id', 'posts.title')])->get()
@@ -178,7 +178,7 @@ class ProjectionBypassTest extends TestCase
         $cold = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()
             ->map(fn($c) => $c->posts->pluck('title')->sort()->values()->all())->all();
 
-        $this->assertNotEmpty($this->redisKeys('test:through:*'), 'table.* projection must populate the through-relation cache');
+        $this->assertNotEmpty($this->redisKeys('through:*'), 'table.* projection must populate the through-relation cache');
         $this->assertSame($native, $cold);
 
         $warm = Country::with(['posts' => fn($q) => $q->select('posts.*')])->get()

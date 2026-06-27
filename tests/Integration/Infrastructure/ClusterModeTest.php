@@ -30,8 +30,8 @@ class ClusterModeTest extends TestCase
 
         Author::query()->dependsOn([Post::class, Tag::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'Multi-dependency normalized queries should use query keys in cluster mode');
-        $this->assertEmpty($this->redisKeys('test:result:*'), 'Multi-dependency normalized queries should not fall back to result cache');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'Multi-dependency normalized queries should use query keys in cluster mode');
+        $this->assertEmpty($this->redisKeys('result:*'), 'Multi-dependency normalized queries should not fall back to result cache');
     }
 
     public function test_depends_on_returns_correct_results_in_cluster_mode(): void
@@ -195,11 +195,11 @@ class ClusterModeTest extends TestCase
         Author::get();
         Author::orderBy('name')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:*'));
+        $this->assertNotEmpty($this->redisKeys('*'));
 
         $this->cacheManager()->flushAll();
 
-        $this->assertEmpty($this->redisKeys('test:*'));
+        $this->assertEmpty($this->redisKeys('*'));
     }
 
     public function test_flush_tag_clears_only_tagged_keys_in_cluster_mode(): void
@@ -209,13 +209,13 @@ class ClusterModeTest extends TestCase
         Author::tag('homepage')->get();
         Author::get();
 
-        $taggedKeys = $this->redisKeys('test:query:*:homepage:*');
+        $taggedKeys = $this->redisKeys('query:*:homepage:*');
         $this->assertNotEmpty($taggedKeys, 'tagged query keys must exist before flush');
 
         $this->cacheManager()->flushTag(Author::class, 'homepage');
 
-        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must be gone after flushTag');
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive flushTag');
+        $this->assertEmpty($this->redisKeys('query:*:homepage:*'), 'tagged keys must be gone after flushTag');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'untagged query keys must survive flushTag');
     }
 
     public function test_flush_tag_across_models_clears_tagged_keys_for_all_models_in_cluster_mode(): void
@@ -227,12 +227,12 @@ class ClusterModeTest extends TestCase
         Post::tag('homepage')->get();
         Author::get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must exist before flush');
+        $this->assertNotEmpty($this->redisKeys('query:*:homepage:*'), 'tagged keys must exist before flush');
 
         $this->cacheManager()->flushTagAcrossModels('homepage');
 
-        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'all tagged keys must be gone after flushTagAcrossModels');
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive');
+        $this->assertEmpty($this->redisKeys('query:*:homepage:*'), 'all tagged keys must be gone after flushTagAcrossModels');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'untagged query keys must survive');
     }
 
     public function test_prefix_sensitive_scan_and_flush_operations_work_in_cluster_mode(): void
@@ -250,28 +250,28 @@ class ClusterModeTest extends TestCase
             Post::tag('homepage')->get();
             Author::get();
 
-            $this->assertNotEmpty($this->redisKeys('test:query:*'));
-            foreach ($this->redisKeys('test:*') as $key) {
+            $this->assertNotEmpty($this->redisKeys('query:*'));
+            foreach ($this->redisKeys('*') as $key) {
                 $this->assertStringNotContainsString('laravel:', $key);
             }
 
             $this->cacheManager()->flushTag(Author::class, 'homepage');
-            $this->assertEmpty($this->redisKeys('test:query:testing:authors:homepage:*'), 'author tagged keys must be gone');
-            $this->assertNotEmpty($this->redisKeys('test:query:testing:posts:homepage:*'), 'post tagged keys must survive');
+            $this->assertEmpty($this->redisKeys('query:testing:authors:homepage:*'), 'author tagged keys must be gone');
+            $this->assertNotEmpty($this->redisKeys('query:testing:posts:homepage:*'), 'post tagged keys must survive');
 
             $this->cacheManager()->flushTagAcrossModels('homepage');
-            $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'));
-            $this->assertNotEmpty($this->redisKeys('test:query:*'));
+            $this->assertEmpty($this->redisKeys('query:*:homepage:*'));
+            $this->assertNotEmpty($this->redisKeys('query:*'));
 
-            $removed = $this->cacheManager()->getStore()->flushByPatterns(['query:*']);
+            $removed = $this->cacheManager()->getStore()->flushByPatterns([$this->cacheManager()->keys()->prefixed('query:*')]);
             $this->assertGreaterThan(0, $removed);
-            $this->assertEmpty($this->redisKeys('test:query:*'));
+            $this->assertEmpty($this->redisKeys('query:*'));
 
             Author::get();
-            $this->assertNotEmpty($this->redisKeys('test:*'));
+            $this->assertNotEmpty($this->redisKeys('*'));
 
             $this->cacheManager()->flushAll();
-            $this->assertEmpty($this->redisKeys('test:*'));
+            $this->assertEmpty($this->redisKeys('*'));
         } finally {
             Redis::purge('normcache-test');
             config()->set('database.redis.options.prefix', '');

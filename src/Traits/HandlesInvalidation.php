@@ -94,17 +94,17 @@ trait HandlesInvalidation
     public function flushAll(): int
     {
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_QUERY . ':*',
-            CacheKeyBuilder::K_MODEL . ':*',
-            CacheKeyBuilder::K_VER . ':*',
-            CacheKeyBuilder::K_COUNT . ':*',
-            CacheKeyBuilder::K_SCALAR . ':*',
-            CacheKeyBuilder::K_PIVOT . ':*',
-            CacheKeyBuilder::K_THROUGH . ':*',
-            CacheKeyBuilder::K_SCHEDULED . ':*',
-            CacheKeyBuilder::K_BUILDING . ':*',
-            CacheKeyBuilder::K_WAKE . ':*',
-            CacheKeyBuilder::K_RESULT . ':*',
+            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_MODEL . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_VER . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_PIVOT . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_SCHEDULED . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_BUILDING . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_WAKE . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':*'),
         ]);
     }
 
@@ -115,11 +115,11 @@ trait HandlesInvalidation
         $classKey = $this->keys->classKey($modelClass);
 
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*',
-            CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*',
+            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*'),
         ]);
     }
 
@@ -128,11 +128,11 @@ trait HandlesInvalidation
         CacheKeyBuilder::assertValidTag($tag);
 
         return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
-            CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*',
+            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*'),
+            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*'),
         ]);
     }
 

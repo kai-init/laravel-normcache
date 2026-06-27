@@ -93,7 +93,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
     }
 
     public function test_belongs_to_many_warm_hit_zero_sql(): void
@@ -146,7 +146,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
 
         $authors = Author::with('tags')->get();
 
@@ -236,7 +236,7 @@ class PivotCacheTest extends TestCase
 
         $author->tags()->get();
 
-        $keyCountAfterWarm = count($this->redisKeys('test:pivot:*'));
+        $keyCountAfterWarm = count($this->redisKeys('pivot:*'));
 
         $author->update(['name' => 'Alice Updated']);
 
@@ -246,7 +246,7 @@ class PivotCacheTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertEmpty($queries);
-        $this->assertSame($keyCountAfterWarm, count($this->redisKeys('test:pivot:*')));
+        $this->assertSame($keyCountAfterWarm, count($this->redisKeys('pivot:*')));
         $this->assertSame(['Fiction'], $tags->pluck('name')->all());
     }
 
@@ -317,7 +317,7 @@ class PivotCacheTest extends TestCase
             ->get();
 
         $this->assertSame([$tag->id], $tags->modelKeys());
-        $this->assertEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertEmpty($this->redisKeys('pivot:*'));
     }
 
     public function test_pivot_cache_ordered_eager_loads_do_not_collide(): void
@@ -534,7 +534,7 @@ class PivotCacheTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame([$tag->id], $tags->modelKeys());
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'), 'pivot cache should be used for table.* projection');
+        $this->assertNotEmpty($this->redisKeys('pivot:*'), 'pivot cache should be used for table.* projection');
         $this->assertEmpty(array_filter($queries, fn($q) => str_contains($q['query'], 'author_tag')), 'pivot query should be cached');
     }
 
@@ -579,7 +579,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get(); // warm pivot cache
 
-        $keys = $this->redisKeys('test:pivot:*');
+        $keys = $this->redisKeys('pivot:*');
         $this->assertNotEmpty($keys);
         $pivotKey = $keys[0];
 
@@ -613,6 +613,6 @@ class PivotCacheTest extends TestCase
 
         $author->tags()->dependsOn([Post::class])->get();
 
-        $this->assertEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertEmpty($this->redisKeys('pivot:*'));
     }
 }

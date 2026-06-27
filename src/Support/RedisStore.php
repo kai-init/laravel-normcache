@@ -21,8 +21,7 @@ final class RedisStore
 
     public function __construct(
         string $redisConnection,
-        private string $keyPrefix,
-        private string $hashTagPrefix = '{nc}:',
+        private string $nullKey = '{nc}:null',
         private int $wakeTokenCount = 64,
     ) {
         $this->serializer = new CacheSerializer;
@@ -33,19 +32,9 @@ final class RedisStore
     // Operations — singular
     // -------------------------------------------------------------------------
 
-    public function prefix(string $key): string
-    {
-        return $this->hashTagPrefix . $this->keyPrefix . $key;
-    }
-
-    public function hashTagPrefix(): string
-    {
-        return $this->hashTagPrefix;
-    }
-
     public function get(string $key): mixed
     {
-        $value = $this->connection->get($this->prefix($key));
+        $value = $this->connection->get($key);
 
         return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
@@ -53,7 +42,7 @@ final class RedisStore
     // Returns the raw string value without deserialization (for JSON-encoded entries).
     public function getRaw(string $key): ?string
     {
-        $value = $this->connection->get($this->prefix($key));
+        $value = $this->connection->get($key);
 
         return ($value !== null && $value !== false) ? $value : null;
     }
@@ -66,13 +55,13 @@ final class RedisStore
 
     public function set(string $key, mixed $value, int $ttl): void
     {
-        $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
+        $this->connection->setex($key, $ttl, $this->serialize($value));
     }
 
     // Set a raw string value without serialization.
     public function setRaw(string $key, string $value, int $ttl): void
     {
-        $this->connection->setex($this->prefix($key), $ttl, $value);
+        $this->connection->setex($key, $ttl, $value);
     }
 
     // SET NX EX — returns true if the lock was claimed.
@@ -89,13 +78,13 @@ final class RedisStore
 
     public function delete(string|array $keys): void
     {
-        $keys = (array) $keys;
-        if (empty($keys)) {
+        $keys = array_values(array_filter((array) $keys, fn($k) => $k !== ''));
+
+        if ($keys === []) {
             return;
         }
 
-        $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
-        $this->del($prefixed);
+        $this->del($keys);
     }
 
     // DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock.
@@ -116,7 +105,7 @@ final class RedisStore
     public function storeRawAndRelease(string $key, string $value, int $ttl, ?string $buildingKey = null, ?string $wakeKey = null, ?string $token = null): bool
     {
         if ($buildingKey === null) {
-            $this->connection->setex($this->prefix($key), $ttl, $value);
+            $this->connection->setex($key, $ttl, $value);
 
             return true;
         }
@@ -130,7 +119,7 @@ final class RedisStore
 
     public function increment(string $key): int
     {
-        return (int) $this->connection->incr($this->prefix($key));
+        return (int) $this->connection->incr($key);
     }
 
     public function incrementAndExpire(string $key, int $ttl): int
@@ -146,7 +135,7 @@ final class RedisStore
      *  Requires Redis 6.0+ for sub-second precision; older Redis rounds the timeout up to 1s. */
     public function brpop(string $key, float $timeoutSeconds): bool
     {
-        $result = $this->connection->brpop($this->prefix($key), $timeoutSeconds);
+        $result = $this->connection->brpop($key, $timeoutSeconds);
 
         return $result !== null && $result !== false;
     }
@@ -170,7 +159,7 @@ final class RedisStore
 
         $prefixed = [];
         foreach ($keys as $key) {
-            $prefixed[] = $this->prefix($key);
+            $prefixed[] = $key;
         }
 
         $raw = $this->connection->mget($prefixed);
@@ -200,7 +189,7 @@ final class RedisStore
 
         if ($this->isCluster()) {
             foreach ($pairs as $key => $value) {
-                $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
+                $this->connection->setex($key, $ttl, $this->serialize($value));
             }
 
             return;
@@ -208,7 +197,7 @@ final class RedisStore
 
         $this->connection->pipeline(function ($pipe) use ($pairs, $ttl) {
             foreach ($pairs as $key => $value) {
-                $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
+                $pipe->setex($key, $ttl, $this->serialize($value));
             }
         });
     }
@@ -292,19 +281,18 @@ final class RedisStore
         return $total;
     }
 
-    // Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT.
+    // Passes $keys to EVALSHA as-is, falling back to EVAL on NOSCRIPT.
     public function script(string $script, array $keys, array $args = []): mixed
     {
         $prefixedKeys = [];
         foreach ($keys as $key) {
-            $prefixedKeys[] = $key === '' ? '' : $this->prefix($key);
+            $prefixedKeys[] = $key;
         }
 
         if ($this->isCluster()) {
-            $nullKey = rtrim($this->hashTagPrefix, ':') . ':null';
             foreach ($prefixedKeys as $i => $prefixedKey) {
                 if ($prefixedKey === '') {
-                    $prefixedKeys[$i] = $nullKey;
+                    $prefixedKeys[$i] = $this->nullKey;
                 }
             }
         }
@@ -421,7 +409,7 @@ final class RedisStore
 
     private function keysForPattern(string $pattern): array
     {
-        return $this->scanPattern($this->prefix($pattern));
+        return $this->scanPattern($pattern);
     }
 
     private function scanKeys(string $pattern): array

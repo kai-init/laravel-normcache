@@ -42,7 +42,7 @@ class ModelHydratorStampedeTest extends TestCase
         $author = Author::create(['name' => 'Bob']);
         $this->evictModelCache(Author::class, $author->id);
 
-        $keys = new CacheKeyBuilder;
+        $keys = $manager->keys();
         $classKey = $keys->classKey(Author::class);
         $lockSuffix = $keys->resultBuildIdentityHash('model', null, (string) $author->id);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', $lockSuffix);
