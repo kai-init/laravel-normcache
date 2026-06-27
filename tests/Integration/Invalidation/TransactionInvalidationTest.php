@@ -67,7 +67,7 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
-    public function test_transaction_commit_evicts_only_the_updated_model_key(): void
+    public function test_transaction_commit_bumps_version_and_evicts_all_model_keys(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         $bob = Author::create(['name' => 'Bob']);
@@ -76,12 +76,15 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
         $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
 
+        $versionBefore = NormCache::currentVersion(Author::class);
+
         DB::transaction(function () use ($alice) {
             $alice->update(['name' => 'Alicia']);
         });
 
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertNull($this->modelCacheEntry(Author::class, $alice->id));
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $bob->id));
     }
 
     public function test_model_key_preserved_after_transaction_rollback(): void
@@ -188,7 +191,7 @@ class TransactionInvalidationTest extends TestCase
         $this->assertSame('Alicia', $result->name);
     }
 
-    public function test_insert_in_transaction_preserves_existing_model_payloads_on_commit(): void
+    public function test_insert_in_transaction_bumps_version_on_commit(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         $bob = Author::create(['name' => 'Bob']);
@@ -197,13 +200,15 @@ class TransactionInvalidationTest extends TestCase
         $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
         $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
 
+        $versionBefore = NormCache::currentVersion(Author::class);
+
         DB::transaction(function () {
             Author::create(['name' => 'Carol']);
         });
 
-        // Insert only needs a version bump — existing payloads should not be flushed.
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $alice->id));
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $bob->id));
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+        $this->assertNull($this->modelCacheEntry(Author::class, $alice->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $bob->id));
     }
 
     public function test_insert_in_transaction_still_invalidates_query_cache_on_commit(): void

@@ -19,6 +19,8 @@ final class ModelHydrator
 
     private static ?\Closure $setAttributeDirectClosure = null;
 
+    private static array $overridesNewFromBuilder = [];
+
     private static ?\Closure $getAttributeDirectClosure = null;
 
     private static ?\Closure $transformScalarClosure = null;
@@ -82,11 +84,16 @@ final class ModelHydrator
         $classKey = $this->keys->classKey($modelClass);
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
 
-        $raw ??= $this->store->getMany($this->modelKeysFor($classKey, $ids));
+        // Pre-supplied $raw skips the version GET; resolve lazily only if there are misses.
+        if ($raw === null) {
+            $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
+            $raw = $this->store->getMany($this->modelKeysFor($classKey, $modelVersion, $ids));
+        } else {
+            $modelVersion = 0; // deferred
+        }
 
         ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
         $lockKey = $wakeKey = $token = null;
-        $version = 0;
 
         if ($hits !== [] && $reporting) {
             CacheReporter::modelHitActive($modelClass, array_keys($hits), $debugbarStart, [
@@ -99,6 +106,10 @@ final class ModelHydrator
             return array_values($hits);
         }
 
+        if ($containedInQueryHit) {
+            $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
+        }
+
         if ($reporting) {
             CacheReporter::modelMissActive($modelClass, $missed, $debugbarStart, [
                 'hits' => array_keys($hits),
@@ -108,24 +119,36 @@ final class ModelHydrator
 
         [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
 
-        [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
+        [$status, $missed] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $modelVersion, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
 
         if ($status === 'building' && $missed !== []) {
             $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
 
-            [$status, $missed, $version] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
+            [$status, $missed] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $modelVersion, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
         }
 
         if ($status === 'miss') {
             try {
-                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $version, $lockKey, $wakeKey, $token);
+                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, true, $lockKey, $wakeKey, $token);
             } catch (\Throwable $e) {
                 $this->store->releaseBuilding($lockKey, $wakeKey, $token);
 
                 throw $e;
             }
-        } elseif ($missed !== []) {
-            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $version);
+        } elseif ($status === 'hit' && $missed !== []) {
+            // Corrupt payload: Lua reported hit but deserialization failed. Only the lock owner overwrites.
+            if ($this->store->setNxEx($lockKey, $token, $this->buildingLockTtl)) {
+                try {
+                    $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, true, $lockKey, $wakeKey, $token);
+                } catch (\Throwable $e) {
+                    $this->store->releaseBuilding($lockKey, $wakeKey, $token);
+                    throw $e;
+                }
+            } else {
+                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, false);
+            }
+        } elseif ($status === 'building' && $missed !== []) {
+            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, false);
         }
 
         $ordered = [];
@@ -151,9 +174,9 @@ final class ModelHydrator
         return [$lockKey, $wakeKey, $token];
     }
 
-    private function modelKeysFor(string $classKey, array $ids): array
+    private function modelKeysFor(string $classKey, int $modelVersion, array $ids): array
     {
-        $prefix = $this->keys->modelPrefix($classKey);
+        $prefix = $this->keys->modelPrefix($classKey, $modelVersion);
         $keys = [];
         foreach ($ids as $id) {
             $keys[] = $prefix . $id;
@@ -167,6 +190,7 @@ final class ModelHydrator
         array $idsToFetch,
         string $modelClass,
         string $classKey,
+        int $modelVersion,
         ?array $projection,
         ?Model $prototype,
         string $lockKey,
@@ -174,16 +198,14 @@ final class ModelHydrator
         string $token,
         array &$hits,
     ): array {
-        $fetchKeys = $this->modelKeysFor($classKey, $idsToFetch);
+        $fetchKeys = $this->modelKeysFor($classKey, $modelVersion, $idsToFetch);
 
         $result = $this->store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [...$fetchKeys, $lockKey, $this->keys->verKey($classKey), $wakeKey],
+            [...$fetchKeys, $lockKey, '', $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );
 
-        $status = $result[0];
-        $version = $this->versions->normalizeVersion($result[2] ?? null);
         $raw = $this->store->unserializeMany($result[3] ?? []);
 
         ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $raw, $projection, $prototype);
@@ -193,13 +215,12 @@ final class ModelHydrator
         }
 
         if ($stillMissed === []) {
-            return ['hit', [], 0];
+            return ['hit', []];
         }
 
-        return [$status, $stillMissed, $version];
+        return [$result[0], $stillMissed];
     }
 
-    // Fetches still-missing ids from the database, caches them, and merges into $hits by reference.
     private function fetchAndMerge(
         array $missed,
         string $modelClass,
@@ -209,6 +230,7 @@ final class ModelHydrator
         bool $preserveQueryShape,
         array &$hits,
         int $modelVersion,
+        bool $writeCache,
         ?string $buildingKey = null,
         ?string $wakeKey = null,
         ?string $token = null,
@@ -219,7 +241,7 @@ final class ModelHydrator
 
         $fetched = $this->fetchFromDatabaseAndCache(
             $missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape,
-            $modelVersion, $buildingKey, $wakeKey, $token
+            $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
         );
 
         foreach ($fetched as $id => $model) {
@@ -326,6 +348,7 @@ final class ModelHydrator
         ?EloquentBuilder $missedQuery,
         bool $preserveQueryShape,
         int $modelVersion,
+        bool $writeCache,
         ?string $buildingKey = null,
         ?string $wakeKey = null,
         ?string $token = null,
@@ -338,12 +361,12 @@ final class ModelHydrator
 
         if ($this->overridesNewFromBuilder($query->getModel())) {
             return $this->fetchAndCacheUsingEloquent(
-                $missed, $modelClass, $classKey, $projection, $query, $modelVersion, $buildingKey, $wakeKey, $token
+                $missed, $modelClass, $classKey, $projection, $query, $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
             );
         }
 
         return $this->fetchAndCacheUsingClosure(
-            $missed, $modelClass, $classKey, $projection, $query, $query->getModel(), $modelVersion, $buildingKey, $wakeKey, $token
+            $missed, $modelClass, $classKey, $projection, $query, $query->getModel(), $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
         );
     }
 
@@ -354,6 +377,7 @@ final class ModelHydrator
         ?array $projection,
         EloquentBuilder $query,
         int $modelVersion,
+        bool $writeCache,
         ?string $buildingKey = null,
         ?string $wakeKey = null,
         ?string $token = null,
@@ -373,8 +397,8 @@ final class ModelHydrator
             $attrs = $model->getRawOriginal();
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
-            if (!$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
+            if ($writeCache && !$isTrashed) {
+                $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
             }
 
             if ($hydrate !== null) {
@@ -382,17 +406,8 @@ final class ModelHydrator
             }
         }
 
-        if ($attrsByKey !== [] || $buildingKey !== null) {
-            $this->store->setManyTrackedIfVersion(
-                $attrsByKey,
-                $this->ttl,
-                $this->keys->membersKey($classKey),
-                $this->keys->verKey($classKey),
-                $modelVersion,
-                $buildingKey,
-                $wakeKey,
-                $token
-            );
+        if ($writeCache || $buildingKey !== null) {
+            $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
         }
 
         return $loaded->all();
@@ -406,6 +421,7 @@ final class ModelHydrator
         EloquentBuilder $query,
         Model $prototype,
         int $modelVersion,
+        bool $writeCache,
         ?string $buildingKey = null,
         ?string $wakeKey = null,
         ?string $token = null,
@@ -433,8 +449,8 @@ final class ModelHydrator
             $id = $attrs[$pk];
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
-            if (!$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
+            if ($writeCache && !$isTrashed) {
+                $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
             }
 
             $returnAttrs = $projection !== null
@@ -448,11 +464,25 @@ final class ModelHydrator
             $models[$id] = $instance;
         }
 
+        if ($writeCache || $buildingKey !== null) {
+            $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
+        }
+
+        return $models;
+    }
+
+    private function storeModelAttrs(
+        array $attrsByKey,
+        string $classKey,
+        int $modelVersion,
+        ?string $buildingKey,
+        ?string $wakeKey,
+        ?string $token,
+    ): void {
         if ($attrsByKey !== [] || $buildingKey !== null) {
-            $this->store->setManyTrackedIfVersion(
+            $this->store->setManyIfVersion(
                 $attrsByKey,
                 $this->ttl,
-                $this->keys->membersKey($classKey),
                 $this->keys->verKey($classKey),
                 $modelVersion,
                 $buildingKey,
@@ -460,15 +490,19 @@ final class ModelHydrator
                 $token
             );
         }
+    }
 
-        return $models;
+    public static function reset(): void
+    {
+        self::$overridesNewFromBuilder = [];
     }
 
     private function overridesNewFromBuilder(Model $model): bool
     {
-        $method = new \ReflectionMethod($model, 'newFromBuilder');
+        $class = $model::class;
 
-        return $method->getDeclaringClass()->getName() !== Model::class;
+        return self::$overridesNewFromBuilder[$class] ??=
+            (new \ReflectionMethod($model, 'newFromBuilder'))->getDeclaringClass()->getName() !== Model::class;
     }
 
     public static function hydrateClosure(): \Closure

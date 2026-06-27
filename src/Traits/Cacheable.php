@@ -90,8 +90,6 @@ trait Cacheable
         $existsBefore = $this->exists;
         $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
 
-        $this->evictBeforeSaveForObservers($existsBefore, $originalKey);
-
         $result = $save();
 
         if ($result) {
@@ -119,37 +117,7 @@ trait Cacheable
             return;
         }
 
-        if ($originalKey !== null && $originalKey !== $this->getKey()) {
-            NormCache::evictModelKey(static::class, $originalKey);
-        }
-
         NormCache::flushInstance($this);
-    }
-
-    // Evict before save so observers do not read an outdated model payload.
-    private function evictBeforeSaveForObservers(bool $existsBefore, mixed $originalKey = null): void
-    {
-        if (!$existsBefore) {
-            return;
-        }
-
-        if (!$this->isDirty()) {
-            return;
-        }
-
-        if ($this->isPendingRestoreSave()) {
-            return;
-        }
-
-        if (!NormCache::isEnabled()) {
-            return;
-        }
-
-        if ($this->getConnection()->transactionLevel() !== 0) {
-            return;
-        }
-
-        NormCache::evictModelKey(static::class, $originalKey ?? $this->getKey());
     }
 
     private function isRestoreSave(bool $existsBefore): bool
@@ -161,17 +129,6 @@ trait Cacheable
         $deletedAtColumn = $this->getDeletedAtColumn();
 
         return $this->wasChanged($deletedAtColumn) && $this->{$deletedAtColumn} === null;
-    }
-
-    private function isPendingRestoreSave(): bool
-    {
-        if (!method_exists($this, 'getDeletedAtColumn')) {
-            return false;
-        }
-
-        $deletedAtColumn = $this->getDeletedAtColumn();
-
-        return $this->isDirty($deletedAtColumn) && $this->{$deletedAtColumn} === null;
     }
 
     private function runWithoutCache(callable $callback)

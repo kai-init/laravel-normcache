@@ -115,27 +115,24 @@ class CacheManagerTest extends TestCase
 
     public function test_flush_model_bumps_version_and_clears_related_keys(): void
     {
-        $redis = Redis::connection('normcache-test');
         $store = $this->manager->getStore();
         $postsKey = DB::getDefaultConnection() . ':posts';
         $authorsKey = DB::getDefaultConnection() . ':authors';
 
-        $redis->sadd("{nc}:test:members:model:{{$postsKey}}", "{nc}:test:model:{{$postsKey}}:1", "{nc}:test:model:{{$postsKey}}:2");
-        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
-        $store->set("model:{{$postsKey}}:2", ['id' => 2], 3600);
+        $store->set("model:{{$postsKey}}:v0:1", ['id' => 1], 3600);
+        $store->set("model:{{$postsKey}}:v0:2", ['id' => 2], 3600);
         $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
-        $store->set("model:{{$authorsKey}}:1", ['id' => 1], 3600);
+        $store->set("model:{{$authorsKey}}:v0:1", ['id' => 1], 3600);
 
         $versionBefore = $this->manager->currentVersion(Post::class);
 
         $this->manager->forceFlushModel(Post::class);
 
-        $this->assertNull($store->get("model:{{$postsKey}}:1"));
-        $this->assertNull($store->get("model:{{$postsKey}}:2"));
-        $this->assertSame(0, $redis->exists("{nc}:test:members:model:{{$postsKey}}"));
-        $this->assertNotNull($store->get("query:{{$postsKey}}:v1:abc"));
-        $this->assertNotNull($store->get("model:{{$authorsKey}}:1"));
         $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Post::class));
+        $this->assertNull($this->modelCacheEntry(Post::class, 1));
+        $this->assertNull($this->modelCacheEntry(Post::class, 2));
+        $this->assertNotNull($store->get("query:{{$postsKey}}:v1:abc"));
+        $this->assertNotNull($store->get("model:{{$authorsKey}}:v0:1"));
     }
 
     public function test_flush_all_removes_all_package_keys_and_returns_count(): void
@@ -144,16 +141,15 @@ class CacheManagerTest extends TestCase
         $postsKey = DB::getDefaultConnection() . ':posts';
 
         $store->set("query:{{$postsKey}}:v1:abc", [1, 2], 3600);
-        $store->set("model:{{$postsKey}}:1", ['id' => 1], 3600);
+        $store->set("model:{{$postsKey}}:v0:1", ['id' => 1], 3600);
         $store->set("ver:{{$postsKey}}:", 3, 3600);
         $store->set("through:{{$postsKey}}:author:v1:v1:abc", [1], 3600);
         $store->set("scheduled:{{$postsKey}}:", (string) ((int) floor(microtime(true) * 1000) + 1000), 3600);
         $store->set("building:query:{{$postsKey}}:v1:abc", 1, 3600);
-        Redis::connection('normcache-test')->sadd("{nc}:test:members:model:{{$postsKey}}", "{nc}:test:model:{{$postsKey}}:1");
 
         $deleted = $this->manager->flushAll();
 
-        $this->assertSame(7, $deleted);
+        $this->assertSame(6, $deleted);
         $this->assertEmpty($this->redisKeys('test:*'));
     }
 
@@ -185,21 +181,19 @@ class CacheManagerTest extends TestCase
         config()->set('database.redis.options.prefix', '');
     }
 
-    public function test_targeted_delete_outside_transaction_removes_membership_reference(): void
+    public function test_targeted_update_bumps_version_and_makes_model_cache_unreachable(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Author::all();
 
-        $classKey = $this->manager->classKey(Author::class);
-        $memberKey = "{nc}:test:members:model:{{$classKey}}";
-        $modelKey = "{nc}:test:model:{{$classKey}}:{$author->id}";
-        $redis = Redis::connection('normcache-test');
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
 
-        $this->assertTrue((bool) $redis->sismember($memberKey, $modelKey));
+        $versionBefore = $this->manager->currentVersion(Author::class);
 
         Author::whereKey($author->id)->update(['name' => 'Alicia']);
 
-        $this->assertFalse((bool) $redis->sismember($memberKey, $modelKey));
+        $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Author::class));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
     public function test_scheduled_invalidation_key_persists_until_processed(): void
@@ -338,11 +332,9 @@ class CacheManagerTest extends TestCase
             $this->manager->invalidateMultipleVersions([Author::class, Post::class], 'testing');
         });
 
-        // Version bumped after commit
         $this->assertGreaterThan($versionBefore, $this->manager->currentVersion(Author::class));
-        // Model payloads preserved (version bump only, not full flush)
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
-        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
     }
 
     public function test_store_versioned_result_does_not_write_or_release_when_building_token_mismatches(): void

@@ -44,11 +44,14 @@ final class NormalizedCacheReader
         $expectedVersions = $this->keys->versionsFromSegment($seg);
         [$status, $ids] = $this->resolveIds($result, $queryKey);
 
+        // Use the version Lua already resolved atomically; a separate GET would race with version bumps.
+        $modelVersion = is_array($ids) ? (int) ($expectedVersions[0] ?? 0) : 0;
+
         return $this->toQueryResult(
             $status, $queryKey, $buildingKey, (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
             $versionKeys, $expectedVersions,
             $ids,
-            is_array($ids) ? $this->fetchModels($classKey, $ids) : null
+            is_array($ids) ? $this->fetchModels($classKey, $modelVersion, $ids) : null
         );
     }
 
@@ -171,13 +174,13 @@ final class NormalizedCacheReader
         return $result->status === CacheStatus::Building ? null : $result;
     }
 
-    private function fetchModels(string $classKey, array $ids): array
+    private function fetchModels(string $classKey, int $modelVersion, array $ids): array
     {
         if ($ids === []) {
             return [];
         }
 
-        $modelPrefix = $this->keys->modelPrefix($classKey);
+        $modelPrefix = $this->keys->modelPrefix($classKey, $modelVersion);
 
         return $this->store->getMany(array_map(static fn($id) => $modelPrefix . $id, $ids));
     }

@@ -72,19 +72,19 @@ class CacheEventsTest extends TestCase
         });
     }
 
-    public function test_partial_model_cache_miss_fires_both_events(): void
+    public function test_partial_model_cache_miss_fires_miss_for_both_when_version_bumped(): void
     {
         $alice = Author::create(['name' => 'Alice']);
-        Author::all(); // warm alice's model key
+        Author::all(); // warm alice's model key at version V
 
-        $bob = Author::create(['name' => 'Bob']); // bob's model key not cached yet
+        Author::create(['name' => 'Bob']); // version bumps to V+1; alice's V key is no longer current
 
         Event::fake([ModelCacheHit::class, ModelCacheMiss::class]);
 
-        // query cache is outdated (version bumped by Bob's insert), so both IDs are fetched via MGET
+        // query cache is stale; version bump makes alice's model key unreachable too, so both miss
         Author::all();
 
-        Event::assertDispatched(ModelCacheHit::class);
+        Event::assertNotDispatched(ModelCacheHit::class);
         Event::assertDispatched(ModelCacheMiss::class);
     }
 

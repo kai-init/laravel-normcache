@@ -39,15 +39,14 @@ class ModelCachingTest extends TestCase
     {
         $author = Author::create(['name' => 'Alice']);
         Author::all();
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
         Post::all();
 
         $this->artisan('normcache:flush', ['--model' => Author::class])->assertSuccessful();
 
-        $default = DB::getDefaultConnection();
-
-        $this->assertEmpty($this->redisKeys('test:model:{' . $default . ':authors}:*'));
-        $this->assertNotEmpty($this->redisKeys('test:model:{' . $default . ':posts}:*'));
+        // Author entries are unreachable after the version bump; Post cache is unaffected.
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
     }
 
     public function test_flush_command_rejects_nonexistent_class(): void

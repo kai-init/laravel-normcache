@@ -212,17 +212,16 @@ class CacheManager
         }
 
         $classKey = $this->keys->classKey($modelClass);
-        $modelVersion = $this->currentVersion($modelClass);
+        $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
 
         $attrsByKey = [];
         foreach ($modelAttrs as $id => $attrs) {
-            $attrsByKey[$this->keys->modelPrefix($classKey) . $id] = $attrs;
+            $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
         }
 
-        $this->store->setManyTrackedIfVersion(
+        $this->store->setManyIfVersion(
             $attrsByKey,
             $this->config->ttl,
-            $this->keys->membersKey($classKey),
             $this->keys->verKey($classKey),
             $modelVersion
         );

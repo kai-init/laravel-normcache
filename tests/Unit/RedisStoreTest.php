@@ -103,9 +103,9 @@ class RedisStoreTest extends TestCase
         $this->assertSame('bar', $this->store->unserialize($result));
     }
 
-    public function test_it_can_set_many_tracked_if_version(): void
+    public function test_it_can_set_many_if_version(): void
     {
-        $this->store->delete(['member:1', 'ver:1', 'key:1', 'key:2']);
+        $this->store->delete(['ver:1', 'key:1', 'key:2']);
         $this->store->setRaw('ver:1', '1', 60);
 
         $attrs = [
@@ -113,21 +113,21 @@ class RedisStoreTest extends TestCase
             'key:2' => ['id' => 2, 'name' => 'Bob'],
         ];
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:1', 'ver:1', 1);
+        $this->store->setManyIfVersion($attrs, 60, 'ver:1', 1);
 
         $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
         $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('key:2'));
 
         // Should NOT update if version mismatch
         $attrs2 = ['key:1' => ['id' => 1, 'name' => 'Charlie']];
-        $this->store->setManyTrackedIfVersion($attrs2, 60, 'member:1', 'ver:1', 2);
+        $this->store->setManyIfVersion($attrs2, 60, 'ver:1', 2);
 
         $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
     }
 
-    public function test_it_can_set_many_tracked_if_version_with_lock_release(): void
+    public function test_it_can_set_many_if_version_with_lock_release(): void
     {
-        $this->store->delete(['member:2', 'ver:2', 'key:3', 'key:4', 'lock:2', 'wake:2']);
+        $this->store->delete(['ver:2', 'key:3', 'key:4', 'lock:2', 'wake:2']);
         $this->store->setRaw('ver:2', '1', 60);
         $this->store->setNxEx('lock:2', 'tok', 60);
 
@@ -136,16 +136,16 @@ class RedisStoreTest extends TestCase
             'key:4' => ['id' => 4, 'name' => 'Eve'],
         ];
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:2', 'ver:2', 1, 'lock:2', 'wake:2', 'tok');
+        $this->store->setManyIfVersion($attrs, 60, 'ver:2', 1, 'lock:2', 'wake:2', 'tok');
 
         $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('key:3'));
         $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('key:4'));
         $this->assertNull($this->store->getRaw('lock:2'), 'build lock should be released after the write');
     }
 
-    public function test_set_many_tracked_if_version_handles_large_script_batches(): void
+    public function test_set_many_if_version_handles_large_script_batches(): void
     {
-        $this->store->delete(['member:large', 'ver:large']);
+        $this->store->delete(['ver:large']);
         $this->store->setRaw('ver:large', '1', 60);
 
         $attrs = [];
@@ -153,13 +153,12 @@ class RedisStoreTest extends TestCase
             $attrs["key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
         }
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:large', 'ver:large', 1);
+        $this->store->setManyIfVersion($attrs, 60, 'ver:large', 1);
 
         $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('key:large:9999'));
-        $this->assertSame(10000, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:large']));
     }
 
-    public function test_set_many_tracked_script_chunks_sadd_internally(): void
+    public function test_set_many_if_version_script_chunks_internally(): void
     {
         $this->store->setRaw('ver:script-large', '1', 60);
 
@@ -172,23 +171,22 @@ class RedisStoreTest extends TestCase
         }
 
         $result = $this->store->script(
-            RedisScripts::get('store_many_tracked_if_version'),
-            array_merge(['ver:script-large', 'member:script-large', '', ''], $keys),
+            RedisScripts::get('store_many_if_version'),
+            array_merge(['ver:script-large', '', ''], $keys),
             array_merge(['1', '60', (string) $count, ''], $values)
         );
 
         $this->assertSame($count, (int) $result);
-        $this->assertSame($count, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:script-large']));
     }
 
     public function test_it_skips_write_but_still_releases_on_version_mismatch(): void
     {
-        $this->store->delete(['member:3', 'ver:3', 'key:5', 'lock:3', 'wake:3']);
+        $this->store->delete(['ver:3', 'key:5', 'lock:3', 'wake:3']);
         $this->store->setRaw('ver:3', '2', 60);
         $this->store->setNxEx('lock:3', 'tok', 60);
 
-        $this->store->setManyTrackedIfVersion(
-            ['key:5' => ['id' => 5]], 60, 'member:3', 'ver:3', 1, 'lock:3', 'wake:3', 'tok'
+        $this->store->setManyIfVersion(
+            ['key:5' => ['id' => 5]], 60, 'ver:3', 1, 'lock:3', 'wake:3', 'tok'
         );
 
         $this->assertNull($this->store->get('key:5'));
@@ -200,7 +198,7 @@ class RedisStoreTest extends TestCase
         $this->store->delete(['lock:4', 'wake:4']);
         $this->store->setNxEx('lock:4', 'tok', 60);
 
-        $this->store->setManyTrackedIfVersion([], 60, 'member:4', 'ver:4', 1, 'lock:4', 'wake:4', 'tok');
+        $this->store->setManyIfVersion([], 60, 'ver:4', 1, 'lock:4', 'wake:4', 'tok');
 
         $this->assertNull($this->store->getRaw('lock:4'));
     }
@@ -229,7 +227,7 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', false);
+            $store = new RedisStore('normcache-test', 'test:', '');
             $store->set('query:abc', [1], 60);
             $store->set('query:def', [2], 60);
             $store->set('model:1', ['id' => 1], 60);
@@ -257,7 +255,7 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', false);
+            $store = new RedisStore('normcache-test', 'test:', '');
             $store->set('query:1', 'a', 60);
             $store->set('query:2', 'b', 60);
             $store->set('model:1', 'c', 60);
@@ -365,7 +363,7 @@ class RedisStoreTest extends TestCase
         $predisClient = new PredisClient([$standaloneConn], ['cluster' => 'predis']);
         $clusterConnection = new PredisClusterConnection($predisClient);
 
-        $store = new RedisStore('normcache-test', 'testscan:', false);
+        $store = new RedisStore('normcache-test', 'testscan:', '');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $clusterConnection);
 
         $deleted = $store->flushByPatterns(['model:{posts}:*']);
@@ -415,7 +413,7 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', '', true);
+        $store = new RedisStore('normcache-test', '', '');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $this->assertSame(
@@ -430,7 +428,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test', '', '');
         $data = ['x' => 1];
 
         $this->assertSame($data, $store->unserialize(igbinary_serialize($data)));
@@ -454,7 +452,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test', '', '');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
@@ -468,7 +466,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test', '', '');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
@@ -487,7 +485,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test', '', '');
         $serializer = (new ReflectionProperty($store, 'serializer'))->getValue($store);
         (new ReflectionProperty($serializer, 'igbinary'))->setValue($serializer, false);
 

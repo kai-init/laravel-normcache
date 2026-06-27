@@ -24,7 +24,6 @@ use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
-use ReflectionProperty;
 
 abstract class TestCase extends OrchestraTestCase
 {
@@ -115,29 +114,35 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function resetClassKeyCache(): void
     {
-        (new ReflectionProperty(CacheKeyBuilder::class, 'classKeys'))->setValue(null, []);
-        (new ReflectionProperty(CacheKeyBuilder::class, 'prototypes'))->setValue(null, []);
-        (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->setValue(null, []);
+        CacheKeyBuilder::reset();
     }
 
     protected function modelCacheEntry(string $class, mixed $id): mixed
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
 
-        return $this->cacheManager()->getStore()->get($key);
+        return $manager->getStore()->get($this->currentModelKey($manager, $class, $id));
     }
 
     protected function evictModelCache(string $class, mixed $id): void
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
-        $this->cacheManager()->getStore()->delete($key);
+        $manager = $this->cacheManager();
+        $manager->getStore()->delete($this->currentModelKey($manager, $class, $id));
     }
 
     protected function prefixedModelKey(string $class, mixed $id): string
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
 
-        return $this->cacheManager()->getStore()->prefix($key);
+        return $manager->getStore()->prefix($this->currentModelKey($manager, $class, $id));
+    }
+
+    private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
+    {
+        $classKey = $manager->classKey($class);
+        $version = $manager->currentVersion($class);
+
+        return 'model:{' . $classKey . '}:v' . $version . ':' . $id;
     }
 
     protected function redisKeys(string $pattern = '*'): array

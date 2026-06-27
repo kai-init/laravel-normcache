@@ -58,8 +58,8 @@ class ModelHydratorStampedeTest extends TestCase
         // The lock is held by another process — we must not release it.
         $this->assertSame('other-token', $store->getRaw($lockKey));
 
-        // Our DB fallback still populates the cache for future requests.
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+        // Non-owner waiters read from DB but must not write cache — that is the lock owner's job.
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
     }
 
     public function test_build_status_script_claims_lock_when_unheld(): void
@@ -70,7 +70,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $classKey = $keys->classKey(Author::class);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
-        $modelKey = $keys->modelPrefix($classKey) . 'missing-id';
+        $modelKey = $keys->modelPrefix($classKey, 0) . 'missing-id';
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
@@ -91,7 +91,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $classKey = $keys->classKey(Author::class);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
-        $modelKey = $keys->modelPrefix($classKey) . 'missing-id';
+        $modelKey = $keys->modelPrefix($classKey, 0) . 'missing-id';
         $store->setNxEx($lockKey, 'other-token', 5);
 
         $result = $store->script(
@@ -114,7 +114,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $classKey = $keys->classKey(Author::class);
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
-        $modelKey = $keys->modelPrefix($classKey) . 'present-id';
+        $modelKey = $keys->modelPrefix($classKey, 0) . 'present-id';
         $store->set($modelKey, ['id' => 1, 'name' => 'Present'], 60);
 
         $result = $store->script(
@@ -138,14 +138,15 @@ class ModelHydratorStampedeTest extends TestCase
 
         $author = Author::create(['name' => 'Carol']);
         $classKey = $keys->classKey(Author::class);
-        $modelKey = $keys->modelPrefix($classKey) . $author->id;
+        $version = $versions->normalizeVersion($store->getRaw($keys->verKey($classKey)));
+        $modelKey = $keys->modelPrefix($classKey, $version) . $author->id;
         $store->set($modelKey, $author->getRawOriginal(), 3600);
 
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
         $hits = [];
 
         $method = new \ReflectionMethod($hydrator, 'fetchMissedStatus');
-        $args = [[$author->id], Author::class, $classKey, null, null, $lockKey, $keys->wakeKey($classKey, 'test-lock'), 'token', &$hits];
+        $args = [[$author->id], Author::class, $classKey, $version, null, null, $lockKey, $keys->wakeKey($classKey, 'test-lock'), 'token', &$hits];
         [$status, $missed] = $method->invokeArgs($hydrator, $args);
 
         $this->assertSame('hit', $status);
@@ -168,7 +169,7 @@ class ModelHydratorStampedeTest extends TestCase
         $count = 1200;
         $modelKeys = [];
         for ($i = 0; $i < $count; $i++) {
-            $modelKey = $keys->modelPrefix($classKey) . "present-{$i}";
+            $modelKey = $keys->modelPrefix($classKey, 0) . "present-{$i}";
             $store->set($modelKey, ['id' => $i], 60);
             $modelKeys[] = $modelKey;
         }
@@ -205,7 +206,7 @@ class ModelHydratorStampedeTest extends TestCase
         $missingIndex = 500;
         $modelKeys = [];
         for ($i = 0; $i < $count; $i++) {
-            $modelKey = $keys->modelPrefix($classKey) . "key-{$i}";
+            $modelKey = $keys->modelPrefix($classKey, 0) . "key-{$i}";
             if ($i !== $missingIndex) {
                 $store->set($modelKey, ['id' => $i], 60);
             }
