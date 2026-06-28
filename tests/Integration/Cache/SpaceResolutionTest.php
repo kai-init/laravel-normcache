@@ -76,4 +76,20 @@ class SpaceResolutionTest extends TestCase
             'SpacedPost (content) must write keys under the {nc:content} hash tag',
         );
     }
+
+    public function test_spaced_model_write_invalidates_its_space_cache(): void
+    {
+        SpacedPost::create(['title' => 'First', 'author_id' => 1]);
+
+        $this->assertSame('First', SpacedPost::query()->get()->first()->title);
+
+        $post = SpacedPost::query()->get()->first();
+        $post->update(['title' => 'Second']);
+
+        $this->assertSame(
+            'Second',
+            SpacedPost::query()->get()->first()->title,
+            'content-space cache must invalidate when a content model is written',
+        );
+    }
 }

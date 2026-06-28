@@ -5,8 +5,10 @@ namespace NormCache\Traits;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
+use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
+use NormCache\Values\CacheSpace;
 
 /**
  * @phpstan-require-extends CacheManager
@@ -16,8 +18,22 @@ trait HandlesInvalidation
     /** @var array<string, array<string, true>> */
     private array $flushQueue = [];
 
-    /** @var array<string, array<string, true>> */
+    /** @var array<string, array<string, list<CacheSpace>>> conn => classKey => spaces */
     private array $versionQueue = [];
+
+    private ?CacheSpaceRegistry $spaceRegistry = null;
+
+    /** @return list<CacheSpace> the spaces a model's version key lives in */
+    private function modelSpaces(string $modelClass): array
+    {
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForModel($modelClass);
+    }
+
+    /** @return list<CacheSpace> the spaces a table's version key lives in */
+    private function tableSpaces(string $table): array
+    {
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForTable($table);
+    }
 
     // Invalidation
 
@@ -31,7 +47,7 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class)),
+            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class), $this->modelSpaces($model::class)),
             fn() => $this->doInvalidateVersion($model::class),
         );
     }
@@ -65,7 +81,7 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($class)),
+            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($class), $this->modelSpaces($class)),
             fn() => $this->doInvalidateVersion($class),
         );
     }
@@ -80,15 +96,18 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $connectionName,
-            fn() => $this->queueVersionFlush($connectionName, $classKey),
-            fn() => $this->doInvalidateKey($classKey),
+            fn() => $this->queueVersionFlush($connectionName, $classKey, $this->tableSpaces($table)),
+            fn() => $this->doInvalidateTable($table, $classKey),
         );
     }
 
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->keys->classKey($modelClass);
-        $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl()); // bypass cooldown
+
+        foreach ($this->modelSpaces($modelClass) as $space) {
+            $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl()); // bypass cooldown
+        }
     }
 
     public function flushAll(): int
@@ -146,7 +165,7 @@ trait HandlesInvalidation
             $connectionName,
             function () use ($connectionName, $modelClasses) {
                 foreach ($modelClasses as $modelClass) {
-                    $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass));
+                    $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass), $this->modelSpaces($modelClass));
                 }
             },
             function () use ($modelClasses) {
@@ -160,7 +179,7 @@ trait HandlesInvalidation
     public function commitPending(string $connectionName): void
     {
         $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
-        $versions = array_keys($this->versionQueue[$connectionName] ?? []);
+        $versions = $this->versionQueue[$connectionName] ?? [];
 
         unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName]);
 
@@ -175,9 +194,11 @@ trait HandlesInvalidation
 
             $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
 
-            foreach ($versions as $classKey) {
+            foreach ($versions as $classKey => $spaces) {
                 if (!in_array($classKey, $flushClassKeys, true)) {
-                    $this->doInvalidateKey($classKey);
+                    foreach ($spaces as $space) {
+                        $this->doInvalidateKey($classKey, $space);
+                    }
                 }
             }
         });
@@ -208,19 +229,30 @@ trait HandlesInvalidation
 
     private function doInvalidateVersion(string $modelClass): void
     {
-        $this->doInvalidateKey($this->keys->classKey($modelClass));
+        $classKey = $this->keys->classKey($modelClass);
+
+        foreach ($this->modelSpaces($modelClass) as $space) {
+            $this->doInvalidateKey($classKey, $space);
+        }
     }
 
-    private function doInvalidateKey(string $classKey): void
+    private function doInvalidateTable(string $table, string $classKey): void
+    {
+        foreach ($this->tableSpaces($table) as $space) {
+            $this->doInvalidateKey($classKey, $space);
+        }
+    }
+
+    private function doInvalidateKey(string $classKey, ?CacheSpace $space = null): void
     {
         if ($this->config->cooldown <= 0) {
-            $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl());
+            $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl());
 
             return;
         }
 
-        $this->resolveCurrentVersion($classKey);
-        $this->scheduleInvalidation($classKey);
+        $this->resolveCurrentVersion($classKey, $space);
+        $this->scheduleInvalidation($classKey, $space);
     }
 
     private function versionTtl(): int
@@ -228,24 +260,24 @@ trait HandlesInvalidation
         return max($this->config->ttl, $this->config->queryTtl) * 2;
     }
 
-    private function resolveCurrentVersion(string $classKey): string|int|null
+    private function resolveCurrentVersion(string $classKey, ?CacheSpace $space = null): string|int|null
     {
         if ($this->config->cooldown <= 0) {
-            return $this->store->getRaw($this->keys->verKey($classKey));
+            return $this->store->getRaw($this->keys->verKey($classKey, $space));
         }
 
         return $this->store->script(
             RedisScripts::get('fetch_version_with_cooldown'),
-            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
+            [$this->keys->verKey($classKey, $space), $this->keys->scheduledKey($classKey, $space)],
             [(string) (int) floor(microtime(true) * 1000)]
         );
     }
 
-    private function scheduleInvalidation(string $classKey): void
+    private function scheduleInvalidation(string $classKey, ?CacheSpace $space = null): void
     {
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->config->cooldown * 1000);
 
-        $this->store->setNxEx($this->keys->scheduledKey($classKey), (string) $dueAtMs, $this->config->cooldown + $this->versionTtl());
+        $this->store->setNxEx($this->keys->scheduledKey($classKey, $space), (string) $dueAtMs, $this->config->cooldown + $this->versionTtl());
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void
@@ -253,8 +285,9 @@ trait HandlesInvalidation
         $this->flushQueue[$connectionName][$modelClass] = true;
     }
 
-    private function queueVersionFlush(string $connectionName, string $classKey): void
+    /** @param  list<CacheSpace>  $spaces */
+    private function queueVersionFlush(string $connectionName, string $classKey, array $spaces): void
     {
-        $this->versionQueue[$connectionName][$classKey] = true;
+        $this->versionQueue[$connectionName][$classKey] = $spaces;
     }
 }

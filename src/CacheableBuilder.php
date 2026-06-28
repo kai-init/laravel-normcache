@@ -343,7 +343,7 @@ class CacheableBuilder extends Builder
         }
 
         try {
-            $cachedTotal = $this->rememberPaginationTotal($prepared, $plan);
+            $cachedTotal = NormCache::keys()->withSpace($plan->space, fn() => $this->rememberPaginationTotal($prepared, $plan));
         } catch (\Throwable $e) {
             NormCache::fallback($e);
 

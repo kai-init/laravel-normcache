@@ -154,13 +154,13 @@ trait CachesScalarResults
             return $computeValue();
         }
 
-        $result = NormCache::result()->execute(
+        $result = NormCache::keys()->withSpace($plan->space, fn() => NormCache::result()->execute(
             $prepared,
             $plan,
             $kind,
             $columns,
             $computeValue
-        );
+        ));
 
         return $result[0];
     }
