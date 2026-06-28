@@ -4,6 +4,7 @@ namespace NormCache\Planning;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
@@ -73,7 +74,7 @@ final class CachePlanner
             CacheOperation::MorphToEagerLoad => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
         };
 
-        return $explain ? $plan : $this->applySpaceValidation($plan, $builder, $model, $context->operation);
+        return $this->applySpaceValidation($plan, $builder, $model, $context->operation, $explain);
     }
 
     private ?CacheSpaceResolver $spaceResolver = null;
@@ -87,6 +88,7 @@ final class CachePlanner
         CacheableBuilder $builder,
         Model $model,
         CacheOperation $operation,
+        bool $explain = false,
     ): CachePlan {
         if (!$plan->isCacheable()) {
             return $plan;
@@ -106,10 +108,18 @@ final class CachePlanner
             return $plan->withSpace($space);
         }
 
-        $reasons = ['cross-space dependencies for space [' . $space->name . ']: '
-            . implode(', ', [...$validation->invalidModels, ...$validation->invalidTables])];
+        $offending = implode(', ', [...$validation->invalidModels, ...$validation->invalidTables]);
+        $reasons = ['cross-space dependencies for space [' . $space->name . ']: ' . $offending];
 
-        if (config('normcache.spaces.cross_space_behavior', 'bypass') === 'throw') {
+        if (!$explain && config('app.debug', false)) {
+            $modelClass = $model::class;
+            Log::warning(
+                "NormCache: query for [{$modelClass}] in space [{$space->name}] depends on [{$offending}] "
+                . "which are not in that space; the query will not cache. Add them to the space or drop the dependency."
+            );
+        }
+
+        if (!$explain && config('normcache.spaces.cross_space_behavior', 'bypass') === 'throw') {
             throw new \RuntimeException('NormCache: ' . $reasons[0]);
         }
 
@@ -118,7 +128,7 @@ final class CachePlanner
             dependencies: $plan->dependencies,
             reasons: $reasons,
             bypassReasons: ['dependency' => $reasons],
-        );
+        )->withSpace($space);
     }
 
     private function globalBypass(

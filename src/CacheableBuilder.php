@@ -205,10 +205,14 @@ class CacheableBuilder extends Builder
             selectAll: true,
         ), PlanningMode::Explain);
 
+        $space = ($plan->space !== null && $plan->space->name !== 'default')
+            ? ' [space: ' . $plan->space->name . ']'
+            : '';
+
         return match ($plan->strategy) {
-            CacheStrategy::DirectModels => 'cached: direct (primary key)',
-            CacheStrategy::NormalizedQuery => 'cached',
-            CacheStrategy::VersionedResult => $this->explainResultStrategy(),
+            CacheStrategy::DirectModels => 'cached: direct (primary key)' . $space,
+            CacheStrategy::NormalizedQuery => 'cached' . $space,
+            CacheStrategy::VersionedResult => $this->explainResultStrategy() . $space,
             CacheStrategy::LiveQuery => $this->explainBypassStrategy($plan),
         };
     }

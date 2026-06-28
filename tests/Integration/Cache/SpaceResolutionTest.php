@@ -94,6 +94,19 @@ class SpaceResolutionTest extends TestCase
         );
     }
 
+    public function test_explain_shows_the_resolved_space(): void
+    {
+        $this->assertStringContainsString('[space: content]', SpacedPost::query()->explain());
+        $this->assertStringNotContainsString('[space:', Post::query()->explain());
+    }
+
+    public function test_explain_reports_cross_space_bypass(): void
+    {
+        $explain = SpacedPost::query()->dependsOn([Author::class])->explain();
+
+        $this->assertStringContainsString('cross-space', $explain);
+    }
+
     public function test_co_located_relation_eager_load_caches_under_the_space_tag(): void
     {
         $author = SpacedAuthor::create(['name' => 'Ann']);
