@@ -1,0 +1,20 @@
+# Local Redis for the test suite.
+#   redis          — single node on 6379 (default `composer test`)
+#   redis-cluster  — 6-node cluster (3 masters + 3 replicas) on 7010-7015,
+#                    matching REDIS_CLUSTER_NODES in phpunit.xml (`composer test:cluster`)
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  redis-cluster:
+    image: grokzen/redis-cluster:7.0.10
+    environment:
+      IP: 0.0.0.0
+      INITIAL_PORT: 7010
+      MASTERS: 3
+      SLAVES_PER_MASTER: 1
+    ports:
+      - "7010-7015:7010-7015"

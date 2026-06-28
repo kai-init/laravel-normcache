@@ -147,13 +147,15 @@ abstract class NormalizedReader
         $ttl ??= $this->queryTtl;
 
         if (!empty($versionKeys)) {
+            $keys = array_merge($versionKeys, [$key]);
+            if ($buildingKey !== null) {
+                $keys[] = $buildingKey;
+                $keys[] = $this->keys->buildingToWakeKey($buildingKey);
+            }
+
             $this->store->script(
                 RedisScripts::get('store_versioned_payload'),
-                array_merge($versionKeys, [
-                    $key,
-                    $buildingKey ?? '',
-                    $buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : '',
-                ]),
+                $keys,
                 array_merge(
                     [(string) count($versionKeys), '1', (string) $ttl],
                     $expectedVersions,

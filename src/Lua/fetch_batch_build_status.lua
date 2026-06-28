@@ -1,16 +1,14 @@
 -- Re-checks still-missing model/pivot keys and atomically claims the build lock if
--- anything is still missing. Used for both model attributes (with version) and pivot
--- payloads (without version).
+-- anything is still missing. Used for both model attributes and pivot payloads.
 --
 -- KEYS[1..n] = model/pivot keys to re-check
 -- KEYS[n+1]  = building lock key
--- KEYS[n+2]  = version key ('' to skip — pivot case)
--- KEYS[n+3]  = wake key
+-- KEYS[n+2]  = wake key
 -- ARGV[1] = lock token
 -- ARGV[2] = lock TTL in seconds
 --
--- Returns: {status, lockTokenOrFalse, version|false, rawValues}
-local n = #KEYS - 3
+-- Returns: {status, lockTokenOrFalse, false, rawValues}
+local n = #KEYS - 2
 local chunkSize = 500
 local values = {}
 local allHit = true
@@ -34,15 +32,13 @@ for start = 1, n, chunkSize do
     end
 end
 
-local version = KEYS[n + 2] ~= '' and (redis.call('GET', KEYS[n + 2]) or '0') or false
-
 if allHit then
-    return {'hit', false, version, values}
+    return {'hit', false, false, values}
 end
 
 if redis.call('SET', KEYS[n + 1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2])) then
-    redis.call('DEL', KEYS[n + 3])
-    return {'miss', ARGV[1], version, values}
+    redis.call('DEL', KEYS[n + 2])
+    return {'miss', ARGV[1], false, values}
 end
 
-return {'building', false, version, values}
+return {'building', false, false, values}

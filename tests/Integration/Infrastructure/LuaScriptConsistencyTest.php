@@ -231,7 +231,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{$authorKey}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
+        $pivotKey = $manager->keys()->pivotKey($authorKey, $tagKey, 'tags', 'manual-pivot-build', $cache->seg, 1);
 
         $this->bumpVersionInRedis($pivotTableKey);
 
@@ -253,7 +253,7 @@ class LuaScriptConsistencyTest extends TestCase
         $cache = $manager->getPivotCache(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
         $authorKey = NormCache::classKey(Author::class);
         $tagKey = NormCache::classKey(Tag::class);
-        $pivotKey = "pivot:{$authorKey}:{$tagKey}:tags:manual-pivot-build:{$cache->seg}:1";
+        $pivotKey = $manager->keys()->pivotKey($authorKey, $tagKey, 'tags', 'manual-pivot-build', $cache->seg, 1);
 
         $this->bumpVersionInRedis($tagKey);
 

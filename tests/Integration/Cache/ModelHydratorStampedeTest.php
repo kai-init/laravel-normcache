@@ -74,7 +74,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
+            [$modelKey, $lockKey, $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -96,7 +96,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
+            [$modelKey, $lockKey, $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -119,7 +119,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$modelKey, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
+            [$modelKey, $lockKey, $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -176,7 +176,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
+            [...$modelKeys, $lockKey, $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 
@@ -215,7 +215,7 @@ class ModelHydratorStampedeTest extends TestCase
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [...$modelKeys, $lockKey, $keys->verKey($classKey), $keys->wakeKey($classKey, 'test-lock')],
+            [...$modelKeys, $lockKey, $keys->wakeKey($classKey, 'test-lock')],
             ['token', '5']
         );
 

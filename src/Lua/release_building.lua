@@ -1,7 +1,7 @@
 -- Release a build lock only when the caller still owns it.
 --
 -- KEYS[1] = building lock key
--- KEYS[2] = wake key
+-- KEYS[2] = wake key (optional; omit when there are no waiters to signal)
 -- ARGV[1] = building lock token (optional; empty means release unconditionally)
 -- ARGV[2] = wake token count (optional; defaults to 1)
 local token = ARGV[1] or ''
@@ -12,7 +12,7 @@ if token ~= '' and redis.call('GET', KEYS[1]) ~= token then
 end
 
 redis.call('DEL', KEYS[1])
-if KEYS[2] ~= '' then
+if #KEYS >= 2 then
     for i = 1, wake_count do
         redis.call('LPUSH', KEYS[2], '1')
     end

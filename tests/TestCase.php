@@ -185,7 +185,7 @@ abstract class TestCase extends OrchestraTestCase
         $queryTtl ??= (int) config('normcache.query_ttl');
 
         $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
-        $store = new RedisStore($connection, $keys->nullKey(), $stampedeWakeTokens);
+        $store = new RedisStore($connection, $stampedeWakeTokens);
         $versions = new VersionTracker($store, $keys);
         $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens);
         $engine = new ExecutionEngine;

@@ -77,11 +77,6 @@ class CacheKeyBuilder
         return $this->full($pattern, $space);
     }
 
-    public function nullKey(?CacheSpace $space = null): string
-    {
-        return $this->tagPrefix($space) . 'null';
-    }
-
     // -------------------------------------------------------------------------
     // Prefixes
     // -------------------------------------------------------------------------

@@ -53,21 +53,21 @@ class RedisStoreTest extends TestCase
 
     public function test_it_can_release_building_locks(): void
     {
-        $this->store->set('build:foo', '1', 60);
-        $this->store->releaseBuilding('build:foo', 'wake:foo');
+        $this->store->set('{t}:build:foo', '1', 60);
+        $this->store->releaseBuilding('{t}:build:foo', '{t}:wake:foo');
 
-        $this->assertNull($this->store->getRaw('build:foo'));
-        $this->assertTrue($this->store->brpop('wake:foo', 1));
+        $this->assertNull($this->store->getRaw('{t}:build:foo'));
+        $this->assertTrue($this->store->brpop('{t}:wake:foo', 1));
     }
 
     public function test_release_building_pushes_configured_wake_tokens(): void
     {
         $store = new RedisStore('normcache-test', wakeTokenCount: 3);
 
-        $store->set('build:tokens', '1', 60);
-        $store->releaseBuilding('build:tokens', 'wake:tokens');
+        $store->set('{t}:build:tokens', '1', 60);
+        $store->releaseBuilding('{t}:build:tokens', '{t}:wake:tokens');
 
-        $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['wake:tokens']));
+        $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['{t}:wake:tokens']));
     }
 
     public function test_it_can_get_many_values(): void
@@ -100,74 +100,74 @@ class RedisStoreTest extends TestCase
 
     public function test_it_can_set_many_if_version(): void
     {
-        $this->store->delete(['ver:1', 'key:1', 'key:2']);
-        $this->store->setRaw('ver:1', '1', 60);
+        $this->store->delete(['{t}:ver:1', '{t}:key:1', '{t}:key:2']);
+        $this->store->setRaw('{t}:ver:1', '1', 60);
 
         $attrs = [
-            'key:1' => ['id' => 1, 'name' => 'Alice'],
-            'key:2' => ['id' => 2, 'name' => 'Bob'],
+            '{t}:key:1' => ['id' => 1, 'name' => 'Alice'],
+            '{t}:key:2' => ['id' => 2, 'name' => 'Bob'],
         ];
 
-        $this->store->setManyIfVersion($attrs, 60, 'ver:1', 1);
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:1', 1);
 
-        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
-        $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('key:2'));
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('{t}:key:1'));
+        $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('{t}:key:2'));
 
         // Should NOT update if version mismatch
-        $attrs2 = ['key:1' => ['id' => 1, 'name' => 'Charlie']];
-        $this->store->setManyIfVersion($attrs2, 60, 'ver:1', 2);
+        $attrs2 = ['{t}:key:1' => ['id' => 1, 'name' => 'Charlie']];
+        $this->store->setManyIfVersion($attrs2, 60, '{t}:ver:1', 2);
 
-        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('{t}:key:1'));
     }
 
     public function test_it_can_set_many_if_version_with_lock_release(): void
     {
-        $this->store->delete(['ver:2', 'key:3', 'key:4', 'lock:2', 'wake:2']);
-        $this->store->setRaw('ver:2', '1', 60);
-        $this->store->setNxEx('lock:2', 'tok', 60);
+        $this->store->delete(['{t}:ver:2', '{t}:key:3', '{t}:key:4', '{t}:lock:2', '{t}:wake:2']);
+        $this->store->setRaw('{t}:ver:2', '1', 60);
+        $this->store->setNxEx('{t}:lock:2', 'tok', 60);
 
         $attrs = [
-            'key:3' => ['id' => 3, 'name' => 'Dee'],
-            'key:4' => ['id' => 4, 'name' => 'Eve'],
+            '{t}:key:3' => ['id' => 3, 'name' => 'Dee'],
+            '{t}:key:4' => ['id' => 4, 'name' => 'Eve'],
         ];
 
-        $this->store->setManyIfVersion($attrs, 60, 'ver:2', 1, 'lock:2', 'wake:2', 'tok');
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:2', 1, '{t}:lock:2', '{t}:wake:2', 'tok');
 
-        $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('key:3'));
-        $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('key:4'));
-        $this->assertNull($this->store->getRaw('lock:2'), 'build lock should be released after the write');
+        $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('{t}:key:3'));
+        $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('{t}:key:4'));
+        $this->assertNull($this->store->getRaw('{t}:lock:2'), 'build lock should be released after the write');
     }
 
     public function test_set_many_if_version_handles_large_script_batches(): void
     {
-        $this->store->delete(['ver:large']);
-        $this->store->setRaw('ver:large', '1', 60);
+        $this->store->delete(['{t}:ver:large']);
+        $this->store->setRaw('{t}:ver:large', '1', 60);
 
         $attrs = [];
         for ($i = 0; $i < 10000; $i++) {
-            $attrs["key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
+            $attrs["{t}:key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
         }
 
-        $this->store->setManyIfVersion($attrs, 60, 'ver:large', 1);
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:large', 1);
 
-        $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('key:large:9999'));
+        $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('{t}:key:large:9999'));
     }
 
     public function test_set_many_if_version_script_chunks_internally(): void
     {
-        $this->store->setRaw('ver:script-large', '1', 60);
+        $this->store->setRaw('{t}:ver:script-large', '1', 60);
 
         $count = 8200;
         $keys = [];
         $values = [];
         for ($i = 0; $i < $count; $i++) {
-            $keys[] = "key:script-large:{$i}";
+            $keys[] = "{t}:key:script-large:{$i}";
             $values[] = $this->store->serialize(['id' => $i]);
         }
 
         $result = $this->store->script(
             RedisScripts::get('store_model_attrs'),
-            array_merge(['ver:script-large', '', ''], $keys),
+            array_merge(['{t}:ver:script-large'], $keys),
             array_merge(['1', '60', (string) $count, ''], $values)
         );
 
@@ -176,26 +176,26 @@ class RedisStoreTest extends TestCase
 
     public function test_it_skips_write_but_still_releases_on_version_mismatch(): void
     {
-        $this->store->delete(['ver:3', 'key:5', 'lock:3', 'wake:3']);
-        $this->store->setRaw('ver:3', '2', 60);
-        $this->store->setNxEx('lock:3', 'tok', 60);
+        $this->store->delete(['{t}:ver:3', '{t}:key:5', '{t}:lock:3', '{t}:wake:3']);
+        $this->store->setRaw('{t}:ver:3', '2', 60);
+        $this->store->setNxEx('{t}:lock:3', 'tok', 60);
 
         $this->store->setManyIfVersion(
-            ['key:5' => ['id' => 5]], 60, 'ver:3', 1, 'lock:3', 'wake:3', 'tok'
+            ['{t}:key:5' => ['id' => 5]], 60, '{t}:ver:3', 1, '{t}:lock:3', '{t}:wake:3', 'tok'
         );
 
-        $this->assertNull($this->store->get('key:5'));
-        $this->assertNull($this->store->getRaw('lock:3'), 'build lock should still be released even when the write is skipped');
+        $this->assertNull($this->store->get('{t}:key:5'));
+        $this->assertNull($this->store->getRaw('{t}:lock:3'), 'build lock should still be released even when the write is skipped');
     }
 
     public function test_it_releases_lock_unconditionally_when_there_is_nothing_to_write(): void
     {
-        $this->store->delete(['lock:4', 'wake:4']);
-        $this->store->setNxEx('lock:4', 'tok', 60);
+        $this->store->delete(['{t}:lock:4', '{t}:wake:4']);
+        $this->store->setNxEx('{t}:lock:4', 'tok', 60);
 
-        $this->store->setManyIfVersion([], 60, 'ver:4', 1, 'lock:4', 'wake:4', 'tok');
+        $this->store->setManyIfVersion([], 60, '{t}:ver:4', 1, '{t}:lock:4', '{t}:wake:4', 'tok');
 
-        $this->assertNull($this->store->getRaw('lock:4'));
+        $this->assertNull($this->store->getRaw('{t}:lock:4'));
     }
 
     public function test_it_can_flush_by_patterns(): void

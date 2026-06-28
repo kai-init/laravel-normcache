@@ -202,7 +202,7 @@ final class ModelHydrator
 
         $result = $this->store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [...$fetchKeys, $lockKey, '', $wakeKey],
+            [...$fetchKeys, $lockKey, $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );
 

@@ -124,7 +124,7 @@ final class ResultCacheReader
 
         $result = $this->store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [...$missedKeys, $lockKey, '', $wakeKey],
+            [...$missedKeys, $lockKey, $wakeKey],
             [$token, (string) $this->buildingLockTtl]
         );
 
@@ -205,12 +205,15 @@ final class ResultCacheReader
             return true;
         }
 
+        $keys = array_merge($versionKeys, array_keys($entries));
+        if ($buildingKey !== null) {
+            $keys[] = $buildingKey;
+            $keys[] = $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey);
+        }
+
         return (bool) $this->store->script(
             RedisScripts::get('store_versioned_payload'),
-            array_merge($versionKeys, array_keys($entries), [
-                $buildingKey ?? '',
-                $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : ''),
-            ]),
+            $keys,
             array_merge(
                 [(string) count($versionKeys), (string) count($entries), (string) $ttl],
                 $expectedVersions,

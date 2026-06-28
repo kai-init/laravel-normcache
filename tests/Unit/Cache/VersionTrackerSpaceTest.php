@@ -14,7 +14,7 @@ class VersionTrackerSpaceTest extends TestCase
     public function test_current_version_reads_the_space_scoped_version_key(): void
     {
         $keys = new CacheKeyBuilder('{nc}:', 'test:');
-        $store = new RedisStore('normcache-test', $keys->nullKey());
+        $store = new RedisStore('normcache-test');
         $tracker = new VersionTracker($store, $keys);
 
         $content = new CacheSpace('content', 'nc:content');

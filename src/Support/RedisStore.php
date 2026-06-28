@@ -21,7 +21,6 @@ final class RedisStore
 
     public function __construct(
         string $redisConnection,
-        private string $nullKey = '{nc}:null',
         private int $wakeTokenCount = 64,
     ) {
         $this->serializer = new CacheSerializer;
@@ -90,9 +89,11 @@ final class RedisStore
     // DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock.
     public function releaseBuilding(string $buildingKey, string $wakeKey, ?string $token = null): bool
     {
+        $keys = $wakeKey !== '' ? [$buildingKey, $wakeKey] : [$buildingKey];
+
         return (bool) $this->script(
             RedisScripts::get('release_building'),
-            [$buildingKey, $wakeKey],
+            $keys,
             [$token ?? '', (string) $this->wakeTokenCount]
         );
     }
@@ -110,9 +111,11 @@ final class RedisStore
             return true;
         }
 
+        $keys = $wakeKey !== null && $wakeKey !== '' ? [$key, $buildingKey, $wakeKey] : [$key, $buildingKey];
+
         return (bool) $this->script(
             RedisScripts::get('store_versioned_payload'),
-            [$key, $buildingKey, $wakeKey ?? ''],
+            $keys,
             ['0', '1', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
         );
     }
@@ -227,12 +230,19 @@ final class RedisStore
         foreach ($chunks as $i => $chunk) {
             $isLast = $i === $lastChunk;
 
+            // Only the last chunk releases the build lock; trailing lock/wake keys are
+            // present (and removed below if absent) only on that chunk.
+            $keys = array_merge([$versionKey], array_keys($chunk));
+            if ($isLast && $buildingKey !== null) {
+                $keys[] = $buildingKey;
+                if ($wakeKey !== null && $wakeKey !== '') {
+                    $keys[] = $wakeKey;
+                }
+            }
+
             $this->script(
                 $script,
-                array_merge(
-                    [$versionKey, $isLast ? ($buildingKey ?? '') : '', $isLast ? ($wakeKey ?? '') : ''],
-                    array_keys($chunk)
-                ),
+                $keys,
                 array_merge(
                     [(string) $expectedVersion, (string) $ttl, (string) count($chunk), $isLast ? ($token ?? '') : ''],
                     array_map(fn($attrs) => $this->serialize($attrs), array_values($chunk)),
@@ -281,24 +291,12 @@ final class RedisStore
         return $total;
     }
 
-    // Passes $keys to EVALSHA as-is, falling back to EVAL on NOSCRIPT.
+    // Runs a Lua script via EVALSHA, falling back to EVAL on NOSCRIPT. All KEYS must
+    // share one hash slot (cluster); optional slots are omitted, never passed empty.
     public function script(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = [];
-        foreach ($keys as $key) {
-            $prefixedKeys[] = $key;
-        }
-
-        if ($this->isCluster()) {
-            foreach ($prefixedKeys as $i => $prefixedKey) {
-                if ($prefixedKey === '') {
-                    $prefixedKeys[$i] = $this->nullKey;
-                }
-            }
-        }
-
-        $n = count($prefixedKeys);
-        $allArgs = array_merge($prefixedKeys, $args);
+        $n = count($keys);
+        $allArgs = array_merge($keys, $args);
 
         $sha = self::$shas[$script] ??= sha1($script);
 

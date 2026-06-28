@@ -81,11 +81,11 @@ class PivotStampedeTest extends TestCase
 
         $lockKey = $keys->resultBuildingKey('cls', 'v1', 'test-lock');
         $wakeKey = $keys->wakeKey('cls', 'test-lock');
-        $pivotKey = 'pivot:missing:1';
+        $pivotKey = $keys->prefixed('pivot:missing:1');
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$pivotKey, $lockKey, '', $wakeKey],
+            [$pivotKey, $lockKey, $wakeKey],
             ['token', '5']
         );
 
@@ -102,12 +102,12 @@ class PivotStampedeTest extends TestCase
 
         $lockKey = $keys->resultBuildingKey('cls', 'v1', 'test-lock');
         $wakeKey = $keys->wakeKey('cls', 'test-lock');
-        $pivotKey = 'pivot:missing:1';
+        $pivotKey = $keys->prefixed('pivot:missing:1');
         $store->setNxEx($lockKey, 'other-token', 5);
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$pivotKey, $lockKey, '', $wakeKey],
+            [$pivotKey, $lockKey, $wakeKey],
             ['token', '5']
         );
 
@@ -124,12 +124,12 @@ class PivotStampedeTest extends TestCase
 
         $lockKey = $keys->resultBuildingKey('cls', 'v1', 'test-lock');
         $wakeKey = $keys->wakeKey('cls', 'test-lock');
-        $pivotKey = 'pivot:present:1';
+        $pivotKey = $keys->prefixed('pivot:present:1');
         $store->setRaw($pivotKey, $store->serialize([['id' => 1]]), 60);
 
         $result = $store->script(
             RedisScripts::get('fetch_batch_build_status'),
-            [$pivotKey, $lockKey, '', $wakeKey],
+            [$pivotKey, $lockKey, $wakeKey],
             ['token', '5']
         );
 

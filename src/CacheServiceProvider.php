@@ -56,7 +56,7 @@ class CacheServiceProvider extends ServiceProvider
             $stampedeWakeTokens = (int) config('normcache.stampede_wake_tokens', 64);
 
             $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
-            $store = new RedisStore($connection, $keys->nullKey(), $stampedeWakeTokens);
+            $store = new RedisStore($connection, $stampedeWakeTokens);
             $versions = new VersionTracker($store, $keys);
             $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens);
             $engine = new ExecutionEngine;

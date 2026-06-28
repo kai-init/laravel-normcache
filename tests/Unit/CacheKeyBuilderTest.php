@@ -17,7 +17,6 @@ class CacheKeyBuilderTest extends TestCase
         $this->assertSame('{nc:content}:test:ver:mysql:posts:', $keys->verKey('mysql:posts', $content));
         $this->assertSame('{nc:content}:test:model:mysql:posts:v3:', $keys->modelPrefix('mysql:posts', 3, $content));
         $this->assertSame('{nc:content}:test:query:mysql:posts:', $keys->queryPrefix('mysql:posts', null, $content));
-        $this->assertSame('{nc:content}:null', $keys->nullKey($content));
         $this->assertSame('{nc:content}:test:query:*', $keys->prefixed('query:*', $content));
     }
 
@@ -26,7 +25,6 @@ class CacheKeyBuilderTest extends TestCase
         $keys = new CacheKeyBuilder('{nc}:', 'test:');
 
         $this->assertSame('{nc}:test:ver:mysql:posts:', $keys->verKey('mysql:posts'));
-        $this->assertSame('{nc}:null', $keys->nullKey());
     }
 
     public function test_class_key_rejects_connection_name_containing_colon(): void
@@ -91,7 +89,6 @@ class CacheKeyBuilderTest extends TestCase
         $this->assertSame('{nc}:test:wake:mysql:posts:', $keys->wakePrefix('mysql:posts'));
         $this->assertSame('{nc}:test:model:mysql:posts:v3:', $keys->modelPrefix('mysql:posts', 3));
         $this->assertSame('{nc}:test:query:mysql:posts:', $keys->queryPrefix('mysql:posts'));
-        $this->assertSame('{nc}:null', $keys->nullKey());
         $this->assertSame('{nc}:test:query:*', $keys->prefixed('query:*'));
     }
 }
