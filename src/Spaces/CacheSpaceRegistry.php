@@ -193,7 +193,7 @@ final class CacheSpaceRegistry
      */
     private function spaceNames(array $spaces): array
     {
-        return array_values(array_map(fn(CacheSpace $s) => $s->name, $spaces));
+        return array_map(fn(CacheSpace $s) => $s->name, $spaces);
     }
 
     /**

@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
-use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;

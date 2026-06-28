@@ -254,7 +254,7 @@ class CacheKeyBuilder
         $space ??= $this->activeSpace;
 
         if ($depClasses === [] && $depTableKeys === []) {
-            $cacheKey = ($space?->name ?? '') . '|' . $classKey;
+            $cacheKey = ($space === null ? '' : $space->name) . '|' . $classKey;
 
             return self::$singleDepPairs[$cacheKey] ??= [
                 [$this->verKey($classKey, $space)],

@@ -32,7 +32,7 @@ trait HandlesInvalidation
     /** @return list<CacheSpace> the spaces a table's version key lives in */
     private function tableSpaces(string $table): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForTable($table);
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->materializedSpaces();
     }
 
     /** @return list<CacheSpace> */

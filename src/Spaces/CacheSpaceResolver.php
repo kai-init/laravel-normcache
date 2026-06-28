@@ -13,7 +13,7 @@ final class CacheSpaceResolver
     public function resolve(string $modelClass, ?string $explicitSpace): CacheSpace
     {
         if ($explicitSpace !== null) {
-            if (! $this->registry->modelAllowedInSpace($modelClass, $explicitSpace)) {
+            if (!$this->registry->modelAllowedInSpace($modelClass, $explicitSpace)) {
                 throw new \InvalidArgumentException(
                     "NormCache: model [{$modelClass}] is not a member of space [{$explicitSpace}]; declare it in \$normCacheSpaces or remove ->space()."
                 );

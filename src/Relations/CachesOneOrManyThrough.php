@@ -9,6 +9,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
@@ -137,10 +138,18 @@ trait CachesOneOrManyThrough
     private function shouldUseCache(CacheableBuilder $builder, Builder $base): ?CachePlan
     {
         if ($this->isSimpleThroughQuery($base, $builder)) {
+            $space = NormCache::spaceFor($this->related::class, $builder->getSpace());
+            $dependencies = new DependencySet(models: [$this->throughParent::class]);
+            $validation = app(CacheSpaceRegistry::class)->validateDependencies($space, $dependencies->models, $dependencies->tables);
+
+            if (!$validation->isValid) {
+                return null;
+            }
+
             return CachePlan::result(
                 operation: CacheOperation::Through,
-                dependencies: new DependencySet(models: [$this->throughParent::class]),
-            );
+                dependencies: $dependencies,
+            )->withSpace($space);
         }
 
         $projection = ProjectionClassifier::resolve($base, null);

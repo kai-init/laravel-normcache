@@ -140,7 +140,7 @@ class CacheManager
 
     public function currentVersion(string $modelClass): int
     {
-        return $this->versions->currentVersion($modelClass);
+        return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0]);
     }
 
     public function currentTableVersion(string $connectionName, string $table): int

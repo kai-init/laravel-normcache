@@ -3,7 +3,9 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\CatalogTag;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\ReportingCountry;
 use NormCache\Tests\Fixtures\Models\SpacedAuthor;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
@@ -92,6 +94,45 @@ class SpaceResolutionTest extends TestCase
             SpacedPost::query()->get()->first()->title,
             'content-space cache must invalidate when a content model is written',
         );
+    }
+
+    public function test_current_version_reads_spaced_model_home_space(): void
+    {
+        $before = $this->cacheManager()->currentVersion(SpacedPost::class);
+
+        $this->cacheManager()->forceFlushModel(SpacedPost::class);
+
+        $this->assertGreaterThan($before, $this->cacheManager()->currentVersion(SpacedPost::class));
+    }
+
+    public function test_simple_through_relation_caches_under_related_space(): void
+    {
+        $country = ReportingCountry::create(['name' => 'Australia']);
+        $author = SpacedAuthor::create(['name' => 'Alice', 'country_id' => $country->id]);
+        SpacedPost::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertSame(['Hello'], $country->spacedPosts()->get()->pluck('title')->all());
+
+        $store = $this->cacheManager()->getStore();
+        $this->assertNotEmpty($store->scanPattern('{nc:content}:test:through:*'));
+        $this->assertEmpty($store->scanPattern('{nc}:test:through:*'));
+    }
+
+    public function test_spaced_pivot_relation_invalidates_when_pivot_table_changes(): void
+    {
+        $post = SpacedPost::create(['title' => 'First', 'author_id' => 1]);
+        $firstTag = CatalogTag::create(['name' => 'First']);
+        $secondTag = CatalogTag::create(['name' => 'Second']);
+        $post->catalogTags()->attach($firstTag->id);
+
+        $first = SpacedPost::query()->with('catalogTags')->get()->first()->catalogTags->pluck('name')->all();
+        $this->assertSame(['First'], $first);
+        $this->assertNotEmpty($this->cacheManager()->getStore()->scanPattern('{nc:catalog}:test:pivot:*'));
+
+        $post->catalogTags()->attach($secondTag->id);
+
+        $second = SpacedPost::query()->with('catalogTags')->get()->first()->catalogTags->pluck('name')->sort()->values()->all();
+        $this->assertSame(['First', 'Second'], $second);
     }
 
     public function test_flush_all_removes_spaced_keys(): void
