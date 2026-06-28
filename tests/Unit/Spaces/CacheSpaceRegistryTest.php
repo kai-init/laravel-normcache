@@ -2,10 +2,12 @@
 
 namespace NormCache\Tests\Unit\Spaces;
 
+use Illuminate\Database\Eloquent\Model;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
 
 class CacheSpaceRegistryTest extends TestCase
 {
@@ -69,9 +71,9 @@ class CacheSpaceRegistryTest extends TestCase
 
     public function test_model_in_too_many_spaces_throws_on_resolution(): void
     {
-        $model = new class extends \Illuminate\Database\Eloquent\Model
+        $model = new class extends Model
         {
-            use \NormCache\Traits\Cacheable;
+            use Cacheable;
 
             protected static array $normCacheSpaces = ['a', 'b', 'c'];
         };
@@ -90,6 +92,15 @@ class CacheSpaceRegistryTest extends TestCase
         $this->assertFalse($registry->tableAllowedInSpace('mysql:legacy_flags', 'content'));
     }
 
+    public function test_single_base_model_dependencies_do_not_need_validation(): void
+    {
+        $registry = $this->registry();
+
+        $this->assertTrue($registry->dependenciesAreOnlyModel(Author::class, [Author::class], []));
+        $this->assertFalse($registry->dependenciesAreOnlyModel(Author::class, [Author::class, SpacedPost::class], []));
+        $this->assertFalse($registry->dependenciesAreOnlyModel(Author::class, [Author::class], ['mysql:legacy_flags']));
+    }
+
     public function test_validate_dependencies_passes_when_all_allowed(): void
     {
         $registry = $this->registry();
@@ -97,8 +108,19 @@ class CacheSpaceRegistryTest extends TestCase
 
         $result = $registry->validateDependencies($content, [SpacedPost::class], []);
 
-        $this->assertTrue($result->ok);
+        $this->assertTrue($result->isValid);
         $this->assertSame([], $result->invalidModels);
+        $this->assertSame([], $result->dependenciesBySpace);
+    }
+
+    public function test_validate_dependencies_can_build_map_for_explain(): void
+    {
+        $registry = $this->registry();
+        $content = $registry->space('content');
+
+        $result = $registry->validateDependencies($content, [SpacedPost::class], [], includeDependenciesBySpace: true);
+
+        $this->assertTrue($result->isValid);
         $this->assertSame(['content'], $result->dependenciesBySpace[SpacedPost::class]);
     }
 
@@ -110,7 +132,7 @@ class CacheSpaceRegistryTest extends TestCase
         // Author is default-only; depending on it inside content is invalid.
         $result = $registry->validateDependencies($content, [SpacedPost::class, Author::class], ['mysql:legacy_flags']);
 
-        $this->assertFalse($result->ok);
+        $this->assertFalse($result->isValid);
         $this->assertSame([Author::class], $result->invalidModels);
         $this->assertSame(['mysql:legacy_flags'], $result->invalidTables);
         $this->assertSame(['default'], $result->dependenciesBySpace[Author::class]);

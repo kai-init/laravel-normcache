@@ -92,6 +92,17 @@ class CacheKeyBuilderTest extends TestCase
         $this->assertNotSame($defaultVer[0], $contentVer[0], 'same classKey under two spaces must produce distinct version keys');
     }
 
+    public function test_active_space_is_exposed_and_restored(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+        $content = new CacheSpace('content', 'nc:content');
+
+        $seen = $keys->withSpace($content, fn() => $keys->activeSpace());
+
+        $this->assertSame($content, $seen);
+        $this->assertNull($keys->activeSpace());
+    }
+
     public function test_key_methods_emit_full_keys_with_hash_tag_and_prefix(): void
     {
         $keys = new CacheKeyBuilder('{nc}:', 'test:');

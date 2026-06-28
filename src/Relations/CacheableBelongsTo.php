@@ -41,10 +41,13 @@ class CacheableBelongsTo extends BelongsTo
             return $this->getFromPreparedBuilder($prepared);
         }
 
-        $models = NormCache::keys()->withSpace(
-            NormCache::spaceFor($this->related::class, $builder->getSpace()),
-            fn() => NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false)
-        );
+        $keys = NormCache::keys();
+        $models = NormCache::activeSpaceFor($this->related::class, $builder->getSpace()) !== null
+            ? NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false)
+            : $keys->withSpace(
+                NormCache::spaceFor($this->related::class, $builder->getSpace()),
+                fn() => NormCache::getModels($this->eagerKeys, $this->related::class, $columns, null, $builder, false)
+            );
 
         if ($builder->getEagerLoads() !== []) {
             $models = $builder->eagerLoadRelations($models);

@@ -93,9 +93,7 @@ trait CachesPivotRelation
         $relatedClass = $this->related::class;
         $parentClassKey = NormCache::classKey($parentClass);
 
-        $results = NormCache::keys()->withSpace(
-            NormCache::spaceFor($relatedClass, $builder->getSpace()),
-            fn() => NormCache::rescue(
+        $runPivot = fn() => NormCache::rescue(
             fn() => NormCache::engine()->runPivot(
                 fetch: fn() => NormCache::getPivotCache(
                     $parentClass,
@@ -150,7 +148,12 @@ trait CachesPivotRelation
                 },
             ),
             fn() => $this->getFromPreparedPivotBuilder($prepared)
-        ));
+        );
+
+        $keys = NormCache::keys();
+        $results = NormCache::activeSpaceFor($relatedClass, $builder->getSpace()) !== null
+            ? $runPivot()
+            : $keys->withSpace(NormCache::spaceFor($relatedClass, $builder->getSpace()), $runPivot);
 
         return $results;
     }

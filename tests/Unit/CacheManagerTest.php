@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
 
 class CacheManagerTest extends TestCase
@@ -109,6 +110,30 @@ class CacheManagerTest extends TestCase
 
         $this->assertSame('7', Redis::connection('normcache-test')->get("{nc}:test:ver:{$classKey}:"));
         $this->assertSame(7, $manager->currentVersion(Author::class));
+    }
+
+    public function test_active_space_for_returns_active_space_only_when_model_belongs_to_it(): void
+    {
+        $content = $this->manager->spaceFor(SpacedPost::class);
+
+        $seen = $this->manager->keys()->withSpace($content, fn() => [
+            $this->manager->activeSpaceFor(SpacedPost::class)?->name,
+            $this->manager->activeSpaceFor(Author::class)?->name,
+        ]);
+
+        $this->assertSame(['content', null], $seen);
+    }
+
+    public function test_active_space_for_reuses_matching_explicit_space(): void
+    {
+        $content = $this->manager->spaceFor(SpacedPost::class);
+
+        $seen = $this->manager->keys()->withSpace(
+            $content,
+            fn() => $this->manager->activeSpaceFor(SpacedPost::class, 'content')?->name,
+        );
+
+        $this->assertSame('content', $seen);
     }
 
     // -------------------------------------------------------------------------

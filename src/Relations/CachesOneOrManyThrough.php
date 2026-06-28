@@ -69,7 +69,7 @@ trait CachesOneOrManyThrough
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
 
-        return NormCache::keys()->withSpace($plan->space, fn() => NormCache::rescue(
+        $runThrough = fn() => NormCache::rescue(
             fn() => NormCache::engine()->runThrough(
                 fetch: fn() => NormCache::getThroughCache($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
                 waitForBuild: fn() => NormCache::waitForThroughBuild(
@@ -117,7 +117,14 @@ trait CachesOneOrManyThrough
                 },
             ),
             fn() => $this->getFromPreparedBuilder($prepared)
-        ));
+        );
+
+        $keys = NormCache::keys();
+        $activeSpace = NormCache::activeSpaceFor($relatedClass);
+
+        return $activeSpace !== null && ($plan->space === null || $plan->space->name === $activeSpace->name)
+            ? $runThrough()
+            : $keys->withSpace($plan->space, $runThrough);
     }
 
     private function applyOneOfManyDependency(CacheableBuilder $query): void

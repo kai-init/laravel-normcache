@@ -3,7 +3,7 @@
 namespace NormCache\Values;
 
 // Result of validating an operation's dependencies against one cache space.
-// $dependenciesBySpace maps each dependency to the spaces it lives in, for explain().
+// $dependenciesBySpace is populated for explain() or failed validation only.
 final readonly class SpaceValidationResult
 {
     /**
@@ -12,7 +12,7 @@ final readonly class SpaceValidationResult
      * @param  array<string, list<string>>  $dependenciesBySpace
      */
     public function __construct(
-        public bool $ok,
+        public bool $isValid,
         public CacheSpace $space,
         public array $invalidModels = [],
         public array $invalidTables = [],

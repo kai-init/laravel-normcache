@@ -70,34 +70,58 @@ final class CacheSpaceRegistry
         return $this->isAllowed($this->spacesForTable($table), $space);
     }
 
+    public function dependenciesAreOnlyModel(string $modelClass, array $models, array $tables): bool
+    {
+        return $models === [$modelClass] && $tables === [];
+    }
+
     /**
      * Validate a cached operation's dependencies against the active space.
      *
      * @param  list<class-string>  $models
      * @param  list<string>  $tables
      */
-    public function validateDependencies(CacheSpace $space, array $models, array $tables): SpaceValidationResult
-    {
+    public function validateDependencies(
+        CacheSpace $space,
+        array $models,
+        array $tables,
+        bool $includeDependenciesBySpace = false,
+    ): SpaceValidationResult {
         $invalidModels = [];
         $invalidTables = [];
-        $dependenciesBySpace = [];
+        $dependencySpaces = [];
 
         foreach ($models as $modelClass) {
-            $dependenciesBySpace[$modelClass] = $this->spaceNames($this->spacesForModel($modelClass));
-            if (!$this->modelAllowedInSpace($modelClass, $space)) {
+            $spaces = $this->spacesForModel($modelClass);
+
+            if ($includeDependenciesBySpace) {
+                $dependencySpaces[$modelClass] = $spaces;
+            }
+
+            if (!$this->isAllowed($spaces, $space)) {
                 $invalidModels[] = $modelClass;
             }
         }
 
         foreach ($tables as $table) {
-            $dependenciesBySpace[$table] = $this->spaceNames($this->spacesForTable($table));
-            if (!$this->tableAllowedInSpace($table, $space)) {
+            $spaces = $this->spacesForTable($table);
+
+            if ($includeDependenciesBySpace) {
+                $dependencySpaces[$table] = $spaces;
+            }
+
+            if (!$this->isAllowed($spaces, $space)) {
                 $invalidTables[] = $table;
             }
         }
 
+        $ok = $invalidModels === [] && $invalidTables === [];
+        $dependenciesBySpace = $includeDependenciesBySpace
+            ? $this->dependencySpaceNames($dependencySpaces)
+            : ($ok ? [] : $this->dependencySpaceNamesFor($models, $tables));
+
         return new SpaceValidationResult(
-            ok: $invalidModels === [] && $invalidTables === [],
+            isValid: $ok,
             space: $space,
             invalidModels: $invalidModels,
             invalidTables: $invalidTables,
@@ -170,5 +194,40 @@ final class CacheSpaceRegistry
     private function spaceNames(array $spaces): array
     {
         return array_values(array_map(fn(CacheSpace $s) => $s->name, $spaces));
+    }
+
+    /**
+     * @param  array<string, list<CacheSpace>>  $dependencies
+     * @return array<string, list<string>>
+     */
+    private function dependencySpaceNames(array $dependencies): array
+    {
+        $names = [];
+
+        foreach ($dependencies as $dependency => $spaces) {
+            $names[$dependency] = $this->spaceNames($spaces);
+        }
+
+        return $names;
+    }
+
+    /**
+     * @param  list<class-string>  $models
+     * @param  list<string>  $tables
+     * @return array<string, list<string>>
+     */
+    private function dependencySpaceNamesFor(array $models, array $tables): array
+    {
+        $names = [];
+
+        foreach ($models as $modelClass) {
+            $names[$modelClass] = $this->spaceNames($this->spacesForModel($modelClass));
+        }
+
+        foreach ($tables as $table) {
+            $names[$table] = $this->spaceNames($this->spacesForTable($table));
+        }
+
+        return $names;
     }
 }

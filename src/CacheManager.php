@@ -110,6 +110,27 @@ class CacheManager
         return ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($modelClass, $explicitSpace);
     }
 
+    public function activeSpaceFor(string $modelClass, ?string $explicitSpace = null): ?CacheSpace
+    {
+        $active = $this->keys->activeSpace();
+
+        if ($active === null) {
+            return null;
+        }
+
+        if ($explicitSpace !== null && $active->name !== $explicitSpace) {
+            return null;
+        }
+
+        foreach ($this->modelSpaces($modelClass) as $space) {
+            if ($space->name === $active->name) {
+                return $active;
+            }
+        }
+
+        return null;
+    }
+
     private ?CacheSpaceResolver $spaceResolver = null;
 
     public function tableKey(string $connectionName, string $table): string

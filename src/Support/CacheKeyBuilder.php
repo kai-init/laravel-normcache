@@ -59,6 +59,11 @@ class CacheKeyBuilder
         }
     }
 
+    public function activeSpace(): ?CacheSpace
+    {
+        return $this->activeSpace;
+    }
+
     private function full(string $body, ?CacheSpace $space = null): string
     {
         return $this->tagPrefix($space) . $this->keyPrefix . $body;

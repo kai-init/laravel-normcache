@@ -94,17 +94,27 @@ final class CachePlanner
             return $plan;
         }
 
-        $resolver = $this->spaceResolver ??= app(CacheSpaceResolver::class);
         $registry = $this->spaceRegistry ??= app(CacheSpaceRegistry::class);
 
+        if ($registry->dependenciesAreOnlyModel($model::class, $plan->dependencies->models, $plan->dependencies->tables)) {
+            $space = $builder->getSpace() === null
+                ? $registry->spacesForModel($model::class)[0]
+                : ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($model::class, $builder->getSpace());
+
+            return $plan->withSpace($space);
+        }
+
+        $resolver = $this->spaceResolver ??= app(CacheSpaceResolver::class);
         $space = $resolver->resolve($model::class, $builder->getSpace());
+
         $validation = $registry->validateDependencies(
             $space,
             $plan->dependencies->models,
             $plan->dependencies->tables,
+            includeDependenciesBySpace: $explain,
         );
 
-        if ($validation->ok) {
+        if ($validation->isValid) {
             return $plan->withSpace($space);
         }
 
@@ -115,7 +125,7 @@ final class CachePlanner
             $modelClass = $model::class;
             Log::warning(
                 "NormCache: query for [{$modelClass}] in space [{$space->name}] depends on [{$offending}] "
-                . "which are not in that space; the query will not cache. Add them to the space or drop the dependency."
+                . 'which are not in that space; the query will not cache. Add them to the space or drop the dependency.'
             );
         }
 
