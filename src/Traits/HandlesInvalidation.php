@@ -35,6 +35,12 @@ trait HandlesInvalidation
         return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForTable($table);
     }
 
+    /** @return list<CacheSpace> */
+    private function materializedSpaces(): array
+    {
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->materializedSpaces();
+    }
+
     // Invalidation
 
     public function invalidateVersion(Model $model): void
@@ -112,19 +118,19 @@ trait HandlesInvalidation
 
     public function flushAll(): int
     {
-        return $this->store->flushByPatterns([
-            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_MODEL . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_VER . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_PIVOT . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_SCHEDULED . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_BUILDING . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_WAKE . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':*'),
-        ]);
+        return $this->store->flushByPatterns($this->prefixedForSpaces([
+            CacheKeyBuilder::K_QUERY . ':*',
+            CacheKeyBuilder::K_MODEL . ':*',
+            CacheKeyBuilder::K_VER . ':*',
+            CacheKeyBuilder::K_COUNT . ':*',
+            CacheKeyBuilder::K_SCALAR . ':*',
+            CacheKeyBuilder::K_PIVOT . ':*',
+            CacheKeyBuilder::K_THROUGH . ':*',
+            CacheKeyBuilder::K_SCHEDULED . ':*',
+            CacheKeyBuilder::K_BUILDING . ':*',
+            CacheKeyBuilder::K_WAKE . ':*',
+            CacheKeyBuilder::K_RESULT . ':*',
+        ], $this->materializedSpaces()));
     }
 
     public function flushTag(string $modelClass, string $tag): int
@@ -133,26 +139,26 @@ trait HandlesInvalidation
 
         $classKey = $this->keys->classKey($modelClass);
 
-        return $this->store->flushByPatterns([
-            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*'),
-        ]);
+        return $this->store->flushByPatterns($this->prefixedForSpaces([
+            CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*',
+        ], $this->modelSpaces($modelClass)));
     }
 
     public function flushTagAcrossModels(string $tag): int
     {
         CacheKeyBuilder::assertValidTag($tag);
 
-        return $this->store->flushByPatterns([
-            $this->keys->prefixed(CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*'),
-            $this->keys->prefixed(CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*'),
-        ]);
+        return $this->store->flushByPatterns($this->prefixedForSpaces([
+            CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*',
+        ], $this->materializedSpaces()));
     }
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
@@ -283,6 +289,24 @@ trait HandlesInvalidation
     private function queueModelFlush(string $connectionName, string $modelClass): void
     {
         $this->flushQueue[$connectionName][$modelClass] = true;
+    }
+
+    /**
+     * @param  list<string>  $patterns
+     * @param  list<CacheSpace>  $spaces
+     * @return list<string>
+     */
+    private function prefixedForSpaces(array $patterns, array $spaces): array
+    {
+        $prefixed = [];
+
+        foreach ($spaces as $space) {
+            foreach ($patterns as $pattern) {
+                $prefixed[] = $this->keys->prefixed($pattern, $space);
+            }
+        }
+
+        return $prefixed;
     }
 
     /** @param  list<CacheSpace>  $spaces */

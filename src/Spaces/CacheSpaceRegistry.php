@@ -39,6 +39,15 @@ final class CacheSpaceRegistry
     }
 
     /** @return list<CacheSpace> */
+    public function materializedSpaces(): array
+    {
+        $spaces = $this->spaces;
+        $spaces[self::DEFAULT_SPACE] ??= $this->defaultSpace();
+
+        return array_values($spaces);
+    }
+
+    /** @return list<CacheSpace> */
     public function spacesForModel(string $modelClass): array
     {
         return $this->modelSpaces[$modelClass] ??= $this->resolveModelSpaces($modelClass);

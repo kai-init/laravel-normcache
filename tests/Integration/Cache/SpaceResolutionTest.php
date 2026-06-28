@@ -94,6 +94,48 @@ class SpaceResolutionTest extends TestCase
         );
     }
 
+    public function test_flush_all_removes_spaced_keys(): void
+    {
+        SpacedPost::create(['title' => 'First', 'author_id' => 1]);
+
+        SpacedPost::query()->get();
+
+        $store = $this->cacheManager()->getStore();
+        $this->assertNotEmpty($store->scanPattern('{nc:content}:test:*'));
+
+        $this->cacheManager()->flushAll();
+
+        $this->assertEmpty($store->scanPattern('{nc:content}:test:*'));
+    }
+
+    public function test_flush_tag_removes_spaced_tagged_keys(): void
+    {
+        SpacedPost::create(['title' => 'First', 'author_id' => 1]);
+
+        SpacedPost::query()->tag('homepage')->get();
+
+        $store = $this->cacheManager()->getStore();
+        $this->assertNotEmpty($store->scanPattern('{nc:content}:test:query:*:homepage:*'));
+
+        $this->cacheManager()->flushTag(SpacedPost::class, 'homepage');
+
+        $this->assertEmpty($store->scanPattern('{nc:content}:test:query:*:homepage:*'));
+    }
+
+    public function test_flush_tag_across_models_removes_spaced_tagged_keys(): void
+    {
+        SpacedPost::create(['title' => 'First', 'author_id' => 1]);
+
+        SpacedPost::query()->tag('deploy')->get();
+
+        $store = $this->cacheManager()->getStore();
+        $this->assertNotEmpty($store->scanPattern('{nc:content}:test:query:*:deploy:*'));
+
+        $this->cacheManager()->flushTagAcrossModels('deploy');
+
+        $this->assertEmpty($store->scanPattern('{nc:content}:test:query:*:deploy:*'));
+    }
+
     public function test_explain_shows_the_resolved_space(): void
     {
         $this->assertStringContainsString('[space: content]', SpacedPost::query()->explain());
