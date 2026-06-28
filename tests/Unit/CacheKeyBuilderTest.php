@@ -79,6 +79,19 @@ class CacheKeyBuilderTest extends TestCase
         $this->assertSame('{nc}:test:wake:mysql:posts:abc123', $wake);
     }
 
+    public function test_dep_key_pairs_respects_active_space_in_static_cache(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+        $content = new CacheSpace('content', 'nc:content');
+
+        [$defaultVer] = $keys->depKeyPairs('mysql:posts', []);
+        [$contentVer] = $keys->withSpace($content, fn() => $keys->depKeyPairs('mysql:posts', []));
+
+        $this->assertSame('{nc}:test:ver:mysql:posts:', $defaultVer[0]);
+        $this->assertSame('{nc:content}:test:ver:mysql:posts:', $contentVer[0]);
+        $this->assertNotSame($defaultVer[0], $contentVer[0], 'same classKey under two spaces must produce distinct version keys');
+    }
+
     public function test_key_methods_emit_full_keys_with_hash_tag_and_prefix(): void
     {
         $keys = new CacheKeyBuilder('{nc}:', 'test:');

@@ -246,6 +246,8 @@ class CacheKeyBuilder
      */
     public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = [], ?CacheSpace $space = null): array
     {
+        $space ??= $this->activeSpace;
+
         if ($depClasses === [] && $depTableKeys === []) {
             $cacheKey = ($space?->name ?? '') . '|' . $classKey;
 
