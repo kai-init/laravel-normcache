@@ -20,6 +20,10 @@ class MultiSpaceClusterPlacementTest extends TestCase
             $this->markTestSkipped('Requires a Redis Cluster (composer test:cluster).');
         }
 
+        if (!class_exists(Redis::class)) {
+            $this->markTestSkipped('Physical cluster placement check requires the phpredis extension.');
+        }
+
         $this->setClusterMode(true);
     }
 
@@ -52,18 +56,18 @@ class MultiSpaceClusterPlacementTest extends TestCase
         );
     }
 
-    // Master port whose keyspace holds this space tag's keys, or null.
-    private function masterHolding(string $hashTag): ?int
+    // Master node whose keyspace holds this space tag's keys, or null.
+    private function masterHolding(string $hashTag): ?string
     {
-        foreach ($this->masterPorts() as $port) {
+        foreach ($this->masterNodes() as [$host, $port]) {
             $node = new Redis;
-            $node->connect('127.0.0.1', $port);
+            $node->connect($host, $port);
 
             // KEYS treats { } as literal; only the owning node returns this space's keys.
             if (!empty($node->keys('{' . $hashTag . '}:*'))) {
                 $node->close();
 
-                return $port;
+                return "{$host}:{$port}";
             }
 
             $node->close();
@@ -72,19 +76,29 @@ class MultiSpaceClusterPlacementTest extends TestCase
         return null;
     }
 
-    /** @return list<int> master node ports, from CLUSTER SLOTS */
-    private function masterPorts(): array
+    /** @return list<array{0: string, 1: int}> master nodes, from CLUSTER SLOTS */
+    private function masterNodes(): array
     {
+        [$host, $port] = $this->clusterProbeNode();
         $probe = new Redis;
-        $probe->connect('127.0.0.1', 7010);
+        $probe->connect($host, $port);
         $slots = $probe->rawCommand('CLUSTER', 'SLOTS');
         $probe->close();
 
-        $ports = [];
+        $nodes = [];
         foreach ($slots as $range) {
-            $ports[] = (int) $range[2][1]; // [start, end, [masterIp, masterPort, id], ...]
+            $masterPort = (int) $range[2][1]; // [start, end, [masterIp, masterPort, id], ...]
+            $nodes["{$host}:{$masterPort}"] = [$host, $masterPort];
         }
 
-        return array_values(array_unique($ports));
+        return array_values($nodes);
+    }
+
+    /** @return array{0: string, 1: int} */
+    private function clusterProbeNode(): array
+    {
+        $node = config('database.redis.clusters.normcache-test.0');
+
+        return [$node['host'], (int) $node['port']];
     }
 }
