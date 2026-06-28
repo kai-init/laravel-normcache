@@ -261,7 +261,7 @@ class CacheableBuilder extends Builder
             selectAll: $columns === ['*'],
         ));
 
-        return match ($plan->strategy) {
+        return NormCache::keys()->withSpace($plan->space, fn() => match ($plan->strategy) {
             CacheStrategy::DirectModels => NormCache::rescue(
                 fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
                 fn() => $this->getWithoutCacheFromPrepared($prepared, $columns),
@@ -272,7 +272,7 @@ class CacheableBuilder extends Builder
             ),
             CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
             CacheStrategy::LiveQuery => $this->bypassAndReturn($model, $plan->bypassReasons, $debugbarStart, $prepared, $columns),
-        };
+        });
     }
 
     private function executeResultQuery(

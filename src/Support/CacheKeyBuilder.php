@@ -39,19 +39,36 @@ class CacheKeyBuilder
 
     private static array $singleDepPairs = [];
 
+    private ?CacheSpace $activeSpace = null;
+
     public function __construct(
         private readonly string $hashTagPrefix = '{nc}:',
         private readonly string $keyPrefix = '',
     ) {}
+
+    // Scope an operation to a space: every key built inside $callback uses its tag.
+    public function withSpace(?CacheSpace $space, callable $callback): mixed
+    {
+        $previous = $this->activeSpace;
+        $this->activeSpace = $space;
+
+        try {
+            return $callback();
+        } finally {
+            $this->activeSpace = $previous;
+        }
+    }
 
     private function full(string $body, ?CacheSpace $space = null): string
     {
         return $this->tagPrefix($space) . $this->keyPrefix . $body;
     }
 
-    // Hash-tag prefix for a space ("{nc:content}:"), or the configured default ("{nc}:").
+    // Hash-tag prefix: explicit space, else the active operation's space, else default.
     private function tagPrefix(?CacheSpace $space): string
     {
+        $space ??= $this->activeSpace;
+
         return $space === null ? $this->hashTagPrefix : '{' . $space->hashTag . '}:';
     }
 

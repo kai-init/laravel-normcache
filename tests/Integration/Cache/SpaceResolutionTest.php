@@ -62,4 +62,18 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertSame('default', $plan->space?->name);
     }
+
+    public function test_spaced_model_query_writes_keys_under_its_space_tag(): void
+    {
+        Post::create(['title' => 'Hello', 'author_id' => 1]);
+
+        SpacedPost::query()->get();
+
+        $store = $this->cacheManager()->getStore();
+
+        $this->assertNotEmpty(
+            $store->scanPattern('{nc:content}:*'),
+            'SpacedPost (content) must write keys under the {nc:content} hash tag',
+        );
+    }
 }
