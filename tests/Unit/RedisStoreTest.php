@@ -9,6 +9,7 @@ use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use Predis\Client as PredisClient;
+use Predis\NotSupportedException;
 use ReflectionProperty;
 
 class RedisStoreTest extends TestCase
@@ -78,6 +79,40 @@ class RedisStoreTest extends TestCase
         $results = $this->store->getMany(['foo', 'baz', 'missing']);
 
         $this->assertSame(['bar', 'qux', null], $results);
+    }
+
+    public function test_predis_cluster_get_many_reads_each_key_without_mget_array_command(): void
+    {
+        $connection = new class extends PredisClusterConnection
+        {
+            public array $reads = [];
+
+            public array $values = [];
+
+            public function __construct() {}
+
+            public function mget($keys)
+            {
+                throw new NotSupportedException("Cannot use 'MGET' with redis-cluster.");
+            }
+
+            public function get($key)
+            {
+                $this->reads[] = $key;
+
+                return $this->values[$key] ?? null;
+            }
+        };
+
+        $store = new RedisStore('normcache-test');
+        $connection->values = [
+            'foo' => $store->serialize('bar'),
+            'baz' => $store->serialize('qux'),
+        ];
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $this->assertSame(['bar', 'qux', null], $store->getMany(['foo', 'baz', 'missing']));
+        $this->assertSame(['foo', 'baz', 'missing'], $connection->reads);
     }
 
     public function test_it_can_set_many_values(): void
@@ -210,6 +245,34 @@ class RedisStoreTest extends TestCase
         $this->assertNull($this->store->get('foo:1'));
         $this->assertNull($this->store->get('foo:2'));
         $this->assertSame('c', $this->store->get('bar:1'));
+    }
+
+    public function test_predis_cluster_delete_sends_one_key_per_command(): void
+    {
+        $connection = new class extends PredisClusterConnection
+        {
+            public array $deleted = [];
+
+            public function __construct() {}
+
+            public function del($keys)
+            {
+                if (is_array($keys)) {
+                    throw new NotSupportedException("Cannot use 'DEL' with redis-cluster.");
+                }
+
+                $this->deleted[] = $keys;
+
+                return 1;
+            }
+        };
+
+        $store = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $store->delete(['foo:1', 'foo:2']);
+
+        $this->assertSame(['foo:1', 'foo:2'], $connection->deleted);
     }
 
     public function test_scan_pattern_strips_connection_prefix_from_returned_keys(): void

@@ -165,7 +165,9 @@ final class RedisStore
             $prefixed[] = $key;
         }
 
-        $raw = $this->connection->mget($prefixed);
+        $raw = $this->connection instanceof PredisClusterConnection
+            ? array_map(fn($key) => $this->connection->get($key), $prefixed)
+            : $this->connection->mget($prefixed);
         $values = [];
 
         foreach ($raw as $i => $value) {
@@ -265,7 +267,15 @@ final class RedisStore
 
     private function del(array $keys): void
     {
-        // PredisClusterConnection extends PredisConnection, so this covers both.
+        if ($this->connection instanceof PredisClusterConnection) {
+            foreach ($keys as $key) {
+                $this->connection->del($key);
+            }
+
+            return;
+        }
+
+        // Standalone Predis accepts Laravel's array form.
         if ($this->connection instanceof PredisConnection) {
             $this->connection->del($keys);
 
