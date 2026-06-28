@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration\Cache;
 
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\SpacedAuthor;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CachePlanContext;
@@ -90,6 +91,24 @@ class SpaceResolutionTest extends TestCase
             'Second',
             SpacedPost::query()->get()->first()->title,
             'content-space cache must invalidate when a content model is written',
+        );
+    }
+
+    public function test_co_located_relation_eager_load_caches_under_the_space_tag(): void
+    {
+        $author = SpacedAuthor::create(['name' => 'Ann']);
+        SpacedPost::create(['title' => 'Hi', 'author_id' => $author->id]);
+
+        $post = SpacedPost::query()->with('spacedAuthor')->get()->first();
+
+        $this->assertSame('Ann', $post->spacedAuthor->name);
+
+        $store = $this->cacheManager()->getStore();
+        $authorKeys = $store->scanPattern('{nc:content}:test:model:*authors*');
+
+        $this->assertNotEmpty(
+            $authorKeys,
+            'co-located belongsTo (content) must cache the related model under {nc:content}',
         );
     }
 }

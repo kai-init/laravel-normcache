@@ -11,11 +11,13 @@ use NormCache\Cache\NormalizedThroughReader;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FallbackHandler;
 use NormCache\Support\RedisStore;
 use NormCache\Traits\HandlesInvalidation;
 use NormCache\Values\CacheConfig;
+use NormCache\Values\CacheSpace;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
@@ -100,6 +102,15 @@ class CacheManager
     {
         return $this->keys->classKey($class);
     }
+
+    // Resolve the active cache space for a model (used by relations to scope their
+    // cache execution to the same space the planner validated against).
+    public function spaceFor(string $modelClass, ?string $explicitSpace = null): CacheSpace
+    {
+        return ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($modelClass, $explicitSpace);
+    }
+
+    private ?CacheSpaceResolver $spaceResolver = null;
 
     public function tableKey(string $connectionName, string $table): string
     {
