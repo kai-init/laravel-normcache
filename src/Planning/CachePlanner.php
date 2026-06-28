@@ -8,6 +8,8 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
 use NormCache\Facades\NormCache;
+use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
@@ -61,7 +63,7 @@ final class CachePlanner
             return $this->transactionBypass($builder, $model, $context);
         }
 
-        return match ($context->operation) {
+        $plan = match ($context->operation) {
             CacheOperation::Scalar => $this->planScalarLike($builder, $model, $base, $context, $insideTransaction, $explain, self::SIMPLE_RESULT_BYPASS_FLAGS),
             CacheOperation::PaginationCount => $this->planScalarLike($builder, $model, $base, $context, $insideTransaction, $explain, self::SIMPLE_PAGINATION_BYPASS_FLAGS),
             CacheOperation::Pivot,
@@ -70,6 +72,53 @@ final class CachePlanner
             CacheOperation::BelongsToEagerLoad,
             CacheOperation::MorphToEagerLoad => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
         };
+
+        return $explain ? $plan : $this->applySpaceValidation($plan, $builder, $model, $context->operation);
+    }
+
+    private ?CacheSpaceResolver $spaceResolver = null;
+
+    private ?CacheSpaceRegistry $spaceRegistry = null;
+
+    // Bypass (or throw) when a plan's dependencies don't co-locate in its cache space.
+    // Neutral for default-only apps: everything resolves to the default space.
+    private function applySpaceValidation(
+        CachePlan $plan,
+        CacheableBuilder $builder,
+        Model $model,
+        CacheOperation $operation,
+    ): CachePlan {
+        if (!$plan->isCacheable()) {
+            return $plan;
+        }
+
+        $resolver = $this->spaceResolver ??= app(CacheSpaceResolver::class);
+        $registry = $this->spaceRegistry ??= app(CacheSpaceRegistry::class);
+
+        $space = $resolver->resolve($model::class, $builder->getSpace());
+        $validation = $registry->validateDependencies(
+            $space,
+            $plan->dependencies->models,
+            $plan->dependencies->tables,
+        );
+
+        if ($validation->ok) {
+            return $plan;
+        }
+
+        $reasons = ['cross-space dependencies for space [' . $space->name . ']: '
+            . implode(', ', [...$validation->invalidModels, ...$validation->invalidTables])];
+
+        if (config('normcache.spaces.cross_space_behavior', 'bypass') === 'throw') {
+            throw new \RuntimeException('NormCache: ' . $reasons[0]);
+        }
+
+        return CachePlan::bypass(
+            operation: $operation,
+            dependencies: $plan->dependencies,
+            reasons: $reasons,
+            bypassReasons: ['dependency' => $reasons],
+        );
     }
 
     private function globalBypass(

@@ -51,6 +51,8 @@ class CacheableBuilder extends Builder
 
     private ?string $cacheTag = null;
 
+    private ?string $cacheSpace = null;
+
     // -------------------------------------------------------------------------
     // Configuration
     // -------------------------------------------------------------------------
@@ -85,6 +87,18 @@ class CacheableBuilder extends Builder
         $this->cacheTag = $tag;
 
         return $this;
+    }
+
+    public function space(string $name): static
+    {
+        $this->cacheSpace = $name;
+
+        return $this;
+    }
+
+    public function getSpace(): ?string
+    {
+        return $this->cacheSpace;
     }
 
     public function dependsOn(array $modelClasses): static

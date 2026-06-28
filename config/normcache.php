@@ -39,4 +39,13 @@ return [
 
     // Register the Laravel Debugbar collector for local cache inspection.
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
+    // Redis Cluster sharding via cache spaces (see docs/space.md). Models declare
+    // membership with `protected static array $normCacheSpaces`.
+    'spaces' => [
+        // Cap on spaces per model; each write bumps a version key per space.
+        'max_per_model' => 16,
+
+        // When a query's dependencies span spaces: 'bypass' (skip caching) or 'throw'.
+        'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
+    ],
 ];

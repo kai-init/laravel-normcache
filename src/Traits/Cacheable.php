@@ -22,6 +22,13 @@ trait Cacheable
         NormCache::flushInstance($this);
     }
 
+    // Cache spaces this model belongs to (empty = default), via $normCacheSpaces.
+    /** @return list<string> */
+    public static function normCacheSpaces(): array
+    {
+        return property_exists(static::class, 'normCacheSpaces') ? (array) static::$normCacheSpaces : [];
+    }
+
     // -------------------------------------------------------------------------
     // Public overrides
     // -------------------------------------------------------------------------

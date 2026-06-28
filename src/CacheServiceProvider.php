@@ -18,6 +18,8 @@ use NormCache\Cache\VersionTracker;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
+use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
@@ -27,6 +29,14 @@ class CacheServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
+
+        $this->app->singleton(CacheSpaceRegistry::class, function () {
+            return new CacheSpaceRegistry((int) config('normcache.spaces.max_per_model', 16));
+        });
+
+        $this->app->singleton(CacheSpaceResolver::class, function ($app) {
+            return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
+        });
 
         $this->app->singleton(CacheManager::class, function () {
             $connection = config('normcache.connection');
