@@ -31,7 +31,10 @@ class CacheServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
 
         $this->app->singleton(CacheSpaceRegistry::class, function () {
-            return new CacheSpaceRegistry((int) config('normcache.spaces.max_per_model', 16));
+            return new CacheSpaceRegistry(
+                (int) config('normcache.spaces.max_per_model', 16),
+                (array) config('normcache.spaces.placement', []),
+            );
         });
 
         $this->app->singleton(CacheSpaceResolver::class, function ($app) {

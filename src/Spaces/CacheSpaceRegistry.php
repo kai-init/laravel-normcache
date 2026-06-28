@@ -20,7 +20,13 @@ final class CacheSpaceRegistry
     /** @var array<class-string, list<CacheSpace>> model class => spaces (memoized, validated) */
     private array $modelSpaces = [];
 
-    public function __construct(private readonly int $maxPerModel = 16) {}
+    /**
+     * @param  array<string, array{hash_tag?: string}>  $placement  per-space hash-tag overrides
+     */
+    public function __construct(
+        private readonly int $maxPerModel = 16,
+        private readonly array $placement = [],
+    ) {}
 
     public function defaultSpace(): CacheSpace
     {
@@ -114,6 +120,19 @@ final class CacheSpaceRegistry
             throw new \InvalidArgumentException(
                 "Invalid cache space name [{$name}]: must be non-empty and contain no ':', '{', '}', or whitespace."
             );
+        }
+
+        // Config override for pinning a space to a specific slot/node; else by convention.
+        $override = $this->placement[$name]['hash_tag'] ?? null;
+
+        if ($override !== null) {
+            if ($override === '' || preg_match('/[{}]/', $override)) {
+                throw new \InvalidArgumentException(
+                    "Invalid hash_tag override [{$override}] for space [{$name}]: must be non-empty and contain no '{' or '}'."
+                );
+            }
+
+            return $override;
         }
 
         return $name === self::DEFAULT_SPACE

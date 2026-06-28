@@ -30,6 +30,14 @@ class CacheSpaceRegistryTest extends TestCase
         $this->assertSame('nc:content', $space->hashTag);
     }
 
+    public function test_placement_config_overrides_the_hash_tag(): void
+    {
+        $registry = new CacheSpaceRegistry(16, ['catalog' => ['hash_tag' => 'shard7']]);
+
+        $this->assertSame('shard7', $registry->space('catalog')->hashTag);
+        $this->assertSame('nc:content', $registry->space('content')->hashTag);
+    }
+
     public function test_invalid_space_name_throws(): void
     {
         $this->expectException(\InvalidArgumentException::class);

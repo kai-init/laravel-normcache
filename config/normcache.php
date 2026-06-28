@@ -47,5 +47,11 @@ return [
 
         // When a query's dependencies span spaces: 'bypass' (skip caching) or 'throw'.
         'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
+
+        // Optional per-space hash-tag override, to pin a space to a specific cluster
+        // slot/node. Omit to use the convention ('content' -> {nc:content}).
+        'placement' => [
+            // 'catalog' => ['hash_tag' => 'nc:catalog'],
+        ],
     ],
 ];
