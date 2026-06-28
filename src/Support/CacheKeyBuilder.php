@@ -5,6 +5,7 @@ namespace NormCache\Support;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\ModelHydrator;
+use NormCache\Values\CacheSpace;
 
 class CacheKeyBuilder
 {
@@ -43,60 +44,66 @@ class CacheKeyBuilder
         private readonly string $keyPrefix = '',
     ) {}
 
-    private function full(string $body): string
+    private function full(string $body, ?CacheSpace $space = null): string
     {
-        return $this->hashTagPrefix . $this->keyPrefix . $body;
+        return $this->tagPrefix($space) . $this->keyPrefix . $body;
     }
 
-    public function prefixed(string $pattern): string
+    // Hash-tag prefix for a space ("{nc:content}:"), or the configured default ("{nc}:").
+    private function tagPrefix(?CacheSpace $space): string
     {
-        return $this->full($pattern);
+        return $space === null ? $this->hashTagPrefix : '{' . $space->hashTag . '}:';
     }
 
-    public function nullKey(): string
+    public function prefixed(string $pattern, ?CacheSpace $space = null): string
     {
-        return $this->hashTagPrefix . 'null';
+        return $this->full($pattern, $space);
+    }
+
+    public function nullKey(?CacheSpace $space = null): string
+    {
+        return $this->tagPrefix($space) . 'null';
     }
 
     // -------------------------------------------------------------------------
     // Prefixes
     // -------------------------------------------------------------------------
 
-    public function modelPrefix(string $classKey, int|string $version): string
+    public function modelPrefix(string $classKey, int|string $version, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_MODEL . ':' . $classKey . ':v' . $version . ':');
+        return $this->full(self::K_MODEL . ':' . $classKey . ':v' . $version . ':', $space);
     }
 
-    public function queryPrefix(string $classKey, ?string $tag = null): string
+    public function queryPrefix(string $classKey, ?string $tag = null, ?CacheSpace $space = null): string
     {
         $base = self::K_QUERY . ':' . $classKey . ':';
 
-        return $this->full($tag !== null ? $base . $tag . ':' : $base);
+        return $this->full($tag !== null ? $base . $tag . ':' : $base, $space);
     }
 
-    public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null): string
+    public function namespacedPrefix(string $namespace, string $classKey, ?string $tag = null, ?CacheSpace $space = null): string
     {
-        return $this->full("{$namespace}:{$classKey}:" . $this->tagSegment($tag));
+        return $this->full("{$namespace}:{$classKey}:" . $this->tagSegment($tag), $space);
     }
 
-    public function pivotBasePrefix(string $parentKey, string $relatedKey): string
+    public function pivotBasePrefix(string $parentKey, string $relatedKey, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_PIVOT . ':' . $parentKey . ':' . $relatedKey . ':');
+        return $this->full(self::K_PIVOT . ':' . $parentKey . ':' . $relatedKey . ':', $space);
     }
 
-    public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg): string
+    public function pivotPrefix(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, ?CacheSpace $space = null): string
     {
-        return $this->pivotBasePrefix($parentKey, $relatedKey) . $relation . ':' . $constraintHash . ':' . $seg . ':';
+        return $this->pivotBasePrefix($parentKey, $relatedKey, $space) . $relation . ':' . $constraintHash . ':' . $seg . ':';
     }
 
-    public function buildingPrefix(string $classKey): string
+    public function buildingPrefix(string $classKey, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_BUILDING . ':' . $classKey . ':');
+        return $this->full(self::K_BUILDING . ':' . $classKey . ':', $space);
     }
 
-    public function wakePrefix(string $classKey): string
+    public function wakePrefix(string $classKey, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_WAKE . ':' . $classKey . ':');
+        return $this->full(self::K_WAKE . ':' . $classKey . ':', $space);
     }
 
     // -------------------------------------------------------------------------
@@ -136,43 +143,43 @@ class CacheKeyBuilder
         return "{$connectionName}:{$table}";
     }
 
-    public function verKey(string $classKey): string
+    public function verKey(string $classKey, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_VER . ':' . $classKey . ':');
+        return $this->full(self::K_VER . ':' . $classKey . ':', $space);
     }
 
-    public function scheduledKey(string $classKey): string
+    public function scheduledKey(string $classKey, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_SCHEDULED . ':' . $classKey . ':');
+        return $this->full(self::K_SCHEDULED . ':' . $classKey . ':', $space);
     }
 
-    public function wakeKey(string $classKey, string $lockSuffix): string
+    public function wakeKey(string $classKey, string $lockSuffix, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_WAKE . ':' . $classKey . ':' . $lockSuffix);
+        return $this->full(self::K_WAKE . ':' . $classKey . ':' . $lockSuffix, $space);
     }
 
     // -------------------------------------------------------------------------
     // Specific Keys
     // -------------------------------------------------------------------------
 
-    public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash): string
+    public function queryKey(string $classKey, ?string $tag, int|string $version, string $hash, ?CacheSpace $space = null): string
     {
-        return $this->queryPrefix($classKey, $tag) . 'v' . $version . ':' . $hash;
+        return $this->queryPrefix($classKey, $tag, $space) . 'v' . $version . ':' . $hash;
     }
 
-    public function namespacedKey(string $namespace, string $classKey, ?string $tag, string $seg, string $hash): string
+    public function namespacedKey(string $namespace, string $classKey, ?string $tag, string $seg, string $hash, ?CacheSpace $space = null): string
     {
-        return $this->namespacedPrefix($namespace, $classKey, $tag) . $seg . ':' . $hash;
+        return $this->namespacedPrefix($namespace, $classKey, $tag, $space) . $seg . ':' . $hash;
     }
 
-    public function resultBuildingKey(string $classKey, string $seg, string $lockSuffix): string
+    public function resultBuildingKey(string $classKey, string $seg, string $lockSuffix, ?CacheSpace $space = null): string
     {
-        return $this->buildingPrefix($classKey) . $seg . ':' . $lockSuffix;
+        return $this->buildingPrefix($classKey, $space) . $seg . ':' . $lockSuffix;
     }
 
-    public function pivotKey(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, mixed $parentId): string
+    public function pivotKey(string $parentKey, string $relatedKey, string $relation, string $constraintHash, string $seg, mixed $parentId, ?CacheSpace $space = null): string
     {
-        return $this->pivotPrefix($parentKey, $relatedKey, $relation, $constraintHash, $seg) . $parentId;
+        return $this->pivotPrefix($parentKey, $relatedKey, $relation, $constraintHash, $seg, $space) . $parentId;
     }
 
     // -------------------------------------------------------------------------
@@ -225,12 +232,14 @@ class CacheKeyBuilder
     /**
      * @return array{0: list<string>, 1: list<string>} [versionKeys, scheduledKeys]
      */
-    public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = []): array
+    public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = [], ?CacheSpace $space = null): array
     {
         if ($depClasses === [] && $depTableKeys === []) {
-            return self::$singleDepPairs[$classKey] ??= [
-                [$this->verKey($classKey)],
-                [$this->scheduledKey($classKey)],
+            $cacheKey = ($space?->name ?? '') . '|' . $classKey;
+
+            return self::$singleDepPairs[$cacheKey] ??= [
+                [$this->verKey($classKey, $space)],
+                [$this->scheduledKey($classKey, $space)],
             ];
         }
 
@@ -260,8 +269,8 @@ class CacheKeyBuilder
         $scheduledKeys = [];
 
         foreach ($all as $key) {
-            $versionKeys[] = $this->verKey($key);
-            $scheduledKeys[] = $this->scheduledKey($key);
+            $versionKeys[] = $this->verKey($key, $space);
+            $scheduledKeys[] = $this->scheduledKey($key, $space);
         }
 
         return [$versionKeys, $scheduledKeys];

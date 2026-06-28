@@ -103,7 +103,7 @@ final class CachePlanner
         );
 
         if ($validation->ok) {
-            return $plan;
+            return $plan->withSpace($space);
         }
 
         $reasons = ['cross-space dependencies for space [' . $space->name . ']: '

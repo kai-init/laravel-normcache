@@ -5,9 +5,30 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Database\Eloquent\Model;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CacheSpace;
 
 class CacheKeyBuilderTest extends TestCase
 {
+    public function test_key_methods_emit_the_space_hash_tag(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+        $content = new CacheSpace('content', 'nc:content');
+
+        $this->assertSame('{nc:content}:test:ver:mysql:posts:', $keys->verKey('mysql:posts', $content));
+        $this->assertSame('{nc:content}:test:model:mysql:posts:v3:', $keys->modelPrefix('mysql:posts', 3, $content));
+        $this->assertSame('{nc:content}:test:query:mysql:posts:', $keys->queryPrefix('mysql:posts', null, $content));
+        $this->assertSame('{nc:content}:null', $keys->nullKey($content));
+        $this->assertSame('{nc:content}:test:query:*', $keys->prefixed('query:*', $content));
+    }
+
+    public function test_null_space_keeps_the_default_tag(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+
+        $this->assertSame('{nc}:test:ver:mysql:posts:', $keys->verKey('mysql:posts'));
+        $this->assertSame('{nc}:null', $keys->nullKey());
+    }
+
     public function test_class_key_rejects_connection_name_containing_colon(): void
     {
         $model = new class extends Model

@@ -41,4 +41,25 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertTrue($plan->isCacheable(), 'default-space deps must not be downgraded');
     }
+
+    public function test_cacheable_plan_carries_the_resolved_space(): void
+    {
+        $plan = SpacedPost::query()->cachePlan(
+            SpacedPost::query()->toBase(),
+            CachePlanContext::models(),
+        );
+
+        $this->assertTrue($plan->isCacheable());
+        $this->assertSame('content', $plan->space?->name);
+    }
+
+    public function test_default_model_plan_carries_default_space(): void
+    {
+        $plan = Post::query()->cachePlan(
+            Post::query()->toBase(),
+            CachePlanContext::models(),
+        );
+
+        $this->assertSame('default', $plan->space?->name);
+    }
 }

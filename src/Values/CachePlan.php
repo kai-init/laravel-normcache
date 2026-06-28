@@ -20,7 +20,23 @@ final readonly class CachePlan
         public ?array $primaryKeys = null,
         public array $reasons = [],
         public array $bypassReasons = [],
+        public ?CacheSpace $space = null,
     ) {}
+
+    public function withSpace(CacheSpace $space): self
+    {
+        return new self(
+            strategy: $this->strategy,
+            operation: $this->operation,
+            dependencies: $this->dependencies,
+            normalizable: $this->normalizable,
+            columns: $this->columns,
+            primaryKeys: $this->primaryKeys,
+            reasons: $this->reasons,
+            bypassReasons: $this->bypassReasons,
+            space: $space,
+        );
+    }
 
     public static function normalized(
         CacheOperation $operation,
