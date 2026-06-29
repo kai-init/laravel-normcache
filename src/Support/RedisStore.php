@@ -549,7 +549,7 @@ final class RedisStore
 
         $tag = $matches[1];
 
-        return str_contains($tag, '*') || str_contains($tag, '?') || $tag === ''
+        return str_contains($tag, '*') || str_contains($tag, '?')
             ? null
             : $tag;
     }

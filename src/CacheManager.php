@@ -143,6 +143,11 @@ class CacheManager
         return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0]);
     }
 
+    public function currentVersionInSpace(string $modelClass, string $space): int
+    {
+        return $this->versions->currentVersion($modelClass, $this->spaceFor($modelClass, $space));
+    }
+
     public function currentTableVersion(string $connectionName, string $table): int
     {
         return $this->versions->currentTableVersion($connectionName, $table);
@@ -237,25 +242,32 @@ class CacheManager
         return $this->resultReader->store($key, $payload, $buildingKey, $ttl, $wakeKey, $versionKeys, $expectedVersions, $buildingToken);
     }
 
-    public function storeModelAttrs(string $modelClass, array $modelAttrs): void
+    public function storeModelAttrs(string $modelClass, array $modelAttrs, ?CacheSpace $space = null): void
+    {
+        $space ??= $this->keys->activeSpace();
+        $modelVersion = $this->versions->currentVersion($modelClass, $space);
+
+        $this->storeModelAttrsForVersion($modelClass, $modelAttrs, $modelVersion, $space);
+    }
+
+    public function storeModelAttrsForVersion(string $modelClass, array $modelAttrs, int $expectedVersion, ?CacheSpace $space = null): void
     {
         if (empty($modelAttrs)) {
             return;
         }
 
         $classKey = $this->keys->classKey($modelClass);
-        $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
 
         $attrsByKey = [];
         foreach ($modelAttrs as $id => $attrs) {
-            $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
+            $attrsByKey[$this->keys->modelPrefix($classKey, $expectedVersion, $space) . $id] = $attrs;
         }
 
         $this->store->setManyIfVersion(
             $attrsByKey,
             $this->config->ttl,
-            $this->keys->verKey($classKey),
-            $modelVersion
+            $this->keys->verKey($classKey, $space),
+            $expectedVersion
         );
     }
 

@@ -63,7 +63,7 @@ final class CacheSpaceRegistry
             ...array_keys($this->spaces),
         ]));
 
-        return array_values(array_map(fn(string $name) => $this->space($name), $names));
+        return array_map(fn(string $name) => $this->space($name), $names);
     }
 
     /** @return list<CacheSpace> */
@@ -222,8 +222,8 @@ final class CacheSpaceRegistry
 
         try {
             $this->metadataStore->addToSet($this->metadataSpacesKey(), [$name]);
-        } catch (\Throwable) {
-            // Registry writes must not block the read path.
+        } catch (\Throwable $e) {
+            report($e);
         }
     }
 

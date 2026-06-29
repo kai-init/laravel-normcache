@@ -342,6 +342,37 @@ class CacheManagerTest extends TestCase
         $this->assertNull($store->getRaw($buildingKey));
     }
 
+    public function test_store_model_attrs_for_version_skips_stale_version_write(): void
+    {
+        $manager = $this->cacheManager();
+        $store = $manager->getStore();
+        $classKey = $manager->classKey(Author::class);
+
+        $store->setRaw($manager->keys()->verKey($classKey), '5', 3600);
+        $store->increment($manager->keys()->verKey($classKey));
+
+        $manager->storeModelAttrsForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Stale']], 5);
+
+        $this->assertNull($store->get($manager->keys()->modelPrefix($classKey, 5) . '1'));
+        $this->assertNull($store->get($manager->keys()->modelPrefix($classKey, 6) . '1'));
+    }
+
+    public function test_store_model_attrs_for_version_writes_when_version_matches(): void
+    {
+        $manager = $this->cacheManager();
+        $store = $manager->getStore();
+        $classKey = $manager->classKey(Author::class);
+
+        $store->setRaw($manager->keys()->verKey($classKey), '5', 3600);
+
+        $manager->storeModelAttrsForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Fresh']], 5);
+
+        $this->assertSame(
+            ['id' => 1, 'name' => 'Fresh'],
+            $store->get($manager->keys()->modelPrefix($classKey, 5) . '1')
+        );
+    }
+
     public function test_store_query_ids_skips_write_on_version_mismatch(): void
     {
         $store = $this->cacheManager()->getStore();
