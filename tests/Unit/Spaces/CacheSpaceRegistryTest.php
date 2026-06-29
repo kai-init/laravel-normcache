@@ -51,12 +51,12 @@ class CacheSpaceRegistryTest extends TestCase
         );
     }
 
-    public function test_placement_keys_are_not_registry_entries_until_materialized(): void
+    public function test_known_spaces_include_configured_placement_spaces(): void
     {
         $registry = new CacheSpaceRegistry(16, ['catalog' => ['hash_tag' => 'shard7']]);
 
         $this->assertSame(
-            ['default'],
+            ['default', 'catalog'],
             array_map(fn($s) => $s->name, $registry->knownSpaces()),
         );
     }

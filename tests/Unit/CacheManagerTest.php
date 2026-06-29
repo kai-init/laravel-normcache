@@ -342,6 +342,19 @@ class CacheManagerTest extends TestCase
         $this->assertNull($store->getRaw($buildingKey));
     }
 
+    public function test_expected_version_for_model_uses_matching_version_key(): void
+    {
+        $manager = $this->cacheManager();
+        $authorKey = $manager->classKey(Author::class);
+        $postKey = $manager->classKey(Post::class);
+
+        $this->assertSame(9, $manager->expectedVersionForModel(
+            Author::class,
+            [$manager->keys()->verKey($postKey), $manager->keys()->verKey($authorKey)],
+            ['4', '9'],
+        ));
+    }
+
     public function test_store_model_attrs_for_version_skips_stale_version_write(): void
     {
         $manager = $this->cacheManager();

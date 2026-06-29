@@ -59,6 +59,7 @@ final class CacheSpaceRegistry
     {
         $names = array_values(array_unique([
             self::DEFAULT_SPACE,
+            ...array_keys($this->placement),
             ...$this->metadataSpaces(),
             ...array_keys($this->spaces),
         ]));

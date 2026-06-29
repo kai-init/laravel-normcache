@@ -93,7 +93,12 @@ trait CachesOneOrManyThrough
 
                     $cachePayload = $this->cachePayloadFromResult($rawModels);
                     $space = NormCache::keys()->activeSpace();
-                    $relatedVersion = isset($result->expectedVersions[0]) ? (int) $result->expectedVersions[0] : null;
+                    $relatedVersion = NormCache::expectedVersionForModel(
+                        $relatedClass,
+                        $result->versionKeys,
+                        $result->expectedVersions,
+                        $space,
+                    );
 
                     NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $relatedVersion, $space) {
                         $stored = NormCache::storeThroughIds(

@@ -258,7 +258,12 @@ trait CachesPivotRelation
             buildingKey: $buildingKey, wakeKey: $wakeKey, buildingToken: $buildingToken,
         );
 
-        $relatedVersion = isset($expectedVersions[0]) ? (int) $expectedVersions[0] : null;
+        $relatedVersion = NormCache::expectedVersionForModel(
+            $relatedClass,
+            $versionKeys,
+            $expectedVersions,
+            NormCache::keys()->activeSpace(),
+        );
 
         if ($stored && $relatedVersion !== null) {
             NormCache::storeModelAttrsForVersion(
