@@ -242,16 +242,6 @@ class CacheManager
         $this->storeModelAttrsForVersion($modelClass, $modelAttrs, $modelVersion, $space);
     }
 
-    private function expectedVersionForModel(string $modelClass, array $versionKeys, array $expectedVersions, ?CacheSpace $space = null): ?int
-    {
-        $classKey = $this->keys->classKey($modelClass);
-        $index = array_search($this->keys->verKey($classKey, $space), $versionKeys, true);
-
-        return $index === false || !isset($expectedVersions[$index])
-            ? null
-            : (int) $expectedVersions[$index];
-    }
-
     public function storeModelAttrsForVersionedResult(
         string $modelClass,
         array $modelAttrs,
@@ -259,13 +249,14 @@ class CacheManager
         array $expectedVersions,
         ?CacheSpace $space = null,
     ): void {
-        $expectedVersion = $this->expectedVersionForModel($modelClass, $versionKeys, $expectedVersions, $space);
+        $classKey = $this->keys->classKey($modelClass);
+        $index = array_search($this->keys->verKey($classKey, $space), $versionKeys, true);
 
-        if ($expectedVersion === null) {
+        if ($index === false || !isset($expectedVersions[$index])) {
             return;
         }
 
-        $this->storeModelAttrsForVersion($modelClass, $modelAttrs, $expectedVersion, $space);
+        $this->storeModelAttrsForVersion($modelClass, $modelAttrs, (int) $expectedVersions[$index], $space);
     }
 
     public function storeModelAttrsForVersion(string $modelClass, array $modelAttrs, int $expectedVersion, ?CacheSpace $space = null): void

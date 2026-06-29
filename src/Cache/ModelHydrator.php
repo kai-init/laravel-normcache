@@ -407,9 +407,7 @@ final class ModelHydrator
             }
         }
 
-        if ($writeCache || $buildingKey !== null) {
-            $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
-        }
+        $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
 
         return $loaded->all();
     }
@@ -465,9 +463,7 @@ final class ModelHydrator
             $models[$id] = $instance;
         }
 
-        if ($writeCache || $buildingKey !== null) {
-            $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
-        }
+        $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
 
         return $models;
     }
@@ -480,17 +476,15 @@ final class ModelHydrator
         ?string $wakeKey,
         ?string $token,
     ): void {
-        if ($attrsByKey !== [] || $buildingKey !== null) {
-            $this->store->setManyIfVersion(
-                $attrsByKey,
-                $this->ttl,
-                $this->keys->verKey($classKey),
-                $modelVersion,
-                $buildingKey,
-                $wakeKey,
-                $token
-            );
-        }
+        $this->store->setManyIfVersion(
+            $attrsByKey,
+            $this->ttl,
+            $this->keys->verKey($classKey),
+            $modelVersion,
+            $buildingKey,
+            $wakeKey,
+            $token
+        );
     }
 
     public static function reset(): void

@@ -449,16 +449,6 @@ class CacheManagerTest extends TestCase
     // storeQueryIds — corrupt/default path
     // -------------------------------------------------------------------------
 
-    public function test_store_query_ids_skips_write_without_building_key_and_version_keys(): void
-    {
-        $store = $this->manager->getStore();
-        $key = 'query:corrupt_default_path:abc';
-
-        $this->manager->storeQueryIds($key, ['1', '2', '3'], 60, null, [], [], null);
-
-        $this->assertNull($store->getRaw($key), 'Corrupt/default path must not write unprotected query IDs');
-    }
-
     public function test_store_query_ids_writes_normally_with_building_key_and_wake_key(): void
     {
         $store = $this->manager->getStore();

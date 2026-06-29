@@ -144,36 +144,20 @@ abstract class NormalizedReader
     ): bool {
         $ttl ??= $this->queryTtl;
 
-        if (!empty($versionKeys)) {
-            $keys = array_merge($versionKeys, [$key]);
-            if ($buildingKey !== null) {
-                $keys[] = $buildingKey;
-                $keys[] = $wakeKey;
-            }
-
-            return (bool) $this->store->script(
-                RedisScripts::get('store_versioned_payload'),
-                $keys,
-                array_merge(
-                    [(string) count($versionKeys), '1', (string) $ttl],
-                    $expectedVersions,
-                    [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
-                )
-            );
-
+        $keys = array_merge($versionKeys, [$key]);
+        if ($buildingKey !== null) {
+            $keys[] = $buildingKey;
+            $keys[] = $wakeKey;
         }
 
-        if ($buildingKey === null) {
-            return false;
-        }
-
-        return $this->store->storeRawAndRelease(
-            $key,
-            $payload,
-            $ttl,
-            $buildingKey,
-            $wakeKey,
-            $buildingToken
+        return (bool) $this->store->script(
+            RedisScripts::get('store_versioned_payload'),
+            $keys,
+            array_merge(
+                [(string) count($versionKeys), '1', (string) $ttl],
+                $expectedVersions,
+                [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
+            )
         );
     }
 
