@@ -265,7 +265,7 @@ class CacheableBuilder extends Builder
             selectAll: $columns === ['*'],
         ));
 
-        return NormCache::keys()->withSpace($plan->space, fn() => match ($plan->strategy) {
+        return NormCache::withSpace($plan->space, fn() => match ($plan->strategy) {
             CacheStrategy::DirectModels => NormCache::rescue(
                 fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
                 fn() => $this->getWithoutCacheFromPrepared($prepared, $columns),
@@ -347,7 +347,7 @@ class CacheableBuilder extends Builder
         }
 
         try {
-            $cachedTotal = NormCache::keys()->withSpace($plan->space, fn() => $this->rememberPaginationTotal($prepared, $plan));
+            $cachedTotal = NormCache::withSpace($plan->space, fn() => $this->rememberPaginationTotal($prepared, $plan));
         } catch (\Throwable $e) {
             NormCache::fallback($e);
 

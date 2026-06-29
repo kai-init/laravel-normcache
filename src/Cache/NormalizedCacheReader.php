@@ -4,6 +4,7 @@ namespace NormCache\Cache;
 
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
+use NormCache\Values\BuildContext;
 use NormCache\Values\QueryCacheResult;
 
 /**
@@ -57,22 +58,17 @@ final class NormalizedCacheReader extends NormalizedReader
 
     protected function buildResult(
         LuaStatus $status,
-        string $queryKey,
-        string $buildingKey,
-        string $lockToken,
-        string $wakeKey,
-        array $versionKeys,
-        array $expectedVersions,
+        BuildContext $build,
         ?array $ids = null,
-        mixed $extra = null,
+        ?array $throughKeys = null,
         ?array $models = null,
     ): QueryCacheResult {
         return match ($status) {
-            LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $queryKey, $ids, $models ?? [], null, null, [], []),
-            LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
-            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions, $wakeKey),
+            LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $models ?? [], null, null, [], []),
+            LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $build->queryKey, [], [], null, null, [], []),
+            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $build->queryKey, null, null, $build->buildingKey, $build->lockToken, $build->versionKeys, $build->expectedVersions, $build->wakeKey),
             LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($build),
         };
     }
 

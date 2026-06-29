@@ -7,6 +7,7 @@ use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
+use NormCache\Values\BuildContext;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ThroughCacheResult;
 
@@ -32,10 +33,10 @@ abstract class NormalizedReader
     abstract protected function queryPrefix(string $classKey, ?string $tag): string;
 
     /**
-     * Decode the Lua payload to [status, ids, extra]. ids: list on hit, [] empty,
-     * null otherwise. extra: reader-specific (e.g. through keys).
+     * Decode the Lua payload to [status, ids, throughKeys]. ids: list on hit,
+     * [] empty, null otherwise. throughKeys is only used by through relations.
      *
-     * @return array{0: LuaStatus, 1: ?array<int|string, mixed>, 2: mixed}
+     * @return array{0: LuaStatus, 1: ?array<int|string, mixed>, 2: ?array<int|string, mixed>}
      */
     abstract protected function decodePayload(array $result, string $queryKey): array;
 
@@ -46,14 +47,9 @@ abstract class NormalizedReader
      */
     abstract protected function buildResult(
         LuaStatus $status,
-        string $queryKey,
-        string $buildingKey,
-        string $lockToken,
-        string $wakeKey,
-        array $versionKeys,
-        array $expectedVersions,
+        BuildContext $build,
         ?array $ids = null,
-        mixed $extra = null,
+        ?array $throughKeys = null,
         ?array $models = null,
     ): QueryCacheResult|ThroughCacheResult;
 
@@ -83,7 +79,7 @@ abstract class NormalizedReader
         $wakeKey = $this->keys->wakePrefix($classKey) . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
-        [$status, $ids, $extra] = $this->decodePayload($result, $queryKey);
+        [$status, $ids, $throughKeys] = $this->decodePayload($result, $queryKey);
 
         // Use the version Lua already resolved atomically; a separate GET would race with version bumps.
         $modelVersion = is_array($ids) ? (int) ($expectedVersions[0] ?? 0) : 0;
@@ -91,14 +87,16 @@ abstract class NormalizedReader
 
         return $this->buildResult(
             $status,
-            $queryKey,
-            $buildingKey,
-            (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
-            $wakeKey,
-            $versionKeys,
-            $expectedVersions,
+            new BuildContext(
+                queryKey: $queryKey,
+                buildingKey: $buildingKey,
+                lockToken: (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
+                wakeKey: $wakeKey,
+                versionKeys: $versionKeys,
+                expectedVersions: $expectedVersions,
+            ),
             $ids,
-            $extra,
+            $throughKeys,
             $models,
         );
     }
@@ -122,20 +120,15 @@ abstract class NormalizedReader
      * @return TResult
      */
     protected function claimMissAfterCorruptHit(
-        string $queryKey,
-        string $buildingKey,
-        string $lockToken,
-        string $wakeKey,
-        array $versionKeys,
-        array $expectedVersions,
+        BuildContext $build,
     ): QueryCacheResult|ThroughCacheResult {
-        if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-            $this->store->delete($wakeKey);
+        if ($this->store->setNxEx($build->buildingKey, $build->lockToken, $this->buildingLockTtl)) {
+            $this->store->delete($build->wakeKey);
 
-            return $this->buildResult(LuaStatus::Miss, $queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+            return $this->buildResult(LuaStatus::Miss, $build);
         }
 
-        return $this->buildResult(LuaStatus::Building, $queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+        return $this->buildResult(LuaStatus::Building, $build);
     }
 
     // Store an encoded payload, version-guarded, releasing the build lock.
@@ -155,9 +148,7 @@ abstract class NormalizedReader
             $keys = array_merge($versionKeys, [$key]);
             if ($buildingKey !== null) {
                 $keys[] = $buildingKey;
-                if ($wakeKey !== null) {
-                    $keys[] = $wakeKey;
-                }
+                $keys[] = $wakeKey;
             }
 
             return (bool) $this->store->script(

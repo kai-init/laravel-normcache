@@ -110,29 +110,12 @@ class CacheManager
         return ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($modelClass, $explicitSpace);
     }
 
-    public function activeSpaceFor(string $modelClass, ?string $explicitSpace = null): ?CacheSpace
+    public function withSpace(?CacheSpace $space, callable $callback): mixed
     {
-        $active = $this->keys->activeSpace();
-
-        if ($active === null) {
-            return null;
+        if ($space === null) {
+            return $this->keys->withSpace(null, $callback);
         }
 
-        if ($explicitSpace !== null && $active->name !== $explicitSpace) {
-            return null;
-        }
-
-        foreach ($this->modelSpaces($modelClass) as $space) {
-            if ($space->name === $active->name) {
-                return $active;
-            }
-        }
-
-        return null;
-    }
-
-    public function withSpace(CacheSpace $space, callable $callback): mixed
-    {
         $active = $this->keys->activeSpace();
 
         return $active !== null && $active->name === $space->name
@@ -155,11 +138,6 @@ class CacheManager
     public function currentVersion(string $modelClass): int
     {
         return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0]);
-    }
-
-    public function currentVersionInSpace(string $modelClass, string $space): int
-    {
-        return $this->versions->currentVersion($modelClass, $this->spaceFor($modelClass, $space));
     }
 
     public function currentTableVersion(string $connectionName, string $table): int
@@ -264,7 +242,7 @@ class CacheManager
         $this->storeModelAttrsForVersion($modelClass, $modelAttrs, $modelVersion, $space);
     }
 
-    public function expectedVersionForModel(string $modelClass, array $versionKeys, array $expectedVersions, ?CacheSpace $space = null): ?int
+    private function expectedVersionForModel(string $modelClass, array $versionKeys, array $expectedVersions, ?CacheSpace $space = null): ?int
     {
         $classKey = $this->keys->classKey($modelClass);
         $index = array_search($this->keys->verKey($classKey, $space), $versionKeys, true);

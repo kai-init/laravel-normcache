@@ -5,6 +5,7 @@ namespace NormCache\Cache;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Values\BuildContext;
 use NormCache\Values\ThroughCacheResult;
 
 /**
@@ -49,22 +50,17 @@ final class NormalizedThroughReader extends NormalizedReader
 
     protected function buildResult(
         LuaStatus $status,
-        string $queryKey,
-        string $buildingKey,
-        string $lockToken,
-        string $wakeKey,
-        array $versionKeys,
-        array $expectedVersions,
+        BuildContext $build,
         ?array $ids = null,
-        mixed $extra = null,
+        ?array $throughKeys = null,
         ?array $models = null,
     ): ThroughCacheResult {
         return match ($status) {
-            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $extra, $models ?? [], null, null, [], []),
-            LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $queryKey, [], [], [], null, null, [], []),
-            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions, $wakeKey),
+            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $throughKeys, $models ?? [], null, null, [], []),
+            LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $build->queryKey, [], [], [], null, null, [], []),
+            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $build->queryKey, null, null, null, $build->buildingKey, $build->lockToken, $build->versionKeys, $build->expectedVersions, $build->wakeKey),
             LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($build),
         };
     }
 
