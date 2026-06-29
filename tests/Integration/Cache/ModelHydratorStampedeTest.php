@@ -18,10 +18,12 @@ class ModelHydratorStampedeTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $this->evictModelCache(Author::class, $author->id);
 
-        $keys = new CacheKeyBuilder;
+        $keys = $manager->keys();
         $classKey = $keys->classKey(Author::class);
-        $lockSuffix = $keys->resultBuildIdentityHash('model', null, (string) $author->id);
-        $lockKey = $keys->resultBuildingKey($classKey, 'model', $lockSuffix);
+        $modelVersion = $manager->currentVersion(Author::class);
+        $lockSegment = 'model:v' . $modelVersion;
+        $lockSuffix = $keys->resultBuildIdentityHash($lockSegment, null, (string) $author->id);
+        $lockKey = $keys->resultBuildingKey($classKey, $lockSegment, $lockSuffix);
 
         DB::enableQueryLog();
         $models = $manager->getModels([$author->id], Author::class);
@@ -44,8 +46,10 @@ class ModelHydratorStampedeTest extends TestCase
 
         $keys = $manager->keys();
         $classKey = $keys->classKey(Author::class);
-        $lockSuffix = $keys->resultBuildIdentityHash('model', null, (string) $author->id);
-        $lockKey = $keys->resultBuildingKey($classKey, 'model', $lockSuffix);
+        $modelVersion = $manager->currentVersion(Author::class);
+        $lockSegment = 'model:v' . $modelVersion;
+        $lockSuffix = $keys->resultBuildIdentityHash($lockSegment, null, (string) $author->id);
+        $lockKey = $keys->resultBuildingKey($classKey, $lockSegment, $lockSuffix);
 
         $store = $manager->getStore();
         $this->assertTrue($store->setNxEx($lockKey, 'other-token', 5));

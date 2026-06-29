@@ -143,7 +143,7 @@ abstract class NormalizedReader
         array $versionKeys,
         array $expectedVersions,
         ?string $buildingToken,
-    ): void {
+    ): bool {
         $ttl ??= $this->queryTtl;
 
         if (!empty($versionKeys)) {
@@ -153,7 +153,7 @@ abstract class NormalizedReader
                 $keys[] = $this->keys->buildingToWakeKey($buildingKey);
             }
 
-            $this->store->script(
+            return (bool) $this->store->script(
                 RedisScripts::get('store_versioned_payload'),
                 $keys,
                 array_merge(
@@ -163,14 +163,13 @@ abstract class NormalizedReader
                 )
             );
 
-            return;
         }
 
         if ($buildingKey === null) {
-            return;
+            return false;
         }
 
-        $this->store->storeRawAndRelease(
+        return $this->store->storeRawAndRelease(
             $key,
             $payload,
             $ttl,

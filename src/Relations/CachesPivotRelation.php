@@ -253,12 +253,14 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        NormCache::storeManyVersionedResults(
+        $stored = NormCache::storeManyVersionedResults(
             $pivotEntriesByKey, ttl: $ttl, versionKeys: $versionKeys, expectedVersions: $expectedVersions,
             buildingKey: $buildingKey, wakeKey: $wakeKey, buildingToken: $buildingToken,
         );
 
-        NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
+        if ($stored) {
+            NormCache::storeModelAttrs($relatedClass, $modelAttrs);
+        }
     }
 
     private function hydrateFromPivotCache(

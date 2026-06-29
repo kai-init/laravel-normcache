@@ -218,7 +218,7 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->versionKeys,
             $cache->expectedVersions,
         )) {
-            $manager->cacheModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Old']]);
+            $manager->storeModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Old']]);
         }
 
         $this->assertNull($this->modelCacheEntry(Post::class, 1));
@@ -264,7 +264,7 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->versionKeys,
             $cache->expectedVersions,
         )) {
-            $manager->cacheModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Old']]);
+            $manager->storeModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Old']]);
         }
 
         $this->assertNull($this->modelCacheEntry(Tag::class, 1));

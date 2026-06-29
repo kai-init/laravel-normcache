@@ -67,12 +67,12 @@ final class NormalizedThroughReader extends NormalizedReader
         };
     }
 
-    public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
+    public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): bool
     {
         $ids = array_map('strval', $ids);
         $payload = json_encode(['i' => $ids, 't' => $throughKeys], JSON_THROW_ON_ERROR);
 
-        $this->storePayload(
+        return $this->storePayload(
             $key,
             $payload,
             $ttl,

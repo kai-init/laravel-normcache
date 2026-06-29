@@ -75,11 +75,11 @@ final class NormalizedCacheReader extends NormalizedReader
         };
     }
 
-    public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): void
+    public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): bool
     {
         $ids = array_map('strval', $ids);
 
-        $this->storePayload(
+        return $this->storePayload(
             $key,
             json_encode($ids, JSON_THROW_ON_ERROR),
             $ttl,

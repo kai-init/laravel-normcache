@@ -188,6 +188,10 @@ class CacheManagerTest extends TestCase
 
     public function test_flush_all_uses_wildcard_hash_tag_patterns_on_standalone_after_fresh_registry_boot(): void
     {
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            $this->markTestSkipped('Standalone wildcard hash-tag flush path is not used in Redis Cluster mode.');
+        }
+
         $this->app->forgetInstance(CacheSpaceRegistry::class);
 
         $store = $this->manager->getStore();
@@ -203,6 +207,10 @@ class CacheManagerTest extends TestCase
 
     public function test_standalone_space_resolution_does_not_write_registry_metadata(): void
     {
+        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+            $this->markTestSkipped('Redis Cluster mode intentionally writes space registry metadata for flush discovery.');
+        }
+
         $this->app->forgetInstance(CacheSpaceRegistry::class);
 
         $this->app->make(CacheSpaceRegistry::class)->spacesForModel(SpacedPost::class);
@@ -278,6 +286,60 @@ class CacheManagerTest extends TestCase
 
         $this->assertSame(1, $redis->exists($scheduledKey));
         $this->assertSame($firstDueAt, $redis->get($scheduledKey));
+    }
+
+    public function test_get_models_applies_due_cooldown_before_reading_model_cache(): void
+    {
+        $author = Author::create(['name' => 'Fresh']);
+        $manager = $this->buildManager(cooldown: 60);
+        $classKey = $manager->classKey(Author::class);
+        $store = $manager->getStore();
+
+        $store->setRaw($manager->keys()->verKey($classKey), '0', 3600);
+        $store->set($manager->keys()->modelPrefix($classKey, 0) . $author->id, [
+            'id' => $author->id,
+            'name' => 'Stale',
+        ], 3600);
+
+        $store->setRaw(
+            $manager->keys()->scheduledKey($classKey),
+            (string) ((int) floor(microtime(true) * 1000) - 1000),
+            3600,
+        );
+
+        $models = $manager->getModels([$author->id], Author::class, null, null, Author::query());
+
+        $this->assertSame('Fresh', $models[0]->name);
+        $this->assertSame(1, $manager->currentVersion(Author::class));
+        $this->assertNull($store->getRaw($manager->keys()->scheduledKey($classKey)));
+    }
+
+    public function test_store_through_ids_returns_false_on_version_mismatch(): void
+    {
+        $store = $this->cacheManager()->getStore();
+        $classKey = $this->cacheManager()->classKey(Author::class);
+
+        $versionKey = "ver:{{$classKey}}:";
+        $throughKey = "through:{{$classKey}}:v5:through-hash";
+        $buildingKey = "building:{{$classKey}}:v5:through-hash";
+
+        $store->setRaw($versionKey, '5', 3600);
+        $store->setRaw($buildingKey, '1', 3600);
+        $store->increment($versionKey);
+
+        $stored = $this->cacheManager()->storeThroughIds(
+            $throughKey,
+            [1],
+            ['through-1'],
+            3600,
+            $buildingKey,
+            [$versionKey],
+            ['5'],
+        );
+
+        $this->assertFalse($stored);
+        $this->assertNull($store->getRaw($throughKey));
+        $this->assertNull($store->getRaw($buildingKey));
     }
 
     public function test_store_query_ids_skips_write_on_version_mismatch(): void

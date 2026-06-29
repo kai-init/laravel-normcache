@@ -86,7 +86,7 @@ final class ModelHydrator
 
         // Pre-supplied $raw skips the version GET; resolve lazily only if there are misses.
         if ($raw === null) {
-            $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
+            $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
             $raw = $this->store->getMany($this->modelKeysFor($classKey, $modelVersion, $ids));
         } else {
             $modelVersion = 0; // deferred
@@ -107,7 +107,7 @@ final class ModelHydrator
         }
 
         if ($containedInQueryHit) {
-            $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
+            $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
         }
 
         if ($reporting) {
@@ -117,7 +117,7 @@ final class ModelHydrator
             ]);
         }
 
-        [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $missed);
+        [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $modelVersion, $missed);
 
         [$status, $missed] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $modelVersion, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
 
@@ -162,12 +162,13 @@ final class ModelHydrator
     }
 
     // Builds the building-lock key/wake-key/token triple for a set of model ids.
-    private function buildLockTriple(string $classKey, array $ids): array
+    private function buildLockTriple(string $classKey, int $modelVersion, array $ids): array
     {
         $sorted = $ids;
         sort($sorted);
-        $lockSuffix = $this->keys->resultBuildIdentityHash('model', null, implode(',', $sorted));
-        $lockKey = $this->keys->resultBuildingKey($classKey, 'model', $lockSuffix);
+        $segment = 'model:v' . $modelVersion;
+        $lockSuffix = $this->keys->resultBuildIdentityHash($segment, null, implode(',', $sorted));
+        $lockKey = $this->keys->resultBuildingKey($classKey, $segment, $lockSuffix);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $token = $this->versions->buildLockToken();
 

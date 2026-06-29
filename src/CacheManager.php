@@ -217,9 +217,9 @@ class CacheManager
         $this->queryReader->store($key, $ids, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
     }
 
-    public function storeThroughIds(string $key, array $ids, array $throughKeys, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): void
+    public function storeThroughIds(string $key, array $ids, array $throughKeys, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): bool
     {
-        $this->throughReader->store($key, $ids, $throughKeys, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+        return $this->throughReader->store($key, $ids, $throughKeys, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
     }
 
     public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
@@ -237,14 +237,14 @@ class CacheManager
         return $this->resultReader->store($key, $payload, $buildingKey, $ttl, $wakeKey, $versionKeys, $expectedVersions, $buildingToken);
     }
 
-    public function cacheModelAttrs(string $modelClass, array $modelAttrs): void
+    public function storeModelAttrs(string $modelClass, array $modelAttrs): void
     {
         if (empty($modelAttrs)) {
             return;
         }
 
         $classKey = $this->keys->classKey($modelClass);
-        $modelVersion = $this->versions->normalizeVersion($this->store->getRaw($this->keys->verKey($classKey)));
+        $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
 
         $attrsByKey = [];
         foreach ($modelAttrs as $id => $attrs) {
