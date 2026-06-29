@@ -31,9 +31,13 @@ class CacheServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
 
         $this->app->singleton(CacheSpaceRegistry::class, function () {
+            $metadataStore = new RedisStore((string) config('normcache.connection'), (int) config('normcache.stampede_wake_tokens', 64));
+
             return new CacheSpaceRegistry(
-                (int) config('normcache.spaces.max_per_model', 16),
-                (array) config('normcache.spaces.placement', []),
+                maxPerModel: (int) config('normcache.spaces.max_per_model', 16),
+                placement: (array) config('normcache.spaces.placement', []),
+                metadataStore: $metadataStore->isCluster() ? $metadataStore : null,
+                metadataKeyPrefix: (string) config('normcache.key_prefix', ''),
             );
         });
 

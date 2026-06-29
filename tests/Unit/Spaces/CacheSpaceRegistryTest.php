@@ -40,6 +40,27 @@ class CacheSpaceRegistryTest extends TestCase
         $this->assertSame('nc:content', $registry->space('content')->hashTag);
     }
 
+    public function test_known_spaces_include_default_and_materialized_spaces(): void
+    {
+        $registry = new CacheSpaceRegistry(16);
+        $registry->space('catalog');
+
+        $this->assertSame(
+            ['default', 'catalog'],
+            array_map(fn($s) => $s->name, $registry->knownSpaces()),
+        );
+    }
+
+    public function test_placement_keys_are_not_registry_entries_until_materialized(): void
+    {
+        $registry = new CacheSpaceRegistry(16, ['catalog' => ['hash_tag' => 'shard7']]);
+
+        $this->assertSame(
+            ['default'],
+            array_map(fn($s) => $s->name, $registry->knownSpaces()),
+        );
+    }
+
     public function test_invalid_space_name_throws(): void
     {
         $this->expectException(\InvalidArgumentException::class);

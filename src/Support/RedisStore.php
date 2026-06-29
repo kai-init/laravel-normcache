@@ -8,6 +8,7 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
+use Predis\Cluster\RedisStrategy;
 use Predis\NotSupportedException;
 
 final class RedisStore
@@ -61,6 +62,28 @@ final class RedisStore
     public function setRaw(string $key, string $value, int $ttl): void
     {
         $this->connection->setex($key, $ttl, $value);
+    }
+
+    /** @param  list<string>  $values */
+    public function addToSet(string $key, array $values): int
+    {
+        if ($values === []) {
+            return 0;
+        }
+
+        return (int) $this->connection->command('sadd', [$key, ...$values]);
+    }
+
+    /** @return list<string> */
+    public function setMembers(string $key): array
+    {
+        $members = $this->connection->command('smembers', [$key]);
+
+        if (!is_array($members)) {
+            return [];
+        }
+
+        return array_values(array_filter($members, 'is_string'));
     }
 
     // SET NX EX — returns true if the lock was claimed.
@@ -443,6 +466,11 @@ final class RedisStore
 
     private function scanPredisClusterKeys(string $pattern): array
     {
+        $targeted = $this->scanPredisClusterSlotKeys($pattern);
+        if ($targeted !== null) {
+            return $targeted;
+        }
+
         $keys = [];
         $connectionPrefix = $this->connectionPrefix();
 
@@ -454,6 +482,41 @@ final class RedisStore
                 }
             );
         }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function scanPredisClusterSlotKeys(string $pattern): ?array
+    {
+        $hashTag = $this->concreteHashTag($pattern);
+        if ($hashTag === null) {
+            return null;
+        }
+
+        try {
+            $cluster = $this->connection->client()->getConnection();
+            if (!method_exists($cluster, 'getConnectionBySlot')) {
+                return null;
+            }
+
+            $slot = (new RedisStrategy)->getSlotByKey('{' . $hashTag . '}');
+            $node = $cluster->getConnectionBySlot($slot);
+            if (!is_object($node) || !method_exists($node, 'scan')) {
+                return null;
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $keys = [];
+        $connectionPrefix = $this->connectionPrefix();
+
+        $this->executeScan(
+            fn($cursor) => $node->scan($cursor, ['match' => $connectionPrefix . $pattern, 'count' => 1000]),
+            function ($chunk) use (&$keys) {
+                array_push($keys, ...$chunk);
+            }
+        );
 
         return array_values(array_unique($keys));
     }
@@ -476,6 +539,19 @@ final class RedisStore
         }
 
         return $keys;
+    }
+
+    private function concreteHashTag(string $pattern): ?string
+    {
+        if (!preg_match('/\{([^{}]+)\}/', $pattern, $matches)) {
+            return null;
+        }
+
+        $tag = $matches[1];
+
+        return str_contains($tag, '*') || str_contains($tag, '?') || $tag === ''
+            ? null
+            : $tag;
     }
 
     /**

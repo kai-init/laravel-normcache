@@ -158,11 +158,13 @@ Post::withoutAggregateCache()->withCount('comments')->get(); // skip aggregate c
 ```bash
 php artisan normcache:flush --model="App\Models\Post"
 php artisan normcache:flush
+php artisan normcache:flush --space=content
 ```
 
 ```php
 NormCache::flushModel(Post::class);
 NormCache::flushAll();
+NormCache::flushAll('content');
 ```
 
 If you mutate cacheable tables outside Eloquent, flush manually after the write:
@@ -233,6 +235,10 @@ Publish `config/normcache.php` to tune these options (each is also configurable 
 - **`fallback`** — Default: `true` (fail open). When `true`, Redis exceptions disable the cache for the request/job and queries fall back to the database silently; during a Redis outage this shifts load to the database. Set to `false` to fail closed and re-throw Redis exceptions.
 - **`fire_retrieved`** — When `true`, models hydrated from Redis fire Eloquent's `retrieved` event.
 - **`debugbar`** — Enable the Laravel Debugbar collector (see Observability). Default: `false`.
+- **`spaces.cross_space_behavior`** — `bypass` skips caching when dependencies are not registered in the active space; `throw` raises an exception instead.
+- **`spaces.placement`** — Optional hash-tag overrides for pinning spaces to specific Redis Cluster slots.
+
+In Redis Cluster mode, broad flushes use the recorded space registry and scan the owning master for each space hash tag when the client exposes slot-owner lookup. Standalone Redis uses wildcard hash-tag scans and does not maintain registry metadata.
 
 ---
 

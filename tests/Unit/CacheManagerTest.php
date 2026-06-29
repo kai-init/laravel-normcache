@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
+use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
@@ -185,6 +186,45 @@ class CacheManagerTest extends TestCase
         $this->assertSame(0, $this->manager->flushAll());
     }
 
+    public function test_flush_all_uses_wildcard_hash_tag_patterns_on_standalone_after_fresh_registry_boot(): void
+    {
+        $this->app->forgetInstance(CacheSpaceRegistry::class);
+
+        $store = $this->manager->getStore();
+        $postsKey = DB::getDefaultConnection() . ':posts';
+
+        $store->set("{nc:content}:test:query:{{$postsKey}}:v1:abc", [1, 2], 3600);
+
+        $deleted = $this->manager->flushAll();
+
+        $this->assertSame(1, $deleted);
+        $this->assertEmpty($store->scanPattern('{nc:content}:test:*'));
+    }
+
+    public function test_standalone_space_resolution_does_not_write_registry_metadata(): void
+    {
+        $this->app->forgetInstance(CacheSpaceRegistry::class);
+
+        $this->app->make(CacheSpaceRegistry::class)->spacesForModel(SpacedPost::class);
+
+        $this->assertSame([], $this->manager->getStore()->scanPattern('{nc:meta}:test:spaces'));
+    }
+
+    public function test_flush_all_can_target_one_space(): void
+    {
+        $store = $this->manager->getStore();
+        $postsKey = DB::getDefaultConnection() . ':posts';
+
+        $store->set("{nc}:test:query:{{$postsKey}}:v1:abc", [1], 3600);
+        $store->set("{nc:content}:test:query:{{$postsKey}}:v1:def", [2], 3600);
+
+        $deleted = $this->manager->flushAll('content');
+
+        $this->assertSame(1, $deleted);
+        $this->assertNotEmpty($store->scanPattern('{nc}:test:*'));
+        $this->assertEmpty($store->scanPattern('{nc:content}:test:*'));
+    }
+
     public function test_flush_all_removes_keys_when_redis_connection_prefix_is_enabled(): void
     {
         config()->set('database.redis.options.prefix', 'laravel:');
@@ -202,7 +242,7 @@ class CacheManagerTest extends TestCase
         $deleted = $manager->flushAll();
 
         $this->assertSame(3, $deleted);
-        $this->assertSame([], Redis::connection('normcache-test')->keys('*'));
+        $this->assertSame([], $store->scanPattern('{nc}:test:*'));
 
         Redis::purge('normcache-test');
         config()->set('database.redis.options.prefix', '');

@@ -32,13 +32,13 @@ trait HandlesInvalidation
     /** @return list<CacheSpace> the spaces a table's version key lives in */
     private function tableSpaces(string $table): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->materializedSpaces();
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->knownSpaces();
     }
 
     /** @return list<CacheSpace> */
-    private function materializedSpaces(): array
+    private function knownSpaces(): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->materializedSpaces();
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->knownSpaces();
     }
 
     // Invalidation
@@ -116,9 +116,9 @@ trait HandlesInvalidation
         }
     }
 
-    public function flushAll(): int
+    public function flushAll(CacheSpace|string|null $space = null): int
     {
-        return $this->store->flushByPatterns($this->prefixedForSpaces([
+        $patterns = [
             CacheKeyBuilder::K_QUERY . ':*',
             CacheKeyBuilder::K_MODEL . ':*',
             CacheKeyBuilder::K_VER . ':*',
@@ -130,7 +130,19 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_BUILDING . ':*',
             CacheKeyBuilder::K_WAKE . ':*',
             CacheKeyBuilder::K_RESULT . ':*',
-        ], $this->materializedSpaces()));
+        ];
+
+        if (!$this->store->isCluster()) {
+            if ($space === null) {
+                return $this->store->flushByPatterns($this->prefixedForAnySpace($patterns));
+            }
+        }
+
+        $spaces = $space === null
+            ? $this->knownSpaces()
+            : [is_string($space) ? ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->space($space) : $space];
+
+        return $this->store->flushByPatterns($this->prefixedForSpaces($patterns, $spaces));
     }
 
     public function flushTag(string $modelClass, string $tag): int
@@ -152,13 +164,19 @@ trait HandlesInvalidation
     {
         CacheKeyBuilder::assertValidTag($tag);
 
-        return $this->store->flushByPatterns($this->prefixedForSpaces([
+        $patterns = [
             CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*',
-        ], $this->materializedSpaces()));
+        ];
+
+        if (!$this->store->isCluster()) {
+            return $this->store->flushByPatterns($this->prefixedForAnySpace($patterns));
+        }
+
+        return $this->store->flushByPatterns($this->prefixedForSpaces($patterns, $this->knownSpaces()));
     }
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
@@ -307,6 +325,18 @@ trait HandlesInvalidation
         }
 
         return $prefixed;
+    }
+
+    /**
+     * @param  list<string>  $patterns
+     * @return list<string>
+     */
+    private function prefixedForAnySpace(array $patterns): array
+    {
+        return array_map(
+            fn(string $pattern) => preg_replace('/^\{[^}]+\}:/', '{*}:', $this->keys->prefixed($pattern)),
+            $patterns,
+        );
     }
 
     /** @param  list<CacheSpace>  $spaces */

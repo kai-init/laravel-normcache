@@ -39,17 +39,15 @@ return [
 
     // Register the Laravel Debugbar collector for local cache inspection.
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
-    // Redis Cluster sharding via cache spaces (see docs/space.md). Models declare
-    // membership with `protected static array $normCacheSpaces`.
+    // Redis Cluster sharding via model-declared cache spaces.
     'spaces' => [
-        // Cap on spaces per model; each write bumps a version key per space.
+        // Max spaces per model. Writes bump one version key per space.
         'max_per_model' => 16,
 
-        // When a query's dependencies span spaces: 'bypass' (skip caching) or 'throw'.
+        // Cross-space dependency handling: 'bypass' or 'throw'.
         'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
 
-        // Optional per-space hash-tag override, to pin a space to a specific cluster
-        // slot/node. Omit to use the convention ('content' -> {nc:content}).
+        // Optional space => hash-tag override. Default: content => {nc:content}.
         'placement' => [
             // 'catalog' => ['hash_tag' => 'nc:catalog'],
         ],

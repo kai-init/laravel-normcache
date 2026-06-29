@@ -2,12 +2,12 @@
 
 namespace NormCache\Spaces;
 
+use NormCache\Support\RedisStore;
 use NormCache\Values\CacheSpace;
 use NormCache\Values\SpaceValidationResult;
 
-// Resolves the cache spaces a model/table belongs to. Membership is declared on the
-// model (Cacheable::normCacheSpaces()); no declaration = the default space. Space name
-// maps to a hash tag by convention: 'default' -> "nc", "<name>" -> "nc:<name>".
+// Model-declared cache-space registry. Non-default spaces are persisted for
+// Redis Cluster flush discovery; undeclared models use the default space.
 final class CacheSpaceRegistry
 {
     public const DEFAULT_SPACE = 'default';
@@ -26,6 +26,8 @@ final class CacheSpaceRegistry
     public function __construct(
         private readonly int $maxPerModel = 16,
         private readonly array $placement = [],
+        private readonly ?RedisStore $metadataStore = null,
+        private readonly string $metadataKeyPrefix = '',
     ) {}
 
     public function defaultSpace(): CacheSpace
@@ -35,7 +37,12 @@ final class CacheSpaceRegistry
 
     public function space(string $name): CacheSpace
     {
-        return $this->spaces[$name] ??= new CacheSpace($name, $this->hashTagFor($name));
+        if (!isset($this->spaces[$name])) {
+            $this->spaces[$name] = new CacheSpace($name, $this->hashTagFor($name));
+            $this->rememberSpace($name);
+        }
+
+        return $this->spaces[$name];
     }
 
     /** @return list<CacheSpace> */
@@ -48,12 +55,24 @@ final class CacheSpaceRegistry
     }
 
     /** @return list<CacheSpace> */
+    public function knownSpaces(): array
+    {
+        $names = array_values(array_unique([
+            self::DEFAULT_SPACE,
+            ...$this->metadataSpaces(),
+            ...array_keys($this->spaces),
+        ]));
+
+        return array_values(array_map(fn(string $name) => $this->space($name), $names));
+    }
+
+    /** @return list<CacheSpace> */
     public function spacesForModel(string $modelClass): array
     {
         return $this->modelSpaces[$modelClass] ??= $this->resolveModelSpaces($modelClass);
     }
 
-    // Tables have no model to declare membership, so they belong to the default space.
+    // Non-model table dependencies are default-space only for now.
     /** @return list<CacheSpace> */
     public function spacesForTable(string $table): array
     {
@@ -76,7 +95,7 @@ final class CacheSpaceRegistry
     }
 
     /**
-     * Validate a cached operation's dependencies against the active space.
+     * Validate operation dependencies against the active space.
      *
      * @param  list<class-string>  $models
      * @param  list<string>  $tables
@@ -149,13 +168,13 @@ final class CacheSpaceRegistry
 
     private function hashTagFor(string $name): string
     {
-        if ($name === '' || preg_match('/[:{}\s]/', $name)) {
+        if (!$this->validSpaceName($name)) {
             throw new \InvalidArgumentException(
                 "Invalid cache space name [{$name}]: must be non-empty and contain no ':', '{', '}', or whitespace."
             );
         }
 
-        // Config override for pinning a space to a specific slot/node; else by convention.
+        // Placement override; otherwise use the standard hash-tag convention.
         $override = $this->placement[$name]['hash_tag'] ?? null;
 
         if ($override !== null) {
@@ -171,6 +190,46 @@ final class CacheSpaceRegistry
         return $name === self::DEFAULT_SPACE
             ? self::DEFAULT_HASH_TAG
             : self::DEFAULT_HASH_TAG . ':' . $name;
+    }
+
+    private function validSpaceName(string $name): bool
+    {
+        return $name !== '' && !preg_match('/[:{}\s]/', $name);
+    }
+
+    /** @return list<string> */
+    private function metadataSpaces(): array
+    {
+        if ($this->metadataStore === null) {
+            return [];
+        }
+
+        try {
+            return array_values(array_filter(
+                $this->metadataStore->setMembers($this->metadataSpacesKey()),
+                fn(string $name) => $this->validSpaceName($name),
+            ));
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    private function rememberSpace(string $name): void
+    {
+        if ($this->metadataStore === null || $name === self::DEFAULT_SPACE) {
+            return;
+        }
+
+        try {
+            $this->metadataStore->addToSet($this->metadataSpacesKey(), [$name]);
+        } catch (\Throwable) {
+            // Registry writes must not block the read path.
+        }
+    }
+
+    private function metadataSpacesKey(): string
+    {
+        return '{nc:meta}:' . $this->metadataKeyPrefix . 'spaces';
     }
 
     /** @param  list<CacheSpace>  $allowed */

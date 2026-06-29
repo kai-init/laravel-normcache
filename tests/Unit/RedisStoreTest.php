@@ -430,6 +430,82 @@ class RedisStoreTest extends TestCase
         $this->assertEmpty($directClient->keys('model:*'));
     }
 
+    public function test_predis_cluster_scan_targets_owner_for_concrete_hash_tag_pattern(): void
+    {
+        $owner = new class
+        {
+            public array $patterns = [];
+
+            public function scan($cursor, array $options)
+            {
+                $this->patterns[] = $options['match'] ?? null;
+
+                return ['0', ['{nc:content}:test:query:testing:posts:v1:abc']];
+            }
+        };
+
+        $other = new class
+        {
+            public int $calls = 0;
+
+            public function scan($cursor, array $options)
+            {
+                $this->calls++;
+
+                return ['0', []];
+            }
+        };
+
+        $connection = new class($owner, $other) extends PredisClusterConnection
+        {
+            public function __construct(private object $owner, private object $other) {}
+
+            public function client()
+            {
+                return new class($this->owner, $this->other) implements \IteratorAggregate
+                {
+                    public function __construct(private object $owner, private object $other) {}
+
+                    public function getOptions()
+                    {
+                        return new class
+                        {
+                            public $prefix = null;
+                        };
+                    }
+
+                    public function getConnection()
+                    {
+                        return new class($this->owner)
+                        {
+                            public function __construct(private object $owner) {}
+
+                            public function getConnectionBySlot($slot)
+                            {
+                                return $this->owner;
+                            }
+                        };
+                    }
+
+                    public function getIterator(): \Traversable
+                    {
+                        return new \ArrayIterator([$this->owner, $this->other]);
+                    }
+                };
+            }
+        };
+
+        $store = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $this->assertSame(
+            ['{nc:content}:test:query:testing:posts:v1:abc'],
+            $store->scanPattern('{nc:content}:test:query:*')
+        );
+        $this->assertSame(['{nc:content}:test:query:*'], $owner->patterns);
+        $this->assertSame(0, $other->calls);
+    }
+
     public function test_predis_cluster_scan_deduplicates_keys_returned_by_multiple_nodes(): void
     {
         $connection = new class extends PredisClusterConnection
