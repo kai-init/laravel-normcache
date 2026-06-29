@@ -60,6 +60,7 @@ final class NormalizedCacheReader extends NormalizedReader
         string $queryKey,
         string $buildingKey,
         string $lockToken,
+        string $wakeKey,
         array $versionKeys,
         array $expectedVersions,
         ?array $ids = null,
@@ -69,13 +70,13 @@ final class NormalizedCacheReader extends NormalizedReader
         return match ($status) {
             LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $queryKey, $ids, $models ?? [], null, null, [], []),
             LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $queryKey, [], [], null, null, [], []),
-            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
+            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $queryKey, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions, $wakeKey),
             LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions),
         };
     }
 
-    public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): bool
+    public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken, ?string $wakeKey = null): bool
     {
         $ids = array_map('strval', $ids);
 
@@ -87,6 +88,7 @@ final class NormalizedCacheReader extends NormalizedReader
             $versionKeys,
             $expectedVersions,
             $buildingToken,
+            $wakeKey,
         );
     }
 }

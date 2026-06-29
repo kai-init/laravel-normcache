@@ -131,6 +131,20 @@ class CacheManager
         return null;
     }
 
+    public function withSpace(CacheSpace $space, callable $callback): mixed
+    {
+        $active = $this->keys->activeSpace();
+
+        return $active !== null && $active->name === $space->name
+            ? $callback()
+            : $this->keys->withSpace($space, $callback);
+    }
+
+    public function withSpaceForModel(string $modelClass, ?string $explicitSpace, callable $callback): mixed
+    {
+        return $this->withSpace($this->spaceFor($modelClass, $explicitSpace), $callback);
+    }
+
     private ?CacheSpaceResolver $spaceResolver = null;
 
     public function tableKey(string $connectionName, string $table): string
@@ -217,14 +231,14 @@ class CacheManager
     // Storage
     // -------------------------------------------------------------------------
 
-    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): void
+    public function storeQueryIds(string $key, array $ids, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null, ?string $wakeKey = null): void
     {
-        $this->queryReader->store($key, $ids, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+        $this->queryReader->store($key, $ids, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken, $wakeKey);
     }
 
-    public function storeThroughIds(string $key, array $ids, array $throughKeys, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null): bool
+    public function storeThroughIds(string $key, array $ids, array $throughKeys, ?int $ttl = null, ?string $buildingKey = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingToken = null, ?string $wakeKey = null): bool
     {
-        return $this->throughReader->store($key, $ids, $throughKeys, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+        return $this->throughReader->store($key, $ids, $throughKeys, $ttl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken, $wakeKey);
     }
 
     public function storeVersionedResult(string $key, mixed $payload, ?int $ttl = null, array $versionKeys = [], array $expectedVersions = [], ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null): bool
@@ -258,6 +272,22 @@ class CacheManager
         return $index === false || !isset($expectedVersions[$index])
             ? null
             : (int) $expectedVersions[$index];
+    }
+
+    public function storeModelAttrsForVersionedResult(
+        string $modelClass,
+        array $modelAttrs,
+        array $versionKeys,
+        array $expectedVersions,
+        ?CacheSpace $space = null,
+    ): void {
+        $expectedVersion = $this->expectedVersionForModel($modelClass, $versionKeys, $expectedVersions, $space);
+
+        if ($expectedVersion === null) {
+            return;
+        }
+
+        $this->storeModelAttrsForVersion($modelClass, $modelAttrs, $expectedVersion, $space);
     }
 
     public function storeModelAttrsForVersion(string $modelClass, array $modelAttrs, int $expectedVersion, ?CacheSpace $space = null): void

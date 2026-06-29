@@ -138,13 +138,11 @@ class CacheableMorphTo extends MorphTo
             $missedQuery = $queryWithMacros->mergeConstraintsFrom($this->query);
         }
 
-        $keys = NormCache::keys();
-        $models = NormCache::activeSpaceFor($class) !== null
-            ? NormCache::getModels($ids, $class, $columns, null, $missedQuery, false)
-            : $keys->withSpace(
-                NormCache::spaceFor($class),
-                fn() => NormCache::getModels($ids, $class, $columns, null, $missedQuery, false)
-            );
+        $models = NormCache::withSpaceForModel(
+            $class,
+            null,
+            fn() => NormCache::getModels($ids, $class, $columns, null, $missedQuery, false),
+        );
         $collection = $instance->newCollection($models);
 
         $eagerLoads = $this->morphableEagerLoads[$class] ?? [];

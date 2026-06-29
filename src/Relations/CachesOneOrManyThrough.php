@@ -93,21 +93,21 @@ trait CachesOneOrManyThrough
 
                     $cachePayload = $this->cachePayloadFromResult($rawModels);
                     $space = NormCache::keys()->activeSpace();
-                    $relatedVersion = NormCache::expectedVersionForModel(
-                        $relatedClass,
-                        $result->versionKeys,
-                        $result->expectedVersions,
-                        $space,
-                    );
 
-                    NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $relatedVersion, $space) {
+                    NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
                         $stored = NormCache::storeThroughIds(
                             $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
-                            $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken
+                            $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken, $result->wakeKey
                         );
 
-                        if ($stored && $relatedVersion !== null) {
-                            NormCache::storeModelAttrsForVersion($relatedClass, $modelAttrs, $relatedVersion, $space);
+                        if ($stored) {
+                            NormCache::storeModelAttrsForVersionedResult(
+                                $relatedClass,
+                                $modelAttrs,
+                                $result->versionKeys,
+                                $result->expectedVersions,
+                                $space,
+                            );
                         }
                     });
 
@@ -130,12 +130,7 @@ trait CachesOneOrManyThrough
             fn() => $this->getFromPreparedBuilder($prepared)
         );
 
-        $keys = NormCache::keys();
-        $activeSpace = NormCache::activeSpaceFor($relatedClass);
-
-        return $activeSpace !== null && ($plan->space === null || $plan->space->name === $activeSpace->name)
-            ? $runThrough()
-            : $keys->withSpace($plan->space, $runThrough);
+        return NormCache::withSpace($plan->space, $runThrough);
     }
 
     private function applyOneOfManyDependency(CacheableBuilder $query): void

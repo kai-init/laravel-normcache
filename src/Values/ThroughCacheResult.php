@@ -16,5 +16,6 @@ final readonly class ThroughCacheResult
         public ?string $buildingToken,
         public array $versionKeys,
         public array $expectedVersions,
+        public ?string $wakeKey = null,
     ) {}
 }

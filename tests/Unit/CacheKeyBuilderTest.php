@@ -41,24 +41,6 @@ class CacheKeyBuilderTest extends TestCase
         $keys->classKey($model::class);
     }
 
-    public function test_building_to_wake_key_carves_multi_version_key_without_braces(): void
-    {
-        $keys = new CacheKeyBuilder;
-
-        $wake = $keys->buildingToWakeKey('building:mysql:posts:v12:v3:v9:abc123');
-
-        $this->assertSame('wake:mysql:posts:abc123', $wake);
-    }
-
-    public function test_building_to_wake_key_carves_single_version_key(): void
-    {
-        $keys = new CacheKeyBuilder;
-
-        $wake = $keys->buildingToWakeKey('building:mysql:posts:v1:deadbeef');
-
-        $this->assertSame('wake:mysql:posts:deadbeef', $wake);
-    }
-
     public function test_version_keys_are_brace_free(): void
     {
         $keys = new CacheKeyBuilder('', '');
@@ -68,15 +50,6 @@ class CacheKeyBuilderTest extends TestCase
         $this->assertSame('building:mysql:posts:', $keys->buildingPrefix('mysql:posts'));
         $this->assertSame('wake:mysql:posts:', $keys->wakePrefix('mysql:posts'));
         $this->assertSame('model:mysql:posts:v3:', $keys->modelPrefix('mysql:posts', 3));
-    }
-
-    public function test_building_to_wake_key_is_prefix_agnostic_on_full_keys(): void
-    {
-        $keys = new CacheKeyBuilder;
-
-        $wake = $keys->buildingToWakeKey('{nc}:test:building:mysql:posts:v12:v3:abc123');
-
-        $this->assertSame('{nc}:test:wake:mysql:posts:abc123', $wake);
     }
 
     public function test_dep_key_pairs_respects_active_space_in_static_cache(): void

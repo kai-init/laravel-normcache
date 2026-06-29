@@ -225,23 +225,6 @@ class CacheKeyBuilder
         return $parts;
     }
 
-    public function buildingToWakeKey(string $buildingKey): string
-    {
-        $keyword = self::K_BUILDING . ':';
-        $pos = strpos($buildingKey, $keyword);
-        $afterKeyword = $pos + strlen($keyword);
-
-        $connEnd = strpos($buildingKey, ':', $afterKeyword);
-        $tableEnd = strpos($buildingKey, ':', $connEnd + 1);
-
-        $head = substr($buildingKey, 0, $tableEnd);
-        $head = substr_replace($head, self::K_WAKE, $pos, strlen(self::K_BUILDING));
-
-        $hash = substr(strrchr($buildingKey, ':'), 1);
-
-        return $head . ':' . $hash;
-    }
-
     // -------------------------------------------------------------------------
     // Dependency Resolvers
     // -------------------------------------------------------------------------

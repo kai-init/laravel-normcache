@@ -190,9 +190,7 @@ final class ResultCacheReader
         }
 
         return $this->store->storeSerializedAndRelease(
-            $key, $payload, $ttl, $buildingKey,
-            $wakeKey ?? ($buildingKey !== null ? $this->keys->buildingToWakeKey($buildingKey) : null),
-            $buildingToken
+            $key, $payload, $ttl, $buildingKey, $wakeKey, $buildingToken
         );
     }
 
@@ -208,7 +206,9 @@ final class ResultCacheReader
         $keys = array_merge($versionKeys, array_keys($entries));
         if ($buildingKey !== null) {
             $keys[] = $buildingKey;
-            $keys[] = $wakeKey ?? $this->keys->buildingToWakeKey($buildingKey);
+            if ($wakeKey !== null) {
+                $keys[] = $wakeKey;
+            }
         }
 
         return (bool) $this->store->script(

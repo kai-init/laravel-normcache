@@ -52,6 +52,7 @@ final class NormalizedThroughReader extends NormalizedReader
         string $queryKey,
         string $buildingKey,
         string $lockToken,
+        string $wakeKey,
         array $versionKeys,
         array $expectedVersions,
         ?array $ids = null,
@@ -61,13 +62,13 @@ final class NormalizedThroughReader extends NormalizedReader
         return match ($status) {
             LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $queryKey, $ids, $extra, $models ?? [], null, null, [], []),
             LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $queryKey, [], [], [], null, null, [], []),
-            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
+            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $queryKey, null, null, null, $buildingKey, $lockToken, $versionKeys, $expectedVersions, $wakeKey),
             LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
-            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions),
+            LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions),
         };
     }
 
-    public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken): bool
+    public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken, ?string $wakeKey = null): bool
     {
         $ids = array_map('strval', $ids);
         $payload = json_encode(['i' => $ids, 't' => $throughKeys], JSON_THROW_ON_ERROR);
@@ -80,6 +81,7 @@ final class NormalizedThroughReader extends NormalizedReader
             $versionKeys,
             $expectedVersions,
             $buildingToken,
+            $wakeKey,
         );
     }
 }

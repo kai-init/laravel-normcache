@@ -150,12 +150,7 @@ trait CachesPivotRelation
             fn() => $this->getFromPreparedPivotBuilder($prepared)
         );
 
-        $keys = NormCache::keys();
-        $results = NormCache::activeSpaceFor($relatedClass, $builder->getSpace()) !== null
-            ? $runPivot()
-            : $keys->withSpace(NormCache::spaceFor($relatedClass, $builder->getSpace()), $runPivot);
-
-        return $results;
+        return NormCache::withSpaceForModel($relatedClass, $builder->getSpace(), $runPivot);
     }
 
     private function shouldUsePivotCache(
@@ -258,18 +253,12 @@ trait CachesPivotRelation
             buildingKey: $buildingKey, wakeKey: $wakeKey, buildingToken: $buildingToken,
         );
 
-        $relatedVersion = NormCache::expectedVersionForModel(
-            $relatedClass,
-            $versionKeys,
-            $expectedVersions,
-            NormCache::keys()->activeSpace(),
-        );
-
-        if ($stored && $relatedVersion !== null) {
-            NormCache::storeModelAttrsForVersion(
+        if ($stored) {
+            NormCache::storeModelAttrsForVersionedResult(
                 $relatedClass,
                 $modelAttrs,
-                $relatedVersion,
+                $versionKeys,
+                $expectedVersions,
                 NormCache::keys()->activeSpace(),
             );
         }

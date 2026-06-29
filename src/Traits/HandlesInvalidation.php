@@ -30,7 +30,7 @@ trait HandlesInvalidation
     }
 
     /** @return list<CacheSpace> the spaces a table's version key lives in */
-    private function tableSpaces(string $table): array
+    private function tableInvalidationSpaces(string $table): array
     {
         return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->knownSpaces();
     }
@@ -102,7 +102,7 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $connectionName,
-            fn() => $this->queueVersionFlush($connectionName, $classKey, $this->tableSpaces($table)),
+            fn() => $this->queueVersionFlush($connectionName, $classKey, $this->tableInvalidationSpaces($table)),
             fn() => $this->doInvalidateTable($table, $classKey),
         );
     }
@@ -262,7 +262,7 @@ trait HandlesInvalidation
 
     private function doInvalidateTable(string $table, string $classKey): void
     {
-        foreach ($this->tableSpaces($table) as $space) {
+        foreach ($this->tableInvalidationSpaces($table) as $space) {
             $this->doInvalidateKey($classKey, $space);
         }
     }

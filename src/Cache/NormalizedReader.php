@@ -49,6 +49,7 @@ abstract class NormalizedReader
         string $queryKey,
         string $buildingKey,
         string $lockToken,
+        string $wakeKey,
         array $versionKeys,
         array $expectedVersions,
         ?array $ids = null,
@@ -79,6 +80,7 @@ abstract class NormalizedReader
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
         $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
+        $wakeKey = $this->keys->wakePrefix($classKey) . $hash;
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         [$status, $ids, $extra] = $this->decodePayload($result, $queryKey);
@@ -92,6 +94,7 @@ abstract class NormalizedReader
             $queryKey,
             $buildingKey,
             (string) (($status === LuaStatus::Miss ? $result[2] : null) ?? $lockToken),
+            $wakeKey,
             $versionKeys,
             $expectedVersions,
             $ids,
@@ -122,16 +125,17 @@ abstract class NormalizedReader
         string $queryKey,
         string $buildingKey,
         string $lockToken,
+        string $wakeKey,
         array $versionKeys,
         array $expectedVersions,
     ): QueryCacheResult|ThroughCacheResult {
         if ($this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
-            $this->store->delete($this->keys->buildingToWakeKey($buildingKey));
+            $this->store->delete($wakeKey);
 
-            return $this->buildResult(LuaStatus::Miss, $queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+            return $this->buildResult(LuaStatus::Miss, $queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
         }
 
-        return $this->buildResult(LuaStatus::Building, $queryKey, $buildingKey, $lockToken, $versionKeys, $expectedVersions);
+        return $this->buildResult(LuaStatus::Building, $queryKey, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
     }
 
     // Store an encoded payload, version-guarded, releasing the build lock.
@@ -143,6 +147,7 @@ abstract class NormalizedReader
         array $versionKeys,
         array $expectedVersions,
         ?string $buildingToken,
+        ?string $wakeKey = null,
     ): bool {
         $ttl ??= $this->queryTtl;
 
@@ -150,7 +155,9 @@ abstract class NormalizedReader
             $keys = array_merge($versionKeys, [$key]);
             if ($buildingKey !== null) {
                 $keys[] = $buildingKey;
-                $keys[] = $this->keys->buildingToWakeKey($buildingKey);
+                if ($wakeKey !== null) {
+                    $keys[] = $wakeKey;
+                }
             }
 
             return (bool) $this->store->script(
@@ -174,7 +181,7 @@ abstract class NormalizedReader
             $payload,
             $ttl,
             $buildingKey,
-            $this->keys->buildingToWakeKey($buildingKey),
+            $wakeKey,
             $buildingToken
         );
     }

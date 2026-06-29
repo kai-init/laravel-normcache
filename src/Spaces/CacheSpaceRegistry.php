@@ -37,12 +37,7 @@ final class CacheSpaceRegistry
 
     public function space(string $name): CacheSpace
     {
-        if (!isset($this->spaces[$name])) {
-            $this->spaces[$name] = new CacheSpace($name, $this->hashTagFor($name));
-            $this->rememberSpace($name);
-        }
-
-        return $this->spaces[$name];
+        return $this->materializeSpace($name);
     }
 
     /** @return list<CacheSpace> */
@@ -64,7 +59,7 @@ final class CacheSpaceRegistry
             ...array_keys($this->spaces),
         ]));
 
-        return array_map(fn(string $name) => $this->space($name), $names);
+        return array_map(fn(string $name) => $this->materializeSpace($name, remember: false), $names);
     }
 
     /** @return list<CacheSpace> */
@@ -165,6 +160,19 @@ final class CacheSpaceRegistry
         }
 
         return array_values(array_map(fn($name) => $this->space($name), $names));
+    }
+
+    private function materializeSpace(string $name, bool $remember = true): CacheSpace
+    {
+        if (!isset($this->spaces[$name])) {
+            $this->spaces[$name] = new CacheSpace($name, $this->hashTagFor($name));
+
+            if ($remember) {
+                $this->rememberSpace($name);
+            }
+        }
+
+        return $this->spaces[$name];
     }
 
     private function hashTagFor(string $name): string

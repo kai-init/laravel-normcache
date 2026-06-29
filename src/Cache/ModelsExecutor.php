@@ -65,7 +65,7 @@ final class ModelsExecutor
 
                 $ids = $this->resolveIds(
                     $result->key, $base, $queryTtl, $prototype,
-                    $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken
+                    $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken, $result->wakeKey
                 );
 
                 return $executionBuilder->finalizeResult(
@@ -107,9 +107,10 @@ final class ModelsExecutor
         array $versionKeys = [],
         array $expectedVersions = [],
         ?string $buildingToken = null,
+        ?string $wakeKey = null,
     ): array {
         $ids = $this->buildIds($base, $prototype);
-        NormCache::storeQueryIds($key, $ids, $queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken);
+        NormCache::storeQueryIds($key, $ids, $queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken, $wakeKey);
 
         return $ids;
     }
