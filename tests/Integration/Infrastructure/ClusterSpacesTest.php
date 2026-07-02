@@ -247,4 +247,66 @@ class ClusterSpacesTest extends TestCase
         $this->assertNoKeysForHashTag('nc:catalog', 'test:*');
         $this->assertNoKeysForHashTag('nc:reporting', 'test:*');
     }
+
+    public function test_scheduled_invalidation_keys_are_space_scoped(): void
+    {
+        $this->cacheManager()->config()->cooldown = 5;
+
+        $author = SpacedAuthor::create(['name' => 'Ann']);
+        $post = SpacedPost::create(['title' => 'First', 'author_id' => $author->id]);
+
+        SpacedPost::query()->get();
+
+        $this->assertNoCrossSlot(fn() => $post->update(['title' => 'Second']));
+
+        $scheduledKeys = $this->keysForHashTag('nc:content', 'test:scheduled:*');
+        $this->assertNotEmpty($scheduledKeys, 'Cooldown must write a scheduled key under {nc:content}.');
+        $this->assertAllKeysShareHashTag($scheduledKeys, 'nc:content');
+        $this->assertNoKeysForHashTag('nc', 'test:scheduled:*');
+
+        $contentSlot = $this->redisClusterSlot('nc:content');
+        foreach ($scheduledKeys as $key) {
+            preg_match('/^\{([^}]+)\}:/', $key, $m);
+            $this->assertSame($contentSlot, $this->redisClusterSlot($m[1] ?? ''));
+        }
+
+        // fetch_version_with_cooldown passes ver + scheduled as Lua KEYS[]; mismatched slots throw CROSSSLOT.
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->get());
+    }
+
+    public function test_building_and_wake_keys_share_payload_slot_per_space(): void
+    {
+        $author = SpacedAuthor::create(['name' => 'Ann']);
+        $post = SpacedPost::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $country = ReportingCountry::create(['name' => 'Oz']);
+        SpacedAuthor::where('id', $author->id)->update(['country_id' => $country->id]);
+        $tag = CatalogTag::create(['name' => 'Widget']);
+        $post->catalogTags()->attach($tag->id);
+
+        // Building/wake keys are ephemeral (Lua sets them on miss, deletes on store); co-location is
+        // proven indirectly — Lua passes them with version keys as KEYS[], and Redis Cluster
+        // requires all KEYS[] to share a slot, so CROSSSLOT fires immediately on any mismatch.
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->get());
+        $this->assertAnyKeysForHashTag('nc:content', 'test:query:*');
+        $this->assertNoKeysForHashTag('nc', 'test:query:*spaced*');
+
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->count());
+        $this->assertAnyKeysForHashTag('nc:content', 'test:count:*');
+        $this->assertNoKeysForHashTag('nc', 'test:count:*spaced*');
+
+        $this->assertNoCrossSlot(fn() => ReportingCountry::first()->spacedPosts()->get());
+        $this->assertAnyKeysForHashTag('nc:content', 'test:through:*');
+        $this->assertNoKeysForHashTag('nc', 'test:through:*');
+
+        // storeManyVersionedResults issues batched multi-key Lua writes; pivot is the highest CROSSSLOT risk.
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->with('catalogTags')->get());
+        $this->assertAnyKeysForHashTag('nc:catalog', 'test:pivot:*');
+        $this->assertNoKeysForHashTag('nc:content', 'test:pivot:*');
+        $this->assertNoKeysForHashTag('nc', 'test:pivot:*');
+
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->get());
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->count());
+        $this->assertNoCrossSlot(fn() => ReportingCountry::first()->spacedPosts()->get());
+        $this->assertNoCrossSlot(fn() => SpacedPost::query()->with('catalogTags')->get());
+    }
 }
