@@ -62,6 +62,13 @@ trait Cacheable
 
     public function save(array $options = []): bool
     {
+        if ($this->exists && $this->isDirty()
+            && $this->getConnection()->transactionLevel() === 0
+            && !$this->isPendingRestoreSave()
+        ) {
+            NormCache::flushInstance($this);
+        }
+
         return $this->saveWithCacheInvalidation(fn() => parent::save($options));
     }
 
@@ -125,6 +132,17 @@ trait Cacheable
         }
 
         NormCache::flushInstance($this);
+    }
+
+    private function isPendingRestoreSave(): bool
+    {
+        if (!method_exists($this, 'getDeletedAtColumn')) {
+            return false;
+        }
+
+        $col = $this->getDeletedAtColumn();
+
+        return $this->isDirty($col) && $this->getAttribute($col) === null;
     }
 
     private function isRestoreSave(bool $existsBefore): bool

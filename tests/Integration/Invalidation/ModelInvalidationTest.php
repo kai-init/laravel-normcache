@@ -286,10 +286,11 @@ class ModelInvalidationTest extends TestCase
 
         $after = NormCache::currentVersion(Post::class);
 
+        // Pre-save flush (observer safety) + post-save flush = two version bumps outside a transaction.
         $this->assertSame(
-            $before + 1,
+            $before + 2,
             $after,
-            'Dirty existing model save should invalidate the model version exactly once.'
+            'Dirty existing model save outside a transaction bumps the version twice.'
         );
     }
 
