@@ -237,7 +237,7 @@ class CachePlannerTest extends TestCase
             'boolean' => 'and',
         ];
         $prepared->base->wheres[] = [
-            'type' => 'Raw',
+            'type' => 'raw',
             'sql' => 'LOWER(name) = LOWER(name)',
             'boolean' => 'and',
         ];

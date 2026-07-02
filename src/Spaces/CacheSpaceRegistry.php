@@ -147,7 +147,9 @@ final class CacheSpaceRegistry
     /** @return list<CacheSpace> */
     private function resolveModelSpaces(string $modelClass): array
     {
-        $names = method_exists($modelClass, 'normCacheSpaces') ? $modelClass::normCacheSpaces() : [];
+        $names = array_values(array_unique(
+            method_exists($modelClass, 'normCacheSpaces') ? $modelClass::normCacheSpaces() : []
+        ));
 
         if ($names === []) {
             return [$this->defaultSpace()];
@@ -159,7 +161,7 @@ final class CacheSpaceRegistry
             );
         }
 
-        return array_values(array_map(fn($name) => $this->space($name), $names));
+        return array_map(fn($name) => $this->space($name), $names);
     }
 
     private function materializeSpace(string $name, bool $remember = true): CacheSpace

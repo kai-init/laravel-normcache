@@ -30,7 +30,7 @@ class BypassReasonsTest extends TestCase
     public function test_raw_where_is_reported_as_dependency_bypass_reason(): void
     {
         $query = $this->makeBaseQuery(null);
-        $query->wheres = [['type' => 'Raw', 'sql' => 'LOWER(name) = ?', 'boolean' => 'and']];
+        $query->wheres = [['type' => 'raw', 'sql' => 'LOWER(name) = ?', 'boolean' => 'and']];
 
         $this->assertSame(
             ['dependency' => ['raw WHERE expression']],

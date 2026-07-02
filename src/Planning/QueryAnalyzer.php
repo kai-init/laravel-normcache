@@ -212,7 +212,7 @@ final class QueryAnalyzer
         foreach ($wheres as $where) {
             $type = $where['type'] ?? '';
 
-            if ($type === 'Raw' || $type === 'raw') {
+            if ($type === 'raw') {
                 $flags |= QueryInspection::RAW_WHERE;
             }
 

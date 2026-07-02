@@ -29,7 +29,7 @@ class QueryAnalyzerTest extends TestCase
     {
         $nested = $this->makeBaseQuery();
         $nested->wheres = [
-            ['type' => 'Raw', 'sql' => 'LOWER(name) = ?'],
+            ['type' => 'raw', 'sql' => 'LOWER(name) = ?'],
             ['type' => 'Exists', 'query' => $this->makeBaseQuery()],
         ];
 

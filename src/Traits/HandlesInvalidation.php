@@ -185,6 +185,12 @@ trait HandlesInvalidation
             return;
         }
 
+        // Infer connection from the first model so callers inside DB::transaction() get
+        // deferred invalidation even without an explicit connection name.
+        $connectionName ??= $modelClasses !== []
+            ? ($this->keys->prototype(reset($modelClasses))->getConnectionName() ?? DB::getDefaultConnection())
+            : null;
+
         $this->queueOrRun(
             $connectionName,
             function () use ($connectionName, $modelClasses) {

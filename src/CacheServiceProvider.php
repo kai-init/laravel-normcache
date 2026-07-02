@@ -109,6 +109,7 @@ class CacheServiceProvider extends ServiceProvider
             // Re-enable optimistically between queue jobs. If Redis is still down, fallback() will
             // disable again on the first failed call — worst case is one extra Redis attempt per job.
             $resetManager = function () {
+                CacheKeyBuilder::reset();
                 $manager = $this->app->make(CacheManager::class);
                 $manager->discardAllPending();
                 $manager->enable();
