@@ -848,4 +848,28 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('Alice', $second->first()->name);
         $this->assertSame('Alice', $second->first()->display_name);
     }
+
+    public function test_depends_on_merges_previous_model_dependencies(): void
+    {
+        $builder = Post::query()
+            ->dependsOn([Post::class])
+            ->dependsOn([Author::class]);
+
+        $this->assertContains(Post::class, $builder->explicitDependencies());
+        $this->assertContains(Author::class, $builder->explicitDependencies());
+        $this->assertCount(2, $builder->explicitDependencies());
+    }
+
+    public function test_depends_on_tables_merges_previous_table_dependencies(): void
+    {
+        $conn = (new Post)->getConnection()->getName();
+
+        $builder = Post::query()
+            ->dependsOnTables(['posts'])
+            ->dependsOnTables(['authors']);
+
+        $this->assertContains("{$conn}:posts", $builder->explicitTableDependencies());
+        $this->assertContains("{$conn}:authors", $builder->explicitTableDependencies());
+        $this->assertCount(2, $builder->explicitTableDependencies());
+    }
 }

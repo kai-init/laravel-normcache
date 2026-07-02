@@ -107,6 +107,33 @@ trait HandlesInvalidation
         );
     }
 
+    /** Bump the pivot table version only in the spaces belonging to the involved models. */
+    public function invalidatePivotTableVersion(string $connectionName, string $table, array $modelClasses): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $classKey = $this->keys->tableKey($connectionName, $table);
+        $spaces = [];
+        foreach ($modelClasses as $modelClass) {
+            foreach ($this->modelSpaces($modelClass) as $space) {
+                $spaces[$space->name] = $space;
+            }
+        }
+        $spaces = array_values($spaces);
+
+        $this->queueOrRun(
+            $connectionName,
+            fn() => $this->queueVersionFlush($connectionName, $classKey, $spaces),
+            function () use ($classKey, $spaces) {
+                foreach ($spaces as $space) {
+                    $this->doInvalidateKey($classKey, $space);
+                }
+            },
+        );
+    }
+
     public function forceFlushModel(string $modelClass): void
     {
         $classKey = $this->keys->classKey($modelClass);

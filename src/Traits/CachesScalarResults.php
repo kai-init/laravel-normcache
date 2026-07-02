@@ -13,6 +13,7 @@ use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\DependencySet;
 
 /**
  * @mixin CacheableBuilder
@@ -137,9 +138,10 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge(
-            (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
-        );
+        $joinDeps = !empty($base->joins)
+            ? (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
+            : DependencySet::empty();
+        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge($joinDeps);
         $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
             $kind->value,
             $columns,

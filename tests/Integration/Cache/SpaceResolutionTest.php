@@ -207,4 +207,22 @@ class SpaceResolutionTest extends TestCase
             'co-located belongsTo (content) must cache the related model under {nc:content}',
         );
     }
+
+    public function test_pivot_invalidation_only_bumps_spaces_of_involved_models(): void
+    {
+        $registry = app(\NormCache\Spaces\CacheSpaceRegistry::class);
+        $registry->space('content');
+        $registry->space('catalog');
+        $registry->space('reporting');
+
+        $store = $this->cacheManager()->getStore();
+
+        $post = SpacedPost::create(['title' => 'Draft', 'author_id' => 1]);
+        $tag  = CatalogTag::create(['name' => 'PHP']);
+        $post->catalogTags()->attach($tag->id);
+
+        $this->assertNotEmpty($store->scanPattern('{nc:content}:test:ver:*taggables*'));
+        $this->assertNotEmpty($store->scanPattern('{nc:catalog}:test:ver:*taggables*'));
+        $this->assertEmpty($store->scanPattern('{nc:reporting}:test:ver:*taggables*'));
+    }
 }

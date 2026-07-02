@@ -107,29 +107,33 @@ class CacheableBuilder extends Builder
             throw new \InvalidArgumentException('dependsOn() requires at least one model class.');
         }
 
+        $existing = $this->dependsOn ?? [];
+
         foreach ($modelClasses as $class) {
             if (!is_string($class)) {
                 throw new \InvalidArgumentException('dependsOn() expects model class names, not model instances.');
             }
 
-            if (isset(self::$validatedModelClasses[$class])) {
-                continue;
+            if (!isset(self::$validatedModelClasses[$class])) {
+                if (!is_a($class, Model::class, true)) {
+                    throw new \InvalidArgumentException("dependsOn() class [{$class}] must be an Eloquent model.");
+                }
+
+                if (!in_array(Cacheable::class, class_uses_recursive($class), true)) {
+                    throw new \InvalidArgumentException(
+                        "dependsOn() class [{$class}] must use the NormCache\\Cacheable trait."
+                    );
+                }
+
+                self::$validatedModelClasses[$class] = true;
             }
 
-            if (!is_a($class, Model::class, true)) {
-                throw new \InvalidArgumentException("dependsOn() class [{$class}] must be an Eloquent model.");
+            if (!in_array($class, $existing, true)) {
+                $existing[] = $class;
             }
-
-            if (!in_array(Cacheable::class, class_uses_recursive($class), true)) {
-                throw new \InvalidArgumentException(
-                    "dependsOn() class [{$class}] must use the NormCache\\Cacheable trait."
-                );
-            }
-
-            self::$validatedModelClasses[$class] = true;
         }
 
-        $this->dependsOn = $modelClasses;
+        $this->dependsOn = $existing;
 
         return $this;
     }
