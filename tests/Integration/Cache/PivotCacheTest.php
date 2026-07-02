@@ -538,6 +538,36 @@ class PivotCacheTest extends TestCase
         $this->assertEmpty(array_filter($queries, fn($q) => str_contains($q['query'], 'author_tag')), 'pivot query should be cached');
     }
 
+    public function test_empty_parent_has_relation_loaded_on_warm_hit(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob   = Author::create(['name' => 'Bob']);
+        $tag   = Tag::create(['name' => 'Fiction']);
+        $alice->tags()->attach($tag->id);
+
+        // Warm: both authors loaded; Bob has no tags.
+        Author::with('tags')->get();
+
+        DB::enableQueryLog();
+        $authors = Author::with('tags')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($queries, 'warm hit should issue no SQL');
+
+        $bobLoaded = $authors->firstWhere('name', 'Bob');
+        $this->assertTrue($bobLoaded->relationLoaded('tags'), 'empty-parent relation must be marked loaded');
+        $this->assertCount(0, $bobLoaded->tags);
+
+        // Accessing the relation must not trigger a lazy load.
+        DB::enableQueryLog();
+        $_ = $bobLoaded->tags->all();
+        $lazyQueries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($lazyQueries, 'accessing loaded empty relation must not issue SQL');
+    }
+
     public function test_belongs_to_many_remains_fast_path(): void
     {
         $author = Author::create(['name' => 'Alice']);
