@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\CatalogTag;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -210,7 +211,7 @@ class SpaceResolutionTest extends TestCase
 
     public function test_pivot_invalidation_only_bumps_spaces_of_involved_models(): void
     {
-        $registry = app(\NormCache\Spaces\CacheSpaceRegistry::class);
+        $registry = app(CacheSpaceRegistry::class);
         $registry->space('content');
         $registry->space('catalog');
         $registry->space('reporting');
@@ -218,7 +219,7 @@ class SpaceResolutionTest extends TestCase
         $store = $this->cacheManager()->getStore();
 
         $post = SpacedPost::create(['title' => 'Draft', 'author_id' => 1]);
-        $tag  = CatalogTag::create(['name' => 'PHP']);
+        $tag = CatalogTag::create(['name' => 'PHP']);
         $post->catalogTags()->attach($tag->id);
 
         $this->assertNotEmpty($store->scanPattern('{nc:content}:test:ver:*taggables*'));

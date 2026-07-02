@@ -541,8 +541,8 @@ class PivotCacheTest extends TestCase
     public function test_empty_parent_has_relation_loaded_on_warm_hit(): void
     {
         $alice = Author::create(['name' => 'Alice']);
-        $bob   = Author::create(['name' => 'Bob']);
-        $tag   = Tag::create(['name' => 'Fiction']);
+        $bob = Author::create(['name' => 'Bob']);
+        $tag = Tag::create(['name' => 'Fiction']);
         $alice->tags()->attach($tag->id);
 
         // Warm: both authors loaded; Bob has no tags.
