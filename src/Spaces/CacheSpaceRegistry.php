@@ -20,6 +20,9 @@ final class CacheSpaceRegistry
     /** @var array<class-string, list<CacheSpace>> model class => spaces (memoized, validated) */
     private array $modelSpaces = [];
 
+    /** @var list<string>|null */
+    private ?array $metadataSpaceNames = null;
+
     /**
      * @param  array<string, array{hash_tag?: string}>  $placement  per-space hash-tag overrides
      */
@@ -215,13 +218,17 @@ final class CacheSpaceRegistry
             return [];
         }
 
+        if ($this->metadataSpaceNames !== null) {
+            return $this->metadataSpaceNames;
+        }
+
         try {
-            return array_values(array_filter(
+            return $this->metadataSpaceNames = array_values(array_filter(
                 $this->metadataStore->setMembers($this->metadataSpacesKey()),
                 fn(string $name) => $this->validSpaceName($name),
             ));
         } catch (\Throwable) {
-            return [];
+            return $this->metadataSpaceNames = [];
         }
     }
 

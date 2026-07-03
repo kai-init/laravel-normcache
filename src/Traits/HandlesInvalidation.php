@@ -32,7 +32,7 @@ trait HandlesInvalidation
     /** @return list<CacheSpace> the spaces a table's version key lives in */
     private function tableInvalidationSpaces(string $table): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->knownSpaces();
+        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForTable($table);
     }
 
     /** @return list<CacheSpace> */
@@ -208,29 +208,33 @@ trait HandlesInvalidation
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
     {
-        if (!$this->isEnabled()) {
+        if (!$this->isEnabled() || $modelClasses === []) {
             return;
         }
 
-        // Infer connection from the first model so callers inside DB::transaction() get
-        // deferred invalidation even without an explicit connection name.
-        $connectionName ??= $modelClasses !== []
-            ? ($this->keys->prototype(reset($modelClasses))->getConnectionName() ?? DB::getDefaultConnection())
-            : null;
+        $groups = [];
 
-        $this->queueOrRun(
-            $connectionName,
-            function () use ($connectionName, $modelClasses) {
-                foreach ($modelClasses as $modelClass) {
-                    $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass), $this->modelSpaces($modelClass));
-                }
-            },
-            function () use ($modelClasses) {
-                foreach ($modelClasses as $modelClass) {
-                    $this->doInvalidateVersion($modelClass);
-                }
-            },
-        );
+        foreach ($modelClasses as $modelClass) {
+            $conn = $connectionName
+                ?? ($this->keys->prototype($modelClass)->getConnectionName() ?? DB::getDefaultConnection());
+            $groups[$conn][] = $modelClass;
+        }
+
+        foreach ($groups as $conn => $classes) {
+            $this->queueOrRun(
+                $conn,
+                function () use ($conn, $classes) {
+                    foreach ($classes as $modelClass) {
+                        $this->queueVersionFlush($conn, $this->keys->classKey($modelClass), $this->modelSpaces($modelClass));
+                    }
+                },
+                function () use ($classes) {
+                    foreach ($classes as $modelClass) {
+                        $this->doInvalidateVersion($modelClass);
+                    }
+                },
+            );
+        }
     }
 
     public function commitPending(string $connectionName): void
@@ -375,6 +379,16 @@ trait HandlesInvalidation
     /** @param  list<CacheSpace>  $spaces */
     private function queueVersionFlush(string $connectionName, string $classKey, array $spaces): void
     {
-        $this->versionQueue[$connectionName][$classKey] = $spaces;
+        $queued = [];
+
+        foreach ($this->versionQueue[$connectionName][$classKey] ?? [] as $space) {
+            $queued[$space->name] = $space;
+        }
+
+        foreach ($spaces as $space) {
+            $queued[$space->name] = $space;
+        }
+
+        $this->versionQueue[$connectionName][$classKey] = array_values($queued);
     }
 }

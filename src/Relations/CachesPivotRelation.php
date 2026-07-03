@@ -13,6 +13,7 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\CacheSpace;
 use NormCache\Values\PreparedQuery;
 
 /** @mixin BelongsToMany */
@@ -119,7 +120,9 @@ trait CachesPivotRelation
                     ];
                 },
                 onStore: function ($models, $pivotResult) use ($cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $shouldCacheRelatedModels, $ttl) {
-                    NormCache::attempt(function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels, $ttl) {
+                    $space = NormCache::keys()->activeSpace();
+
+                    NormCache::attempt(function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels, $ttl, $space) {
                         $relatedKey = NormCache::classKey($relatedClass);
                         $keyMap = [];
                         foreach ($cacheParentIds as $parentId) {
@@ -131,7 +134,8 @@ trait CachesPivotRelation
                         $this->populatePivotCache(
                             $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
                             $pivotResult->versionKeys, $pivotResult->expectedVersions, $ttl,
-                            $pivotResult->buildingKey, $pivotResult->wakeKey, $pivotResult->buildingToken
+                            $pivotResult->buildingKey, $pivotResult->wakeKey, $pivotResult->buildingToken,
+                            $space,
                         );
                     });
                 },
@@ -215,6 +219,7 @@ trait CachesPivotRelation
         Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels,
         array $versionKeys, array $expectedVersions, ?int $ttl = null,
         ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null,
+        ?CacheSpace $space = null,
     ): void {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
         $modelAttrs = [];
@@ -259,7 +264,7 @@ trait CachesPivotRelation
                 $modelAttrs,
                 $versionKeys,
                 $expectedVersions,
-                NormCache::keys()->activeSpace(),
+                $space,
             );
         }
     }

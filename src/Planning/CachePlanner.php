@@ -83,7 +83,7 @@ final class CachePlanner
 
     // Bypass (or throw) when a plan's dependencies don't co-locate in its cache space.
     // Neutral for default-only apps: everything resolves to the default space.
-    private function applySpaceValidation(
+    public function applySpaceValidation(
         CachePlan $plan,
         CacheableBuilder $builder,
         Model $model,

@@ -187,7 +187,7 @@ abstract class TestCase extends OrchestraTestCase
         $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
         $store = new RedisStore($connection, $stampedeWakeTokens);
         $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens);
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0);
         $engine = new ExecutionEngine;
         $config = new CacheConfig(
             ttl: $ttl,
@@ -200,9 +200,9 @@ abstract class TestCase extends OrchestraTestCase
         );
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens),
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
             resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
             result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,

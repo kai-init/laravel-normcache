@@ -124,6 +124,10 @@ trait CachesScalarResults
         array $columns = [],
         ?\Closure $compute = null,
     ): mixed {
+        if ($this->isCacheSkipped() || !NormCache::isEnabled()) {
+            return $fallback();
+        }
+
         if (ProjectionClassifier::hasCalculatedColumns($columns)) {
             return $fallback();
         }

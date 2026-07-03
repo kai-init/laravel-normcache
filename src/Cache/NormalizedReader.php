@@ -27,24 +27,15 @@ abstract class NormalizedReader
         protected readonly int $buildingLockTtl,
         protected readonly int $stampedeWaitMs = 200,
         protected readonly int $wakeTokenCount = 64,
+        protected readonly bool $cooldownEnabled = false,
     ) {}
 
-    // Cache-key prefix for this reader's namespace (query vs through).
     abstract protected function queryPrefix(string $classKey, ?string $tag): string;
 
-    /**
-     * Decode the Lua payload to [status, ids, throughKeys]. ids: list on hit,
-     * [] empty, null otherwise. throughKeys is only used by through relations.
-     *
-     * @return array{0: LuaStatus, 1: ?array<int|string, mixed>, 2: ?array<int|string, mixed>}
-     */
+    /** @return array{0: LuaStatus, 1: ?array<int|string, mixed>, 2: ?array<int|string, mixed>} */
     abstract protected function decodePayload(array $result, string $queryKey): array;
 
-    /**
-     * Build the concrete result DTO for this reader.
-     *
-     * @return TResult
-     */
+    /** @return TResult */
     abstract protected function buildResult(
         LuaStatus $status,
         BuildContext $build,
@@ -65,12 +56,20 @@ abstract class NormalizedReader
 
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $scheduledKeys, [
+            array_merge($versionKeys, $this->cooldownEnabled ? $scheduledKeys : [], [
                 $queryPrefix,
                 $this->keys->buildingPrefix($classKey),
                 $this->keys->wakePrefix($classKey),
             ]),
-            [$hash, $hash, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            [
+                $hash,
+                $hash,
+                (int) floor(microtime(true) * 1000),
+                $this->buildingLockTtl,
+                $lockToken,
+                (string) count($versionKeys),
+                $this->cooldownEnabled ? '1' : '0',
+            ]
         );
 
         $seg = (string) ($result[1] ?? '');
@@ -147,7 +146,9 @@ abstract class NormalizedReader
         $keys = array_merge($versionKeys, [$key]);
         if ($buildingKey !== null) {
             $keys[] = $buildingKey;
-            $keys[] = $wakeKey;
+            if ($wakeKey !== null) {
+                $keys[] = $wakeKey;
+            }
         }
 
         return (bool) $this->store->script(

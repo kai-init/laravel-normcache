@@ -183,14 +183,9 @@ final class RedisStore
             return [];
         }
 
-        $prefixed = [];
-        foreach ($keys as $key) {
-            $prefixed[] = $key;
-        }
-
         $raw = $this->connection instanceof PredisClusterConnection
-            ? array_map(fn($key) => $this->connection->get($key), $prefixed)
-            : $this->connection->mget($prefixed);
+            ? array_map(fn($key) => $this->connection->get($key), $keys)
+            : $this->connection->mget($keys);
         $values = [];
 
         foreach ($raw as $i => $value) {

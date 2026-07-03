@@ -20,6 +20,7 @@ final class ResultCacheReader
         private readonly int $buildingLockTtl,
         private readonly int $stampedeWaitMs,
         private readonly int $wakeTokenCount = 64,
+        private readonly bool $cooldownEnabled = false,
     ) {}
 
     public function fetch(
@@ -252,8 +253,16 @@ final class ResultCacheReader
     ): array {
         return $this->store->script(
             RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $scheduledKeys, [$resultPrefix, $buildingPrefix, $wakePrefix]),
-            [$hash, $lockSuffix, (int) floor(microtime(true) * 1000), $this->buildingLockTtl, $lockToken]
+            array_merge($versionKeys, $this->cooldownEnabled ? $scheduledKeys : [], [$resultPrefix, $buildingPrefix, $wakePrefix]),
+            [
+                $hash,
+                $lockSuffix,
+                (int) floor(microtime(true) * 1000),
+                $this->buildingLockTtl,
+                $lockToken,
+                (string) count($versionKeys),
+                $this->cooldownEnabled ? '1' : '0',
+            ]
         );
     }
 
