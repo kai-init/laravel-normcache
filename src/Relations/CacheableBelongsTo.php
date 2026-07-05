@@ -15,8 +15,6 @@ use NormCache\Values\PreparedQuery;
 
 class CacheableBelongsTo extends BelongsTo
 {
-    use CollectsRelatedModels;
-
     private array $eagerKeys = [];
 
     public function addEagerConstraints(array $models): void
@@ -122,6 +120,6 @@ class CacheableBelongsTo extends BelongsTo
             return $this->related->newCollection();
         }
 
-        return $this->collectFromPreparedBuilder($prepared);
+        return $prepared->builder->collectFromPrepared($prepared);
     }
 }

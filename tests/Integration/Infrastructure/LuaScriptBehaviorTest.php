@@ -77,6 +77,9 @@ class LuaScriptBehaviorTest extends TestCase
         Author::get();
         $version = NormCache::currentVersion(Author::class);
 
+        // Reads only check scheduled keys while the cooldown toggle is active.
+        $this->cacheManager()->config()->cooldown = 1;
+
         // Place a past-due scheduled invalidation directly in Redis
         $pastMs = (int) (microtime(true) * 1000) - 5000;
         $this->setKey("scheduled:{$ck}:", (string) $pastMs);
@@ -96,6 +99,7 @@ class LuaScriptBehaviorTest extends TestCase
         Author::get();
         $version = NormCache::currentVersion(Author::class);
 
+        $this->cacheManager()->config()->cooldown = 1;
         $this->setKey("scheduled:{$ck}:", 'garbage');
 
         Author::get();

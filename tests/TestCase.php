@@ -19,6 +19,8 @@ use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
+use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
@@ -187,7 +189,6 @@ abstract class TestCase extends OrchestraTestCase
         $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
         $store = new RedisStore($connection, $stampedeWakeTokens);
         $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0);
         $engine = new ExecutionEngine;
         $config = new CacheConfig(
             ttl: $ttl,
@@ -198,11 +199,12 @@ abstract class TestCase extends OrchestraTestCase
             dispatchEvents: $dispatchEvents,
             stampedeWakeTokens: $stampedeWakeTokens,
         );
+        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens);
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
+            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
             resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
+            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
             result: new ResultExecutor($engine, $resultReader, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,
@@ -210,6 +212,8 @@ abstract class TestCase extends OrchestraTestCase
             store: $store,
             keys: $keys,
             config: $config,
+            spaceResolver: app(CacheSpaceResolver::class),
+            spaceRegistry: app(CacheSpaceRegistry::class),
         );
     }
 

@@ -119,47 +119,15 @@ final class ExecutionEngine
     }
 
     /**
-     * @param  callable(): QueryCacheResult  $fetch
-     * @param  callable(): (QueryCacheResult|null)  $waitForBuild
+     * @template TResult of QueryCacheResult|ThroughCacheResult
+     *
+     * @param  callable(): TResult  $fetch
+     * @param  callable(): (TResult|null)  $waitForBuild
      * @param  callable(): Collection  $onBuild
-     * @param  callable(QueryCacheResult): Collection  $onMiss
-     * @param  callable(QueryCacheResult): Collection  $onHit
+     * @param  callable(TResult): Collection  $onMiss
+     * @param  callable(TResult): Collection  $onHit
      */
     public function runNormalized(
-        callable $fetch,
-        callable $waitForBuild,
-        callable $onBuild,
-        callable $onMiss,
-        callable $onHit,
-    ): Collection {
-        $result = $fetch();
-
-        if ($result->status === CacheStatus::Building) {
-            $result = $waitForBuild();
-
-            if ($result === null) {
-                return $onBuild();
-            }
-        }
-
-        if ($result->status === CacheStatus::Miss) {
-            return $onMiss($result);
-        }
-
-        return $onHit($result);
-    }
-
-    /**
-     * Same control flow as {@see self::runNormalized()}, kept as a separate method so call
-     * sites get ThroughCacheResult-typed callables instead of QueryCacheResult.
-     *
-     * @param  callable(): ThroughCacheResult  $fetch
-     * @param  callable(): (ThroughCacheResult|null)  $waitForBuild
-     * @param  callable(): Collection  $onBuild
-     * @param  callable(ThroughCacheResult): Collection  $onMiss
-     * @param  callable(ThroughCacheResult): Collection  $onHit
-     */
-    public function runThrough(
         callable $fetch,
         callable $waitForBuild,
         callable $onBuild,

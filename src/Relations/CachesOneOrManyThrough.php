@@ -8,7 +8,6 @@ use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\CachePlanner;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -22,8 +21,6 @@ use NormCache\Values\QueryInspection;
 
 trait CachesOneOrManyThrough
 {
-    use CollectsRelatedModels;
-
     public function get($columns = ['*']): Collection
     {
         if (!$this->query instanceof CacheableBuilder) {
@@ -71,7 +68,7 @@ trait CachesOneOrManyThrough
         $ttl = $builder->getQueryTtl();
 
         $runThrough = fn() => NormCache::rescue(
-            fn() => NormCache::engine()->runThrough(
+            fn() => NormCache::engine()->runNormalized(
                 fetch: fn() => NormCache::getThroughCache($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
                 waitForBuild: fn() => NormCache::waitForThroughBuild(
                     $relatedClass, $hash, $tag, $depClasses, $depTableKeys
@@ -150,7 +147,7 @@ trait CachesOneOrManyThrough
                 dependencies: $dependencies,
             )->withSpace($space);
 
-            $plan = (new CachePlanner)->applySpaceValidation(
+            $plan = $builder->planner()->applySpaceValidation(
                 $plan,
                 $builder,
                 $this->related,
@@ -232,6 +229,6 @@ trait CachesOneOrManyThrough
 
     private function getFromPreparedBuilder(PreparedQuery $prepared, bool $applyAfterCallbacks = true): Collection
     {
-        return $this->collectFromPreparedBuilder($prepared, $applyAfterCallbacks);
+        return $prepared->builder->collectFromPrepared($prepared, applyAfterCallbacks: $applyAfterCallbacks);
     }
 }

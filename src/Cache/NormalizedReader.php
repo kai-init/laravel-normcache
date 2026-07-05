@@ -8,6 +8,7 @@ use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildContext;
+use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ThroughCacheResult;
 
@@ -25,10 +26,16 @@ abstract class NormalizedReader
         protected readonly VersionTracker $versions,
         protected readonly int $queryTtl,
         protected readonly int $buildingLockTtl,
+        protected readonly CacheConfig $config,
         protected readonly int $stampedeWaitMs = 200,
         protected readonly int $wakeTokenCount = 64,
-        protected readonly bool $cooldownEnabled = false,
     ) {}
+
+    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
+    protected function cooldownEnabled(): bool
+    {
+        return $this->config->cooldown > 0;
+    }
 
     abstract protected function queryPrefix(string $classKey, ?string $tag): string;
 
@@ -53,10 +60,11 @@ abstract class NormalizedReader
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $queryPrefix = $this->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
+        $cooldown = $this->cooldownEnabled();
 
         $result = $this->store->script(
             RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $this->cooldownEnabled ? $scheduledKeys : [], [
+            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [
                 $queryPrefix,
                 $this->keys->buildingPrefix($classKey),
                 $this->keys->wakePrefix($classKey),
@@ -68,7 +76,7 @@ abstract class NormalizedReader
                 $this->buildingLockTtl,
                 $lockToken,
                 (string) count($versionKeys),
-                $this->cooldownEnabled ? '1' : '0',
+                $cooldown ? '1' : '0',
             ]
         );
 

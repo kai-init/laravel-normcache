@@ -11,6 +11,7 @@ use NormCache\Cache\NormalizedThroughReader;
 use NormCache\Cache\ResultCacheReader;
 use NormCache\Cache\ResultExecutor;
 use NormCache\Cache\VersionTracker;
+use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FallbackHandler;
@@ -38,6 +39,8 @@ class CacheManager
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
         private readonly CacheConfig $config,
+        private readonly CacheSpaceResolver $spaceResolver,
+        private readonly CacheSpaceRegistry $spaceRegistry,
     ) {}
 
     // -------------------------------------------------------------------------
@@ -107,7 +110,7 @@ class CacheManager
     // cache execution to the same space the planner validated against).
     public function spaceFor(string $modelClass, ?string $explicitSpace = null): CacheSpace
     {
-        return ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($modelClass, $explicitSpace);
+        return $this->spaceResolver->resolve($modelClass, $explicitSpace);
     }
 
     public function withSpace(?CacheSpace $space, callable $callback): mixed
@@ -127,8 +130,6 @@ class CacheManager
     {
         return $this->withSpace($this->spaceFor($modelClass, $explicitSpace), $callback);
     }
-
-    private ?CacheSpaceResolver $spaceResolver = null;
 
     public function tableKey(string $connectionName, string $table): string
     {

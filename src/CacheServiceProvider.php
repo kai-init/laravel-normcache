@@ -45,7 +45,7 @@ class CacheServiceProvider extends ServiceProvider
             return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
         });
 
-        $this->app->singleton(CacheManager::class, function () {
+        $this->app->singleton(CacheManager::class, function ($app) {
             $connection = config('normcache.connection');
             $ttl = (int) config('normcache.ttl');
             $queryTtl = (int) config('normcache.query_ttl');
@@ -62,7 +62,6 @@ class CacheServiceProvider extends ServiceProvider
             $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
             $store = new RedisStore($connection, $stampedeWakeTokens);
             $versions = new VersionTracker($store, $keys);
-            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0);
             $engine = new ExecutionEngine;
             $config = new CacheConfig(
                 ttl: $ttl,
@@ -73,11 +72,12 @@ class CacheServiceProvider extends ServiceProvider
                 dispatchEvents: $events,
                 stampedeWakeTokens: $stampedeWakeTokens,
             );
+            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens);
 
             return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
+                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
                 resultReader: $resultReader,
-                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $stampedeWakeTokens, $cooldown > 0),
+                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
                 result: new ResultExecutor($engine, $resultReader, $config),
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
                 versions: $versions,
@@ -85,6 +85,8 @@ class CacheServiceProvider extends ServiceProvider
                 store: $store,
                 keys: $keys,
                 config: $config,
+                spaceResolver: $app->make(CacheSpaceResolver::class),
+                spaceRegistry: $app->make(CacheSpaceRegistry::class),
             );
         });
 

@@ -5,6 +5,7 @@ namespace NormCache\Support;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\ModelHydrator;
+use NormCache\CacheableBuilder;
 use NormCache\Values\CacheSpace;
 
 class CacheKeyBuilder
@@ -141,6 +142,7 @@ class CacheKeyBuilder
         self::$singleDepPairs = [];
 
         ModelHydrator::reset();
+        CacheableBuilder::resetSharedState();
     }
 
     public static function prototype(string $class): Model

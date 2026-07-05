@@ -197,15 +197,9 @@ class CacheableBuilder extends Builder
     public function explain(): string
     {
         $prepared = $this->prepareCacheExecution();
-        $executionBuilder = $prepared->builder;
-        $base = $prepared->base;
-        $resolvedCols = ProjectionClassifier::resolve($base, ['*']);
-        $explainJoinDeps = !empty($base->joins)
-            ? (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
-            : DependencySet::empty();
-        $plan = $executionBuilder->cachePlan($base, CachePlanContext::models(
-            $resolvedCols,
-            $executionBuilder->inferAggregateDependencies()->merge($explainJoinDeps),
+        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::models(
+            ProjectionClassifier::resolve($prepared->base, ['*']),
+            $inferred,
             selectAll: true,
         ), PlanningMode::Explain);
 
@@ -250,20 +244,9 @@ class CacheableBuilder extends Builder
         $columns = Arr::wrap($columns);
         $prepared = $this->prepareCacheExecution();
         $model = $this->model::class;
-
         $base = $prepared->base;
-        $execBuilder = $prepared->builder;
 
-        $joinDeps = !empty($base->joins)
-            ? (new QueryAnalyzer)->inferJoinDependencies(
-                $base,
-                $execBuilder->getModel()->getConnection()->getName()
-            )
-            : DependencySet::empty();
-
-        $inferred = $execBuilder->inferAggregateDependencies()->merge($joinDeps);
-
-        $plan = $execBuilder->cachePlan($base, CachePlanContext::models(
+        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::models(
             ProjectionClassifier::resolve($base, $columns),
             $inferred,
             selectAll: $columns === ['*'],
@@ -272,11 +255,11 @@ class CacheableBuilder extends Builder
         return NormCache::withSpace($plan->space, fn() => match ($plan->strategy) {
             CacheStrategy::DirectModels => NormCache::rescue(
                 fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
-                fn() => $this->getWithoutCacheFromPrepared($prepared, $columns),
+                fn() => $this->collectFromPrepared($prepared, $columns),
             ),
             CacheStrategy::NormalizedQuery => NormCache::rescue(
                 fn() => $this->modelsExecutor()->runNormalized($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
-                fn() => $this->getWithoutCacheFromPrepared($prepared, $columns)
+                fn() => $this->collectFromPrepared($prepared, $columns)
             ),
             CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
             CacheStrategy::LiveQuery => $this->bypassAndReturn($model, $plan->bypassReasons, $debugbarStart, $prepared, $columns),
@@ -297,7 +280,7 @@ class CacheableBuilder extends Builder
             $columns,
             function () use ($prepared, $columns) {
                 if ($this->hasAggregateColumns()) {
-                    $rawModels = $this->getWithoutCacheFromPrepared($prepared, $columns, false);
+                    $rawModels = $this->collectFromPrepared($prepared, $columns, false);
 
                     return $this->resultPayloadFromEloquentModels($rawModels);
                 }
@@ -323,7 +306,7 @@ class CacheableBuilder extends Builder
     ): Collection {
         CacheReporter::queryBypassed($model, $bypassReasons, $debugbarStart);
 
-        return $this->getWithoutCacheFromPrepared($prepared, $columns);
+        return $this->collectFromPrepared($prepared, $columns);
     }
 
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
@@ -335,14 +318,7 @@ class CacheableBuilder extends Builder
         $debugbarStart = CacheReporter::beginMeasure();
 
         $prepared = $this->prepareCacheExecution();
-        $paginateBase = $prepared->base;
-        $paginateBuilder = $prepared->builder;
-        $paginateJoinDeps = !empty($paginateBase->joins)
-            ? (new QueryAnalyzer)->inferJoinDependencies($paginateBase, $paginateBuilder->getModel()->getConnection()->getName())
-            : DependencySet::empty();
-        $plan = $paginateBuilder->cachePlan($paginateBase, CachePlanContext::paginationCount(
-            $paginateBuilder->inferAggregateDependencies()->merge($paginateJoinDeps)
-        ));
+        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::paginationCount($inferred));
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {
             CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons, $debugbarStart);
@@ -467,19 +443,24 @@ class CacheableBuilder extends Builder
         return new PreparedQuery($builder, $builder->getQuery());
     }
 
-    private function getWithoutCacheFromPrepared(
+    public function collectFromPrepared(
         PreparedQuery $prepared,
-        array $columns,
+        array $columns = ['*'],
         bool $applyAfterCallbacks = true,
+        ?\Closure $beforeEagerLoad = null,
     ): Collection {
         $builder = $prepared->builder;
         $models = $builder->getModels($columns);
+
+        if ($beforeEagerLoad !== null) {
+            $beforeEagerLoad($models);
+        }
 
         if (count($models) > 0) {
             $models = $builder->eagerLoadRelations($models);
         }
 
-        $collection = $this->model->newCollection($models);
+        $collection = $builder->getModel()->newCollection($models);
 
         return $applyAfterCallbacks
             ? $prepared->applyAfterCallbacks($collection)
@@ -510,7 +491,23 @@ class CacheableBuilder extends Builder
         return $this->planner()->plan($this, $base, $context, $planningMode);
     }
 
-    private function planner(): CachePlanner
+    /** @param  \Closure(DependencySet): CachePlanContext  $context */
+    public function planPrepared(
+        PreparedQuery $prepared,
+        \Closure $context,
+        PlanningMode $mode = PlanningMode::Hot,
+    ): CachePlan {
+        $builder = $prepared->builder;
+        $base = $prepared->base;
+
+        $joinDeps = !empty($base->joins)
+            ? (new QueryAnalyzer)->inferJoinDependencies($base, $builder->getModel()->getConnection()->getName())
+            : DependencySet::empty();
+
+        return $builder->cachePlan($base, $context($builder->inferAggregateDependencies()->merge($joinDeps)), $mode);
+    }
+
+    public function planner(): CachePlanner
     {
         return self::$sharedPlanner ??= new CachePlanner;
     }
@@ -518,6 +515,13 @@ class CacheableBuilder extends Builder
     private function modelsExecutor(): ModelsExecutor
     {
         return self::$sharedModelsExecutor ??= new ModelsExecutor;
+    }
+
+    // Drop memoized services on tenant/Octane resets; the planner caches app() lookups.
+    public static function resetSharedState(): void
+    {
+        self::$sharedPlanner = null;
+        self::$sharedModelsExecutor = null;
     }
 
     private function rememberPaginationTotal(PreparedQuery $prepared, CachePlan $plan): int

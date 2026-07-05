@@ -7,6 +7,7 @@ use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
+use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\ResultCacheResult;
 
@@ -18,10 +19,16 @@ final class ResultCacheReader
         private readonly VersionTracker $versions,
         private readonly int $queryTtl,
         private readonly int $buildingLockTtl,
+        private readonly CacheConfig $config,
         private readonly int $stampedeWaitMs,
         private readonly int $wakeTokenCount = 64,
-        private readonly bool $cooldownEnabled = false,
     ) {}
+
+    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
+    private function cooldownEnabled(): bool
+    {
+        return $this->config->cooldown > 0;
+    }
 
     public function fetch(
         string $modelClass, array $depClasses, string $hash,
@@ -251,9 +258,11 @@ final class ResultCacheReader
         string $resultPrefix, string $buildingPrefix, string $wakePrefix,
         string $hash, string $lockSuffix, string $lockToken
     ): array {
+        $cooldown = $this->cooldownEnabled();
+
         return $this->store->script(
             RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $this->cooldownEnabled ? $scheduledKeys : [], [$resultPrefix, $buildingPrefix, $wakePrefix]),
+            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [$resultPrefix, $buildingPrefix, $wakePrefix]),
             [
                 $hash,
                 $lockSuffix,
@@ -261,7 +270,7 @@ final class ResultCacheReader
                 $this->buildingLockTtl,
                 $lockToken,
                 (string) count($versionKeys),
-                $this->cooldownEnabled ? '1' : '0',
+                $cooldown ? '1' : '0',
             ]
         );
     }

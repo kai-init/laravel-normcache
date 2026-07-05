@@ -5,7 +5,6 @@ namespace NormCache\Traits;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
-use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Values\CacheSpace;
@@ -21,24 +20,22 @@ trait HandlesInvalidation
     /** @var array<string, array<string, list<CacheSpace>>> conn => classKey => spaces */
     private array $versionQueue = [];
 
-    private ?CacheSpaceRegistry $spaceRegistry = null;
-
     /** @return list<CacheSpace> the spaces a model's version key lives in */
     private function modelSpaces(string $modelClass): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForModel($modelClass);
+        return $this->spaceRegistry->spacesForModel($modelClass);
     }
 
     /** @return list<CacheSpace> the spaces a table's version key lives in */
     private function tableInvalidationSpaces(string $table): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->spacesForTable($table);
+        return $this->spaceRegistry->spacesForTable($table);
     }
 
     /** @return list<CacheSpace> */
     private function knownSpaces(): array
     {
-        return ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->knownSpaces();
+        return $this->spaceRegistry->knownSpaces();
     }
 
     // Invalidation
@@ -76,20 +73,10 @@ trait HandlesInvalidation
         );
     }
 
+    /** Alias of invalidateVersion(); kept as the model-instance-facing entry point. */
     public function flushInstance(Model $model): void
     {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-        $class = $model::class;
-
-        $this->queueOrRun(
-            $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($class), $this->modelSpaces($class)),
-            fn() => $this->doInvalidateVersion($class),
-        );
+        $this->invalidateVersion($model);
     }
 
     public function invalidateTableVersion(string $connectionName, string $table): void
@@ -167,7 +154,7 @@ trait HandlesInvalidation
 
         $spaces = $space === null
             ? $this->knownSpaces()
-            : [is_string($space) ? ($this->spaceRegistry ??= app(CacheSpaceRegistry::class))->space($space) : $space];
+            : [is_string($space) ? $this->spaceRegistry->space($space) : $space];
 
         return $this->store->flushByPatterns($this->prefixedForSpaces($patterns, $spaces));
     }

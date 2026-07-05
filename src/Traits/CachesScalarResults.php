@@ -9,7 +9,6 @@ use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\CachePlanContext;
@@ -137,19 +136,14 @@ trait CachesScalarResults
         }
 
         $prepared = $this->prepareCacheExecution();
-        $executionBuilder = $prepared->builder;
         $base = $prepared->base;
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $joinDeps = !empty($base->joins)
-            ? (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
-            : DependencySet::empty();
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge($joinDeps);
-        $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
+        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::scalar(
             $kind->value,
             $columns,
-            $inferredDependencies,
+            $inferred,
         ));
 
         if (!$plan->isCacheable()) {

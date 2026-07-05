@@ -19,8 +19,6 @@ use NormCache\Values\PreparedQuery;
 /** @mixin BelongsToMany */
 trait CachesPivotRelation
 {
-    use CollectsRelatedModels;
-
     private array $eagerParentIds = [];
 
     private bool $inEagerLoad = false;
@@ -324,10 +322,10 @@ trait CachesPivotRelation
         PreparedQuery $prepared,
         bool $applyAfterCallbacks = true,
     ): Collection {
-        return $this->collectFromPreparedBuilder(
+        return $prepared->builder->collectFromPrepared(
             $prepared,
-            $applyAfterCallbacks,
-            fn(array $models) => $this->hydratePivotRelation($models),
+            applyAfterCallbacks: $applyAfterCallbacks,
+            beforeEagerLoad: fn(array $models) => $this->hydratePivotRelation($models),
         );
     }
 
