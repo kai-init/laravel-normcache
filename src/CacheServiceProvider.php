@@ -72,12 +72,12 @@ class CacheServiceProvider extends ServiceProvider
                 dispatchEvents: $events,
                 stampedeWakeTokens: $stampedeWakeTokens,
             );
-            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens);
+            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
 
             return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
+                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
                 resultReader: $resultReader,
-                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs, $stampedeWakeTokens),
+                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
                 result: new ResultExecutor($engine, $resultReader, $config),
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
                 versions: $versions,

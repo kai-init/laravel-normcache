@@ -5,7 +5,6 @@ namespace NormCache\Cache;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
@@ -21,14 +20,7 @@ final class ResultCacheReader
         private readonly int $buildingLockTtl,
         private readonly CacheConfig $config,
         private readonly int $stampedeWaitMs,
-        private readonly int $wakeTokenCount = 64,
     ) {}
-
-    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
-    private function cooldownEnabled(): bool
-    {
-        return $this->config->cooldown > 0;
-    }
 
     public function fetch(
         string $modelClass, array $depClasses, string $hash,
@@ -41,12 +33,17 @@ final class ResultCacheReader
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $lockToken = $this->versions->buildLockToken();
 
-        $result = $this->luaFetchVersionedResult(
-            $versionKeys, $scheduledKeys,
+        $result = $this->store->fetchVersionedPayload(
+            $versionKeys,
+            $scheduledKeys,
             $this->keys->namespacedPrefix($namespace, $classKey, $tag),
             $this->keys->buildingPrefix($classKey),
             $this->keys->wakePrefix($classKey),
-            $hash, $lockSuffix, $lockToken
+            $hash,
+            $lockSuffix,
+            $lockToken,
+            $this->buildingLockTtl,
+            $this->config->cooldownEnabled(),
         );
 
         $status = LuaStatus::fromLua($result[0] ?? null);
@@ -107,7 +104,7 @@ final class ResultCacheReader
         $relatedKey = $this->keys->classKey($relatedClass);
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($relatedKey, [], [$pivotTableKey ?? $parentKey]);
 
-        $seg = $this->luaFetchVersionedPivotSegment($versionKeys, $scheduledKeys);
+        $seg = $this->store->fetchVersionedPivotSegment($versionKeys, $scheduledKeys);
 
         $pivotKeys = [];
         foreach ($parentIds as $id) {
@@ -130,11 +127,7 @@ final class ResultCacheReader
             $missedKeys[] = $this->keys->pivotKey($parentKey, $relatedKey, $relation, $constraintHash, $seg, $id);
         }
 
-        $result = $this->store->script(
-            RedisScripts::get('fetch_batch_build_status'),
-            [...$missedKeys, $lockKey, $wakeKey],
-            [$token, (string) $this->buildingLockTtl]
-        );
+        $result = $this->store->fetchBatchBuildStatus($missedKeys, $lockKey, $wakeKey, $token, $this->buildingLockTtl);
 
         $raw = $this->store->unserializeMany($result[3] ?? []);
         foreach ($missed as $i => $id) {
@@ -211,23 +204,14 @@ final class ResultCacheReader
             return true;
         }
 
-        $keys = array_merge($versionKeys, array_keys($entries));
-        if ($buildingKey !== null) {
-            $keys[] = $buildingKey;
-            if ($wakeKey !== null) {
-                $keys[] = $wakeKey;
-            }
-        }
-
-        return (bool) $this->store->script(
-            RedisScripts::get('store_versioned_payload'),
-            $keys,
-            array_merge(
-                [(string) count($versionKeys), (string) count($entries), (string) $ttl],
-                $expectedVersions,
-                array_map(fn($p) => $this->store->serialize($p), array_values($entries)),
-                [$buildingToken ?? '', (string) $this->wakeTokenCount]
-            )
+        return $this->store->storeVersionedPayload(
+            array_map(fn($p) => $this->store->serialize($p), $entries),
+            $ttl,
+            $versionKeys,
+            $expectedVersions,
+            $buildingKey,
+            $wakeKey,
+            $buildingToken,
         );
     }
 
@@ -251,38 +235,5 @@ final class ResultCacheReader
         $result = $this->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
 
         return $result->status === CacheStatus::Building ? null : $result;
-    }
-
-    private function luaFetchVersionedResult(
-        array $versionKeys, array $scheduledKeys,
-        string $resultPrefix, string $buildingPrefix, string $wakePrefix,
-        string $hash, string $lockSuffix, string $lockToken
-    ): array {
-        $cooldown = $this->cooldownEnabled();
-
-        return $this->store->script(
-            RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [$resultPrefix, $buildingPrefix, $wakePrefix]),
-            [
-                $hash,
-                $lockSuffix,
-                (int) floor(microtime(true) * 1000),
-                $this->buildingLockTtl,
-                $lockToken,
-                (string) count($versionKeys),
-                $cooldown ? '1' : '0',
-            ]
-        );
-    }
-
-    private function luaFetchVersionedPivotSegment(array $versionKeys, array $scheduledKeys): string
-    {
-        $result = $this->store->script(
-            RedisScripts::get('fetch_versioned_pivot'),
-            array_merge($versionKeys, $scheduledKeys),
-            [(string) (int) floor(microtime(true) * 1000)]
-        );
-
-        return (string) ($result ?? '');
     }
 }

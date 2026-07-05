@@ -17,4 +17,10 @@ final class CacheConfig
         public bool $dispatchEvents = true,
         public int $stampedeWakeTokens = 64,
     ) {}
+
+    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
+    public function cooldownEnabled(): bool
+    {
+        return $this->cooldown > 0;
+    }
 }

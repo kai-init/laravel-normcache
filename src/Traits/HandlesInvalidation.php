@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
 use NormCache\Values\CacheSpace;
 
 /**
@@ -314,10 +313,9 @@ trait HandlesInvalidation
             return $this->store->getRaw($this->keys->verKey($classKey, $space));
         }
 
-        return $this->store->script(
-            RedisScripts::get('fetch_version_with_cooldown'),
-            [$this->keys->verKey($classKey, $space), $this->keys->scheduledKey($classKey, $space)],
-            [(string) (int) floor(microtime(true) * 1000)]
+        return $this->store->fetchVersionWithCooldown(
+            $this->keys->verKey($classKey, $space),
+            $this->keys->scheduledKey($classKey, $space)
         );
     }
 

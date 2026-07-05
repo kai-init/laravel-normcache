@@ -134,12 +134,92 @@ final class RedisStore
             return true;
         }
 
-        $keys = $wakeKey !== null && $wakeKey !== '' ? [$key, $buildingKey, $wakeKey] : [$key, $buildingKey];
+        return $this->storeVersionedPayload([$key => $value], $ttl, [], [], $buildingKey, $wakeKey, $token);
+    }
+
+    /** @param  array<string, mixed>  $entries  key => pre-encoded payload */
+    public function storeVersionedPayload(
+        array $entries,
+        int $ttl,
+        array $versionKeys,
+        array $expectedVersions,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
+    ): bool {
+        $keys = array_merge($versionKeys, array_keys($entries));
+        if ($buildingKey !== null) {
+            $keys[] = $buildingKey;
+            if ($wakeKey !== null && $wakeKey !== '') {
+                $keys[] = $wakeKey;
+            }
+        }
 
         return (bool) $this->script(
             RedisScripts::get('store_versioned_payload'),
             $keys,
-            ['0', '1', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
+            array_merge(
+                [(string) count($versionKeys), (string) count($entries), (string) $ttl],
+                $expectedVersions,
+                array_values($entries),
+                [$token ?? '', (string) $this->wakeTokenCount]
+            )
+        );
+    }
+
+    public function fetchVersionedPayload(
+        array $versionKeys,
+        array $scheduledKeys,
+        string $payloadPrefix,
+        string $buildingPrefix,
+        string $wakePrefix,
+        string $hash,
+        string $lockSuffix,
+        string $lockToken,
+        int $lockTtl,
+        bool $cooldown,
+    ): array {
+        return (array) $this->script(
+            RedisScripts::get('fetch_versioned_payload'),
+            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [$payloadPrefix, $buildingPrefix, $wakePrefix]),
+            [
+                $hash,
+                $lockSuffix,
+                (int) floor(microtime(true) * 1000),
+                $lockTtl,
+                $lockToken,
+                (string) count($versionKeys),
+                $cooldown ? '1' : '0',
+            ]
+        );
+    }
+
+    public function fetchVersionedPivotSegment(array $versionKeys, array $scheduledKeys): string
+    {
+        $result = $this->script(
+            RedisScripts::get('fetch_versioned_pivot'),
+            array_merge($versionKeys, $scheduledKeys),
+            [(string) (int) floor(microtime(true) * 1000)]
+        );
+
+        return (string) ($result ?? '');
+    }
+
+    public function fetchBatchBuildStatus(array $keys, string $lockKey, string $wakeKey, string $token, int $lockTtl): array
+    {
+        return (array) $this->script(
+            RedisScripts::get('fetch_batch_build_status'),
+            [...$keys, $lockKey, $wakeKey],
+            [$token, (string) $lockTtl]
+        );
+    }
+
+    public function fetchVersionWithCooldown(string $verKey, string $scheduledKey): mixed
+    {
+        return $this->script(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$verKey, $scheduledKey],
+            [(string) (int) floor(microtime(true) * 1000)]
         );
     }
 

@@ -3,7 +3,6 @@
 namespace NormCache\Cache;
 
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheSpace;
 
@@ -40,10 +39,9 @@ final class VersionTracker
 
     private function fetchVersionWithCooldown(string $classKey, ?CacheSpace $space = null): mixed
     {
-        return $this->store->script(
-            RedisScripts::get('fetch_version_with_cooldown'),
-            [$this->keys->verKey($classKey, $space), $this->keys->scheduledKey($classKey, $space)],
-            [(string) (int) floor(microtime(true) * 1000)]
+        return $this->store->fetchVersionWithCooldown(
+            $this->keys->verKey($classKey, $space),
+            $this->keys->scheduledKey($classKey, $space)
         );
     }
 }

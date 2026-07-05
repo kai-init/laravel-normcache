@@ -5,7 +5,6 @@ namespace NormCache\Cache;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildContext;
 use NormCache\Values\CacheConfig;
@@ -28,14 +27,7 @@ abstract class NormalizedReader
         protected readonly int $buildingLockTtl,
         protected readonly CacheConfig $config,
         protected readonly int $stampedeWaitMs = 200,
-        protected readonly int $wakeTokenCount = 64,
     ) {}
-
-    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
-    protected function cooldownEnabled(): bool
-    {
-        return $this->config->cooldown > 0;
-    }
 
     abstract protected function queryPrefix(string $classKey, ?string $tag): string;
 
@@ -60,24 +52,18 @@ abstract class NormalizedReader
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
         $queryPrefix = $this->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
-        $cooldown = $this->cooldownEnabled();
 
-        $result = $this->store->script(
-            RedisScripts::get('fetch_versioned_payload'),
-            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [
-                $queryPrefix,
-                $this->keys->buildingPrefix($classKey),
-                $this->keys->wakePrefix($classKey),
-            ]),
-            [
-                $hash,
-                $hash,
-                (int) floor(microtime(true) * 1000),
-                $this->buildingLockTtl,
-                $lockToken,
-                (string) count($versionKeys),
-                $cooldown ? '1' : '0',
-            ]
+        $result = $this->store->fetchVersionedPayload(
+            $versionKeys,
+            $scheduledKeys,
+            $queryPrefix,
+            $this->keys->buildingPrefix($classKey),
+            $this->keys->wakePrefix($classKey),
+            $hash,
+            $hash,
+            $lockToken,
+            $this->buildingLockTtl,
+            $this->config->cooldownEnabled(),
         );
 
         $seg = (string) ($result[1] ?? '');
@@ -149,24 +135,14 @@ abstract class NormalizedReader
         ?string $buildingToken,
         ?string $wakeKey = null,
     ): bool {
-        $ttl ??= $this->queryTtl;
-
-        $keys = array_merge($versionKeys, [$key]);
-        if ($buildingKey !== null) {
-            $keys[] = $buildingKey;
-            if ($wakeKey !== null) {
-                $keys[] = $wakeKey;
-            }
-        }
-
-        return (bool) $this->store->script(
-            RedisScripts::get('store_versioned_payload'),
-            $keys,
-            array_merge(
-                [(string) count($versionKeys), '1', (string) $ttl],
-                $expectedVersions,
-                [$payload, $buildingToken ?? '', (string) $this->wakeTokenCount]
-            )
+        return $this->store->storeVersionedPayload(
+            [$key => $payload],
+            $ttl ?? $this->queryTtl,
+            $versionKeys,
+            $expectedVersions,
+            $buildingKey,
+            $wakeKey,
+            $buildingToken,
         );
     }
 

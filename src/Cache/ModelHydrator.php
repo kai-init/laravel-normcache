@@ -10,7 +10,6 @@ use NormCache\CacheableBuilder;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
-use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 
 final class ModelHydrator
@@ -201,11 +200,7 @@ final class ModelHydrator
     ): array {
         $fetchKeys = $this->modelKeysFor($classKey, $modelVersion, $idsToFetch);
 
-        $result = $this->store->script(
-            RedisScripts::get('fetch_batch_build_status'),
-            [...$fetchKeys, $lockKey, $wakeKey],
-            [$token, (string) $this->buildingLockTtl]
-        );
+        $result = $this->store->fetchBatchBuildStatus($fetchKeys, $lockKey, $wakeKey, $token, $this->buildingLockTtl);
 
         $raw = $this->store->unserializeMany($result[3] ?? []);
 
