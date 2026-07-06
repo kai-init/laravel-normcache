@@ -8,9 +8,9 @@ use NormCache\Planning\CachePlanner;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class CacheableBuilderSharedStateTest extends TestCase
+class CacheableBuilderSharedStateTest extends UnitTestCase
 {
     public function test_reset_clears_shared_builder_state(): void
     {

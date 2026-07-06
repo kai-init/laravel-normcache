@@ -4,10 +4,10 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Database\Eloquent\Model;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheSpace;
 
-class CacheKeyBuilderTest extends TestCase
+class CacheKeyBuilderTest extends UnitTestCase
 {
     public function test_key_methods_emit_the_space_hash_tag(): void
     {

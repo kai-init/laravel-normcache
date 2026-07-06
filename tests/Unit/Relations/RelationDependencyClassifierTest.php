@@ -5,9 +5,9 @@ namespace NormCache\Tests\Unit\Relations;
 use NormCache\Relations\RelationDependencyClassifier;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class RelationDependencyClassifierTest extends TestCase
+class RelationDependencyClassifierTest extends UnitTestCase
 {
     public function test_classifies_simple_hasmany_relation(): void
     {

@@ -6,9 +6,9 @@ use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class QueryHasherTest extends TestCase
+class QueryHasherTest extends UnitTestCase
 {
     private function makeBuilder(): Builder
     {

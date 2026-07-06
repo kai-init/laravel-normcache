@@ -3,10 +3,10 @@
 namespace NormCache\Tests\Unit;
 
 use NormCache\Support\RedisScripts;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use ReflectionProperty;
 
-class RedisScriptsTest extends TestCase
+class RedisScriptsTest extends UnitTestCase
 {
     private static array $knownScripts = [
         'fetch_batch_build_status',

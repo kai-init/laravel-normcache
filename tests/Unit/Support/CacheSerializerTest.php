@@ -3,9 +3,9 @@
 namespace NormCache\Tests\Unit\Support;
 
 use NormCache\Support\CacheSerializer;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class CacheSerializerTest extends TestCase
+class CacheSerializerTest extends UnitTestCase
 {
     private CacheSerializer $serializer;
 

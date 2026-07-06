@@ -4,9 +4,9 @@ namespace NormCache\Tests\Unit\Spaces;
 
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class CacheableSpacesDeclarationTest extends TestCase
+class CacheableSpacesDeclarationTest extends UnitTestCase
 {
     public function test_model_without_declaration_returns_empty(): void
     {

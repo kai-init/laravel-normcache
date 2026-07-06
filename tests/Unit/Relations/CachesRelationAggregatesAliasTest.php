@@ -4,9 +4,9 @@ namespace NormCache\Tests\Unit\Relations;
 
 use Illuminate\Database\Query\Expression;
 use NormCache\Tests\Fixtures\Models\Author;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class CachesRelationAggregatesAliasTest extends TestCase
+class CachesRelationAggregatesAliasTest extends UnitTestCase
 {
     private function resolveAlias(mixed $column, ?string $name, ?string $function, mixed $columnArg): string
     {

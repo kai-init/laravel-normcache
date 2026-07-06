@@ -8,11 +8,11 @@ use NormCache\Planning\CachePlanner;
 use NormCache\Planning\DependencyResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 
-class CachePlannerTest extends TestCase
+class CachePlannerTest extends UnitTestCase
 {
     public function test_planner_logs_warning_for_under_declared_dependencies_in_debug_mode(): void
     {

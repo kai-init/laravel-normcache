@@ -6,9 +6,9 @@ use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class CacheSpaceResolverTest extends TestCase
+class CacheSpaceResolverTest extends UnitTestCase
 {
     private function resolver(): CacheSpaceResolver
     {

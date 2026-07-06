@@ -5,11 +5,11 @@ namespace NormCache\Tests\Unit;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 
-class CacheableBuilderPlanTest extends TestCase
+class CacheableBuilderPlanTest extends UnitTestCase
 {
     public function test_plan_prepared_matches_direct_plan(): void
     {

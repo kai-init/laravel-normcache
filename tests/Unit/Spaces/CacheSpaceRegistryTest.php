@@ -6,10 +6,10 @@ use Illuminate\Database\Eloquent\Model;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use NormCache\Traits\Cacheable;
 
-class CacheSpaceRegistryTest extends TestCase
+class CacheSpaceRegistryTest extends UnitTestCase
 {
     private function registry(int $maxPerModel = 16): CacheSpaceRegistry
     {
