@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.0] — 2026-07-06
+
+### Added
+
+- Added cache spaces for Redis Cluster sharding: models can declare `$normCacheSpaces`, queries can select `->space()`, and spaces can define placement/cross-space behavior in config.
+- Added space-targeted flushing via `NormCache::flushAll('space')` and `php artisan normcache:flush --space=...`, backed by registry metadata for broad cluster flushes.
+
+### Changed
+
+- Replaced the old slotting/sharding path with model-declared cache spaces.
+- Changed model payload storage to versioned keys shaped like `model:{classKey}:v{version}:{id}`, removing the need for members-set model tracking.
+- Simplified Redis/Lua internals by centralizing script marshalling in `RedisStore` and sharing normalized query/through-relation read flow through `NormalizedReader`.
+- Simplified planning internals by moving dependency inference into planner/dependency collaborators.
+
+### Fixed
+
+- Fixed cache-space consistency across version lookup, invalidation, model payloads, query/result keys, relation caches, pivot/through caches, build locks, and wake keys.
+- Fixed Redis Cluster cross-slot issues in space-aware Lua paths and broad flush scans.
+- Fixed relation and pivot invalidation edge cases, including relation version lookup, guarded relation model writes, `dependsOn()` accumulation, and pivot invalidation.
+- Fixed pre-save invalidation timing so Eloquent observers see a cache miss after writes.
+- Fixed connection/table key safety by rejecting connection names containing `:` and resetting key-builder state across spaces.
+
+### Removed
+
+- Removed the old slotting/sharding configuration and internals.
+- Removed leftover stale-serving code after the `2.4.0` stale-serving removal.
+
+---
+
 ## [2.4.0] — 2026-06-25
 
 ### Removed
