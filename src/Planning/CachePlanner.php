@@ -43,6 +43,15 @@ final class CachePlanner
         private readonly DependencyResolver $dependencies = new DependencyResolver,
     ) {}
 
+    public function inferPreparedDependencies(CacheableBuilder $builder, QueryBuilder $base): DependencySet
+    {
+        $joinDeps = !empty($base->joins)
+            ? $this->analyzer->inferJoinDependencies($base, $builder->getModel()->getConnection()->getName())
+            : DependencySet::empty();
+
+        return $builder->inferAggregateDependencies()->merge($joinDeps);
+    }
+
     public function plan(
         CacheableBuilder $builder,
         QueryBuilder $base,

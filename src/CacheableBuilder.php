@@ -17,7 +17,6 @@ use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Relations\CachesRelationExistence;
 use NormCache\Support\CacheKeyBuilder;
@@ -495,11 +494,7 @@ class CacheableBuilder extends Builder
         $builder = $prepared->builder;
         $base = $prepared->base;
 
-        $joinDeps = !empty($base->joins)
-            ? (new QueryAnalyzer)->inferJoinDependencies($base, $builder->getModel()->getConnection()->getName())
-            : DependencySet::empty();
-
-        return $builder->cachePlan($base, $context($builder->inferAggregateDependencies()->merge($joinDeps)), $mode);
+        return $builder->cachePlan($base, $context($builder->planner()->inferPreparedDependencies($builder, $base)), $mode);
     }
 
     public function planner(): CachePlanner
