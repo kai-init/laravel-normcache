@@ -6,6 +6,7 @@ use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\ResultCacheResult;
@@ -73,7 +74,7 @@ final class ResultCacheReader
         if ($status === LuaStatus::Hit) {
             $unserialized = $payloadAlreadyUnserialized ? $payload : $this->store->unserialize($payload);
             if (is_array($unserialized)) {
-                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, null, null, null, $versionKeys, $expectedVersions);
+                return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions));
             }
 
             // Corrupt payload (not an array), treat as miss.
@@ -81,7 +82,7 @@ final class ResultCacheReader
         }
 
         if ($status === LuaStatus::Building) {
-            return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+            return new ResultCacheResult(CacheStatus::Building, null, null);
         }
 
         // Standard miss or corrupt hit: attempt to claim building lock.
@@ -90,10 +91,10 @@ final class ResultCacheReader
                 $this->store->delete($wakeKey);
             }
 
-            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, $buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions);
+            return new ResultCacheResult(CacheStatus::Miss, $resultKey, null, new BuildHandle($buildingKey, $lockToken, $wakeKey, $versionKeys, $expectedVersions));
         }
 
-        return new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        return new ResultCacheResult(CacheStatus::Building, null, null);
     }
 
     public function fetchPivot(
@@ -116,7 +117,7 @@ final class ResultCacheReader
         $missed = array_keys(array_filter($data, fn($payload) => !is_array($payload)));
 
         if ($missed === []) {
-            return new PivotCacheResult($seg, $data, $versionKeys, $expectedVersions);
+            return new PivotCacheResult($seg, $data, new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions));
         }
 
         [$lockKey, $wakeKey] = $this->pivotLockKeys($relatedKey, $relation, $constraintHash, $parentIds, $seg);
@@ -137,18 +138,20 @@ final class ResultCacheReader
         }
 
         if (array_filter($data, fn($payload) => !is_array($payload)) === []) {
-            return new PivotCacheResult($seg, $data, $versionKeys, $expectedVersions);
+            return new PivotCacheResult($seg, $data, new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions));
         }
 
         if ($result[0] === 'miss') {
             return new PivotCacheResult(
-                $seg, $data, $versionKeys, $expectedVersions,
-                CacheStatus::Miss, $lockKey, $token, $wakeKey
+                $seg, $data,
+                new BuildHandle($lockKey, $token, $wakeKey, $versionKeys, $expectedVersions),
+                CacheStatus::Miss
             );
         }
 
         return new PivotCacheResult(
-            $seg, $data, $versionKeys, $expectedVersions,
+            $seg, $data,
+            new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
             CacheStatus::Building
         );
     }

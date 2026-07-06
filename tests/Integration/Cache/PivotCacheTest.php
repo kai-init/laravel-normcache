@@ -123,7 +123,7 @@ class PivotCacheTest extends TestCase
 
         // Claim the same build lock another concurrent request would, before the eager load runs.
         $claimed = NormCache::getPivotCache(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
-        $this->assertNotNull($claimed->buildingKey);
+        $this->assertNotNull($claimed->build->buildingKey);
 
         DB::enableQueryLog();
         $authors = Author::with('tags')->get();
@@ -134,8 +134,8 @@ class PivotCacheTest extends TestCase
         $this->assertCount(1, $pivotQueries, 'Should fall back to a single direct DB query for the pivot relation while its build lock is held elsewhere');
         $this->assertSame(['Fiction'], $authors->first()->tags->pluck('name')->all());
         $this->assertSame(
-            $claimed->buildingToken,
-            NormCache::getStore()->getRaw($claimed->buildingKey),
+            $claimed->build->buildingToken,
+            NormCache::getStore()->getRaw($claimed->build->buildingKey),
             'The foreign build lock must remain untouched'
         );
     }

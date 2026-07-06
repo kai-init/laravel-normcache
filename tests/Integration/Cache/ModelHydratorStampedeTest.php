@@ -9,6 +9,7 @@ use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
+use NormCache\Values\ModelFetchContext;
 
 class ModelHydratorStampedeTest extends TestCase
 {
@@ -147,16 +148,27 @@ class ModelHydratorStampedeTest extends TestCase
         $store->set($modelKey, $author->getRawOriginal(), 3600);
 
         $lockKey = $keys->resultBuildingKey($classKey, 'model', 'test-lock');
-        $hits = [];
+
+        $context = new ModelFetchContext(
+            modelClass: Author::class,
+            classKey: $classKey,
+            projection: null,
+            prototype: null,
+            missedQuery: null,
+            preserveQueryShape: true,
+            modelVersion: $version,
+        );
+        $context->lockKey = $lockKey;
+        $context->wakeKey = $keys->wakeKey($classKey, 'test-lock');
+        $context->token = 'token';
 
         $method = new \ReflectionMethod($hydrator, 'fetchMissedStatus');
-        $args = [[$author->id], Author::class, $classKey, $version, null, null, $lockKey, $keys->wakeKey($classKey, 'test-lock'), 'token', &$hits];
-        [$status, $missed] = $method->invokeArgs($hydrator, $args);
+        [$status, $missed] = $method->invokeArgs($hydrator, [[$author->id], $context]);
 
         $this->assertSame('hit', $status);
         $this->assertSame([], $missed);
-        $this->assertArrayHasKey($author->id, $hits);
-        $this->assertSame('Carol', $hits[$author->id]->name);
+        $this->assertArrayHasKey($author->id, $context->hits);
+        $this->assertSame('Carol', $context->hits[$author->id]->name);
         $this->assertNull($store->getRaw($lockKey), 'Must not claim the build lock when the retry MGET already resolves the miss');
     }
 

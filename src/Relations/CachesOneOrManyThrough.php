@@ -94,15 +94,15 @@ trait CachesOneOrManyThrough
                     NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
                         $stored = NormCache::storeThroughIds(
                             $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
-                            $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken, $result->wakeKey
+                            $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
                         );
 
                         if ($stored) {
                             NormCache::storeModelAttrsForVersionedResult(
                                 $relatedClass,
                                 $modelAttrs,
-                                $result->versionKeys,
-                                $result->expectedVersions,
+                                $result->build->versionKeys,
+                                $result->build->expectedVersions,
                                 $space,
                             );
                         }

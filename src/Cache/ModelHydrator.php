@@ -11,6 +11,7 @@ use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\RedisStore;
+use NormCache\Values\ModelFetchContext;
 
 final class ModelHydrator
 {
@@ -76,7 +77,8 @@ final class ModelHydrator
         $reporting = CacheReporter::active();
         $debugbarStart = $reporting ? CacheReporter::beginMeasure() : null;
 
-        $containedInQueryHit = $raw !== null;
+        // Pre-supplied $raw defers the version GET; remember it since $raw is reassigned below.
+        $versionDeferred = $raw !== null;
 
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
@@ -92,68 +94,77 @@ final class ModelHydrator
         }
 
         ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
-        $lockKey = $wakeKey = $token = null;
 
-        if ($hits !== [] && $reporting) {
-            CacheReporter::modelHitActive($modelClass, array_keys($hits), $debugbarStart, [
-                'suppress_collector' => $containedInQueryHit,
+        $context = new ModelFetchContext(
+            modelClass: $modelClass,
+            classKey: $classKey,
+            projection: $projection,
+            prototype: $prototype,
+            missedQuery: $missedQuery,
+            preserveQueryShape: $preserveQueryShape,
+            modelVersion: $modelVersion,
+        );
+        $context->hits = $hits;
+
+        if ($context->hits !== [] && $reporting) {
+            CacheReporter::modelHitActive($modelClass, array_keys($context->hits), $debugbarStart, [
                 'ids' => $ids,
             ]);
         }
 
         if ($missed === []) {
-            return array_values($hits);
+            return array_values($context->hits);
         }
 
-        if ($containedInQueryHit) {
-            $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
+        if ($versionDeferred) {
+            $context->modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
         }
 
         if ($reporting) {
             CacheReporter::modelMissActive($modelClass, $missed, $debugbarStart, [
-                'hits' => array_keys($hits),
-                'partial' => $hits !== [],
+                'hits' => array_keys($context->hits),
+                'partial' => $context->hits !== [],
             ]);
         }
 
-        [$lockKey, $wakeKey, $token] = $this->buildLockTriple($classKey, $modelVersion, $missed);
+        [$context->lockKey, $context->wakeKey, $context->token] = $this->buildLockTriple($classKey, $context->modelVersion, $missed);
 
-        [$status, $missed] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $modelVersion, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
+        [$status, $missed] = $this->fetchMissedStatus($missed, $context);
 
         if ($status === 'building' && $missed !== []) {
-            $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
+            $this->store->brpop($context->wakeKey, $this->stampedeWaitMs / 1000.0);
 
-            [$status, $missed] = $this->fetchMissedStatus($missed, $modelClass, $classKey, $modelVersion, $projection, $prototype, $lockKey, $wakeKey, $token, $hits);
+            [$status, $missed] = $this->fetchMissedStatus($missed, $context);
         }
 
         if ($status === 'miss') {
             try {
-                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, true, $lockKey, $wakeKey, $token);
+                $this->fetchAndMerge($missed, $context, true);
             } catch (\Throwable $e) {
-                $this->store->releaseBuilding($lockKey, $wakeKey, $token);
+                $this->store->releaseBuilding($context->lockKey, $context->wakeKey, $context->token);
 
                 throw $e;
             }
         } elseif ($status === 'hit' && $missed !== []) {
             // Corrupt payload: Lua reported hit but deserialization failed. Only the lock owner overwrites.
-            if ($this->store->setNxEx($lockKey, $token, $this->buildingLockTtl)) {
+            if ($this->store->setNxEx($context->lockKey, $context->token, $this->buildingLockTtl)) {
                 try {
-                    $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, true, $lockKey, $wakeKey, $token);
+                    $this->fetchAndMerge($missed, $context, true);
                 } catch (\Throwable $e) {
-                    $this->store->releaseBuilding($lockKey, $wakeKey, $token);
+                    $this->store->releaseBuilding($context->lockKey, $context->wakeKey, $context->token);
                     throw $e;
                 }
             } else {
-                $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, false);
+                $this->fetchAndMerge($missed, $context, false);
             }
         } elseif ($status === 'building' && $missed !== []) {
-            $this->fetchAndMerge($missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape, $hits, $modelVersion, false);
+            $this->fetchAndMerge($missed, $context, false);
         }
 
         $ordered = [];
         foreach ($ids as $id) {
-            if (isset($hits[$id])) {
-                $ordered[] = $hits[$id];
+            if (isset($context->hits[$id])) {
+                $ordered[] = $context->hits[$id];
             }
         }
 
@@ -186,28 +197,18 @@ final class ModelHydrator
     }
 
     // Re-checks still-missing ids and atomically claims the build lock if anything's still missing.
-    private function fetchMissedStatus(
-        array $idsToFetch,
-        string $modelClass,
-        string $classKey,
-        int $modelVersion,
-        ?array $projection,
-        ?Model $prototype,
-        string $lockKey,
-        string $wakeKey,
-        string $token,
-        array &$hits,
-    ): array {
-        $fetchKeys = $this->modelKeysFor($classKey, $modelVersion, $idsToFetch);
+    private function fetchMissedStatus(array $idsToFetch, ModelFetchContext $context): array
+    {
+        $fetchKeys = $this->modelKeysFor($context->classKey, $context->modelVersion, $idsToFetch);
 
-        $result = $this->store->fetchBatchBuildStatus($fetchKeys, $lockKey, $wakeKey, $token, $this->buildingLockTtl);
+        $result = $this->store->fetchBatchBuildStatus($fetchKeys, $context->lockKey, $context->wakeKey, $context->token, $this->buildingLockTtl);
 
         $raw = $this->store->unserializeMany($result[3] ?? []);
 
-        ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $modelClass, $raw, $projection, $prototype);
+        ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $context->modelClass, $raw, $context->projection, $context->prototype);
 
         foreach ($newHits as $id => $hit) {
-            $hits[$id] = $hit;
+            $context->hits[$id] = $hit;
         }
 
         if ($stillMissed === []) {
@@ -217,31 +218,16 @@ final class ModelHydrator
         return [$result[0], $stillMissed];
     }
 
-    private function fetchAndMerge(
-        array $missed,
-        string $modelClass,
-        string $classKey,
-        ?array $projection,
-        ?EloquentBuilder $missedQuery,
-        bool $preserveQueryShape,
-        array &$hits,
-        int $modelVersion,
-        bool $writeCache,
-        ?string $buildingKey = null,
-        ?string $wakeKey = null,
-        ?string $token = null,
-    ): void {
+    private function fetchAndMerge(array $missed, ModelFetchContext $context, bool $writeCache): void
+    {
         if ($missed === []) {
             return;
         }
 
-        $fetched = $this->fetchFromDatabaseAndCache(
-            $missed, $modelClass, $classKey, $projection, $missedQuery, $preserveQueryShape,
-            $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
-        );
+        $fetched = $this->fetchFromDatabaseAndCache($missed, $context, $writeCache);
 
         foreach ($fetched as $id => $model) {
-            $hits[$id] = $model;
+            $context->hits[$id] = $model;
         }
     }
 
@@ -336,49 +322,28 @@ final class ModelHydrator
         return ['hits' => $hits, 'missed' => $missed];
     }
 
-    private function fetchFromDatabaseAndCache(
-        array $missed,
-        string $modelClass,
-        string $classKey,
-        ?array $projection,
-        ?EloquentBuilder $missedQuery,
-        bool $preserveQueryShape,
-        int $modelVersion,
-        bool $writeCache,
-        ?string $buildingKey = null,
-        ?string $wakeKey = null,
-        ?string $token = null,
-    ): array {
+    private function fetchFromDatabaseAndCache(array $missed, ModelFetchContext $context, bool $writeCache): array
+    {
         $query = $this->prepareMissedQuery(
-            $modelClass,
-            $missedQuery instanceof CacheableBuilder ? $missedQuery : null,
-            $preserveQueryShape
+            $context->modelClass,
+            $context->missedQuery instanceof CacheableBuilder ? $context->missedQuery : null,
+            $context->preserveQueryShape
         );
 
         if ($this->overridesNewFromBuilder($query->getModel())) {
-            return $this->fetchAndCacheUsingEloquent(
-                $missed, $modelClass, $classKey, $projection, $query, $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
-            );
+            return $this->fetchAndCacheUsingEloquent($missed, $query, $context, $writeCache);
         }
 
-        return $this->fetchAndCacheUsingClosure(
-            $missed, $modelClass, $classKey, $projection, $query, $query->getModel(), $modelVersion, $writeCache, $buildingKey, $wakeKey, $token
-        );
+        return $this->fetchAndCacheUsingClosure($missed, $query, $context, $writeCache);
     }
 
     private function fetchAndCacheUsingEloquent(
         array $missed,
-        string $modelClass,
-        string $classKey,
-        ?array $projection,
         EloquentBuilder $query,
-        int $modelVersion,
+        ModelFetchContext $context,
         bool $writeCache,
-        ?string $buildingKey = null,
-        ?string $wakeKey = null,
-        ?string $token = null,
     ): array {
-        $prototype = CacheKeyBuilder::prototype($modelClass);
+        $prototype = CacheKeyBuilder::prototype($context->modelClass);
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
         $loaded = $query->whereIn($qualifiedPk, $missed)
@@ -386,45 +351,39 @@ final class ModelHydrator
             ->keyBy($pk);
 
         $attrsByKey = [];
-        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($modelClass);
-        $hydrate = $projection !== null ? self::hydrateClosure() : null;
+        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($context->modelClass);
+        $hydrate = $context->projection !== null ? self::hydrateClosure() : null;
 
         foreach ($loaded as $id => $model) {
             $attrs = $model->getRawOriginal();
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
             if ($writeCache && !$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
+                $attrsByKey[$this->keys->modelPrefix($context->classKey, $context->modelVersion) . $id] = $attrs;
             }
 
             if ($hydrate !== null) {
-                $hydrate($model, AttributeProjector::projectAttributes($attrs, $projection), false);
+                $hydrate($model, AttributeProjector::projectAttributes($attrs, $context->projection), false);
             }
         }
 
-        $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
+        $this->storeModelAttrs($attrsByKey, $context, $writeCache);
 
         return $loaded->all();
     }
 
     private function fetchAndCacheUsingClosure(
         array $missed,
-        string $modelClass,
-        string $classKey,
-        ?array $projection,
         EloquentBuilder $query,
-        Model $prototype,
-        int $modelVersion,
+        ModelFetchContext $context,
         bool $writeCache,
-        ?string $buildingKey = null,
-        ?string $wakeKey = null,
-        ?string $token = null,
     ): array {
+        $prototype = $query->getModel();
         $pk = $prototype->getKeyName();
         $qualifiedPk = $prototype->getQualifiedKeyName();
-        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($modelClass);
+        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($context->modelClass);
         $hydrate = self::hydrateClosure();
-        $connectionName = $query->getModel()->getConnectionName();
+        $connectionName = $prototype->getConnectionName();
 
         $rows = $query->whereIn($qualifiedPk, $missed)
             ->toBase()
@@ -444,11 +403,11 @@ final class ModelHydrator
 
             $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
             if ($writeCache && !$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($classKey, $modelVersion) . $id] = $attrs;
+                $attrsByKey[$this->keys->modelPrefix($context->classKey, $context->modelVersion) . $id] = $attrs;
             }
 
-            $returnAttrs = $projection !== null
-                ? AttributeProjector::projectAttributes($attrs, $projection)
+            $returnAttrs = $context->projection !== null
+                ? AttributeProjector::projectAttributes($attrs, $context->projection)
                 : $attrs;
 
             $instance = clone $prototype;
@@ -458,27 +417,22 @@ final class ModelHydrator
             $models[$id] = $instance;
         }
 
-        $this->storeModelAttrs($attrsByKey, $classKey, $modelVersion, $buildingKey, $wakeKey, $token);
+        $this->storeModelAttrs($attrsByKey, $context, $writeCache);
 
         return $models;
     }
 
-    private function storeModelAttrs(
-        array $attrsByKey,
-        string $classKey,
-        int $modelVersion,
-        ?string $buildingKey,
-        ?string $wakeKey,
-        ?string $token,
-    ): void {
+    // Passes the lock triple only when this call owns the build lock ($writeCache), so the Lua release is owner-gated.
+    private function storeModelAttrs(array $attrsByKey, ModelFetchContext $context, bool $writeCache): void
+    {
         $this->store->setManyIfVersion(
             $attrsByKey,
             $this->ttl,
-            $this->keys->verKey($classKey),
-            $modelVersion,
-            $buildingKey,
-            $wakeKey,
-            $token
+            $this->keys->verKey($context->classKey),
+            $context->modelVersion,
+            $writeCache ? $context->lockKey : null,
+            $writeCache ? $context->wakeKey : null,
+            $writeCache ? $context->token : null,
         );
     }
 

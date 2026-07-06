@@ -13,18 +13,21 @@ class RelationDependencyClassifierTest extends UnitTestCase
     {
         $entry = (new RelationDependencyClassifier)->classify((new Author)->posts(), null);
 
-        $this->assertSame(Post::class, $entry['relatedClass']);
-        $this->assertNull($entry['throughClass']);
-        $this->assertNull($entry['tableKey']);
-        $this->assertSame([], $entry['constraintModels']);
-        $this->assertSame([], $entry['constraintTables']);
+        $this->assertSame(Post::class, $entry->relatedClass);
+        $this->assertNull($entry->throughClass);
+        $this->assertNull($entry->tableKey);
+        $this->assertSame([], $entry->constraintModels);
+        $this->assertSame([], $entry->constraintTables);
+        $this->assertSame([Post::class], $entry->modelDependencies());
+        $this->assertSame([], $entry->tableDependencies());
     }
 
     public function test_belongs_to_many_relation_includes_pivot_table_key(): void
     {
         $entry = (new RelationDependencyClassifier)->classify((new Author)->tags(), null);
 
-        $this->assertNotNull($entry['tableKey']);
+        $this->assertNotNull($entry->tableKey);
+        $this->assertContains($entry->tableKey, $entry->tableDependencies());
     }
 
     public function test_lock_for_update_relation_definition_is_not_classifiable(): void

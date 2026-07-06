@@ -157,15 +157,15 @@ class LuaScriptConsistencyTest extends TestCase
         $manager->storeResultCache(
             $miss->key,
             [['id' => 1, 'name' => 'Old']],
-            $miss->buildingKey,
+            $miss->build->buildingKey,
             60,
-            $miss->wakeKey,
-            $miss->versionKeys,
-            $miss->expectedVersions,
+            $miss->build->wakeKey,
+            $miss->build->versionKeys,
+            $miss->build->expectedVersions,
         );
 
         $this->assertNull($manager->getStore()->get($miss->key));
-        $this->assertNull($manager->getStore()->getRaw($miss->buildingKey));
+        $this->assertNull($manager->getStore()->getRaw($miss->build->buildingKey));
     }
 
     public function test_namespaced_result_write_is_skipped_when_dependency_version_changes_during_build(): void
@@ -179,8 +179,8 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->key,
             [10],
             60,
-            $cache->versionKeys,
-            $cache->expectedVersions,
+            $cache->build->versionKeys,
+            $cache->build->expectedVersions,
         );
 
         $this->assertNull($manager->getStore()->get($cache->key));
@@ -197,8 +197,8 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->key,
             ['ids' => [1], 'throughKeys' => [1 => 1]],
             60,
-            $cache->versionKeys,
-            $cache->expectedVersions,
+            $cache->build->versionKeys,
+            $cache->build->expectedVersions,
         );
 
         $this->assertNull($manager->getStore()->get($cache->key));
@@ -215,8 +215,8 @@ class LuaScriptConsistencyTest extends TestCase
             $cache->key,
             ['ids' => [1], 'throughKeys' => [1 => 1]],
             60,
-            $cache->versionKeys,
-            $cache->expectedVersions,
+            $cache->build->versionKeys,
+            $cache->build->expectedVersions,
         )) {
             $manager->storeModelAttrs(Post::class, [1 => ['id' => 1, 'title' => 'Old']]);
         }
@@ -239,8 +239,8 @@ class LuaScriptConsistencyTest extends TestCase
             $pivotKey,
             [['id' => 1, 'pivot' => []]],
             60,
-            $cache->versionKeys,
-            $cache->expectedVersions,
+            $cache->build->versionKeys,
+            $cache->build->expectedVersions,
         );
 
         $this->assertNull($manager->getStore()->get($pivotKey));
@@ -261,8 +261,8 @@ class LuaScriptConsistencyTest extends TestCase
             $pivotKey,
             [['id' => 1, 'pivot' => []]],
             60,
-            $cache->versionKeys,
-            $cache->expectedVersions,
+            $cache->build->versionKeys,
+            $cache->build->expectedVersions,
         )) {
             $manager->storeModelAttrs(Tag::class, [1 => ['id' => 1, 'name' => 'Old']]);
         }
@@ -359,12 +359,12 @@ class LuaScriptConsistencyTest extends TestCase
         $committed = NormCache::storeResultCache(
             $buildLock->key,
             ['data' => 'outdated'],
-            $buildLock->buildingKey,
+            $buildLock->build->buildingKey,
             null,
-            $buildLock->wakeKey,
-            $buildLock->versionKeys,
-            $buildLock->expectedVersions, // Worker A thinks this is still current
-            $buildLock->buildingToken
+            $buildLock->build->wakeKey,
+            $buildLock->build->versionKeys,
+            $buildLock->build->expectedVersions, // Worker A thinks this is still current
+            $buildLock->build->buildingToken
         );
 
         $this->assertFalse($committed, 'Late writer should have its commit rejected');

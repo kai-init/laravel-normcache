@@ -131,8 +131,8 @@ trait CachesPivotRelation
                         }
                         $this->populatePivotCache(
                             $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
-                            $pivotResult->versionKeys, $pivotResult->expectedVersions, $ttl,
-                            $pivotResult->buildingKey, $pivotResult->wakeKey, $pivotResult->buildingToken,
+                            $pivotResult->build->versionKeys, $pivotResult->build->expectedVersions, $ttl,
+                            $pivotResult->build->buildingKey, $pivotResult->build->wakeKey, $pivotResult->build->buildingToken,
                             $space,
                         );
                     });

@@ -79,12 +79,12 @@ final class ResultExecutor
         $this->resultReader->store(
             $result->key,
             is_array($payload) ? $payload : [$payload],
-            $result->buildingKey,
+            $result->build->buildingKey,
             $ttl,
-            $result->wakeKey,
-            $result->versionKeys,
-            $result->expectedVersions,
-            $result->buildingToken
+            $result->build->wakeKey,
+            $result->build->versionKeys,
+            $result->build->expectedVersions,
+            $result->build->buildingToken
         );
     }
 
@@ -102,12 +102,7 @@ final class ResultExecutor
         $query = $prepared->base;
 
         if ($kind === ResultKind::Collection) {
-            if (empty($query->columns) && $columns !== ['*']) {
-                $query = $query->cloneWithout([]);
-                $query->columns = $columns;
-            }
-
-            return QueryHasher::forResultQuery($prepared->builder, $query);
+            return QueryHasher::forResultQuery($prepared->builder, $prepared->baseWithColumns($columns));
         }
 
         return match ($kind) {

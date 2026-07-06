@@ -285,12 +285,7 @@ class CacheableBuilder extends Builder
                     return $this->resultPayloadFromEloquentModels($rawModels);
                 }
 
-                $resultBase = clone $prepared->base;
-                if (empty($resultBase->columns) && $columns !== ['*']) {
-                    $resultBase->columns = $columns;
-                }
-
-                return $this->buildResultPayloadFromQuery($resultBase);
+                return $this->buildResultPayloadFromQuery($prepared->baseWithColumns($columns));
             }
         );
 

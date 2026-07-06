@@ -10,13 +10,14 @@ use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
 use NormCache\Traits\Cacheable;
 use NormCache\Values\CachePlanContext;
+use NormCache\Values\RelationDependency;
 
 final class RelationDependencyClassifier
 {
     /**
      * @param  Relation<*, *, *>  $relation
      */
-    public function classify(Relation $relation, ?callable $constraint): ?array
+    public function classify(Relation $relation, ?callable $constraint): ?RelationDependency
     {
         $relatedClass = $relation->getRelated()::class;
 
@@ -93,13 +94,13 @@ final class RelationDependencyClassifier
             );
         }
 
-        return [
-            'relatedClass' => $relatedClass,
-            'throughClass' => $throughClass,
-            'tableKey' => $tableKey,
-            'constraintModels' => $constraintModels,
-            'constraintTables' => array_values(array_unique([...$constraintTables, ...$relationExtraTables])),
-        ];
+        return new RelationDependency(
+            relatedClass: $relatedClass,
+            throughClass: $throughClass,
+            tableKey: $tableKey,
+            constraintModels: $constraintModels,
+            constraintTables: array_values(array_unique([...$constraintTables, ...$relationExtraTables])),
+        );
     }
 
     private static function relatedIsCacheable(string $class): bool

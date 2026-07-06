@@ -64,10 +64,10 @@ final class NormalizedCacheReader extends NormalizedReader
         ?array $models = null,
     ): QueryCacheResult {
         return match ($status) {
-            LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $models ?? [], null, null, [], []),
-            LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $build->queryKey, [], [], null, null, [], []),
-            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $build->queryKey, null, null, $build->buildingKey, $build->lockToken, $build->versionKeys, $build->expectedVersions, $build->wakeKey),
-            LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []),
+            LuaStatus::Hit => new QueryCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $models ?? []),
+            LuaStatus::Empty => new QueryCacheResult(CacheStatus::Empty, $build->queryKey, [], []),
+            LuaStatus::Miss => new QueryCacheResult(CacheStatus::Miss, $build->queryKey, null, null, $build->handle()),
+            LuaStatus::Building => new QueryCacheResult(CacheStatus::Building, null, null, null),
             LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($build),
         };
     }

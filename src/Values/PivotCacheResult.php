@@ -12,12 +12,8 @@ final readonly class PivotCacheResult
     public function __construct(
         public string $seg,
         public array $data,
-        public array $versionKeys,
-        public array $expectedVersions,
+        public BuildHandle $build = new BuildHandle,
         public CacheStatus $status = CacheStatus::Hit,
-        public ?string $buildingKey = null,
-        public ?string $buildingToken = null,
-        public ?string $wakeKey = null,
     ) {}
 
     public function missedIds(): array

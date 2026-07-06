@@ -56,10 +56,10 @@ final class NormalizedThroughReader extends NormalizedReader
         ?array $models = null,
     ): ThroughCacheResult {
         return match ($status) {
-            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $throughKeys, $models ?? [], null, null, [], []),
-            LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $build->queryKey, [], [], [], null, null, [], []),
-            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $build->queryKey, null, null, null, $build->buildingKey, $build->lockToken, $build->versionKeys, $build->expectedVersions, $build->wakeKey),
-            LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null, null, null, [], []),
+            LuaStatus::Hit => new ThroughCacheResult(CacheStatus::Hit, $build->queryKey, $ids, $throughKeys, $models ?? []),
+            LuaStatus::Empty => new ThroughCacheResult(CacheStatus::Empty, $build->queryKey, [], [], []),
+            LuaStatus::Miss => new ThroughCacheResult(CacheStatus::Miss, $build->queryKey, null, null, null, $build->handle()),
+            LuaStatus::Building => new ThroughCacheResult(CacheStatus::Building, null, null, null, null),
             LuaStatus::Corrupt => $this->claimMissAfterCorruptHit($build),
         };
     }

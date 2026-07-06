@@ -65,7 +65,7 @@ final class ModelsExecutor
 
                 $ids = $this->resolveIds(
                     $result->key, $base, $queryTtl, $prototype,
-                    $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken, $result->wakeKey
+                    $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
                 );
 
                 return $executionBuilder->finalizeResult(

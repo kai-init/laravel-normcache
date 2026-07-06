@@ -21,7 +21,7 @@ class PivotStampedeTest extends TestCase
         $second = $manager->getPivotCache(Author::class, Tag::class, 'tags', [$author->id]);
 
         $this->assertSame(CacheStatus::Miss, $first->status);
-        $this->assertNotNull($first->buildingKey);
+        $this->assertNotNull($first->build->buildingKey);
         $this->assertSame(CacheStatus::Building, $second->status);
     }
 
@@ -39,14 +39,14 @@ class PivotStampedeTest extends TestCase
 
         $manager->storeManyVersionedResults(
             [$pivotKey => [['id' => $tag->id, 'pivot' => ['author_id' => $author->id, 'tag_id' => $tag->id]]]],
-            versionKeys: $miss->versionKeys,
-            expectedVersions: $miss->expectedVersions,
-            buildingKey: $miss->buildingKey,
-            wakeKey: $miss->wakeKey,
-            buildingToken: $miss->buildingToken,
+            versionKeys: $miss->build->versionKeys,
+            expectedVersions: $miss->build->expectedVersions,
+            buildingKey: $miss->build->buildingKey,
+            wakeKey: $miss->build->wakeKey,
+            buildingToken: $miss->build->buildingToken,
         );
 
-        $this->assertNull($manager->getStore()->getRaw($miss->buildingKey), 'Building lock must be released after store');
+        $this->assertNull($manager->getStore()->getRaw($miss->build->buildingKey), 'Building lock must be released after store');
 
         $hit = $manager->getPivotCache(Author::class, Tag::class, 'tags', [$author->id]);
         $this->assertSame(CacheStatus::Hit, $hit->status);
@@ -64,13 +64,13 @@ class PivotStampedeTest extends TestCase
         $store = $manager->getStore();
 
         // Someone else now holds the lock under a different token.
-        $store->delete($miss->buildingKey);
-        $this->assertTrue($store->setNxEx($miss->buildingKey, 'other-token', 5));
+        $store->delete($miss->build->buildingKey);
+        $this->assertTrue($store->setNxEx($miss->build->buildingKey, 'other-token', 5));
 
         $waited = $manager->waitForPivotBuild(Author::class, Tag::class, 'tags', [$author->id], 'nc', null);
 
         $this->assertNull($waited, 'Waiting must time out and report null while the lock is held by someone else');
-        $this->assertSame('other-token', $store->getRaw($miss->buildingKey), 'Must not release a lock held by another process');
+        $this->assertSame('other-token', $store->getRaw($miss->build->buildingKey), 'Must not release a lock held by another process');
     }
 
     public function test_pivot_build_status_script_claims_lock_when_unheld(): void

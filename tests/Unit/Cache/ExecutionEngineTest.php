@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit\Cache;
 use Illuminate\Database\Eloquent\Collection;
 use NormCache\Cache\ExecutionEngine;
 use NormCache\Enums\CacheStatus;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ResultCacheResult;
@@ -26,7 +27,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_result_calls_on_hit_and_returns_collection(): void
     {
-        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', ['data'], null, null, null, [], []);
+        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', ['data']);
         $hitCalled = false;
 
         $result = $this->executor->runResult(
@@ -48,7 +49,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_result_calls_on_miss_store_and_returns_models(): void
     {
-        $miss = new ResultCacheResult(CacheStatus::Miss, 'k', null, null, null, null, [], []);
+        $miss = new ResultCacheResult(CacheStatus::Miss, 'k', null);
         $storeCalled = false;
         $models = new Collection;
 
@@ -69,7 +70,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_result_calls_on_build_when_wait_returns_null(): void
     {
-        $building = new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        $building = new ResultCacheResult(CacheStatus::Building, null, null);
         $buildCalled = false;
 
         $this->executor->runResult(
@@ -90,8 +91,8 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_result_retries_hit_after_successful_wait(): void
     {
-        $building = new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', ['data'], null, null, null, [], []);
+        $building = new ResultCacheResult(CacheStatus::Building, null, null);
+        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', ['data']);
         $hitCalled = false;
 
         $this->executor->runResult(
@@ -116,7 +117,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_pivot_calls_on_hit_when_no_missed_ids(): void
     {
-        $pivotResult = new PivotCacheResult('v1', [1 => [['id' => 5]]], [], []);
+        $pivotResult = new PivotCacheResult('v1', [1 => [['id' => 5]]]);
         $hitCalled = false;
 
         $this->executor->runPivot(
@@ -137,7 +138,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_pivot_calls_on_miss_and_store_when_missed_ids_present(): void
     {
-        $pivotResult = new PivotCacheResult('v1', [1 => null, 2 => [['id' => 5]]], [], []);
+        $pivotResult = new PivotCacheResult('v1', [1 => null, 2 => [['id' => 5]]]);
         $missCalled = false;
         $storeCalled = false;
 
@@ -162,7 +163,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_pivot_can_store_raw_models_and_return_transformed_models(): void
     {
-        $pivotResult = new PivotCacheResult('v1', [1 => null], [], []);
+        $pivotResult = new PivotCacheResult('v1', [1 => null]);
         $raw = new Collection(['raw']);
         $visible = new Collection(['visible']);
         $stored = null;
@@ -188,7 +189,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_normalized_calls_on_hit_with_result(): void
     {
-        $hit = new QueryCacheResult(CacheStatus::Hit, 'k', [1, 2], null, null, null, [], []);
+        $hit = new QueryCacheResult(CacheStatus::Hit, 'k', [1, 2], null);
         $received = null;
 
         $this->executor->runNormalized(
@@ -208,7 +209,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_normalized_calls_on_miss_with_result(): void
     {
-        $miss = new QueryCacheResult(CacheStatus::Miss, 'k', null, null, 'bk', 'tok', ['ver:k:'], ['5']);
+        $miss = new QueryCacheResult(CacheStatus::Miss, 'k', null, null, new BuildHandle('bk', 'tok', null, ['ver:k:'], ['5']));
         $received = null;
 
         $this->executor->runNormalized(
@@ -228,7 +229,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_normalized_calls_on_build_when_wait_returns_null(): void
     {
-        $building = new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        $building = new QueryCacheResult(CacheStatus::Building, null, null, null);
         $buildCalled = false;
 
         $this->executor->runNormalized(
@@ -248,8 +249,8 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_normalized_retries_after_successful_wait(): void
     {
-        $building = new QueryCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-        $hit = new QueryCacheResult(CacheStatus::Hit, 'k', [1], null, null, null, [], []);
+        $building = new QueryCacheResult(CacheStatus::Building, null, null, null);
+        $hit = new QueryCacheResult(CacheStatus::Hit, 'k', [1], null);
         $hitCalled = false;
 
         $this->executor->runNormalized(
@@ -273,7 +274,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_scalar_calls_on_hit_on_cache_hit(): void
     {
-        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', 42, null, null, null, [], []);
+        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', 42);
         $received = null;
 
         $this->executor->runScalar(
@@ -293,7 +294,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_scalar_calls_compute_and_store_on_miss(): void
     {
-        $miss = new ResultCacheResult(CacheStatus::Miss, 'k', null, null, null, null, [], []);
+        $miss = new ResultCacheResult(CacheStatus::Miss, 'k', null);
         $storeCalled = false;
 
         $result = $this->executor->runScalar(
@@ -312,7 +313,7 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_scalar_calls_compute_on_build_budget_exhausted(): void
     {
-        $building = new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
+        $building = new ResultCacheResult(CacheStatus::Building, null, null);
 
         $result = $this->executor->runScalar(
             fetch: fn() => $building,
@@ -327,8 +328,8 @@ class ExecutionEngineTest extends TestCase
 
     public function test_run_scalar_retries_after_successful_wait(): void
     {
-        $building = new ResultCacheResult(CacheStatus::Building, null, null, null, null, null, [], []);
-        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', 55, null, null, null, [], []);
+        $building = new ResultCacheResult(CacheStatus::Building, null, null);
+        $hit = new ResultCacheResult(CacheStatus::Hit, 'k', 55);
         $hitCalled = false;
 
         $this->executor->runScalar(

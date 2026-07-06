@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use NormCache\Values\DependencySet;
+use NormCache\Values\RelationDependency;
 
 trait CachesRelationAggregates
 {
@@ -49,27 +50,17 @@ trait CachesRelationAggregates
 
             $names[] = $name;
 
-            $entry = $this->classifyAggregate($name, $constraint);
+            $dependency = $this->classifyAggregate($name, $constraint);
 
-            if ($entry === null) {
+            if ($dependency === null) {
                 $result = parent::withAggregate($relations, $column, $function);
                 $this->clearAggregateTracking(true);
 
                 return $result;
             }
 
-            $dependencies[] = $entry['relatedClass'];
-
-            if ($entry['throughClass'] ?? null) {
-                $dependencies[] = $entry['throughClass'];
-            }
-
-            if ($entry['tableKey'] ?? null) {
-                $tableDependencies[] = $entry['tableKey'];
-            }
-
-            array_push($dependencies, ...$entry['constraintModels']);
-            array_push($tableDependencies, ...$entry['constraintTables']);
+            array_push($dependencies, ...$dependency->modelDependencies());
+            array_push($tableDependencies, ...$dependency->tableDependencies());
         }
 
         $result = parent::withAggregate($relations, $column, $function);
@@ -118,7 +109,7 @@ trait CachesRelationAggregates
     private function classifyAggregate(
         string $name,
         ?callable $constraint,
-    ): ?array {
+    ): ?RelationDependency {
         if (str_contains($name, '.')) {
             return null;
         }

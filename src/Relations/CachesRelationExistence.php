@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
 use NormCache\Values\DependencySet;
+use NormCache\Values\RelationDependency;
 
 /**
  * @mixin CacheableBuilder
@@ -32,22 +33,12 @@ trait CachesRelationExistence
         $this->totalHasCalls++;
 
         if (is_string($relation) && !str_contains($relation, '.')) {
-            $entry = $this->classifyExistenceRelation($relation, $callback);
+            $dependency = $this->classifyExistenceRelation($relation, $callback);
 
-            if ($entry !== null) {
+            if ($dependency !== null) {
                 $this->simpleHasCalls++;
-                $this->existenceDependencies[] = $entry['relatedClass'];
-
-                if ($entry['throughClass'] ?? null) {
-                    $this->existenceDependencies[] = $entry['throughClass'];
-                }
-
-                if ($entry['tableKey'] ?? null) {
-                    $this->existenceTableDependencies[] = $entry['tableKey'];
-                }
-
-                array_push($this->existenceDependencies, ...$entry['constraintModels']);
-                array_push($this->existenceTableDependencies, ...$entry['constraintTables']);
+                array_push($this->existenceDependencies, ...$dependency->modelDependencies());
+                array_push($this->existenceTableDependencies, ...$dependency->tableDependencies());
             }
         }
 
@@ -70,7 +61,7 @@ trait CachesRelationExistence
         );
     }
 
-    private function classifyExistenceRelation(string $name, ?callable $constraint): ?array
+    private function classifyExistenceRelation(string $name, ?callable $constraint): ?RelationDependency
     {
         $relation = $this->getRelationWithoutConstraints($name);
 

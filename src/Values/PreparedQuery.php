@@ -14,6 +14,18 @@ final class PreparedQuery
         public readonly QueryBuilder $base,
     ) {}
 
+    /** Clone of base with the caller's projection injected when the query itself selects none. */
+    public function baseWithColumns(array $columns): QueryBuilder
+    {
+        $base = clone $this->base;
+
+        if (empty($base->columns) && $columns !== ['*']) {
+            $base->columns = $columns;
+        }
+
+        return $base;
+    }
+
     public function applyBeforeCallbacks(): self
     {
         if (!$this->beforeCallbacksApplied) {

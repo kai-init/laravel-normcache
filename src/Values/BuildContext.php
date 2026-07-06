@@ -12,4 +12,9 @@ final readonly class BuildContext
         public array $versionKeys,
         public array $expectedVersions,
     ) {}
+
+    public function handle(): BuildHandle
+    {
+        return new BuildHandle($this->buildingKey, $this->lockToken, $this->wakeKey, $this->versionKeys, $this->expectedVersions);
+    }
 }
