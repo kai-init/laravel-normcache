@@ -12,42 +12,6 @@ use NormCache\Values\ThroughCacheResult;
 final class ExecutionEngine
 {
     /**
-     * @param  callable(): ResultCacheResult  $fetch
-     * @param  callable(): (ResultCacheResult|null)  $waitForBuild
-     * @param  callable(ResultCacheResult): array{Collection, mixed}  $onMiss
-     * @param  callable(mixed, ResultCacheResult): void  $onStore
-     * @param  callable(ResultCacheResult): Collection  $onHit
-     * @param  callable(): Collection  $onBuild
-     */
-    public function runResult(
-        callable $fetch,
-        callable $waitForBuild,
-        callable $onMiss,
-        callable $onStore,
-        callable $onHit,
-        callable $onBuild,
-    ): Collection {
-        $result = $fetch();
-
-        if ($result->status === CacheStatus::Building) {
-            $result = $waitForBuild();
-
-            if ($result === null) {
-                return $onBuild();
-            }
-        }
-
-        if ($result->status === CacheStatus::Hit) {
-            return $onHit($result);
-        }
-
-        [$models, $payload] = $onMiss($result);
-        $onStore($payload, $result);
-
-        return $models;
-    }
-
-    /**
      * @param  callable(): PivotCacheResult  $fetch
      * @param  callable(): (PivotCacheResult|null)  $waitForBuild
      * @param  callable(): Collection  $onBuild

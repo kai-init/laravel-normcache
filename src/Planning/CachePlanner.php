@@ -104,17 +104,12 @@ final class CachePlanner
         }
 
         $registry = $this->spaceRegistry ??= app(CacheSpaceRegistry::class);
-
-        if ($registry->dependenciesAreOnlyModel($model::class, $plan->dependencies->models, $plan->dependencies->tables)) {
-            $space = $builder->getSpace() === null
-                ? $registry->spacesForModel($model::class)[0]
-                : ($this->spaceResolver ??= app(CacheSpaceResolver::class))->resolve($model::class, $builder->getSpace());
-
-            return $plan->withSpace($space);
-        }
-
         $resolver = $this->spaceResolver ??= app(CacheSpaceResolver::class);
         $space = $resolver->resolve($model::class, $builder->getSpace());
+
+        if ($registry->dependenciesAreOnlyModel($model::class, $plan->dependencies->models, $plan->dependencies->tables)) {
+            return $plan->withSpace($space);
+        }
 
         $validation = $registry->validateDependencies(
             $space,
@@ -145,7 +140,6 @@ final class CachePlanner
         return CachePlan::bypass(
             operation: $operation,
             dependencies: $plan->dependencies,
-            reasons: $reasons,
             bypassReasons: ['dependency' => $reasons],
         )->withSpace($space);
     }
@@ -167,7 +161,6 @@ final class CachePlanner
         return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $this->dependencies->resolveBase($builder, $model, $context),
-            reasons: $reasons,
             bypassReasons: ['opted_out' => $reasons],
         );
     }
@@ -182,7 +175,6 @@ final class CachePlanner
         return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $this->dependencies->resolveBase($builder, $model, $context),
-            reasons: $reasons,
             bypassReasons: ['safety' => $reasons],
         );
     }
@@ -322,13 +314,11 @@ final class CachePlanner
         if ($dependencies->safe && $this->hasResultDependencies($context, $hasExplicit)) {
             if ($this->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
                 $this->dependencies->warnUnderDeclared($modelTable, $base, $inspection, $dependencies);
-                $reasons = ['join_result_requires_explicit_select'];
 
                 return CachePlan::bypass(
                     operation: $context->operation,
                     dependencies: $dependencies,
-                    reasons: $reasons,
-                    bypassReasons: ['normalization' => $reasons],
+                    bypassReasons: ['normalization' => ['join_result_requires_explicit_select']],
                 );
             }
 
@@ -493,13 +483,11 @@ final class CachePlanner
         }
 
         $bypassReasons = $this->mergedBypassReasons($context, $inspection, $insideTransaction);
-        $reasons = $bypassReasons['safety'] ?? [];
 
         return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $dependencies,
-            reasons: $reasons,
-            bypassReasons: ['safety' => $reasons],
+            bypassReasons: ['safety' => $bypassReasons['safety'] ?? []],
         );
     }
 
@@ -567,11 +555,6 @@ final class CachePlanner
         return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $dependencies,
-            reasons: array_values(array_unique([
-                ...$dependencies->reasons,
-                ...($bypassReasons['dependency'] ?? []),
-                ...($bypassReasons['normalization'] ?? []),
-            ])),
             bypassReasons: $bypassReasons,
         );
     }

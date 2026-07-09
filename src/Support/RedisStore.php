@@ -285,27 +285,6 @@ final class RedisStore
         return $unserialize ? $this->unserialize($value) : $value;
     }
 
-    public function setMany(array $pairs, int $ttl): void
-    {
-        if (empty($pairs)) {
-            return;
-        }
-
-        if ($this->isCluster()) {
-            foreach ($pairs as $key => $value) {
-                $this->connection->setex($key, $ttl, $this->serialize($value));
-            }
-
-            return;
-        }
-
-        $this->connection->pipeline(function ($pipe) use ($pairs, $ttl) {
-            foreach ($pairs as $key => $value) {
-                $pipe->setex($key, $ttl, $this->serialize($value));
-            }
-        });
-    }
-
     // CAS write of model attribute entries; releases the build lock as part of the write when given.
     public function setManyIfVersion(
         array $attrsByKey,

@@ -141,7 +141,7 @@ final class ResultCacheReader
             return new PivotCacheResult($seg, $data, new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions));
         }
 
-        if ($result[0] === 'miss') {
+        if (LuaStatus::fromLua($result[0] ?? null) === LuaStatus::Miss) {
             return new PivotCacheResult(
                 $seg, $data,
                 new BuildHandle($lockKey, $token, $wakeKey, $versionKeys, $expectedVersions),

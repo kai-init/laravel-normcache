@@ -66,11 +66,6 @@ final readonly class QueryInspection
         return ($this->flags & self::DEPENDENCY_BYPASS) === self::EXISTS_WHERE;
     }
 
-    public function hasNormalizationBypass(): bool
-    {
-        return $this->has(self::NORMALIZATION_BYPASS);
-    }
-
     public function normalizationFlags(): int
     {
         return $this->flags & self::NORMALIZATION_BYPASS;

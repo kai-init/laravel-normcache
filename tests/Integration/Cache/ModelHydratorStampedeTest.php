@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\ModelHydrator;
 use NormCache\Cache\VersionTracker;
+use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisScripts;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -165,7 +166,7 @@ class ModelHydratorStampedeTest extends TestCase
         $method = new \ReflectionMethod($hydrator, 'fetchMissedStatus');
         [$status, $missed] = $method->invokeArgs($hydrator, [[$author->id], $context]);
 
-        $this->assertSame('hit', $status);
+        $this->assertSame(LuaStatus::Hit, $status);
         $this->assertSame([], $missed);
         $this->assertArrayHasKey($author->id, $context->hits);
         $this->assertSame('Carol', $context->hits[$author->id]->name);

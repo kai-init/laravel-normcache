@@ -68,8 +68,8 @@ abstract class NormalizedReader
 
         $seg = (string) ($result[1] ?? '');
         $queryKey = $queryPrefix . $seg . ':' . $hash;
-        $buildingKey = $this->keys->buildingPrefix($classKey) . $seg . ':' . $hash;
-        $wakeKey = $this->keys->wakePrefix($classKey) . $hash;
+        $buildingKey = $this->keys->resultBuildingKey($classKey, $seg, $hash);
+        $wakeKey = $this->keys->wakeKey($classKey, $hash);
         $expectedVersions = $this->keys->versionsFromSegment($seg);
 
         [$status, $ids, $throughKeys] = $this->decodePayload($result, $queryKey);
@@ -100,7 +100,7 @@ abstract class NormalizedReader
     public function waitForBuild(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult|ThroughCacheResult|null
     {
         $classKey = $this->keys->classKey($modelClass);
-        $this->store->brpop($this->keys->wakePrefix($classKey) . $hash, $this->stampedeWaitMs / 1000.0);
+        $this->store->brpop($this->keys->wakeKey($classKey, $hash), $this->stampedeWaitMs / 1000.0);
 
         $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
 
