@@ -20,6 +20,9 @@ final class CacheSpaceRegistry
     /** @var array<class-string, list<CacheSpace>> model class => spaces (memoized, validated) */
     private array $modelSpaces = [];
 
+    /** @var array<string, list<CacheSpace>> table key => spaces (memoized, validated) */
+    private array $tableSpaces = [];
+
     /** @var list<string>|null */
     private ?array $metadataSpaceNames = null;
 
@@ -62,11 +65,10 @@ final class CacheSpaceRegistry
         return $this->modelSpaces[$modelClass] ??= $this->resolveModelSpaces($modelClass);
     }
 
-    // Non-model table dependencies are default-space only for now.
     /** @return list<CacheSpace> */
     public function spacesForTable(string $table): array
     {
-        return [$this->defaultSpace()];
+        return $this->tableSpaces[$table] ??= $this->resolveTableSpaces($table);
     }
 
     public function modelAllowedInSpace(string $modelClass, CacheSpace|string $space): bool
@@ -110,6 +112,10 @@ final class CacheSpaceRegistry
         foreach ($tables as $table) {
             $spaces = $this->spacesForTable($table);
 
+            if (!$this->isAllowed($spaces, $space)) {
+                $spaces = $this->rememberTableSpace($table, $space);
+            }
+
             if ($includeDependenciesBySpace) {
                 $dependencySpaces[$table] = $spaces;
             }
@@ -151,6 +157,17 @@ final class CacheSpaceRegistry
         }
 
         return array_map(fn($name) => $this->space($name), $names);
+    }
+
+    /** @return list<CacheSpace> */
+    private function resolveTableSpaces(string $table): array
+    {
+        $names = array_values(array_unique([
+            self::DEFAULT_SPACE,
+            ...$this->metadataTableSpaces($table),
+        ]));
+
+        return array_map(fn(string $name) => $this->materializeSpace($name, remember: false), $names);
     }
 
     private function materializeSpace(string $name, bool $remember = true): CacheSpace
@@ -218,6 +235,23 @@ final class CacheSpaceRegistry
         }
     }
 
+    /** @return list<string> */
+    private function metadataTableSpaces(string $table): array
+    {
+        if ($this->metadataStore === null) {
+            return [];
+        }
+
+        try {
+            return array_values(array_filter(
+                $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
+                fn(string $name) => $this->validSpaceName($name),
+            ));
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
     private function rememberSpace(string $name): void
     {
         if ($this->metadataStore === null || $name === self::DEFAULT_SPACE) {
@@ -231,9 +265,41 @@ final class CacheSpaceRegistry
         }
     }
 
+    /** @return list<CacheSpace> */
+    private function rememberTableSpace(string $table, CacheSpace $space): array
+    {
+        $spaces = $this->spacesForTable($table);
+
+        if (!$this->isAllowed($spaces, $space)) {
+            $spaces[] = $space;
+            $this->tableSpaces[$table] = $spaces;
+            $this->persistTableSpace($table, $space);
+        }
+
+        return $spaces;
+    }
+
+    private function persistTableSpace(string $table, CacheSpace $space): void
+    {
+        if ($this->metadataStore === null || $space->name === self::DEFAULT_SPACE) {
+            return;
+        }
+
+        try {
+            $this->metadataStore->addToSet($this->metadataTableSpacesKey($table), [$space->name]);
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
     private function metadataSpacesKey(): string
     {
         return '{nc:meta}:' . $this->metadataKeyPrefix . 'spaces';
+    }
+
+    private function metadataTableSpacesKey(string $table): string
+    {
+        return '{nc:meta}:' . $this->metadataKeyPrefix . 'table-spaces:' . sha1($table);
     }
 
     /** @param  list<CacheSpace>  $allowed */

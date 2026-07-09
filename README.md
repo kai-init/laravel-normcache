@@ -14,6 +14,7 @@ Normcache caches query results as ID lists and stores model attributes in versio
 ## Table of Contents
 
 - [Installation](#installation)
+- [What's new in 3.0](#whats-new-in-30)
 - [Usage](#usage)
 - [Invalidation](#invalidation)
 - [Cache spaces](#cache-spaces)
@@ -39,6 +40,16 @@ class Post extends Model
     use Cacheable;
 }
 ```
+
+## What's new in 3.0
+
+Normcache 3.0 is a Redis Cluster-oriented release.
+
+- Cache spaces replace the old slotting/sharding configuration.
+- Space-targeted flushes are available through `flushAll('space')` and `normcache:flush --space=...`.
+- Raw table dependencies from `dependsOnTables()` work in named spaces.
+- Model payload invalidation now relies on versioned keys instead of members-set scans.
+- `stale_version_depth` remains removed; rebuild coordination uses build locks and wake tokens.
 
 ## Usage
 
@@ -168,7 +179,7 @@ Post::query()
     ->get();
 ```
 
-If a dependency is not valid in the active space, Normcache bypasses the cache by default. Set `spaces.cross_space_behavior` to `throw` to fail loudly during development. Raw table dependencies from `dependsOnTables()` are default-space only, so named-space queries should prefer cacheable model dependencies where possible.
+If a model dependency is not valid in the active space, Normcache bypasses the cache by default. Set `spaces.cross_space_behavior` to `throw` to fail loudly during development. Raw table dependencies from `dependsOnTables()` are registered in the active space and invalidated with that space's table version.
 
 Configure placement when you need to control Redis Cluster hash tags:
 
@@ -194,22 +205,22 @@ php artisan vendor:publish --tag=normcache-config
 
 Common options:
 
-| Option | Purpose |
-| --- | --- |
-| `connection` | Redis connection name. Default: `cache`. |
-| `enabled` | Master on/off switch. |
-| `ttl` | Model attribute key lifetime. |
-| `query_ttl` | Query/result/pivot/through key lifetime. |
-| `key_prefix` | Prefix for all Normcache Redis keys. |
-| `cooldown` | Debounce version bumps for write-heavy models. |
-| `building_lock_ttl` | Cache rebuild lock lifetime. |
-| `stampede_wait_ms` | How long waiters block for a rebuild wake signal. |
-| `stampede_wake_tokens` | Number of waiters to wake after a rebuild. |
-| `fallback` | Fail open to the database on Redis errors when `true`. |
-| `events` | Dispatch cache hit/miss events when `true`. |
-| `fire_retrieved` | Fire Eloquent `retrieved` for cached models when `true`. |
-| `debugbar` | Enable Laravel Debugbar integration when installed. |
-| `spaces.*` | Cache-space limits, cross-space policy, and hash-tag placement. |
+| Option                 | Purpose                                                         |
+| ---------------------- | --------------------------------------------------------------- |
+| `connection`           | Redis connection name. Default: `cache`.                        |
+| `enabled`              | Master on/off switch.                                           |
+| `ttl`                  | Model attribute key lifetime.                                   |
+| `query_ttl`            | Query/result/pivot/through key lifetime.                        |
+| `key_prefix`           | Prefix for all Normcache Redis keys.                            |
+| `cooldown`             | Debounce version bumps for write-heavy models.                  |
+| `building_lock_ttl`    | Cache rebuild lock lifetime.                                    |
+| `stampede_wait_ms`     | How long waiters block for a rebuild wake signal.               |
+| `stampede_wake_tokens` | Number of waiters to wake after a rebuild.                      |
+| `fallback`             | Fail open to the database on Redis errors when `true`.          |
+| `events`               | Dispatch cache hit/miss events when `true`.                     |
+| `fire_retrieved`       | Fire Eloquent `retrieved` for cached models when `true`.        |
+| `debugbar`             | Enable Laravel Debugbar integration when installed.             |
+| `spaces.*`             | Cache-space limits, cross-space policy, and hash-tag placement. |
 
 ## Bypasses and limitations
 

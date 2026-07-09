@@ -104,11 +104,24 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $this->registry(maxPerModel: 2)->spacesForModel($model::class);
     }
 
-    public function test_tables_belong_to_the_default_space(): void
+    public function test_tables_start_in_the_default_space(): void
     {
         $registry = $this->registry();
 
         $this->assertSame(['default'], array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')));
+    }
+
+    public function test_table_dependency_is_valid_in_the_active_space(): void
+    {
+        $registry = $this->registry();
+        $content = $registry->space('content');
+
+        $result = $registry->validateDependencies($content, [], ['mysql:legacy_flags'], includeDependenciesBySpace: true);
+
+        $this->assertTrue($result->isValid);
+        $this->assertSame([], $result->invalidTables);
+        $this->assertContains('content', $result->dependenciesBySpace['mysql:legacy_flags']);
+        $this->assertContains('content', array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')));
     }
 
     public function test_single_base_model_dependencies_do_not_need_validation(): void
@@ -148,13 +161,14 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $registry = $this->registry();
         $content = $registry->space('content');
 
-        // Author is default-only; depending on it inside content is invalid.
+        // Author is default-only; raw table deps are registered into the active space.
         $result = $registry->validateDependencies($content, [SpacedPost::class, Author::class], ['mysql:legacy_flags']);
 
         $this->assertFalse($result->isValid);
         $this->assertSame([Author::class], $result->invalidModels);
-        $this->assertSame(['mysql:legacy_flags'], $result->invalidTables);
+        $this->assertSame([], $result->invalidTables);
         $this->assertSame(['default'], $result->dependenciesBySpace[Author::class]);
         $this->assertSame(['content'], $result->dependenciesBySpace[SpacedPost::class]);
+        $this->assertContains('content', $result->dependenciesBySpace['mysql:legacy_flags']);
     }
 }

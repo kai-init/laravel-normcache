@@ -9,41 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Extracted `ModelHydrator`'s static Eloquent-internals utilities into `Support\RawAttributes` (bound closures) and `Support\ScalarTransformer` (cached scalar cast/mutator handling), and unified the two miss-path fetchers' cache-write bookkeeping.
-- Removed the write-only `CachePlan::$reasons` field; flat reason lists are now derived via `CachePlan::flatReasons()`.
-- Typed the remaining raw Lua status strings (`ModelHydrator`, pivot fetch) through the `LuaStatus` enum.
-- Removed dead internal surface: `ExecutionEngine::runResult()`, `QueryInspection::hasNormalizationBypass()`, `CacheSpaceRegistry::materializedSpaces()`/`tableAllowedInSpace()`, `ProjectionClassifier::containsWildcard()`, `RedisStore::setMany()`.
+No unreleased changes.
 
 ---
 
-## [3.0.0] — 2026-07-06
+## [3.0.0] — 2026-07-09
 
 ### Added
 
-- Added cache spaces for Redis Cluster sharding: models can declare `$normCacheSpaces`, queries can select `->space()`, and spaces can define placement/cross-space behavior in config.
-- Added space-targeted flushing via `NormCache::flushAll('space')` and `php artisan normcache:flush --space=...`, backed by registry metadata for broad cluster flushes.
+- **Cache spaces for Redis Cluster sharding:** models can declare `$normCacheSpaces`, queries can select `->space()`, and each space maps to its own Redis hash tag.
+- **Space-targeted flushing:** `NormCache::flushAll('space')` and `php artisan normcache:flush --space=...` now flush one cache space.
 
 ### Changed
 
-- Replaced the old slotting/sharding path with model-declared cache spaces.
-- Changed model payload storage to versioned keys shaped like `model:{classKey}:v{version}:{id}`, removing the need for members-set model tracking.
-- Simplified Redis/Lua internals by centralizing script marshalling in `RedisStore` and sharing normalized query/through-relation read flow through `NormalizedReader`.
-- Simplified planning internals by moving dependency inference into planner/dependency collaborators.
+- **BREAKING:** replaced the old slotting/sharding configuration with model-declared cache spaces.
+- Model payloads are now stored under versioned keys (`model:{classKey}:v{version}:{id}`), so invalidation bumps versions instead of scanning model member sets.
+- `dependsOnTables()` now works in named cache spaces; raw table dependencies are registered in the active space and invalidated with that space's table version.
 
 ### Fixed
 
-- Fixed cache-space consistency across version lookup, invalidation, model payloads, query/result keys, relation caches, pivot/through caches, build locks, and wake keys.
-- Fixed Redis Cluster cross-slot issues in space-aware Lua paths and broad flush scans.
-- Fixed relation and pivot invalidation edge cases, including relation version lookup, guarded relation model writes, `dependsOn()` accumulation, and pivot invalidation.
+- Fixed cache-space consistency across query, result, model, relation, pivot, through, build-lock, wake, and invalidation keys.
+- Fixed Redis Cluster cross-slot errors in space-aware cache paths and broad flush scans.
+- Fixed relation and pivot invalidation edge cases, including guarded relation writes, empty parent relation loads, and repeated builder use.
 - Fixed pre-save invalidation timing so Eloquent observers see a cache miss after writes.
-- Fixed connection/table key safety by rejecting connection names containing `:` and resetting key-builder state across spaces.
+- Fixed connection/table key safety by rejecting connection names containing `:`.
+- Tightened versioned writes so concurrent invalidation cannot leave stale query, result, pivot, through, or model payloads behind.
 
 ### Removed
 
 - Removed the old slotting/sharding configuration and internals.
-- Removed leftover stale-serving code after the `2.4.0` stale-serving removal.
+- Removed leftover stale-serving internals after the `2.4.0` `stale_version_depth` removal.
 
 ---
 

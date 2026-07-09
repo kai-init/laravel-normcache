@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Support\Facades\DB;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\CatalogTag;
@@ -44,6 +45,30 @@ class SpaceResolutionTest extends TestCase
             ->cachePlan(Post::query()->toBase(), CachePlanContext::models());
 
         $this->assertTrue($plan->isCacheable(), 'default-space deps must not be downgraded');
+    }
+
+    public function test_named_space_query_can_cache_with_raw_table_dependency(): void
+    {
+        $author = SpacedAuthor::create(['name' => 'Alice']);
+        SpacedPost::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $query = fn() => SpacedPost::query()
+            ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->where('authors.name', 'Alice')
+            ->select('posts.*')
+            ->dependsOnTables(['authors'])
+            ->get();
+
+        $this->assertSame(['Hello'], $query()->pluck('title')->all());
+        $this->assertNotEmpty(
+            $this->cacheManager()->getStore()->scanPattern('{nc:content}:test:result:*'),
+            'named-space raw table dependencies should cache under the active space',
+        );
+
+        DB::table('authors')->where('id', $author->id)->update(['name' => 'Bob']);
+        $this->cacheManager()->invalidateTableVersion('testing', 'authors');
+
+        $this->assertSame([], $query()->pluck('title')->all());
     }
 
     public function test_cacheable_plan_carries_the_resolved_space(): void
