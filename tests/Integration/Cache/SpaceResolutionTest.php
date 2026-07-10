@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Support\Facades\DB;
 use NormCache\Enums\CacheOperation;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -63,7 +64,7 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertSame(['Hello'], $query()->pluck('title')->all());
         $this->assertNotEmpty(
-            $this->cacheManager()->getStore()->scanPattern('{nc:content}:test:result:*'),
+            $this->cacheManager()->store()->scanPattern('{nc:content}:test:result:*'),
             'named-space raw table dependencies should cache under the active space',
         );
 
