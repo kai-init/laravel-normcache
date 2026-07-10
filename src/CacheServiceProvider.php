@@ -8,22 +8,15 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use NormCache\Cache\ExecutionEngine;
-use NormCache\Cache\ModelCacheRepository;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheRepository;
-use NormCache\Cache\ResultCacheRepository;
-use NormCache\Cache\ResultExecutor;
-use NormCache\Cache\ThroughCacheRepository;
-use NormCache\Cache\VersionTracker;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
+use NormCache\Planning\CachePlanner;
+use NormCache\Planning\CachePlanSpaceValidator;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
-use NormCache\Values\CacheConfig;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -46,54 +39,28 @@ class CacheServiceProvider extends ServiceProvider
             return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
         });
 
-        $this->app->singleton(CacheManager::class, function ($app) {
-            $connection = config('normcache.connection');
-            $ttl = (int) config('normcache.ttl');
-            $queryTtl = (int) config('normcache.query_ttl');
-            $keyPrefix = config('normcache.key_prefix');
-            $cooldown = (int) config('normcache.cooldown');
-            $enabled = (bool) config('normcache.enabled', true);
-            $events = (bool) config('normcache.events', false);
-            $fallback = (bool) config('normcache.fallback', true);
-            $fireRetrieved = (bool) config('normcache.fire_retrieved', false);
-            $buildingLockTtl = (int) config('normcache.building_lock_ttl', 5);
-            $stampedeWaitMs = (int) config('normcache.stampede_wait_ms', 200);
-            $stampedeWakeTokens = (int) config('normcache.stampede_wake_tokens', 64);
-
-            $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
-            $store = new RedisStore($connection, $stampedeWakeTokens);
-            $versions = new VersionTracker($store, $keys);
-            $engine = new ExecutionEngine;
-            $config = new CacheConfig(
-                ttl: $ttl,
-                queryTtl: $queryTtl,
-                cooldown: $cooldown,
-                enabled: $enabled,
-                fallbackEnabled: $fallback,
-                dispatchEvents: $events,
-                stampedeWakeTokens: $stampedeWakeTokens,
-            );
-            $queries = new NormalizedCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-            $results = new ResultCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-            $through = new ThroughCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-            $models = new ModelCacheRepository($store, $keys, $versions, $config);
-
-            return new CacheManager(
-                queries: $queries,
-                results: $results,
-                through: $through,
-                models: $models,
-                result: new ResultExecutor($engine, $results, $config),
-                hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
-                versions: $versions,
-                engine: $engine,
-                store: $store,
-                keys: $keys,
-                config: $config,
-                spaceResolver: $app->make(CacheSpaceResolver::class),
-                spaceRegistry: $app->make(CacheSpaceRegistry::class),
+        $this->app->singleton(CachePlanSpaceValidator::class, function ($app) {
+            return new CachePlanSpaceValidator(
+                registry: $app->make(CacheSpaceRegistry::class),
+                resolver: $app->make(CacheSpaceResolver::class),
+                crossSpaceBehavior: (string) config('normcache.spaces.cross_space_behavior', 'bypass'),
+                debug: (bool) config('app.debug', false),
+                logger: $app->make('log'),
             );
         });
+
+        $this->app->singleton(CachePlanner::class, function ($app) {
+            return new CachePlanner(spaceValidator: $app->make(CachePlanSpaceValidator::class));
+        });
+
+        $this->app->singleton(CacheManagerFactory::class, function ($app) {
+            return new CacheManagerFactory(
+                $app->make(CacheSpaceRegistry::class),
+                $app->make(CacheSpaceResolver::class),
+            );
+        });
+
+        $this->app->singleton(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
 
         $this->app->alias(CacheManager::class, 'normcache');
     }

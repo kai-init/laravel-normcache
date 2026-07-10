@@ -502,7 +502,7 @@ class CacheableBuilder extends Builder
 
     public function planner(): CachePlanner
     {
-        return self::$sharedPlanner ??= new CachePlanner;
+        return self::$sharedPlanner ??= app(CachePlanner::class);
     }
 
     private function modelsExecutor(): ModelsExecutor

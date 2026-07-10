@@ -22,6 +22,54 @@ class ClusterModeTest extends TestCase
         $this->setClusterMode(true);
     }
 
+    public function test_predis_cluster_bulk_reads_preserve_order_and_missing_values_across_spaces(): void
+    {
+        $this->requirePredisCluster();
+
+        $store = $this->cacheManager()->store();
+        $defaultKeys = [
+            '{nc}:test:bulk:1',
+            '{nc}:test:bulk:missing',
+            '{nc}:test:bulk:2',
+        ];
+        $contentKeys = [
+            '{nc:content}:test:bulk:1',
+            '{nc:content}:test:bulk:missing',
+            '{nc:content}:test:bulk:2',
+        ];
+
+        $store->set($defaultKeys[0], 'default-one', 60);
+        $store->set($defaultKeys[2], 'default-two', 60);
+        $store->set($contentKeys[0], 'content-one', 60);
+        $store->set($contentKeys[2], 'content-two', 60);
+
+        $this->assertSame(['default-one', null, 'default-two'], $store->getMany($defaultKeys));
+        $this->assertSame(['content-one', null, 'content-two'], $store->getMany($contentKeys));
+    }
+
+    public function test_predis_cluster_delete_groups_mixed_space_keys_without_crossslot_errors(): void
+    {
+        $this->requirePredisCluster();
+
+        $store = $this->cacheManager()->store();
+        $keys = [
+            '{nc}:test:delete:1',
+            '{nc}:test:delete:2',
+            '{nc:content}:test:delete:1',
+            '{nc:content}:test:delete:2',
+        ];
+
+        foreach ($keys as $key) {
+            $store->set($key, 'value', 60);
+        }
+
+        $store->delete($keys);
+
+        foreach ($keys as $key) {
+            $this->assertNull($store->get($key));
+        }
+    }
+
     // dependsOn — multi-dependency normalized query stays normalized (no forced result cache)
 
     public function test_multi_dependency_normalized_query_stays_normalized_in_cluster_mode(): void
@@ -336,5 +384,14 @@ class ClusterModeTest extends TestCase
 
         $this->assertSame(3, $cold->total());
         $this->assertSame(3, $warm->total());
+    }
+
+    private function requirePredisCluster(): void
+    {
+        $cluster = env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true;
+
+        if (!$cluster || env('REDIS_CLIENT') !== 'predis') {
+            $this->markTestSkipped('Requires a real Predis Redis Cluster connection.');
+        }
     }
 }

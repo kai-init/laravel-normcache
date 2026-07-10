@@ -4,13 +4,10 @@ namespace NormCache\Planning;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use Illuminate\Support\Facades\Log;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
 use NormCache\Facades\NormCache;
-use NormCache\Spaces\CacheSpaceRegistry;
-use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
@@ -41,6 +38,7 @@ final class CachePlanner
     public function __construct(
         private readonly QueryAnalyzer $analyzer = new QueryAnalyzer,
         private readonly DependencyResolver $dependencies = new DependencyResolver,
+        private readonly ?CachePlanSpaceValidator $spaceValidator = null,
     ) {}
 
     public function inferPreparedDependencies(CacheableBuilder $builder, QueryBuilder $base): DependencySet
@@ -83,64 +81,21 @@ final class CachePlanner
             CacheOperation::MorphToEagerLoad => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
         };
 
-        return $this->applySpaceValidation($plan, $builder, $model, $explain);
+        return $this->spaceValidator()->validate($plan, $builder, $model, $explain);
     }
 
-    private ?CacheSpaceResolver $spaceResolver = null;
-
-    private ?CacheSpaceRegistry $spaceRegistry = null;
-
-    // Bypass (or throw) when a plan's dependencies don't co-locate in its cache space.
-    // Neutral for default-only apps: everything resolves to the default space.
     public function applySpaceValidation(
         CachePlan $plan,
         CacheableBuilder $builder,
         Model $model,
         bool $explain = false,
     ): CachePlan {
-        if (!$plan->isCacheable()) {
-            return $plan;
-        }
+        return $this->spaceValidator()->validate($plan, $builder, $model, $explain);
+    }
 
-        $registry = $this->spaceRegistry ??= app(CacheSpaceRegistry::class);
-        $resolver = $this->spaceResolver ??= app(CacheSpaceResolver::class);
-        $space = $resolver->resolve($model::class, $builder->getSpace());
-
-        if ($registry->dependenciesAreOnlyModel($model::class, $plan->dependencies->models, $plan->dependencies->tables)) {
-            return $plan->withSpace($space);
-        }
-
-        $validation = $registry->validateDependencies(
-            $space,
-            $plan->dependencies->models,
-            $plan->dependencies->tables,
-            includeDependenciesBySpace: $explain,
-        );
-
-        if ($validation->isValid) {
-            return $plan->withSpace($space);
-        }
-
-        $offending = implode(', ', [...$validation->invalidModels, ...$validation->invalidTables]);
-        $reasons = ['cross-space dependencies for space [' . $space->name . ']: ' . $offending];
-
-        if (!$explain && config('app.debug', false)) {
-            $modelClass = $model::class;
-            Log::warning(
-                "NormCache: query for [{$modelClass}] in space [{$space->name}] depends on [{$offending}] "
-                . 'which are not in that space; the query will not cache. Add them to the space or drop the dependency.'
-            );
-        }
-
-        if (!$explain && config('normcache.spaces.cross_space_behavior', 'bypass') === 'throw') {
-            throw new \RuntimeException('NormCache: ' . $reasons[0]);
-        }
-
-        return CachePlan::bypass(
-            operation: $plan->operation,
-            dependencies: $plan->dependencies,
-            bypassReasons: ['dependency' => $reasons],
-        )->withSpace($space);
+    private function spaceValidator(): CachePlanSpaceValidator
+    {
+        return $this->spaceValidator ?? CachePlanSpaceValidator::standalone();
     }
 
     private function globalBypass(

@@ -5,6 +5,7 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
+use NormCache\CacheManagerFactory;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -20,6 +21,34 @@ class CacheManagerTest extends TestCase
     {
         parent::setUp();
         $this->manager = $this->cacheManager();
+    }
+
+    public function test_factory_builds_manager_with_explicit_overrides(): void
+    {
+        $manager = $this->app->make(CacheManagerFactory::class)->make([
+            'connection' => 'normcache-test',
+            'ttl' => 123,
+            'query_ttl' => 45,
+            'key_prefix' => 'factory:',
+            'cooldown' => 7,
+            'enabled' => false,
+            'events' => false,
+            'fallback' => true,
+            'fire_retrieved' => true,
+            'building_lock_ttl' => 9,
+            'stampede_wait_ms' => 11,
+            'stampede_wake_tokens' => 3,
+        ]);
+
+        $this->assertSame(123, $manager->config()->ttl);
+        $this->assertSame(45, $manager->config()->queryTtl);
+        $this->assertSame(7, $manager->config()->cooldown);
+        $this->assertFalse($manager->isEnabled());
+        $this->assertFalse($manager->isEventsEnabled());
+        $this->assertTrue($manager->isFallbackEnabled());
+
+        $classKey = $manager->keys()->classKey(Author::class);
+        $this->assertSame("{nc}:factory:ver:{$classKey}:", $manager->keys()->verKey($classKey));
     }
 
     // -------------------------------------------------------------------------

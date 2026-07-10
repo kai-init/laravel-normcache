@@ -10,21 +10,10 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Cache\ExecutionEngine;
-use NormCache\Cache\ModelCacheRepository;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheRepository;
-use NormCache\Cache\ResultCacheRepository;
-use NormCache\Cache\ResultExecutor;
-use NormCache\Cache\ThroughCacheRepository;
-use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
+use NormCache\CacheManagerFactory;
 use NormCache\CacheServiceProvider;
-use NormCache\Spaces\CacheSpaceRegistry;
-use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisStore;
-use NormCache\Values\CacheConfig;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
 
@@ -184,42 +173,20 @@ abstract class TestCase extends OrchestraTestCase
         int $stampedeWaitMs = 200,
         int $stampedeWakeTokens = 64,
     ): CacheManager {
-        $ttl ??= (int) config('normcache.ttl');
-        $queryTtl ??= (int) config('normcache.query_ttl');
-
-        $keys = new CacheKeyBuilder('{nc}:', $keyPrefix);
-        $store = new RedisStore($connection, $stampedeWakeTokens);
-        $versions = new VersionTracker($store, $keys);
-        $engine = new ExecutionEngine;
-        $config = new CacheConfig(
-            ttl: $ttl,
-            queryTtl: $queryTtl,
-            cooldown: $cooldown,
-            enabled: $enabled,
-            fallbackEnabled: $fallback,
-            dispatchEvents: $dispatchEvents,
-            stampedeWakeTokens: $stampedeWakeTokens,
-        );
-        $queries = new NormalizedCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-        $results = new ResultCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-        $through = new ThroughCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
-        $models = new ModelCacheRepository($store, $keys, $versions, $config);
-
-        return new CacheManager(
-            queries: $queries,
-            results: $results,
-            through: $through,
-            models: $models,
-            result: new ResultExecutor($engine, $results, $config),
-            hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
-            versions: $versions,
-            engine: $engine,
-            store: $store,
-            keys: $keys,
-            config: $config,
-            spaceResolver: app(CacheSpaceResolver::class),
-            spaceRegistry: app(CacheSpaceRegistry::class),
-        );
+        return $this->app->make(CacheManagerFactory::class)->make([
+            'connection' => $connection,
+            'ttl' => $ttl ?? (int) config('normcache.ttl'),
+            'query_ttl' => $queryTtl ?? (int) config('normcache.query_ttl'),
+            'key_prefix' => $keyPrefix,
+            'cooldown' => $cooldown,
+            'enabled' => $enabled,
+            'events' => $dispatchEvents,
+            'fallback' => $fallback,
+            'fire_retrieved' => $fireRetrieved,
+            'building_lock_ttl' => $buildingLockTtl,
+            'stampede_wait_ms' => $stampedeWaitMs,
+            'stampede_wake_tokens' => $stampedeWakeTokens,
+        ]);
     }
 
     /** Assert native == cold == warm for a given query. */
