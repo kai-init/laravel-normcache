@@ -9,11 +9,12 @@ use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\ExecutionEngine;
+use NormCache\Cache\ModelCacheRepository;
 use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\NormalizedThroughReader;
-use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\NormalizedCacheRepository;
+use NormCache\Cache\ResultCacheRepository;
 use NormCache\Cache\ResultExecutor;
+use NormCache\Cache\ThroughCacheRepository;
 use NormCache\Cache\VersionTracker;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
@@ -72,13 +73,17 @@ class CacheServiceProvider extends ServiceProvider
                 dispatchEvents: $events,
                 stampedeWakeTokens: $stampedeWakeTokens,
             );
-            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+            $queries = new NormalizedCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+            $results = new ResultCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+            $through = new ThroughCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+            $models = new ModelCacheRepository($store, $keys, $versions, $config);
 
             return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
-                resultReader: $resultReader,
-                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
-                result: new ResultExecutor($engine, $resultReader, $config),
+                queries: $queries,
+                results: $results,
+                through: $through,
+                models: $models,
+                result: new ResultExecutor($engine, $results, $config),
                 hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
                 versions: $versions,
                 engine: $engine,

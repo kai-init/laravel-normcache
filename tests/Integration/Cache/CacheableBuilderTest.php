@@ -833,7 +833,7 @@ class CacheableBuilderTest extends TestCase
     // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.
     private function corruptResultCacheEntry(string $key): void
     {
-        $serialized = $this->cacheManager()->getStore()->serialize([]);
+        $serialized = $this->cacheManager()->store()->serialize([]);
         Redis::connection('normcache-test')->set($key, $serialized);
     }
 

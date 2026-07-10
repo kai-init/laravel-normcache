@@ -5,14 +5,11 @@ namespace NormCache\Cache;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Values\BuildContext;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\QueryCacheResult;
 
-/**
- * Query cache: payload is a bare id list, hydrated from per-model attribute keys.
- *
- * @extends NormalizedReader<QueryCacheResult>
- */
-final class NormalizedCacheReader extends NormalizedReader
+/** @extends VersionedCacheRepository<QueryCacheResult> */
+final class NormalizedCacheRepository extends VersionedCacheRepository
 {
     protected function queryPrefix(string $classKey, ?string $tag): string
     {
@@ -72,19 +69,19 @@ final class NormalizedCacheReader extends NormalizedReader
         };
     }
 
-    public function store(string $key, array $ids, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken, ?string $wakeKey = null): bool
-    {
+    public function store(
+        string $key,
+        array $ids,
+        ?int $ttl,
+        BuildHandle $build,
+    ): bool {
         $ids = array_map('strval', $ids);
 
         return $this->storePayload(
             $key,
             json_encode($ids, JSON_THROW_ON_ERROR),
             $ttl,
-            $buildingKey,
-            $versionKeys,
-            $expectedVersions,
-            $buildingToken,
-            $wakeKey,
+            $build,
         );
     }
 }

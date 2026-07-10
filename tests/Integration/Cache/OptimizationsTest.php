@@ -81,7 +81,7 @@ class OptimizationsTest extends TestCase
 
         $query = Author::where('name', 'Payload Author');
         $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
-        $result = app('normcache')->getModelsFromQuery(Author::class, $hash);
+        $result = app('normcache')->queries()->fetch(Author::class, $hash, null, [], []);
 
         $this->assertSame(CacheStatus::Hit, $result->status);
         $this->assertSame([(string) $author->id], $result->ids);
@@ -98,11 +98,11 @@ class OptimizationsTest extends TestCase
         $query->get();
 
         $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
-        $classKey = app('normcache')->classKey(Author::class);
+        $classKey = app('normcache')->keys()->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 
         $manager = app('normcache');
-        $store = $manager->getStore();
+        $store = $manager->store();
         $fullQueryKey = $manager->keys()->prefixed("query:{$classKey}:v{$version}:{$hash}");
         Redis::connection(config('normcache.connection'))->set(
             $fullQueryKey,
@@ -150,7 +150,7 @@ class OptimizationsTest extends TestCase
         $this->assertCount(1, $found);
         Event::assertDispatched(QueryCacheMiss::class);
 
-        $store = app('normcache')->getStore();
+        $store = app('normcache')->store();
         $raw = $store->getRaw($queryKey);
         $repaired = $raw !== null ? json_decode($raw, true) : null;
         $this->assertSame([(string) $found->first()->id], $repaired);

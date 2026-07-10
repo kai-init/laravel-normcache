@@ -30,15 +30,23 @@ final class DependencyResolver
         bool $hasExplicit,
     ): DependencySet {
         $inferred = $context->inferredDependencies;
+        $required = $context->requiredDependencies;
 
         if ($hasExplicit) {
             return new DependencySet(
                 models: array_keys(array_flip([
                     $modelClass,
                     ...$inferred->models,
+                    ...$required->models,
                     ...($explicitModels ?? []),
                 ])),
-                tables: array_values(array_unique([...$inferred->tables, ...$explicitTables])),
+                tables: array_values(array_unique([
+                    ...$inferred->tables,
+                    ...$required->tables,
+                    ...$explicitTables,
+                ])),
+                safe: $required->safe,
+                reasons: $required->reasons,
             );
         }
 
@@ -52,21 +60,30 @@ final class DependencyResolver
 
         if (($hasDependencyBypass && !$exempt)
             || isset($context->contextReasons['dependency'])
-            || !$inferred->safe) {
+            || !$inferred->safe
+            || !$required->safe) {
             return DependencySet::unsafe(array_values(array_unique([
                 ...($inspection !== null ? BypassReasons::fromInspection($inspection)['dependency'] ?? [] : []),
                 ...($context->contextReasons['dependency'] ?? []),
                 ...$inferred->reasons,
+                ...$required->reasons,
             ])));
         }
 
-        if ($inferred->hasNoDependencies()) {
+        if ($inferred->hasNoDependencies() && $required->hasNoDependencies()) {
             return DependencySet::singleModel($modelClass);
         }
 
         return new DependencySet(
-            models: array_keys(array_flip([$modelClass, ...$inferred->models])),
-            tables: $inferred->tables,
+            models: array_keys(array_flip([
+                $modelClass,
+                ...$inferred->models,
+                ...$required->models,
+            ])),
+            tables: array_values(array_unique([
+                ...$inferred->tables,
+                ...$required->tables,
+            ])),
         );
     }
 

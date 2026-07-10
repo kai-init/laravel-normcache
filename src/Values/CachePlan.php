@@ -14,7 +14,6 @@ final readonly class CachePlan
         public CacheStrategy $strategy,
         public CacheOperation $operation,
         public DependencySet $dependencies,
-        public bool $normalizable = false,
         public ?array $columns = null,
         public ?array $primaryKeys = null,
         public array $bypassReasons = [],
@@ -27,7 +26,6 @@ final readonly class CachePlan
             strategy: $this->strategy,
             operation: $this->operation,
             dependencies: $this->dependencies,
-            normalizable: $this->normalizable,
             columns: $this->columns,
             primaryKeys: $this->primaryKeys,
             bypassReasons: $this->bypassReasons,
@@ -45,7 +43,6 @@ final readonly class CachePlan
             strategy: CacheStrategy::NormalizedQuery,
             operation: $operation,
             dependencies: $dependencies,
-            normalizable: true,
             columns: $columns,
             primaryKeys: $primaryKeys,
         );
@@ -54,7 +51,6 @@ final readonly class CachePlan
     public static function result(
         CacheOperation $operation,
         DependencySet $dependencies,
-        bool $normalizable = false,
         ?array $columns = null,
         ?array $primaryKeys = null,
     ): self {
@@ -62,7 +58,6 @@ final readonly class CachePlan
             strategy: CacheStrategy::VersionedResult,
             operation: $operation,
             dependencies: $dependencies,
-            normalizable: $normalizable,
             columns: $columns,
             primaryKeys: $primaryKeys,
         );
@@ -91,7 +86,6 @@ final readonly class CachePlan
             strategy: CacheStrategy::DirectModels,
             operation: $operation,
             dependencies: $dependencies,
-            normalizable: true,
             columns: $columns,
             primaryKeys: $primaryKeys,
         );

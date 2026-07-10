@@ -88,7 +88,7 @@ final class RelationDependencyClassifier
 
         $tableKey = null;
         if ($relation instanceof BelongsToMany) {
-            $tableKey = NormCache::tableKey(
+            $tableKey = NormCache::keys()->tableKey(
                 $relation->getParent()->getConnection()->getName(),
                 $relation->getTable(),
             );

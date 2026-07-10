@@ -8,6 +8,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\CachePlan;
 use NormCache\Values\PreparedQuery;
 
@@ -22,7 +23,7 @@ final class ModelsExecutor
     ): Collection {
         $executionBuilder = $prepared->builder;
 
-        return $executionBuilder->finalizeResult(NormCache::getModels(
+        return $executionBuilder->finalizeResult(NormCache::hydrator()->getModels(
             $primaryKeys,
             $model,
             $selectedCols,
@@ -50,13 +51,13 @@ final class ModelsExecutor
         $depTableKeys = $plan->dependencies->tables;
 
         return NormCache::engine()->runNormalized(
-            fetch: fn() => NormCache::getModelsFromQuery($model, $hash, $cacheTag, $depClasses, $depTableKeys),
-            waitForBuild: fn() => NormCache::waitForQueryBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys),
+            fetch: fn() => NormCache::queries()->fetch($model, $hash, $cacheTag, $depClasses, $depTableKeys),
+            waitForBuild: fn() => NormCache::queries()->waitForBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys),
             onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $prototype) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
                 return $executionBuilder->finalizeResult(
-                    NormCache::getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype),
+                    NormCache::hydrator()->getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype),
                     $prepared
                 );
             },
@@ -64,12 +65,15 @@ final class ModelsExecutor
                 CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'ids']);
 
                 $ids = $this->resolveIds(
-                    $result->key, $base, $queryTtl, $prototype,
-                    $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
+                    $result->key,
+                    $base,
+                    $queryTtl,
+                    $prototype,
+                    $result->build,
                 );
 
                 return $executionBuilder->finalizeResult(
-                    NormCache::getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype),
+                    NormCache::hydrator()->getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype),
                     $prepared
                 );
             },
@@ -81,7 +85,7 @@ final class ModelsExecutor
                 ]);
 
                 return $executionBuilder->finalizeResult(
-                    NormCache::getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype),
+                    NormCache::hydrator()->getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype),
                     $prepared
                 );
             },
@@ -103,14 +107,10 @@ final class ModelsExecutor
         QueryBuilder $base,
         ?int $queryTtl,
         Model $prototype,
-        ?string $buildingKey = null,
-        array $versionKeys = [],
-        array $expectedVersions = [],
-        ?string $buildingToken = null,
-        ?string $wakeKey = null,
+        BuildHandle $build,
     ): array {
         $ids = $this->buildIds($base, $prototype);
-        NormCache::storeQueryIds($key, $ids, $queryTtl, $buildingKey, $versionKeys, $expectedVersions, $buildingToken, $wakeKey);
+        NormCache::queries()->store($key, $ids, $queryTtl, $build);
 
         return $ids;
     }

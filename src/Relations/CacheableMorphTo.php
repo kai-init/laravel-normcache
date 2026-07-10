@@ -97,7 +97,7 @@ class CacheableMorphTo extends MorphTo
             return $instance;
         }
 
-        $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad($type));
+        $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad());
 
         return $plan->isNormalized() ? $instance : null;
     }
@@ -141,7 +141,7 @@ class CacheableMorphTo extends MorphTo
         $models = NormCache::withSpaceForModel(
             $class,
             null,
-            fn() => NormCache::getModels($ids, $class, $columns, null, $missedQuery, false),
+            fn() => NormCache::hydrator()->getModels($ids, $class, $columns, null, $missedQuery, false),
         );
         $collection = $instance->newCollection($models);
 

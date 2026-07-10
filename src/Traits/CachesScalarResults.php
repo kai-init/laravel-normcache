@@ -141,7 +141,6 @@ trait CachesScalarResults
             ? $fallback
             : fn() => $compute($base);
         $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::scalar(
-            $kind->value,
             $columns,
             $inferred,
         ));

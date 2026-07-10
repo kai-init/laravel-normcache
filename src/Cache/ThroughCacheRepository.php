@@ -6,15 +6,11 @@ use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Values\BuildContext;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\ThroughCacheResult;
 
-/**
- * Through cache (HasManyThrough/HasOneThrough): payload is `{i, t}` — id list
- * plus per-row through keys Eloquent needs to re-stitch the relation.
- *
- * @extends NormalizedReader<ThroughCacheResult>
- */
-final class NormalizedThroughReader extends NormalizedReader
+/** @extends VersionedCacheRepository<ThroughCacheResult> */
+final class ThroughCacheRepository extends VersionedCacheRepository
 {
     protected function queryPrefix(string $classKey, ?string $tag): string
     {
@@ -64,8 +60,13 @@ final class NormalizedThroughReader extends NormalizedReader
         };
     }
 
-    public function store(string $key, array $ids, array $throughKeys, ?int $ttl, ?string $buildingKey, array $versionKeys, array $expectedVersions, ?string $buildingToken, ?string $wakeKey = null): bool
-    {
+    public function store(
+        string $key,
+        array $ids,
+        array $throughKeys,
+        ?int $ttl,
+        BuildHandle $build,
+    ): bool {
         $ids = array_map('strval', $ids);
         $payload = json_encode(['i' => $ids, 't' => $throughKeys], JSON_THROW_ON_ERROR);
 
@@ -73,11 +74,7 @@ final class NormalizedThroughReader extends NormalizedReader
             $key,
             $payload,
             $ttl,
-            $buildingKey,
-            $versionKeys,
-            $expectedVersions,
-            $buildingToken,
-            $wakeKey,
+            $build,
         );
     }
 }

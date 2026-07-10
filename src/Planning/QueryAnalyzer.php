@@ -132,7 +132,7 @@ final class QueryAnalyzer
                 return DependencySet::unsafe('join table alias could not be inferred');
             }
 
-            $tables[] = NormCache::tableKey($connection, self::stripAlias($join->table));
+            $tables[] = NormCache::keys()->tableKey($connection, self::stripAlias($join->table));
         }
 
         return new DependencySet(tables: array_values(array_unique($tables)));

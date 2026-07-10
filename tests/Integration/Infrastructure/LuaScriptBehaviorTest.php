@@ -46,7 +46,7 @@ class LuaScriptBehaviorTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         Author::get();
@@ -72,7 +72,7 @@ class LuaScriptBehaviorTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
 
         Author::get();
         $version = NormCache::currentVersion(Author::class);
@@ -94,7 +94,7 @@ class LuaScriptBehaviorTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
 
         Author::get();
         $version = NormCache::currentVersion(Author::class);

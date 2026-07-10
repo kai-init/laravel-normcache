@@ -2,11 +2,12 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
-use Illuminate\Support\Facades\DB;
+use NormCache\Enums\CacheOperation;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\CatalogTag;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\ReportingAuthor;
 use NormCache\Tests\Fixtures\Models\ReportingCountry;
 use NormCache\Tests\Fixtures\Models\SpacedAuthor;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
@@ -34,6 +35,7 @@ class SpaceResolutionTest extends TestCase
             ->cachePlan(SpacedPost::query()->toBase(), CachePlanContext::models());
 
         $this->assertFalse($plan->isCacheable(), 'SpacedPost(content) depending on Author(default) must bypass');
+        $this->assertSame(CacheOperation::Models, $plan->operation);
         $this->assertTrue($plan->hasBypassReason('dependency'));
     }
 
@@ -98,7 +100,7 @@ class SpaceResolutionTest extends TestCase
 
         SpacedPost::query()->get();
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
 
         $this->assertNotEmpty(
             $store->scanPattern('{nc:content}:*'),
@@ -139,9 +141,23 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertSame(['Hello'], $country->spacedPosts()->get()->pluck('title')->all());
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $this->assertNotEmpty($store->scanPattern('{nc:content}:test:through:*'));
         $this->assertEmpty($store->scanPattern('{nc}:test:through:*'));
+    }
+
+    public function test_non_simple_through_relation_bypasses_when_through_model_is_in_another_space(): void
+    {
+        $country = ReportingCountry::create(['name' => 'Australia']);
+        $author = ReportingAuthor::create(['name' => 'Alice', 'country_id' => $country->id]);
+        SpacedPost::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $posts = $country->crossSpacePosts()
+            ->dependsOn([SpacedPost::class])
+            ->get();
+
+        $this->assertSame(['Hello'], $posts->pluck('title')->all());
+        $this->assertEmpty($this->cacheManager()->store()->scanPattern('{nc:content}:test:through:*'));
     }
 
     public function test_spaced_pivot_relation_invalidates_when_pivot_table_changes(): void
@@ -153,7 +169,7 @@ class SpaceResolutionTest extends TestCase
 
         $first = SpacedPost::query()->with('catalogTags')->get()->first()->catalogTags->pluck('name')->all();
         $this->assertSame(['First'], $first);
-        $this->assertNotEmpty($this->cacheManager()->getStore()->scanPattern('{nc:catalog}:test:pivot:*'));
+        $this->assertNotEmpty($this->cacheManager()->store()->scanPattern('{nc:catalog}:test:pivot:*'));
 
         $post->catalogTags()->attach($secondTag->id);
 
@@ -167,7 +183,7 @@ class SpaceResolutionTest extends TestCase
 
         SpacedPost::query()->get();
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $this->assertNotEmpty($store->scanPattern('{nc:content}:test:*'));
 
         $this->cacheManager()->flushAll();
@@ -181,7 +197,7 @@ class SpaceResolutionTest extends TestCase
 
         SpacedPost::query()->tag('homepage')->get();
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $this->assertNotEmpty($store->scanPattern('{nc:content}:test:query:*:homepage:*'));
 
         $this->cacheManager()->flushTag(SpacedPost::class, 'homepage');
@@ -195,7 +211,7 @@ class SpaceResolutionTest extends TestCase
 
         SpacedPost::query()->tag('deploy')->get();
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $this->assertNotEmpty($store->scanPattern('{nc:content}:test:query:*:deploy:*'));
 
         $this->cacheManager()->flushTagAcrossModels('deploy');
@@ -225,7 +241,7 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertSame('Ann', $post->spacedAuthor->name);
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $authorKeys = $store->scanPattern('{nc:content}:test:model:*authors*');
 
         $this->assertNotEmpty(
@@ -241,7 +257,7 @@ class SpaceResolutionTest extends TestCase
         $registry->space('catalog');
         $registry->space('reporting');
 
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
 
         $post = SpacedPost::create(['title' => 'Draft', 'author_id' => 1]);
         $tag = CatalogTag::create(['name' => 'PHP']);

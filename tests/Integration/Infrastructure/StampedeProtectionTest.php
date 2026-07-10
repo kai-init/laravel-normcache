@@ -46,7 +46,7 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         Author::get();
@@ -73,7 +73,7 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         $this->redis()->incr("{nc}:test:ver:{$ck}:");
@@ -95,7 +95,7 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         $this->redis()->incr("{nc}:test:ver:{$ck}:");
@@ -118,7 +118,7 @@ class StampedeProtectionTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         $queryCount = 0;

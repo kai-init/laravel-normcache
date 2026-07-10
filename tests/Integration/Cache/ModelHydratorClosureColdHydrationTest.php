@@ -27,7 +27,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
 
     private function makeHydrator(): ModelHydrator
     {
-        $store = $this->cacheManager()->getStore();
+        $store = $this->cacheManager()->store();
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
 
@@ -119,7 +119,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $this->evictModelCache(InstrumentedPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->getModels([$post->id], InstrumentedPost::class);
+        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class);
 
         $this->assertCount(1, $models);
         $this->assertSame('Hello', $models[0]->title);
@@ -135,7 +135,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $this->evictModelCache(NewFromBuilderOverridingPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->getModels([$post->id], NewFromBuilderOverridingPost::class);
+        $models = $manager->hydrator()->getModels([$post->id], NewFromBuilderOverridingPost::class);
 
         $this->assertCount(1, $models);
         $this->assertSame('Custom', $models[0]->title);
@@ -178,7 +178,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         });
 
         $manager = $this->buildManager(fireRetrieved: false);
-        $models = $manager->getModels([$post->id], Post::class);
+        $models = $manager->hydrator()->getModels([$post->id], Post::class);
 
         $this->assertCount(1, $models);
         $this->assertSame(1, $calls, 'Cold-miss closure hydration must fire retrieved exactly once, matching the previous Eloquent-hydration behavior');
@@ -191,7 +191,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $this->evictModelCache(InstrumentedPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->getModels([$post->id], InstrumentedPost::class);
+        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class);
 
         $native = InstrumentedPost::find($post->id);
 
@@ -304,7 +304,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         $joinedQuery = InstrumentedPost::query()->withoutCache()
             ->join('authors', 'authors.id', '=', 'posts.author_id');
 
-        $models = $manager->getModels([$post->id], InstrumentedPost::class, null, null, $joinedQuery, true);
+        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class, null, null, $joinedQuery, true);
 
         $this->assertCount(1, $models);
         $this->assertSame('JoinAmbiguous', $models[0]->title);
@@ -325,7 +325,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         // whereIn(pk, [post1, post2]) on top of this GROUP BY would collapse to one row.
         $groupedQuery = InstrumentedPost::query()->withoutCache()->groupBy('author_id');
 
-        $models = $manager->getModels([$post1->id, $post2->id], InstrumentedPost::class, null, null, $groupedQuery, true);
+        $models = $manager->hydrator()->getModels([$post1->id, $post2->id], InstrumentedPost::class, null, null, $groupedQuery, true);
 
         $this->assertCount(2, $models, 'Both requested ids must be resolved, not collapsed by the original query\'s GROUP BY');
         $titles = array_map(fn($m) => $m->title, $models);
@@ -356,7 +356,7 @@ class ModelHydratorClosureColdHydrationTest extends TestCase
         );
 
         DB::enableQueryLog();
-        $models = $manager->getModels([$wanted->id], InstrumentedPost::class, null, null, $unionedQuery, true);
+        $models = $manager->hydrator()->getModels([$wanted->id], InstrumentedPost::class, null, null, $unionedQuery, true);
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 

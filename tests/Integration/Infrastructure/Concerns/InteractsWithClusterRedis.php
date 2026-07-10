@@ -92,7 +92,7 @@ trait InteractsWithClusterRedis
     /** @return list<string> */
     protected function keysForHashTag(string $hashTag, string $suffix = '*'): array
     {
-        return array_values($this->cacheManager()->getStore()->scanPattern('{' . $hashTag . '}:' . $suffix));
+        return array_values($this->cacheManager()->store()->scanPattern('{' . $hashTag . '}:' . $suffix));
     }
 
     protected function assertAnyKeysForHashTag(string $hashTag, string $suffix = '*'): void
