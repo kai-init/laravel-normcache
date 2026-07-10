@@ -97,7 +97,7 @@ class CacheableMorphTo extends MorphTo
             return $instance;
         }
 
-        $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad($type));
+        $plan = $builder->cachePlan($base, CachePlanContext::morphToEagerLoad());
 
         return $plan->isNormalized() ? $instance : null;
     }

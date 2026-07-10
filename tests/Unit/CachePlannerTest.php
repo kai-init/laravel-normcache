@@ -89,7 +89,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('count', ['*']),
+            CachePlanContext::scalar(['*']),
         );
 
         $this->assertTrue($plan->usesResultCache());
@@ -104,7 +104,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('count', ['*']),
+            CachePlanContext::scalar(['*']),
         );
 
         $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
@@ -119,7 +119,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('value', ['name']),
+            CachePlanContext::scalar(['name']),
         );
 
         $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
@@ -135,7 +135,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('count', ['name']),
+            CachePlanContext::scalar(['name']),
         );
 
         $this->assertTrue($plan->usesResultCache());
@@ -151,7 +151,6 @@ class CachePlannerTest extends UnitTestCase
             $prepared->builder,
             $prepared->base,
             CachePlanContext::scalar(
-                'count',
                 ['*'],
                 contextReasons: ['opted_out' => ['test bypass']],
             ),
@@ -169,7 +168,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('count', ['*']),
+            CachePlanContext::scalar(['*']),
         );
 
         $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);
@@ -183,7 +182,7 @@ class CachePlannerTest extends UnitTestCase
         $plan = (new CachePlanner)->plan(
             $prepared->builder,
             $prepared->base,
-            CachePlanContext::scalar('count', ['*']),
+            CachePlanContext::scalar(['*']),
         );
 
         $this->assertSame(CacheStrategy::LiveQuery, $plan->strategy);

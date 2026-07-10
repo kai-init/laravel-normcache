@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
-
-### Changed
-
-- Extracted `ModelHydrator`'s static Eloquent-internals utilities into `Support\RawAttributes` (bound closures) and `Support\ScalarTransformer` (cached scalar cast/mutator handling), and unified the two miss-path fetchers' cache-write bookkeeping.
-- Removed the write-only `CachePlan::$reasons` field; flat reason lists are now derived via `CachePlan::flatReasons()`.
-- Typed the remaining raw Lua status strings (`ModelHydrator`, pivot fetch) through the `LuaStatus` enum.
-- Removed dead internal surface: `ExecutionEngine::runResult()`, `QueryInspection::hasNormalizationBypass()`, `CacheSpaceRegistry::materializedSpaces()`/`tableAllowedInSpace()`, `ProjectionClassifier::containsWildcard()`, `RedisStore::setMany()`.
-
----
-
 ## [3.0.0] — 2026-07-06
 
 ### Added
@@ -30,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced the old slotting/sharding path with model-declared cache spaces.
 - Changed model payload storage to versioned keys shaped like `model:{classKey}:v{version}:{id}`, removing the need for members-set model tracking.
 - Simplified Redis/Lua internals by centralizing script marshalling in `RedisStore` and sharing normalized query/through-relation read flow through `NormalizedReader`.
-- Simplified planning internals by moving dependency inference into planner/dependency collaborators.
+- Simplified planning, model hydration, and Lua status handling, including moving dependency inference into planner/dependency collaborators.
 
 ### Fixed
 
@@ -44,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed the old slotting/sharding configuration and internals.
 - Removed leftover stale-serving code after the `2.4.0` stale-serving removal.
+- Removed unused planner metadata (`CachePlan::$normalizable` and `CachePlanContext::$kind`) and the obsolete scalar-kind and morph-type factory arguments.
 
 ---
 

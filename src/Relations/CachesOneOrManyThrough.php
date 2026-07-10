@@ -156,7 +156,6 @@ trait CachesOneOrManyThrough
                 $plan,
                 $builder,
                 $this->related,
-                CacheOperation::Through,
             );
 
             return $plan->usesResultCache() ? $plan : null;

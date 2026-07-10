@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use NormCache\Enums\CacheOperation;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\CatalogTag;
@@ -33,6 +34,7 @@ class SpaceResolutionTest extends TestCase
             ->cachePlan(SpacedPost::query()->toBase(), CachePlanContext::models());
 
         $this->assertFalse($plan->isCacheable(), 'SpacedPost(content) depending on Author(default) must bypass');
+        $this->assertSame(CacheOperation::Models, $plan->operation);
         $this->assertTrue($plan->hasBypassReason('dependency'));
     }
 
