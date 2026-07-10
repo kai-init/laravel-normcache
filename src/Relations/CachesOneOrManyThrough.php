@@ -9,6 +9,7 @@ use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
@@ -67,7 +68,8 @@ trait CachesOneOrManyThrough
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
 
-        $runThrough = fn() => NormCache::rescue(
+        $runThrough = fn() => CacheFallback::rescue(
+            NormCache::config(),
             fn() => NormCache::engine()->runNormalized(
                 fetch: fn() => NormCache::getThroughCache($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
                 waitForBuild: fn() => NormCache::waitForThroughBuild(
@@ -91,22 +93,25 @@ trait CachesOneOrManyThrough
                     $cachePayload = $this->cachePayloadFromResult($rawModels);
                     $space = NormCache::keys()->activeSpace();
 
-                    NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
-                        $stored = NormCache::storeThroughIds(
-                            $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
-                            $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
-                        );
-
-                        if ($stored) {
-                            NormCache::storeModelAttrsForVersionedResult(
-                                $relatedClass,
-                                $modelAttrs,
-                                $result->build->versionKeys,
-                                $result->build->expectedVersions,
-                                $space,
+                    CacheFallback::attempt(
+                        NormCache::config(),
+                        function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
+                            $stored = NormCache::storeThroughIds(
+                                $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
+                                $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
                             );
-                        }
-                    });
+
+                            if ($stored) {
+                                NormCache::storeModelAttrsForVersionedResult(
+                                    $relatedClass,
+                                    $modelAttrs,
+                                    $result->build->versionKeys,
+                                    $result->build->expectedVersions,
+                                    $space,
+                                );
+                            }
+                        },
+                    );
 
                     return $prepared->applyAfterCallbacks($rawModels);
                 },

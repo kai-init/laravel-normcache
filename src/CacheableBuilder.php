@@ -19,6 +19,7 @@ use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Relations\CachesRelationExistence;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -252,11 +253,13 @@ class CacheableBuilder extends Builder
         ));
 
         return NormCache::withSpace($plan->space, fn() => match ($plan->strategy) {
-            CacheStrategy::DirectModels => NormCache::rescue(
+            CacheStrategy::DirectModels => CacheFallback::rescue(
+                NormCache::config(),
                 fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
                 fn() => $this->collectFromPrepared($prepared, $columns),
             ),
-            CacheStrategy::NormalizedQuery => NormCache::rescue(
+            CacheStrategy::NormalizedQuery => CacheFallback::rescue(
+                NormCache::config(),
                 fn() => $this->modelsExecutor()->runNormalized($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
                 fn() => $this->collectFromPrepared($prepared, $columns)
             ),
@@ -323,7 +326,7 @@ class CacheableBuilder extends Builder
         try {
             $cachedTotal = NormCache::withSpace($plan->space, fn() => $this->rememberPaginationTotal($prepared, $plan));
         } catch (\Throwable $e) {
-            NormCache::fallback($e);
+            CacheFallback::fallback(NormCache::config(), $e);
 
             $cachedTotal = null;
         }

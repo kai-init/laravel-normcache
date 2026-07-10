@@ -4,9 +4,9 @@ namespace NormCache\Cache;
 
 use Closure;
 use NormCache\Enums\ResultKind;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
-use NormCache\Support\FallbackHandler;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CachePlan;
@@ -40,7 +40,7 @@ final class ResultExecutor
         $depTableKeys = $plan->dependencies->tables;
         $structuredPayload = $kind === ResultKind::Collection;
 
-        $execution = FallbackHandler::rescue(
+        $execution = CacheFallback::rescue(
             $this->config,
             fn() => $this->engine->runScalar(
                 fetch: fn() => $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),

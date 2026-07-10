@@ -14,7 +14,6 @@ use NormCache\Cache\VersionTracker;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\FallbackHandler;
 use NormCache\Support\RedisStore;
 use NormCache\Traits\HandlesInvalidation;
 use NormCache\Values\CacheConfig;
@@ -279,23 +278,5 @@ class CacheManager
             $this->keys->verKey($classKey, $space),
             $expectedVersion
         );
-    }
-
-    // -------------------------------------------------------------------------
-    // Flow
-    // -------------------------------------------------------------------------
-    public function rescue(callable $operation, callable $fallback): mixed
-    {
-        return FallbackHandler::rescue($this->config, $operation, $fallback);
-    }
-
-    public function attempt(callable $operation): bool
-    {
-        return FallbackHandler::attempt($this->config, $operation);
-    }
-
-    public function fallback(\Throwable $e): void
-    {
-        FallbackHandler::fallback($this->config, $e);
     }
 }

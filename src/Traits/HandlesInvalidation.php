@@ -5,6 +5,7 @@ namespace NormCache\Traits;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Values\CacheSpace;
 
@@ -234,21 +235,24 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->attempt(function () use ($flushes, $versions) {
-            foreach ($flushes as $modelClass) {
-                $this->forceFlushModel($modelClass);
-            }
+        CacheFallback::attempt(
+            $this->config,
+            function () use ($flushes, $versions) {
+                foreach ($flushes as $modelClass) {
+                    $this->forceFlushModel($modelClass);
+                }
 
-            $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
+                $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
 
-            foreach ($versions as $classKey => $spaces) {
-                if (!in_array($classKey, $flushClassKeys, true)) {
-                    foreach ($spaces as $space) {
-                        $this->doInvalidateKey($classKey, $space);
+                foreach ($versions as $classKey => $spaces) {
+                    if (!in_array($classKey, $flushClassKeys, true)) {
+                        foreach ($spaces as $space) {
+                            $this->doInvalidateKey($classKey, $space);
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     public function discardPending(string $connectionName): void
@@ -271,7 +275,7 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->attempt($immediate);
+        CacheFallback::attempt($this->config, $immediate);
     }
 
     private function doInvalidateVersion(string $modelClass): void
