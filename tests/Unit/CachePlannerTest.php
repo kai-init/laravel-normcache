@@ -44,7 +44,7 @@ class CachePlannerTest extends UnitTestCase
         );
 
         $this->assertTrue($plan->isNormalized());
-        $this->assertSame([], $plan->reasons);
+        $this->assertSame([], $plan->flatReasons());
         $this->assertSame([], $plan->bypassReasons);
     }
 

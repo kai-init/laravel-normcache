@@ -109,8 +109,6 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $registry = $this->registry();
 
         $this->assertSame(['default'], array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')));
-        $this->assertTrue($registry->tableAllowedInSpace('mysql:legacy_flags', 'default'));
-        $this->assertFalse($registry->tableAllowedInSpace('mysql:legacy_flags', 'content'));
     }
 
     public function test_single_base_model_dependencies_do_not_need_validation(): void

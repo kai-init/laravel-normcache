@@ -115,14 +115,6 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['foo', 'baz', 'missing'], $connection->reads);
     }
 
-    public function test_it_can_set_many_values(): void
-    {
-        $this->store->setMany(['foo' => 'bar', 'baz' => 'qux'], 60);
-
-        $this->assertSame('bar', $this->store->get('foo'));
-        $this->assertSame('qux', $this->store->get('baz'));
-    }
-
     public function test_it_can_run_lua_scripts(): void
     {
         $script = "return redis.call('GET', KEYS[1])";

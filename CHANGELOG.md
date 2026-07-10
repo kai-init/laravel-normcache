@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Extracted `ModelHydrator`'s static Eloquent-internals utilities into `Support\RawAttributes` (bound closures) and `Support\ScalarTransformer` (cached scalar cast/mutator handling), and unified the two miss-path fetchers' cache-write bookkeeping.
+- Removed the write-only `CachePlan::$reasons` field; flat reason lists are now derived via `CachePlan::flatReasons()`.
+- Typed the remaining raw Lua status strings (`ModelHydrator`, pivot fetch) through the `LuaStatus` enum.
+- Removed dead internal surface: `ExecutionEngine::runResult()`, `QueryInspection::hasNormalizationBypass()`, `CacheSpaceRegistry::materializedSpaces()`/`tableAllowedInSpace()`, `ProjectionClassifier::containsWildcard()`, `RedisStore::setMany()`.
+
 ---
 
 ## [3.0.0] — 2026-07-06

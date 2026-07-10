@@ -38,14 +38,6 @@ class ProjectionClassifierTest extends TestCase
         $this->assertFalse(ProjectionClassifier::isExactFullModelProjection(['authors.id'], 'authors'));
     }
 
-    public function test_contains_wildcard(): void
-    {
-        $this->assertFalse(ProjectionClassifier::containsWildcard(null));
-        $this->assertTrue(ProjectionClassifier::containsWildcard(['*']));
-        $this->assertTrue(ProjectionClassifier::containsWildcard(['authors.*']));
-        $this->assertFalse(ProjectionClassifier::containsWildcard(['id']));
-    }
-
     public function test_has_required_key(): void
     {
         $this->assertTrue(ProjectionClassifier::hasRequiredKey(['*'], 'authors', 'id'));

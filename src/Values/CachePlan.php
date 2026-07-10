@@ -8,7 +8,6 @@ use NormCache\Enums\CacheStrategy;
 final readonly class CachePlan
 {
     /**
-     * @param  list<string>  $reasons
      * @param  array<string, list<string>>  $bypassReasons
      */
     public function __construct(
@@ -18,7 +17,6 @@ final readonly class CachePlan
         public bool $normalizable = false,
         public ?array $columns = null,
         public ?array $primaryKeys = null,
-        public array $reasons = [],
         public array $bypassReasons = [],
         public ?CacheSpace $space = null,
     ) {}
@@ -32,7 +30,6 @@ final readonly class CachePlan
             normalizable: $this->normalizable,
             columns: $this->columns,
             primaryKeys: $this->primaryKeys,
-            reasons: $this->reasons,
             bypassReasons: $this->bypassReasons,
             space: $space,
         );
@@ -74,14 +71,12 @@ final readonly class CachePlan
     public static function bypass(
         CacheOperation $operation,
         DependencySet $dependencies,
-        array $reasons = [],
         array $bypassReasons = [],
     ): self {
         return new self(
             strategy: CacheStrategy::LiveQuery,
             operation: $operation,
             dependencies: $dependencies,
-            reasons: $reasons,
             bypassReasons: $bypassReasons,
         );
     }
@@ -105,6 +100,12 @@ final readonly class CachePlan
     public function hasBypassReason(string $category): bool
     {
         return isset($this->bypassReasons[$category]) && !empty($this->bypassReasons[$category]);
+    }
+
+    /** @return list<string> all bypass reasons, category order preserved */
+    public function flatReasons(): array
+    {
+        return array_values(array_unique(array_merge(...array_values($this->bypassReasons ?: [[]]))));
     }
 
     public function isCacheable(): bool

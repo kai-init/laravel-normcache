@@ -44,15 +44,6 @@ final class CacheSpaceRegistry
     }
 
     /** @return list<CacheSpace> */
-    public function materializedSpaces(): array
-    {
-        $spaces = $this->spaces;
-        $spaces[self::DEFAULT_SPACE] ??= $this->defaultSpace();
-
-        return array_values($spaces);
-    }
-
-    /** @return list<CacheSpace> */
     public function knownSpaces(): array
     {
         $names = array_values(array_unique([
@@ -81,11 +72,6 @@ final class CacheSpaceRegistry
     public function modelAllowedInSpace(string $modelClass, CacheSpace|string $space): bool
     {
         return $this->isAllowed($this->spacesForModel($modelClass), $space);
-    }
-
-    public function tableAllowedInSpace(string $table, CacheSpace|string $space): bool
-    {
-        return $this->isAllowed($this->spacesForTable($table), $space);
     }
 
     public function dependenciesAreOnlyModel(string $modelClass, array $models, array $tables): bool

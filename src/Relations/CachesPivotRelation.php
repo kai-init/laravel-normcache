@@ -6,13 +6,13 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
-use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
+use NormCache\Support\RawAttributes;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\CacheSpace;
 use NormCache\Values\PreparedQuery;
@@ -286,7 +286,7 @@ trait CachesPivotRelation
         }
 
         $modelsById = [];
-        $getAttribute = ModelHydrator::getAttributeDirectClosure();
+        $getAttribute = RawAttributes::getAttributeClosure();
         $keyName = $this->related->getKeyName();
         foreach (NormCache::getModels(array_keys($uniqueRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
             $modelsById[$getAttribute($model, $keyName)] = $model;
@@ -305,7 +305,7 @@ trait CachesPivotRelation
                 $model = clone $modelsById[$entry['id']];
 
                 $pivot = clone $templatePivot;
-                ModelHydrator::hydrateClosure()($pivot, $entry['pivot'], false);
+                RawAttributes::hydrateClosure()($pivot, $entry['pivot'], false);
 
                 $model->setRelation($this->accessor, $pivot);
 
@@ -345,7 +345,7 @@ trait CachesPivotRelation
                 $pivot = $template = $this->newExistingPivot($values);
             } else {
                 $pivot = clone $template;
-                ModelHydrator::hydrateClosure()($pivot, $values, false);
+                RawAttributes::hydrateClosure()($pivot, $values, false);
             }
 
             $model->setRelation($this->accessor, $pivot);

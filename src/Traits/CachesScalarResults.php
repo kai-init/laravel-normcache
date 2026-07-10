@@ -5,12 +5,12 @@ namespace NormCache\Traits;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
-use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Support\ScalarTransformer;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 
@@ -177,7 +177,7 @@ trait CachesScalarResults
             return $results;
         }
 
-        return ModelHydrator::transformScalars($results, $this->model, $column);
+        return ScalarTransformer::transformScalars($results, $this->model, $column);
     }
 
     private function valueFromPreparedBase(QueryBuilder $base, mixed $column): mixed
@@ -199,6 +199,6 @@ trait CachesScalarResults
             return $value;
         }
 
-        return ModelHydrator::transformScalar($value, $this->model, $column);
+        return ScalarTransformer::transformScalar($value, $this->model, $column);
     }
 }

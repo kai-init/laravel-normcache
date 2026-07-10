@@ -4,7 +4,6 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
-use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
@@ -13,6 +12,7 @@ use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
+use NormCache\Support\RawAttributes;
 use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
@@ -214,8 +214,8 @@ trait CachesOneOrManyThrough
         $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
-            $getAttribute = ModelHydrator::getAttributeDirectClosure();
-            $setAttribute = ModelHydrator::setAttributeDirectClosure();
+            $getAttribute = RawAttributes::getAttributeClosure();
+            $setAttribute = RawAttributes::setAttributeClosure();
             $keyName = $this->related->getKeyName();
             foreach ($models as $model) {
                 $id = $getAttribute($model, $keyName);

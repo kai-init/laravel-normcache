@@ -5,51 +5,18 @@ namespace NormCache\Cache;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use Illuminate\Support\Collection;
 use NormCache\CacheableBuilder;
+use NormCache\Enums\LuaStatus;
 use NormCache\Support\AttributeProjector;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
+use NormCache\Support\RawAttributes;
 use NormCache\Support\RedisStore;
 use NormCache\Values\ModelFetchContext;
 
 final class ModelHydrator
 {
-    private static ?\Closure $hydrateClosure = null;
-
-    private static ?\Closure $setAttributeDirectClosure = null;
-
     private static array $overridesNewFromBuilder = [];
-
-    private static ?\Closure $getAttributeDirectClosure = null;
-
-    private static ?\Closure $transformScalarClosure = null;
-
-    private static ?\Closure $transformScalarsClosure = null;
-
-    private const STATELESS_CASTS = [
-        'array' => true,
-        'bool' => true,
-        'boolean' => true,
-        'collection' => true,
-        'custom_datetime' => true,
-        'date' => true,
-        'datetime' => true,
-        'decimal' => true,
-        'double' => true,
-        'float' => true,
-        'immutable_custom_datetime' => true,
-        'immutable_date' => true,
-        'immutable_datetime' => true,
-        'int' => true,
-        'integer' => true,
-        'json' => true,
-        'json:unicode' => true,
-        'object' => true,
-        'real' => true,
-        'string' => true,
-        'timestamp' => true,
-    ];
 
     public function __construct(
         private readonly RedisStore $store,
@@ -131,13 +98,13 @@ final class ModelHydrator
 
         [$status, $missed] = $this->fetchMissedStatus($missed, $context);
 
-        if ($status === 'building' && $missed !== []) {
+        if ($status === LuaStatus::Building && $missed !== []) {
             $this->store->brpop($context->wakeKey, $this->stampedeWaitMs / 1000.0);
 
             [$status, $missed] = $this->fetchMissedStatus($missed, $context);
         }
 
-        if ($status === 'miss') {
+        if ($status === LuaStatus::Miss) {
             try {
                 $this->fetchAndMerge($missed, $context, true);
             } catch (\Throwable $e) {
@@ -145,7 +112,7 @@ final class ModelHydrator
 
                 throw $e;
             }
-        } elseif ($status === 'hit' && $missed !== []) {
+        } elseif ($status === LuaStatus::Hit && $missed !== []) {
             // Corrupt payload: Lua reported hit but deserialization failed. Only the lock owner overwrites.
             if ($this->store->setNxEx($context->lockKey, $context->token, $this->buildingLockTtl)) {
                 try {
@@ -157,7 +124,7 @@ final class ModelHydrator
             } else {
                 $this->fetchAndMerge($missed, $context, false);
             }
-        } elseif ($status === 'building' && $missed !== []) {
+        } elseif ($status === LuaStatus::Building && $missed !== []) {
             $this->fetchAndMerge($missed, $context, false);
         }
 
@@ -197,6 +164,7 @@ final class ModelHydrator
     }
 
     // Re-checks still-missing ids and atomically claims the build lock if anything's still missing.
+    /** @return array{0: LuaStatus, 1: list<int|string>} */
     private function fetchMissedStatus(array $idsToFetch, ModelFetchContext $context): array
     {
         $fetchKeys = $this->modelKeysFor($context->classKey, $context->modelVersion, $idsToFetch);
@@ -212,10 +180,10 @@ final class ModelHydrator
         }
 
         if ($stillMissed === []) {
-            return ['hit', []];
+            return [LuaStatus::Hit, []];
         }
 
-        return [$result[0], $stillMissed];
+        return [LuaStatus::fromLua($result[0] ?? null), $stillMissed];
     }
 
     private function fetchAndMerge(array $missed, ModelFetchContext $context, bool $writeCache): void
@@ -236,7 +204,7 @@ final class ModelHydrator
         $modelClass = $model instanceof Model ? $model::class : $model;
         $prototype = $model instanceof Model ? $model : CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
-        $hydrate = self::hydrateClosure();
+        $hydrate = RawAttributes::hydrateClosure();
 
         $models = [];
         foreach ($payload as $attrs) {
@@ -259,45 +227,11 @@ final class ModelHydrator
         return $models;
     }
 
-    public static function transformScalar(mixed $value, Model $model, string $column): mixed
-    {
-        $isCast = self::resolveStatelessScalarMode($model, $column);
-
-        if ($isCast === null) {
-            return $model->newFromBuilder([$column => $value])->{$column};
-        }
-
-        return self::transformScalarClosure()($model, $column, $value, $isCast);
-    }
-
-    public static function transformScalars(Collection $results, Model $model, string $column): Collection
-    {
-        $isCast = self::resolveStatelessScalarMode($model, $column);
-        $values = $results->all();
-
-        if ($isCast === null) {
-            $template = $model->newInstance([], true);
-            $hydrate = self::hydrateClosure();
-
-            foreach ($values as $key => $value) {
-                $instance = clone $template;
-                $hydrate($instance, [$column => $value], true);
-                $values[$key] = $instance->{$column};
-            }
-
-            return new Collection($values);
-        }
-
-        return new Collection(
-            self::transformScalarsClosure()($model, $column, $values, $isCast),
-        );
-    }
-
     private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
     {
         $prototype = $prototype ?? CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
-        $hydrate = self::hydrateClosure();
+        $hydrate = RawAttributes::hydrateClosure();
         $hits = [];
         $missed = [];
 
@@ -345,31 +279,19 @@ final class ModelHydrator
     ): array {
         $prototype = CacheKeyBuilder::prototype($context->modelClass);
         $pk = $prototype->getKeyName();
-        $qualifiedPk = $prototype->getQualifiedKeyName();
-        $loaded = $query->whereIn($qualifiedPk, $missed)
-            ->get([$prototype->getTable() . '.*'])
-            ->keyBy($pk);
+        $loaded = $query->whereIn($prototype->getQualifiedKeyName(), $missed)
+            ->get([$prototype->getTable() . '.*']);
+        $hydrate = $context->projection !== null ? RawAttributes::hydrateClosure() : null;
 
-        $attrsByKey = [];
-        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($context->modelClass);
-        $hydrate = $context->projection !== null ? self::hydrateClosure() : null;
-
-        foreach ($loaded as $id => $model) {
+        return $this->cacheAndCollect($loaded, $context, $writeCache, function ($model) use ($pk, $hydrate, $context) {
             $attrs = $model->getRawOriginal();
-
-            $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
-            if ($writeCache && !$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($context->classKey, $context->modelVersion) . $id] = $attrs;
-            }
 
             if ($hydrate !== null) {
                 $hydrate($model, AttributeProjector::projectAttributes($attrs, $context->projection), false);
             }
-        }
 
-        $this->storeModelAttrs($attrsByKey, $context, $writeCache);
-
-        return $loaded->all();
+            return array_key_exists($pk, $attrs) ? [$attrs[$pk], $attrs, $model] : null;
+        });
     }
 
     private function fetchAndCacheUsingClosure(
@@ -380,30 +302,18 @@ final class ModelHydrator
     ): array {
         $prototype = $query->getModel();
         $pk = $prototype->getKeyName();
-        $qualifiedPk = $prototype->getQualifiedKeyName();
-        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($context->modelClass);
-        $hydrate = self::hydrateClosure();
+        $hydrate = RawAttributes::hydrateClosure();
         $connectionName = $prototype->getConnectionName();
 
-        $rows = $query->whereIn($qualifiedPk, $missed)
+        $rows = $query->whereIn($prototype->getQualifiedKeyName(), $missed)
             ->toBase()
             ->get([$prototype->getTable() . '.*']);
 
-        $models = [];
-        $attrsByKey = [];
-
-        foreach ($rows as $row) {
+        return $this->cacheAndCollect($rows, $context, $writeCache, function ($row) use ($pk, $prototype, $hydrate, $connectionName, $context) {
             $attrs = (array) $row;
 
             if (!array_key_exists($pk, $attrs)) {
-                continue;
-            }
-
-            $id = $attrs[$pk];
-
-            $isTrashed = $deletedAtCol && isset($attrs[$deletedAtCol]);
-            if ($writeCache && !$isTrashed) {
-                $attrsByKey[$this->keys->modelPrefix($context->classKey, $context->modelVersion) . $id] = $attrs;
+                return null;
             }
 
             $returnAttrs = $context->projection !== null
@@ -414,7 +324,36 @@ final class ModelHydrator
             $instance->setConnection($connectionName);
             $hydrate($instance, $returnAttrs, true);
 
-            $models[$id] = $instance;
+            return [$attrs[$pk], $attrs, $instance];
+        });
+    }
+
+    /**
+     * Shared miss-path bookkeeping: cache-write non-trashed rows, key models by id.
+     *
+     * @param  callable(mixed): (array{mixed, array<string, mixed>, Model}|null)  $each  row → [id, raw attrs, model]; null skips the row
+     */
+    private function cacheAndCollect(iterable $rows, ModelFetchContext $context, bool $writeCache, callable $each): array
+    {
+        $deletedAtCol = CacheKeyBuilder::deletedAtColumn($context->modelClass);
+        $prefix = $this->keys->modelPrefix($context->classKey, $context->modelVersion);
+        $attrsByKey = [];
+        $models = [];
+
+        foreach ($rows as $row) {
+            $result = $each($row);
+
+            if ($result === null) {
+                continue;
+            }
+
+            [$id, $attrs, $model] = $result;
+
+            if ($writeCache && !($deletedAtCol && isset($attrs[$deletedAtCol]))) {
+                $attrsByKey[$prefix . $id] = $attrs;
+            }
+
+            $models[$id] = $model;
         }
 
         $this->storeModelAttrs($attrsByKey, $context, $writeCache);
@@ -447,119 +386,6 @@ final class ModelHydrator
 
         return self::$overridesNewFromBuilder[$class] ??=
             (new \ReflectionMethod($model, 'newFromBuilder'))->getDeclaringClass()->getName() !== Model::class;
-    }
-
-    public static function hydrateClosure(): \Closure
-    {
-        return self::$hydrateClosure ??= \Closure::bind(
-            static function (Model $instance, array $attrs, bool $fire): void {
-                $instance->attributes = $attrs;
-                $instance->original = $attrs;
-                $instance->classCastCache = [];
-                $instance->attributeCastCache = [];
-                $instance->exists = true;
-                if ($fire) {
-                    $instance->fireModelEvent('retrieved', false);
-                }
-            },
-            null,
-            Model::class
-        );
-    }
-
-    public static function setAttributeDirectClosure(): \Closure
-    {
-        return self::$setAttributeDirectClosure ??= \Closure::bind(
-            static function (Model $instance, string $key, mixed $value): void {
-                $instance->attributes[$key] = $value;
-            },
-            null,
-            Model::class
-        );
-    }
-
-    public static function getAttributeDirectClosure(): \Closure
-    {
-        return self::$getAttributeDirectClosure ??= \Closure::bind(
-            static function (Model $instance, string $key): mixed {
-                return $instance->attributes[$key] ?? null;
-            },
-            null,
-            Model::class
-        );
-    }
-
-    private static function resolveStatelessScalarMode(Model $model, string $column): ?bool
-    {
-        if ($model->hasAnyGetMutator($column)) {
-            return null;
-        }
-
-        $cast = $model->getCasts()[$column] ?? null;
-
-        if ($cast === null) {
-            if (!in_array($column, $model->getDates(), true)) {
-                return null;
-            }
-
-            $isCast = false;
-        } elseif (!is_string($cast)) {
-            return null;
-        } else {
-            $cast = strtolower(explode(':', $cast, 2)[0]);
-
-            if (!isset(self::STATELESS_CASTS[$cast])) {
-                return null;
-            }
-
-            $isCast = true;
-        }
-
-        $dispatcher = $model::getEventDispatcher();
-
-        if ($dispatcher !== null && $dispatcher->hasListeners('eloquent.retrieved: ' . $model::class)) {
-            return null;
-        }
-
-        return $isCast;
-    }
-
-    private static function transformScalarClosure(): \Closure
-    {
-        return self::$transformScalarClosure ??= \Closure::bind(
-            static function (Model $model, string $column, mixed $value, bool $isCast): mixed {
-                if ($isCast) {
-                    return $model->castAttribute($column, $value);
-                }
-
-                return $value === null ? null : $model->asDateTime($value);
-            },
-            null,
-            Model::class
-        );
-    }
-
-    private static function transformScalarsClosure(): \Closure
-    {
-        return self::$transformScalarsClosure ??= \Closure::bind(
-            static function (Model $model, string $column, array $values, bool $isCast): array {
-                if ($isCast) {
-                    foreach ($values as $key => $value) {
-                        $values[$key] = $model->castAttribute($column, $value);
-                    }
-
-                    return $values;
-                }
-
-                foreach ($values as $key => $value) {
-                    $values[$key] = $value === null ? null : $model->asDateTime($value);
-                }
-
-                return $values;
-            },
-            null,
-            Model::class
-        );
     }
 
     private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery, bool $preserveQueryShape): EloquentBuilder
