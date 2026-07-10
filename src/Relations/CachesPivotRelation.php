@@ -13,6 +13,7 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
 use NormCache\Support\RawAttributes;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\CacheSpace;
 use NormCache\Values\PreparedQuery;
@@ -91,12 +92,12 @@ trait CachesPivotRelation
 
         $parentClass = $this->parent::class;
         $relatedClass = $this->related::class;
-        $parentClassKey = NormCache::classKey($parentClass);
+        $parentClassKey = NormCache::keys()->classKey($parentClass);
 
         $runPivot = fn() => CacheFallback::rescue(
             NormCache::config(),
             fn() => NormCache::engine()->runPivot(
-                fetch: fn() => NormCache::getPivotCache(
+                fetch: fn() => NormCache::results()->fetchPivot(
                     $parentClass,
                     $relatedClass,
                     $this->relationName,
@@ -104,7 +105,7 @@ trait CachesPivotRelation
                     $constraintHash,
                     $this->pivotTableKey()
                 ),
-                waitForBuild: fn() => NormCache::waitForPivotBuild(
+                waitForBuild: fn() => NormCache::results()->waitForPivotBuild(
                     $parentClass, $relatedClass, $this->relationName, $cacheParentIds, $constraintHash, $this->pivotTableKey()
                 ),
                 onBuild: fn() => $this->getFromPreparedPivotBuilder($prepared),
@@ -125,7 +126,7 @@ trait CachesPivotRelation
                     CacheFallback::attempt(
                         NormCache::config(),
                         function () use ($models, $cacheParentIds, $parentClassKey, $relatedClass, $constraintHash, $pivotResult, $shouldCacheRelatedModels, $ttl, $space) {
-                            $relatedKey = NormCache::classKey($relatedClass);
+                            $relatedKey = NormCache::keys()->classKey($relatedClass);
                             $keyMap = [];
                             foreach ($cacheParentIds as $parentId) {
                                 $keyMap[$parentId] = NormCache::keys()->pivotKey(
@@ -134,9 +135,12 @@ trait CachesPivotRelation
                                 );
                             }
                             $this->populatePivotCache(
-                                $models, $keyMap, $relatedClass, $shouldCacheRelatedModels,
-                                $pivotResult->build->versionKeys, $pivotResult->build->expectedVersions, $ttl,
-                                $pivotResult->build->buildingKey, $pivotResult->build->wakeKey, $pivotResult->build->buildingToken,
+                                $models,
+                                $keyMap,
+                                $relatedClass,
+                                $shouldCacheRelatedModels,
+                                $ttl,
+                                $pivotResult->build,
                                 $space,
                             );
                         },
@@ -199,7 +203,7 @@ trait CachesPivotRelation
 
     private function pivotTableKey(): string
     {
-        return NormCache::tableKey(
+        return NormCache::keys()->tableKey(
             $this->parent->getConnection()->getName(),
             $this->table
         );
@@ -219,9 +223,12 @@ trait CachesPivotRelation
     }
 
     private function populatePivotCache(
-        Collection $results, array $keyMap, string $relatedClass, bool $cacheRelatedModels,
-        array $versionKeys, array $expectedVersions, ?int $ttl = null,
-        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null,
+        Collection $results,
+        array $keyMap,
+        string $relatedClass,
+        bool $cacheRelatedModels,
+        ?int $ttl,
+        BuildHandle $build,
         ?CacheSpace $space = null,
     ): void {
         $pivotMap = array_fill_keys(array_keys($keyMap), []);
@@ -256,17 +263,17 @@ trait CachesPivotRelation
             $pivotEntriesByKey[$keyMap[$parentId]] = $entries;
         }
 
-        $stored = NormCache::storeManyVersionedResults(
-            $pivotEntriesByKey, ttl: $ttl, versionKeys: $versionKeys, expectedVersions: $expectedVersions,
-            buildingKey: $buildingKey, wakeKey: $wakeKey, buildingToken: $buildingToken,
+        $stored = NormCache::results()->storeMany(
+            $pivotEntriesByKey,
+            $ttl,
+            $build,
         );
 
         if ($stored) {
-            NormCache::storeModelAttrsForVersionedResult(
+            NormCache::models()->storeForBuild(
                 $relatedClass,
                 $modelAttrs,
-                $versionKeys,
-                $expectedVersions,
+                $build,
                 $space,
             );
         }
@@ -288,7 +295,7 @@ trait CachesPivotRelation
         $modelsById = [];
         $getAttribute = RawAttributes::getAttributeClosure();
         $keyName = $this->related->getKeyName();
-        foreach (NormCache::getModels(array_keys($uniqueRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
+        foreach (NormCache::hydrator()->getModels(array_keys($uniqueRelatedIds), $relatedClass, $selectedRelatedColumns) as $model) {
             $modelsById[$getAttribute($model, $keyName)] = $model;
         }
 

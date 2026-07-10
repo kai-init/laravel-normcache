@@ -11,7 +11,7 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\PivotCacheResult;
 use NormCache\Values\ResultCacheResult;
 
-final class ResultCacheReader
+final class ResultCacheRepository
 {
     public function __construct(
         private readonly RedisStore $store,
@@ -77,7 +77,6 @@ final class ResultCacheReader
                 return new ResultCacheResult(CacheStatus::Hit, $resultKey, $unserialized, new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions));
             }
 
-            // Corrupt payload (not an array), treat as miss.
             $alreadyClaimed = false;
         }
 
@@ -85,7 +84,6 @@ final class ResultCacheReader
             return new ResultCacheResult(CacheStatus::Building, null, null);
         }
 
-        // Standard miss or corrupt hit: attempt to claim building lock.
         if ($alreadyClaimed || $this->store->setNxEx($buildingKey, $lockToken, $this->buildingLockTtl)) {
             if (!$alreadyClaimed) {
                 $this->store->delete($wakeKey);
@@ -170,7 +168,6 @@ final class ResultCacheReader
         return $result->status === CacheStatus::Building ? null : $result;
     }
 
-    // Lock key is segment-specific; the wake key is not, since waiters re-fetch to learn the current segment anyway.
     private function pivotLockKeys(string $relatedKey, string $relation, string $constraintHash, array $parentIds, ?string $seg): array
     {
         $sortedIds = $parentIds;
@@ -184,46 +181,56 @@ final class ResultCacheReader
     }
 
     public function store(
-        string $key, mixed $payload, ?string $buildingKey, ?int $ttl,
-        ?string $wakeKey, array $versionKeys, array $expectedVersions, ?string $buildingToken
+        string $key,
+        mixed $payload,
+        ?int $ttl,
+        BuildHandle $build,
     ): bool {
         $ttl ??= $this->queryTtl;
 
-        if ($versionKeys !== []) {
-            return $this->storeEntry($key, $payload, $ttl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
+        if ($build->versionKeys !== []) {
+            return $this->storeEntry($key, $payload, $ttl, $build);
         }
 
         return $this->store->storeSerializedAndRelease(
-            $key, $payload, $ttl, $buildingKey, $wakeKey, $buildingToken
+            $key,
+            $payload,
+            $ttl,
+            $build->buildingKey,
+            $build->wakeKey,
+            $build->buildingToken,
         );
     }
 
     public function storeMany(
-        array $entries, int $ttl,
-        array $versionKeys, array $expectedVersions,
-        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
+        array $entries,
+        ?int $ttl = null,
+        BuildHandle $build = new BuildHandle,
     ): bool {
         if (empty($entries)) {
             return true;
         }
 
+        $ttl ??= $this->queryTtl;
+
         return $this->store->storeVersionedPayload(
             array_map(fn($p) => $this->store->serialize($p), $entries),
             $ttl,
-            $versionKeys,
-            $expectedVersions,
-            $buildingKey,
-            $wakeKey,
-            $buildingToken,
+            $build->versionKeys,
+            $build->expectedVersions,
+            $build->buildingKey,
+            $build->wakeKey,
+            $build->buildingToken,
         );
     }
 
     public function storeEntry(
-        string $key, mixed $payload, int $ttl,
-        array $versionKeys, array $expectedVersions,
-        ?string $buildingKey = null, ?string $wakeKey = null, ?string $buildingToken = null
+        string $key,
+        mixed $payload,
+        ?int $ttl = null,
+        BuildHandle $build = new BuildHandle,
     ): bool {
-        return $this->storeMany([$key => $payload], $ttl, $versionKeys, $expectedVersions, $buildingKey, $wakeKey, $buildingToken);
+        return $this->storeMany([$key => $payload], $ttl, $build);
     }
 
     public function waitForBuild(

@@ -17,7 +17,7 @@ final class ResultExecutor
 {
     public function __construct(
         private readonly ExecutionEngine $engine,
-        private readonly ResultCacheReader $resultReader,
+        private readonly ResultCacheRepository $results,
         private readonly CacheConfig $config,
     ) {}
 
@@ -43,8 +43,8 @@ final class ResultExecutor
         $execution = CacheFallback::rescue(
             $this->config,
             fn() => $this->engine->runScalar(
-                fetch: fn() => $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-                waitForBuild: fn() => $this->resultReader->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+                fetch: fn() => $this->results->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+                waitForBuild: fn() => $this->results->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
                 compute: fn() => ['value' => $compute(), 'cached' => false],
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
@@ -76,15 +76,11 @@ final class ResultExecutor
 
     private function storeResult(ResultCacheResult $result, mixed $payload, ?int $ttl): void
     {
-        $this->resultReader->store(
+        $this->results->store(
             $result->key,
             is_array($payload) ? $payload : [$payload],
-            $result->build->buildingKey,
             $ttl,
-            $result->build->wakeKey,
-            $result->build->versionKeys,
-            $result->build->expectedVersions,
-            $result->build->buildingToken
+            $result->build,
         );
     }
 

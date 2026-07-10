@@ -119,10 +119,10 @@ class PivotCacheTest extends TestCase
         $author->tags()->attach($tag->id);
 
         $constraintHash = $this->callConstraintHash($author->tags());
-        $pivotTableKey = NormCache::tableKey($author->getConnection()->getName(), 'author_tag');
+        $pivotTableKey = NormCache::keys()->tableKey($author->getConnection()->getName(), 'author_tag');
 
         // Claim the same build lock another concurrent request would, before the eager load runs.
-        $claimed = NormCache::getPivotCache(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
+        $claimed = NormCache::results()->fetchPivot(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
         $this->assertNotNull($claimed->build->buildingKey);
 
         DB::enableQueryLog();
@@ -135,7 +135,7 @@ class PivotCacheTest extends TestCase
         $this->assertSame(['Fiction'], $authors->first()->tags->pluck('name')->all());
         $this->assertSame(
             $claimed->build->buildingToken,
-            NormCache::getStore()->getRaw($claimed->build->buildingKey),
+            NormCache::store()->getRaw($claimed->build->buildingKey),
             'The foreign build lock must remain untouched'
         );
     }
@@ -597,7 +597,7 @@ class PivotCacheTest extends TestCase
         $author->tags()->select('tags.*')->selectRaw('1 as polluted')->get();
 
         // The model cache should NOT contain 'polluted'
-        $cached = NormCache::getModels([$tag->id], Tag::class);
+        $cached = NormCache::hydrator()->getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
     }
 

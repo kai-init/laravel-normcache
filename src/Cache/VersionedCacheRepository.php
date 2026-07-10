@@ -7,17 +7,13 @@ use NormCache\Enums\LuaStatus;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildContext;
+use NormCache\Values\BuildHandle;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryCacheResult;
 use NormCache\Values\ThroughCacheResult;
 
-/**
- * Shared fetch/store/wait flow for the normalized id-list caches. Subclasses
- * supply only the key prefix, payload codec, and result DTO via three hooks.
- *
- * @template TResult of QueryCacheResult|ThroughCacheResult
- */
-abstract class NormalizedReader
+/** @template TResult of QueryCacheResult|ThroughCacheResult */
+abstract class VersionedCacheRepository
 {
     public function __construct(
         protected readonly RedisStore $store,
@@ -43,9 +39,7 @@ abstract class NormalizedReader
         ?array $models = null,
     ): QueryCacheResult|ThroughCacheResult;
 
-    /**
-     * @return TResult
-     */
+    /** @return TResult */
     public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult|ThroughCacheResult
     {
         $classKey = $this->keys->classKey($modelClass);
@@ -94,9 +88,7 @@ abstract class NormalizedReader
         );
     }
 
-    /**
-     * @return TResult|null
-     */
+    /** @return TResult|null */
     public function waitForBuild(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult|ThroughCacheResult|null
     {
         $classKey = $this->keys->classKey($modelClass);
@@ -107,14 +99,9 @@ abstract class NormalizedReader
         return $result->status === CacheStatus::Building ? null : $result;
     }
 
-    /**
-     * Corrupt hit: claim the build lock to rebuild, else report Building.
-     *
-     * @return TResult
-     */
-    protected function claimMissAfterCorruptHit(
-        BuildContext $build,
-    ): QueryCacheResult|ThroughCacheResult {
+    /** @return TResult */
+    protected function claimMissAfterCorruptHit(BuildContext $build): QueryCacheResult|ThroughCacheResult
+    {
         if ($this->store->setNxEx($build->buildingKey, $build->lockToken, $this->buildingLockTtl)) {
             $this->store->delete($build->wakeKey);
 
@@ -124,25 +111,20 @@ abstract class NormalizedReader
         return $this->buildResult(LuaStatus::Building, $build);
     }
 
-    // Store an encoded payload, version-guarded, releasing the build lock.
     protected function storePayload(
         string $key,
         string $payload,
         ?int $ttl,
-        ?string $buildingKey,
-        array $versionKeys,
-        array $expectedVersions,
-        ?string $buildingToken,
-        ?string $wakeKey = null,
+        BuildHandle $build,
     ): bool {
         return $this->store->storeVersionedPayload(
             [$key => $payload],
             $ttl ?? $this->queryTtl,
-            $versionKeys,
-            $expectedVersions,
-            $buildingKey,
-            $wakeKey,
-            $buildingToken,
+            $build->versionKeys,
+            $build->expectedVersions,
+            $build->buildingKey,
+            $build->wakeKey,
+            $build->buildingToken,
         );
     }
 

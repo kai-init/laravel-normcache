@@ -21,4 +21,9 @@ class ReportingCountry extends Model
     {
         return $this->hasManyThrough(SpacedPost::class, SpacedAuthor::class, 'country_id', 'author_id');
     }
+
+    public function crossSpacePosts(): HasManyThrough
+    {
+        return $this->hasManyThrough(SpacedPost::class, ReportingAuthor::class, 'country_id', 'author_id');
+    }
 }

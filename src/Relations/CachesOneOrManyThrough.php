@@ -71,8 +71,8 @@ trait CachesOneOrManyThrough
         $runThrough = fn() => CacheFallback::rescue(
             NormCache::config(),
             fn() => NormCache::engine()->runNormalized(
-                fetch: fn() => NormCache::getThroughCache($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
-                waitForBuild: fn() => NormCache::waitForThroughBuild(
+                fetch: fn() => NormCache::through()->fetch($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
+                waitForBuild: fn() => NormCache::through()->waitForBuild(
                     $relatedClass, $hash, $tag, $depClasses, $depTableKeys
                 ),
                 onBuild: fn() => $this->getFromPreparedBuilder($prepared),
@@ -96,17 +96,19 @@ trait CachesOneOrManyThrough
                     CacheFallback::attempt(
                         NormCache::config(),
                         function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
-                            $stored = NormCache::storeThroughIds(
-                                $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
-                                $result->build->buildingKey, $result->build->versionKeys, $result->build->expectedVersions, $result->build->buildingToken, $result->build->wakeKey
+                            $stored = NormCache::through()->store(
+                                $result->key,
+                                $cachePayload['ids'],
+                                $cachePayload['throughKeys'],
+                                $ttl,
+                                $result->build,
                             );
 
                             if ($stored) {
-                                NormCache::storeModelAttrsForVersionedResult(
+                                NormCache::models()->storeForBuild(
                                     $relatedClass,
                                     $modelAttrs,
-                                    $result->build->versionKeys,
-                                    $result->build->expectedVersions,
+                                    $result->build,
                                     $space,
                                 );
                             }
@@ -146,7 +148,7 @@ trait CachesOneOrManyThrough
     {
         if ($this->isSimpleThroughQuery($base, $builder)) {
             $space = NormCache::spaceFor($this->related::class, $builder->getSpace());
-            $dependencies = new DependencySet(models: [$this->throughParent::class]);
+            $dependencies = DependencySet::singleModel($this->throughParent::class);
             $plan = CachePlan::result(
                 operation: CacheOperation::Through,
                 dependencies: $dependencies,
@@ -165,7 +167,8 @@ trait CachesOneOrManyThrough
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $builder->inferAggregateDependencies()
+            $builder->inferAggregateDependencies(),
+            DependencySet::singleModel($this->throughParent::class),
         ));
 
         return $plan->usesResultCache() ? $plan : null;
@@ -210,7 +213,7 @@ trait CachesOneOrManyThrough
         ?array $raw = null,
     ): Collection {
         $builder = $prepared->builder;
-        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
+        $models = NormCache::hydrator()->getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
             $getAttribute = RawAttributes::getAttributeClosure();

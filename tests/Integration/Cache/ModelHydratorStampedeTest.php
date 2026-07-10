@@ -28,7 +28,7 @@ class ModelHydratorStampedeTest extends TestCase
         $lockKey = $keys->resultBuildingKey($classKey, $lockSegment, $lockSuffix);
 
         DB::enableQueryLog();
-        $models = $manager->getModels([$author->id], Author::class);
+        $models = $manager->hydrator()->getModels([$author->id], Author::class);
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
@@ -37,7 +37,7 @@ class ModelHydratorStampedeTest extends TestCase
         $this->assertCount(1, $queries, 'Expected exactly one DB query to hydrate the missed model');
 
         $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
-        $this->assertNull($manager->getStore()->getRaw($lockKey), 'Building lock must be released after a miss');
+        $this->assertNull($manager->store()->getRaw($lockKey), 'Building lock must be released after a miss');
     }
 
     public function test_falls_back_to_database_without_releasing_someone_elses_lock(): void
@@ -53,10 +53,10 @@ class ModelHydratorStampedeTest extends TestCase
         $lockSuffix = $keys->resultBuildIdentityHash($lockSegment, null, (string) $author->id);
         $lockKey = $keys->resultBuildingKey($classKey, $lockSegment, $lockSuffix);
 
-        $store = $manager->getStore();
+        $store = $manager->store();
         $this->assertTrue($store->setNxEx($lockKey, 'other-token', 5));
 
-        $models = $manager->getModels([$author->id], Author::class);
+        $models = $manager->hydrator()->getModels([$author->id], Author::class);
 
         $this->assertCount(1, $models);
         $this->assertSame('Bob', $models[0]->name);
@@ -71,7 +71,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_build_status_script_claims_lock_when_unheld(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
 
         $classKey = $keys->classKey(Author::class);
@@ -92,7 +92,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_build_status_script_reports_building_when_lock_already_held(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
 
         $classKey = $keys->classKey(Author::class);
@@ -115,7 +115,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_build_status_script_reports_hit_without_claiming_lock_when_recheck_resolves(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
 
         $classKey = $keys->classKey(Author::class);
@@ -137,7 +137,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_fetch_missed_status_resolves_via_retry_mget_without_claiming_lock(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
         $versions = new VersionTracker($store, $keys);
         $hydrator = new ModelHydrator($store, $keys, $versions, 3600, false, 5, 200);
@@ -176,7 +176,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_build_status_script_all_hit_across_multiple_mget_chunks(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
 
         $classKey = $keys->classKey(Author::class);
@@ -211,7 +211,7 @@ class ModelHydratorStampedeTest extends TestCase
     public function test_build_status_script_partial_miss_across_chunk_boundary(): void
     {
         $manager = $this->buildManager();
-        $store = $manager->getStore();
+        $store = $manager->store();
         $keys = new CacheKeyBuilder;
 
         $classKey = $keys->classKey(Author::class);

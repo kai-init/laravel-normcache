@@ -141,7 +141,7 @@ class CacheableMorphTo extends MorphTo
         $models = NormCache::withSpaceForModel(
             $class,
             null,
-            fn() => NormCache::getModels($ids, $class, $columns, null, $missedQuery, false),
+            fn() => NormCache::hydrator()->getModels($ids, $class, $columns, null, $missedQuery, false),
         );
         $collection = $instance->newCollection($models);
 

@@ -11,11 +11,12 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Cache\ExecutionEngine;
+use NormCache\Cache\ModelCacheRepository;
 use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\NormalizedThroughReader;
-use NormCache\Cache\ResultCacheReader;
+use NormCache\Cache\NormalizedCacheRepository;
+use NormCache\Cache\ResultCacheRepository;
 use NormCache\Cache\ResultExecutor;
+use NormCache\Cache\ThroughCacheRepository;
 use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
@@ -123,13 +124,13 @@ abstract class TestCase extends OrchestraTestCase
     {
         $manager = $this->cacheManager();
 
-        return $manager->getStore()->get($this->currentModelKey($manager, $class, $id));
+        return $manager->store()->get($this->currentModelKey($manager, $class, $id));
     }
 
     protected function evictModelCache(string $class, mixed $id): void
     {
         $manager = $this->cacheManager();
-        $manager->getStore()->delete($this->currentModelKey($manager, $class, $id));
+        $manager->store()->delete($this->currentModelKey($manager, $class, $id));
     }
 
     protected function prefixedModelKey(string $class, mixed $id): string
@@ -141,7 +142,7 @@ abstract class TestCase extends OrchestraTestCase
 
     private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
     {
-        $classKey = $manager->classKey($class);
+        $classKey = $manager->keys()->classKey($class);
         $version = $manager->currentVersion($class);
 
         return $manager->keys()->modelPrefix($classKey, $version) . $id;
@@ -151,7 +152,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         $manager = $this->cacheManager();
 
-        return $manager->getStore()->scanPattern($manager->keys()->prefixed($pattern));
+        return $manager->store()->scanPattern($manager->keys()->prefixed($pattern));
     }
 
     protected function cacheManager(): CacheManager
@@ -199,13 +200,17 @@ abstract class TestCase extends OrchestraTestCase
             dispatchEvents: $dispatchEvents,
             stampedeWakeTokens: $stampedeWakeTokens,
         );
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+        $queries = new NormalizedCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+        $results = new ResultCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+        $through = new ThroughCacheRepository($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs);
+        $models = new ModelCacheRepository($store, $keys, $versions, $config);
 
         return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
-            resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $config, $stampedeWaitMs),
-            result: new ResultExecutor($engine, $resultReader, $config),
+            queries: $queries,
+            results: $results,
+            through: $through,
+            models: $models,
+            result: new ResultExecutor($engine, $results, $config),
             hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
             versions: $versions,
             engine: $engine,

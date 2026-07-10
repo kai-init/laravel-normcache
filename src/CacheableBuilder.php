@@ -405,7 +405,7 @@ class CacheableBuilder extends Builder
         bool $cached,
         PreparedQuery $prepared,
     ): Collection {
-        return $this->finalizeResult(NormCache::hydrateResult($payload, $this->model, $cached), $prepared);
+        return $this->finalizeResult(NormCache::hydrator()->hydrateResult($payload, $this->model, $cached), $prepared);
     }
 
     public function finalizeResult(array $models, PreparedQuery $prepared): Collection

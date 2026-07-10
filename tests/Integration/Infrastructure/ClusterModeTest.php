@@ -263,7 +263,7 @@ class ClusterModeTest extends TestCase
             $this->assertEmpty($this->redisKeys('query:*:homepage:*'));
             $this->assertNotEmpty($this->redisKeys('query:*'));
 
-            $removed = $this->cacheManager()->getStore()->flushByPatterns([$this->cacheManager()->keys()->prefixed('query:*')]);
+            $removed = $this->cacheManager()->store()->flushByPatterns([$this->cacheManager()->keys()->prefixed('query:*')]);
             $this->assertGreaterThan(0, $removed);
             $this->assertEmpty($this->redisKeys('query:*'));
 
@@ -315,7 +315,7 @@ class ClusterModeTest extends TestCase
         Author::create(['name' => 'Alice']);
 
         $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->classKey(Author::class);
+        $classKey = $this->cacheManager()->keys()->classKey(Author::class);
         $verKey = '{nc}:test:ver:' . $classKey . ':';
 
         $ttl = $redis->ttl($verKey);

@@ -8,14 +8,18 @@ final readonly class CachePlanContext
 {
     public DependencySet $inferredDependencies;
 
+    public DependencySet $requiredDependencies;
+
     public function __construct(
         public CacheOperation $operation,
         public ?array $columns = null,
         ?DependencySet $inferredDependencies = null,
         public array $contextReasons = [],
         public bool $selectAll = false,
+        ?DependencySet $requiredDependencies = null,
     ) {
         $this->inferredDependencies = $inferredDependencies ?? DependencySet::empty();
+        $this->requiredDependencies = $requiredDependencies ?? DependencySet::empty();
     }
 
     /** @param  bool  $selectAll  the caller requested the default ['*'] projection */
@@ -49,8 +53,16 @@ final readonly class CachePlanContext
         return new self(CacheOperation::Pivot, $columns, $inferred);
     }
 
-    public static function through(array $columns = [], ?DependencySet $inferred = null): self
-    {
-        return new self(CacheOperation::Through, $columns, $inferred);
+    public static function through(
+        array $columns = [],
+        ?DependencySet $inferred = null,
+        ?DependencySet $required = null,
+    ): self {
+        return new self(
+            CacheOperation::Through,
+            $columns,
+            $inferred,
+            requiredDependencies: $required,
+        );
     }
 }
