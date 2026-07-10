@@ -2,7 +2,7 @@
 
 namespace NormCache\Values;
 
-/** Build-lock and version-guard state a reader hands back so the store path can write and release. */
+/** Build-lock and version-guard state a repository hands back so the store path can write and release. */
 final readonly class BuildHandle
 {
     public function __construct(

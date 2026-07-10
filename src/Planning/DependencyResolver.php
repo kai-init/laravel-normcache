@@ -45,6 +45,8 @@ final class DependencyResolver
                     ...$required->tables,
                     ...$explicitTables,
                 ])),
+                safe: $required->safe,
+                reasons: $required->reasons,
             );
         }
 
