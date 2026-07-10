@@ -9,7 +9,6 @@ use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use Predis\Client as PredisClient;
-use Predis\NotSupportedException;
 use ReflectionProperty;
 
 class RedisStoreTest extends TestCase
@@ -81,38 +80,35 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['bar', 'qux', null], $results);
     }
 
-    public function test_predis_cluster_get_many_reads_each_key_without_mget_array_command(): void
+    public function test_predis_cluster_get_many_uses_one_same_slot_mget_command(): void
     {
         $connection = new class extends PredisClusterConnection
         {
-            public array $reads = [];
+            public array $commands = [];
 
             public array $values = [];
 
             public function __construct() {}
 
-            public function mget($keys)
+            public function command($method, array $parameters = [])
             {
-                throw new NotSupportedException("Cannot use 'MGET' with redis-cluster.");
-            }
+                $this->commands[] = [$method, $parameters];
 
-            public function get($key)
-            {
-                $this->reads[] = $key;
-
-                return $this->values[$key] ?? null;
+                return array_map(fn($key) => $this->values[$key] ?? null, $parameters);
             }
         };
 
         $store = new RedisStore('normcache-test');
         $connection->values = [
-            'foo' => $store->serialize('bar'),
-            'baz' => $store->serialize('qux'),
+            '{nc}:foo' => $store->serialize('bar'),
+            '{nc}:baz' => $store->serialize('qux'),
         ];
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
-        $this->assertSame(['bar', 'qux', null], $store->getMany(['foo', 'baz', 'missing']));
-        $this->assertSame(['foo', 'baz', 'missing'], $connection->reads);
+        $keys = ['{nc}:foo', '{nc}:baz', '{nc}:missing'];
+
+        $this->assertSame(['bar', 'qux', null], $store->getMany($keys));
+        $this->assertSame([['mget', $keys]], $connection->commands);
     }
 
     public function test_it_can_run_lua_scripts(): void
@@ -239,32 +235,39 @@ class RedisStoreTest extends TestCase
         $this->assertSame('c', $this->store->get('bar:1'));
     }
 
-    public function test_predis_cluster_delete_sends_one_key_per_command(): void
+    public function test_predis_cluster_delete_batches_keys_by_hash_tag(): void
     {
         $connection = new class extends PredisClusterConnection
         {
-            public array $deleted = [];
+            public array $commands = [];
 
             public function __construct() {}
 
-            public function del($keys)
+            public function command($method, array $parameters = [])
             {
-                if (is_array($keys)) {
-                    throw new NotSupportedException("Cannot use 'DEL' with redis-cluster.");
-                }
+                $this->commands[] = [$method, $parameters];
 
-                $this->deleted[] = $keys;
-
-                return 1;
+                return count($parameters);
             }
         };
 
         $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
-        $store->delete(['foo:1', 'foo:2']);
+        $store->delete([
+            '{nc}:foo:1',
+            '{nc:content}:foo:1',
+            '{nc}:foo:2',
+            'untagged:1',
+            'untagged:2',
+        ]);
 
-        $this->assertSame(['foo:1', 'foo:2'], $connection->deleted);
+        $this->assertSame([
+            ['del', ['{nc}:foo:1', '{nc}:foo:2']],
+            ['del', ['{nc:content}:foo:1']],
+            ['del', ['untagged:1']],
+            ['del', ['untagged:2']],
+        ], $connection->commands);
     }
 
     public function test_scan_pattern_strips_connection_prefix_from_returned_keys(): void

@@ -265,7 +265,7 @@ final class RedisStore
         }
 
         $raw = $this->connection instanceof PredisClusterConnection
-            ? array_map(fn($key) => $this->connection->get($key), $keys)
+            ? $this->connection->command('mget', $keys)
             : $this->connection->mget($keys);
         $values = [];
 
@@ -346,8 +346,8 @@ final class RedisStore
     private function del(array $keys): void
     {
         if ($this->connection instanceof PredisClusterConnection) {
-            foreach ($keys as $key) {
-                $this->connection->del($key);
+            foreach ($this->groupByHashTag($keys) as $group) {
+                $this->connection->command('del', $group);
             }
 
             return;
@@ -361,6 +361,22 @@ final class RedisStore
         }
 
         $this->connection->unlink($keys);
+    }
+
+    /** @return list<list<string>> */
+    private function groupByHashTag(array $keys): array
+    {
+        $groups = [];
+
+        foreach ($keys as $key) {
+            if (preg_match('/\{([^{}]+)\}/', $key, $matches) === 1) {
+                $groups['tag:' . $matches[1]][] = $key;
+            } else {
+                $groups['key:' . $key][] = $key;
+            }
+        }
+
+        return array_values($groups);
     }
 
     public function flushByPatterns(array $patterns): int
