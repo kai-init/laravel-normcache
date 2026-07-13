@@ -36,6 +36,40 @@ final class RedisScanner
         );
     }
 
+    public function scanPatterns(array $patterns): array
+    {
+        $patterns = array_values(array_unique(array_filter($patterns, 'is_string')));
+
+        if ($patterns === []) {
+            return [];
+        }
+
+        $matched = [];
+
+        foreach ($this->groupPatternsByHashTag($patterns) as $group) {
+            $scanPatterns = count($group) === 1
+                ? $group
+                : [$this->commonScanPattern($group)];
+
+            if ($scanPatterns === ['*']) {
+                $scanPatterns = $group;
+            }
+
+            foreach ($scanPatterns as $scanPattern) {
+                foreach ($this->scanPattern($scanPattern) as $key) {
+                    foreach ($group as $pattern) {
+                        if (fnmatch($pattern, $key)) {
+                            $matched[$key] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return array_keys($matched);
+    }
+
     private function scanKeys(string $pattern): array
     {
         $keys = [];
@@ -132,6 +166,39 @@ final class RedisScanner
         }
 
         return $keys;
+    }
+
+    /** @return list<list<string>> */
+    private function groupPatternsByHashTag(array $patterns): array
+    {
+        $groups = [];
+
+        foreach ($patterns as $pattern) {
+            $group = preg_match('/^\{[^{}]+\}:/', $pattern, $matches) === 1
+                ? $matches[0]
+                : '';
+            $groups[$group][] = $pattern;
+        }
+
+        return array_values($groups);
+    }
+
+    private function commonScanPattern(array $patterns): string
+    {
+        $prefix = array_shift($patterns);
+
+        foreach ($patterns as $pattern) {
+            $length = min(strlen($prefix), strlen($pattern));
+            $i = 0;
+
+            while ($i < $length && $prefix[$i] === $pattern[$i]) {
+                $i++;
+            }
+
+            $prefix = substr($prefix, 0, $i);
+        }
+
+        return $prefix . '*';
     }
 
     private function concreteHashTag(string $pattern): ?string

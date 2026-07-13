@@ -111,7 +111,7 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $this->assertSame(['default'], array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')));
     }
 
-    public function test_table_dependency_is_valid_in_the_active_space(): void
+    public function test_validating_table_dependency_does_not_mutate_registry(): void
     {
         $registry = $this->registry();
         $content = $registry->space('content');
@@ -121,7 +121,23 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $this->assertTrue($result->isValid);
         $this->assertSame([], $result->invalidTables);
         $this->assertContains('content', $result->dependenciesBySpace['mysql:legacy_flags']);
-        $this->assertContains('content', array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')));
+        $this->assertSame(
+            ['default'],
+            array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
+        );
+    }
+
+    public function test_table_dependencies_can_be_registered_after_plan_acceptance(): void
+    {
+        $registry = $this->registry();
+        $content = $registry->space('content');
+
+        $registry->registerTableDependencies($content, ['mysql:legacy_flags']);
+
+        $this->assertContains(
+            'content',
+            array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
+        );
     }
 
     public function test_single_base_model_dependencies_do_not_need_validation(): void
@@ -161,7 +177,7 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $registry = $this->registry();
         $content = $registry->space('content');
 
-        // Author is default-only; raw table deps are registered into the active space.
+        // Author is default-only; raw table dependencies are valid in the active space.
         $result = $registry->validateDependencies($content, [SpacedPost::class, Author::class], ['mysql:legacy_flags']);
 
         $this->assertFalse($result->isValid);

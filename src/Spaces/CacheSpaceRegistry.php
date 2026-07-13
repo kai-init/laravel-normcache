@@ -94,15 +94,11 @@ final class CacheSpaceRegistry
         bool $includeDependenciesBySpace = false,
     ): SpaceValidationResult {
         $invalidModels = [];
-        $invalidTables = [];
         $dependencySpaces = [];
 
         foreach ($models as $modelClass) {
             $spaces = $this->spacesForModel($modelClass);
-
-            if ($includeDependenciesBySpace) {
-                $dependencySpaces[$modelClass] = $spaces;
-            }
+            $dependencySpaces[$modelClass] = $spaces;
 
             if (!$this->isAllowed($spaces, $space)) {
                 $invalidModels[] = $modelClass;
@@ -111,30 +107,23 @@ final class CacheSpaceRegistry
 
         foreach ($tables as $table) {
             $spaces = $this->spacesForTable($table);
+            $validatedSpaces = $this->isAllowed($spaces, $space)
+                ? $spaces
+                : [...$spaces, $space];
 
-            if (!$this->isAllowed($spaces, $space)) {
-                $spaces = $this->rememberTableSpace($table, $space);
-            }
-
-            if ($includeDependenciesBySpace) {
-                $dependencySpaces[$table] = $spaces;
-            }
-
-            if (!$this->isAllowed($spaces, $space)) {
-                $invalidTables[] = $table;
-            }
+            $dependencySpaces[$table] = $validatedSpaces;
         }
 
-        $ok = $invalidModels === [] && $invalidTables === [];
-        $dependenciesBySpace = $includeDependenciesBySpace
-            ? $this->dependencySpaceNames($dependencySpaces)
-            : ($ok ? [] : $this->dependencySpaceNamesFor($models, $tables));
+        $ok = $invalidModels === [];
+        $dependenciesBySpace = $ok && !$includeDependenciesBySpace
+            ? []
+            : $this->dependencySpaceNames($dependencySpaces);
 
         return new SpaceValidationResult(
             isValid: $ok,
             space: $space,
             invalidModels: $invalidModels,
-            invalidTables: $invalidTables,
+            invalidTables: [],
             dependenciesBySpace: $dependenciesBySpace,
         );
     }
@@ -265,6 +254,13 @@ final class CacheSpaceRegistry
         }
     }
 
+    public function registerTableDependencies(CacheSpace $space, array $tables): void
+    {
+        foreach ($tables as $table) {
+            $this->rememberTableSpace($table, $space);
+        }
+    }
+
     /** @return list<CacheSpace> */
     private function rememberTableSpace(string $table, CacheSpace $space): array
     {
@@ -335,26 +331,6 @@ final class CacheSpaceRegistry
 
         foreach ($dependencies as $dependency => $spaces) {
             $names[$dependency] = $this->spaceNames($spaces);
-        }
-
-        return $names;
-    }
-
-    /**
-     * @param  list<class-string>  $models
-     * @param  list<string>  $tables
-     * @return array<string, list<string>>
-     */
-    private function dependencySpaceNamesFor(array $models, array $tables): array
-    {
-        $names = [];
-
-        foreach ($models as $modelClass) {
-            $names[$modelClass] = $this->spaceNames($this->spacesForModel($modelClass));
-        }
-
-        foreach ($tables as $table) {
-            $names[$table] = $this->spaceNames($this->spacesForTable($table));
         }
 
         return $names;

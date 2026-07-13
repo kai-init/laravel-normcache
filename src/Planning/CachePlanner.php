@@ -77,9 +77,7 @@ final class CachePlanner
             CacheOperation::PaginationCount => $this->planScalarLike($builder, $model, $base, $context, $insideTransaction, $explain, self::SIMPLE_PAGINATION_FAST_PATH_BLOCKERS),
             CacheOperation::Pivot,
             CacheOperation::Through => $this->planRelationResult($builder, $base, $context, $insideTransaction, $explain),
-            CacheOperation::Models,
-            CacheOperation::BelongsToEagerLoad,
-            CacheOperation::MorphToEagerLoad => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
+            CacheOperation::Models => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
         };
 
         return $this->spaceValidator()->validate($plan, $builder, $model, $explain);
@@ -237,13 +235,6 @@ final class CachePlanner
             && !$hasContextDependencyBypass
             && $inspection->normalizationFlags() === 0
             && !isset($context->contextReasons['normalization']);
-        $requiresPrimaryKeys = false;
-
-        if ($context->operation === CacheOperation::BelongsToEagerLoad
-            || $context->operation === CacheOperation::MorphToEagerLoad) {
-            $requiresPrimaryKeys = $inspection->primaryKeys === null;
-            $normalizable = $normalizable && !$requiresPrimaryKeys;
-        }
 
         if ($normalizable && $dependencies->safe) {
             return CachePlan::normalized(
@@ -268,12 +259,7 @@ final class CachePlanner
             return $this->resultPlan($modelTable, $base, $context, $inspection, $dependencies);
         }
 
-        return $this->bypassPlan(
-            $context,
-            $inspection,
-            $dependencies,
-            requiresPrimaryKeys: $requiresPrimaryKeys,
-        );
+        return $this->bypassPlan($context, $inspection, $dependencies);
     }
 
     private function planInspectedResult(
@@ -485,14 +471,9 @@ final class CachePlanner
         CachePlanContext $context,
         QueryInspection $inspection,
         DependencySet $dependencies,
-        bool $requiresPrimaryKeys = false,
         bool $relaxedRelationNormalization = false,
     ): CachePlan {
         $bypassReasons = $this->mergedBypassReasons($context, $inspection);
-
-        if ($requiresPrimaryKeys) {
-            $bypassReasons['normalization'][] = 'eager load requires primary key lookup';
-        }
 
         if ($relaxedRelationNormalization) {
             unset($bypassReasons['normalization']);

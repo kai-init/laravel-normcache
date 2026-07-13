@@ -54,6 +54,10 @@ final class CachePlanSpaceValidator
         );
 
         if ($validation->isValid) {
+            if (!$explain) {
+                $this->registry->registerTableDependencies($space, $plan->dependencies->tables);
+            }
+
             return $plan->withSpace($space);
         }
 

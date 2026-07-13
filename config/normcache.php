@@ -4,7 +4,7 @@ return [
     // Redis connection from config/database.php.
     'connection' => env('NORMCACHE_CONNECTION', 'cache'),
 
-    // Master switch; false bypasses the cache.
+    // Boot-time master switch; false bypasses the cache.
     'enabled' => env('NORMCACHE_ENABLED', true),
 
     // Model attribute payload TTL (seconds).

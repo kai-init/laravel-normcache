@@ -3,8 +3,8 @@
 namespace NormCache\Values;
 
 /**
- * Runtime configuration for the cache manager. Mutable so tests and runtime
- * toggles (fallback, cooldown experiments) can adjust knobs on the live instance.
+ * Runtime configuration for the cache manager. Mutable so tests, fallback,
+ * and cooldown experiments can adjust the live request-scoped instance.
  */
 final class CacheConfig
 {

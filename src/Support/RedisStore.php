@@ -379,18 +379,15 @@ final class RedisStore
 
     public function flushByPatterns(array $patterns): int
     {
-        $total = 0;
+        $keys = ($this->scanner ??= new RedisScanner($this->connection))->scanPatterns($patterns);
 
-        foreach ($patterns as $pattern) {
-            $keys = $this->scanPattern($pattern);
-
-            if (!empty($keys)) {
-                $total += count($keys);
-                $this->asyncDel($keys);
-            }
+        if ($keys === []) {
+            return 0;
         }
 
-        return $total;
+        $this->asyncDel($keys);
+
+        return count($keys);
     }
 
     // Runs a Lua script via EVALSHA, falling back to EVAL on NOSCRIPT. All KEYS must

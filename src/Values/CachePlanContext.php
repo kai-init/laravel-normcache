@@ -38,16 +38,6 @@ final readonly class CachePlanContext
         return new self(CacheOperation::PaginationCount, null, $inferred);
     }
 
-    public static function belongsToEagerLoad(array $columns = []): self
-    {
-        return new self(CacheOperation::BelongsToEagerLoad, $columns);
-    }
-
-    public static function morphToEagerLoad(): self
-    {
-        return new self(CacheOperation::MorphToEagerLoad);
-    }
-
     public static function pivot(array $columns = [], ?DependencySet $inferred = null): self
     {
         return new self(CacheOperation::Pivot, $columns, $inferred);

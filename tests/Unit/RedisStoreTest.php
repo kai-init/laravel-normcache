@@ -325,13 +325,43 @@ class RedisStoreTest extends TestCase
         }
     }
 
-    public function test_flush_by_patterns_scans_all_phpredis_cluster_masters(): void
+    public function test_flush_by_patterns_scans_each_phpredis_cluster_master_once_and_filters_keys(): void
     {
-        $connection = new class extends PhpRedisClusterConnection
+        $client = new class
+        {
+            public array $scans = [];
+
+            public function getOption($option)
+            {
+                return 'laravel:';
+            }
+
+            public function _masters(): array
+            {
+                return ['node-a', 'node-b'];
+            }
+
+            public function scan(&$cursor, $node, $pattern = null, $count = 0)
+            {
+                $this->scans[] = [$node, $pattern];
+                $cursor = 0;
+
+                return match ($node) {
+                    'node-a' => [
+                        'laravel:{nc}:test:model:{testing:posts}:1',
+                        'laravel:{nc}:test:other:keep',
+                    ],
+                    'node-b' => ['laravel:{nc}:test:query:{testing:posts}:v1:abc'],
+                    default => [],
+                };
+            }
+        };
+
+        $connection = new class($client) extends PhpRedisClusterConnection
         {
             public array $unlinked = [];
 
-            public function __construct() {}
+            public function __construct(private object $redisClient) {}
 
             public function _prefix($key)
             {
@@ -340,30 +370,7 @@ class RedisStoreTest extends TestCase
 
             public function client()
             {
-                return new class
-                {
-                    public function getOption($option)
-                    {
-                        return 'laravel:';
-                    }
-
-                    public function _masters(): array
-                    {
-                        return ['node-a', 'node-b'];
-                    }
-
-                    public function scan(&$cursor, $node, $pattern = null, $count = 0)
-                    {
-                        $prev = $cursor;
-                        $cursor = 0;
-
-                        return match ([$pattern, $node, $prev]) {
-                            ['laravel:{nc}:test:model:*', 'node-a', null] => ['laravel:{nc}:test:model:{testing:posts}:1'],
-                            ['laravel:{nc}:test:query:*', 'node-b', null] => ['laravel:{nc}:test:query:{testing:posts}:v1:abc'],
-                            default => [],
-                        };
-                    }
-                };
+                return $this->redisClient;
             }
 
             public function unlink($keys)
@@ -381,9 +388,13 @@ class RedisStoreTest extends TestCase
 
         $this->assertSame(2, $deleted);
         $this->assertSame([
-            ['{nc}:test:model:{testing:posts}:1'],
-            ['{nc}:test:query:{testing:posts}:v1:abc'],
-        ], $connection->unlinked);
+            ['node-a', 'laravel:{nc}:test:*'],
+            ['node-b', 'laravel:{nc}:test:*'],
+        ], $client->scans);
+        $this->assertSame([[
+            '{nc}:test:model:{testing:posts}:1',
+            '{nc}:test:query:{testing:posts}:v1:abc',
+        ]], $connection->unlinked);
     }
 
     public function test_flush_by_patterns_scans_all_nodes_on_predis_cluster(): void
