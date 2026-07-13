@@ -54,14 +54,18 @@ final class CachePlanSpaceValidator
         );
 
         if ($validation->isValid) {
-            if (!$explain) {
-                $this->registry->registerTableDependencies($space, $plan->dependencies->tables);
+            if (!$explain && !$this->registry->registerTableDependencies($space, $plan->dependencies->tables)) {
+                return CachePlan::bypass(
+                    operation: $plan->operation,
+                    dependencies: $plan->dependencies,
+                    bypassReasons: ['dependency' => ['failed to register table-space dependencies']],
+                )->withSpace($space);
             }
 
             return $plan->withSpace($space);
         }
 
-        $offending = implode(', ', [...$validation->invalidModels, ...$validation->invalidTables]);
+        $offending = implode(', ', $validation->invalidModels);
         $reason = 'cross-space dependencies for space [' . $space->name . ']: ' . $offending;
 
         if (!$explain && $this->debug) {

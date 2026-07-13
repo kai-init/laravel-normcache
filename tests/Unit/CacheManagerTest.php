@@ -249,17 +249,42 @@ class CacheManagerTest extends TestCase
         $this->assertEmpty($store->scanPattern('{nc:content}:test:*'));
     }
 
-    public function test_standalone_space_resolution_does_not_write_registry_metadata(): void
+    public function test_table_space_registration_survives_a_fresh_registry_instance(): void
     {
-        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
-            $this->markTestSkipped('Redis Cluster mode intentionally writes space registry metadata for flush discovery.');
-        }
+        $tableKey = 'testing:authors';
+        $registry = $this->app->make(CacheSpaceRegistry::class);
+
+        $this->assertTrue($registry->registerTableDependencies($registry->space('content'), [$tableKey]));
 
         $this->app->forgetInstance(CacheSpaceRegistry::class);
+        $freshRegistry = $this->app->make(CacheSpaceRegistry::class);
 
-        $this->app->make(CacheSpaceRegistry::class)->spacesForModel(SpacedPost::class);
+        $this->assertContains(
+            'content',
+            array_map(fn($space) => $space->name, $freshRegistry->spacesForTable($tableKey)),
+        );
+    }
 
-        $this->assertSame([], $this->manager->store()->scanPattern('{nc:meta}:test:spaces'));
+    public function test_table_space_lookup_refreshes_mappings_registered_by_another_registry(): void
+    {
+        $tableKey = 'testing:authors';
+        $registry = $this->app->make(CacheSpaceRegistry::class);
+
+        $this->assertSame(
+            ['default'],
+            array_map(fn($space) => $space->name, $registry->spacesForTable($tableKey)),
+        );
+
+        $otherRegistry = new CacheSpaceRegistry(
+            metadataStore: $this->manager->store(),
+            metadataKeyPrefix: 'test:',
+        );
+        $this->assertTrue($otherRegistry->registerTableDependencies($otherRegistry->space('content'), [$tableKey]));
+
+        $this->assertContains(
+            'content',
+            array_map(fn($space) => $space->name, $registry->spacesForTable($tableKey)),
+        );
     }
 
     public function test_flush_all_can_target_one_space(): void

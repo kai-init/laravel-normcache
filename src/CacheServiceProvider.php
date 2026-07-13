@@ -31,7 +31,7 @@ class CacheServiceProvider extends ServiceProvider
             return new CacheSpaceRegistry(
                 maxPerModel: (int) config('normcache.spaces.max_per_model', 16),
                 placement: (array) config('normcache.spaces.placement', []),
-                metadataStore: $metadataStore->isCluster() ? $metadataStore : null,
+                metadataStore: $metadataStore,
                 metadataKeyPrefix: (string) config('normcache.key_prefix', ''),
             );
         });

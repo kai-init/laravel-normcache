@@ -26,6 +26,9 @@ final class CacheSpaceRegistry
     /** @var list<string>|null */
     private ?array $metadataSpaceNames = null;
 
+    /** @var array<string, string> hash tag => logical space name */
+    private array $hashTagOwners = [];
+
     /**
      * @param  array<string, array{hash_tag?: string}>  $placement  per-space hash-tag overrides
      */
@@ -68,7 +71,15 @@ final class CacheSpaceRegistry
     /** @return list<CacheSpace> */
     public function spacesForTable(string $table): array
     {
-        return $this->tableSpaces[$table] ??= $this->resolveTableSpaces($table);
+        $spaces = $this->tableSpaces[$table] ?? [$this->defaultSpace()];
+
+        foreach ($this->resolveTableSpaces($table) as $space) {
+            if (!$this->isAllowed($spaces, $space)) {
+                $spaces[] = $space;
+            }
+        }
+
+        return $this->tableSpaces[$table] = $spaces;
     }
 
     public function modelAllowedInSpace(string $modelClass, CacheSpace|string $space): bool
@@ -123,7 +134,6 @@ final class CacheSpaceRegistry
             isValid: $ok,
             space: $space,
             invalidModels: $invalidModels,
-            invalidTables: [],
             dependenciesBySpace: $dependenciesBySpace,
         );
     }
@@ -162,7 +172,17 @@ final class CacheSpaceRegistry
     private function materializeSpace(string $name, bool $remember = true): CacheSpace
     {
         if (!isset($this->spaces[$name])) {
-            $this->spaces[$name] = new CacheSpace($name, $this->hashTagFor($name));
+            $hashTag = $this->hashTagFor($name);
+            $owner = $this->hashTagOwners[$hashTag] ?? null;
+
+            if ($owner !== null && $owner !== $name) {
+                throw new \InvalidArgumentException(
+                    "Cache spaces [{$owner}] and [{$name}] cannot share hash tag [{$hashTag}]."
+                );
+            }
+
+            $this->hashTagOwners[$hashTag] = $name;
+            $this->spaces[$name] = new CacheSpace($name, $hashTag);
 
             if ($remember) {
                 $this->rememberSpace($name);
@@ -184,9 +204,9 @@ final class CacheSpaceRegistry
         $override = $this->placement[$name]['hash_tag'] ?? null;
 
         if ($override !== null) {
-            if ($override === '' || preg_match('/[{}]/', $override)) {
+            if ($override === '' || preg_match('/[{}*?\[\]\\\\]/', $override)) {
                 throw new \InvalidArgumentException(
-                    "Invalid hash_tag override [{$override}] for space [{$name}]: must be non-empty and contain no '{' or '}'."
+                    "Invalid hash_tag override [{$override}] for space [{$name}]: must be non-empty and contain no Redis pattern characters."
                 );
             }
 
@@ -200,7 +220,7 @@ final class CacheSpaceRegistry
 
     private function validSpaceName(string $name): bool
     {
-        return $name !== '' && !preg_match('/[:{}\s]/', $name);
+        return $name !== '' && !preg_match('/[:{}\s*?\[\]\\\\]/', $name);
     }
 
     /** @return list<string> */
@@ -231,14 +251,10 @@ final class CacheSpaceRegistry
             return [];
         }
 
-        try {
-            return array_values(array_filter(
-                $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
-                fn(string $name) => $this->validSpaceName($name),
-            ));
-        } catch (\Throwable) {
-            return [];
-        }
+        return array_values(array_filter(
+            $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
+            fn(string $name) => $this->validSpaceName($name),
+        ));
     }
 
     private function rememberSpace(string $name): void
@@ -254,37 +270,49 @@ final class CacheSpaceRegistry
         }
     }
 
-    public function registerTableDependencies(CacheSpace $space, array $tables): void
+    public function registerTableDependencies(CacheSpace $space, array $tables): bool
     {
         foreach ($tables as $table) {
-            $this->rememberTableSpace($table, $space);
+            if (!$this->rememberTableSpace($table, $space)) {
+                return false;
+            }
         }
+
+        return true;
     }
 
-    /** @return list<CacheSpace> */
-    private function rememberTableSpace(string $table, CacheSpace $space): array
+    private function rememberTableSpace(string $table, CacheSpace $space): bool
     {
         $spaces = $this->spacesForTable($table);
 
-        if (!$this->isAllowed($spaces, $space)) {
-            $spaces[] = $space;
-            $this->tableSpaces[$table] = $spaces;
-            $this->persistTableSpace($table, $space);
+        if ($this->isAllowed($spaces, $space)) {
+            return true;
         }
 
-        return $spaces;
+        if (!$this->persistTableSpace($table, $space)) {
+            return false;
+        }
+
+        $spaces[] = $space;
+        $this->tableSpaces[$table] = $spaces;
+
+        return true;
     }
 
-    private function persistTableSpace(string $table, CacheSpace $space): void
+    private function persistTableSpace(string $table, CacheSpace $space): bool
     {
         if ($this->metadataStore === null || $space->name === self::DEFAULT_SPACE) {
-            return;
+            return true;
         }
 
         try {
             $this->metadataStore->addToSet($this->metadataTableSpacesKey($table), [$space->name]);
+
+            return true;
         } catch (\Throwable $e) {
             report($e);
+
+            return false;
         }
     }
 

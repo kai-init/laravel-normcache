@@ -3,17 +3,29 @@
 namespace NormCache\Tests\Unit\Spaces;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Redis\Connections\PredisConnection;
 use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Support\RedisStore;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Traits\Cacheable;
+use ReflectionProperty;
+use RuntimeException;
 
 class CacheSpaceRegistryTest extends UnitTestCase
 {
     private function registry(int $maxPerModel = 16): CacheSpaceRegistry
     {
         return new CacheSpaceRegistry($maxPerModel);
+    }
+
+    private function registryWithConnection(PredisConnection $connection): CacheSpaceRegistry
+    {
+        $store = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        return new CacheSpaceRegistry(metadataStore: $store, metadataKeyPrefix: 'test:');
     }
 
     public function test_default_space_maps_to_nc_hash_tag(): void
@@ -68,6 +80,18 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $this->registry()->space('has space');
     }
 
+    public function test_logical_spaces_cannot_share_the_same_hash_tag(): void
+    {
+        $registry = new CacheSpaceRegistry(16, [
+            'content' => ['hash_tag' => 'shared'],
+            'reporting' => ['hash_tag' => 'shared'],
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $registry->knownSpaces();
+    }
+
     public function test_model_without_declaration_falls_back_to_default(): void
     {
         $registry = $this->registry();
@@ -119,7 +143,6 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $result = $registry->validateDependencies($content, [], ['mysql:legacy_flags'], includeDependenciesBySpace: true);
 
         $this->assertTrue($result->isValid);
-        $this->assertSame([], $result->invalidTables);
         $this->assertContains('content', $result->dependenciesBySpace['mysql:legacy_flags']);
         $this->assertSame(
             ['default'],
@@ -132,12 +155,60 @@ class CacheSpaceRegistryTest extends UnitTestCase
         $registry = $this->registry();
         $content = $registry->space('content');
 
-        $registry->registerTableDependencies($content, ['mysql:legacy_flags']);
+        $this->assertTrue($registry->registerTableDependencies($content, ['mysql:legacy_flags']));
 
         $this->assertContains(
             'content',
             array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
         );
+    }
+
+    public function test_failed_table_space_registration_is_reported_and_not_memoized(): void
+    {
+        $connection = new class extends PredisConnection
+        {
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                return match (strtolower($method)) {
+                    'smembers' => [],
+                    'sadd' => throw new RuntimeException('SADD denied'),
+                    default => null,
+                };
+            }
+        };
+        $registry = $this->registryWithConnection($connection);
+        $content = $registry->space('content');
+
+        $this->assertFalse($registry->registerTableDependencies($content, ['mysql:legacy_flags']));
+        $this->assertSame(
+            ['default'],
+            array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
+        );
+    }
+
+    public function test_failed_table_space_lookup_is_not_treated_as_default_only(): void
+    {
+        $connection = new class extends PredisConnection
+        {
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                if (strtolower($method) === 'smembers') {
+                    throw new RuntimeException('SMEMBERS denied');
+                }
+
+                return null;
+            }
+        };
+        $registry = $this->registryWithConnection($connection);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('SMEMBERS denied');
+
+        $registry->spacesForTable('mysql:legacy_flags');
     }
 
     public function test_single_base_model_dependencies_do_not_need_validation(): void
@@ -182,7 +253,6 @@ class CacheSpaceRegistryTest extends UnitTestCase
 
         $this->assertFalse($result->isValid);
         $this->assertSame([Author::class], $result->invalidModels);
-        $this->assertSame([], $result->invalidTables);
         $this->assertSame(['default'], $result->dependenciesBySpace[Author::class]);
         $this->assertSame(['content'], $result->dependenciesBySpace[SpacedPost::class]);
         $this->assertContains('content', $result->dependenciesBySpace['mysql:legacy_flags']);
