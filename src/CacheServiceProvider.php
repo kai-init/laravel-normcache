@@ -8,6 +8,7 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use NormCache\Cache\ModelsExecutor;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
@@ -52,6 +53,8 @@ class CacheServiceProvider extends ServiceProvider
         $this->app->singleton(CachePlanner::class, function ($app) {
             return new CachePlanner(spaceValidator: $app->make(CachePlanSpaceValidator::class));
         });
+
+        $this->app->singleton(ModelsExecutor::class);
 
         $this->app->singleton(CacheManagerFactory::class, function ($app) {
             return new CacheManagerFactory(

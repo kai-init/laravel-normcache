@@ -37,10 +37,6 @@ class CacheableBuilder extends Builder
 
     private static array $validatedModelClasses = [];
 
-    private static ?CachePlanner $sharedPlanner = null;
-
-    private static ?ModelsExecutor $sharedModelsExecutor = null;
-
     private bool $skipCache = false;
 
     private ?int $queryTtl = null;
@@ -502,19 +498,12 @@ class CacheableBuilder extends Builder
 
     public function planner(): CachePlanner
     {
-        return self::$sharedPlanner ??= app(CachePlanner::class);
+        return app(CachePlanner::class);
     }
 
     private function modelsExecutor(): ModelsExecutor
     {
-        return self::$sharedModelsExecutor ??= new ModelsExecutor;
-    }
-
-    // Drop memoized services on tenant/Octane resets; the planner caches app() lookups.
-    public static function resetSharedState(): void
-    {
-        self::$sharedPlanner = null;
-        self::$sharedModelsExecutor = null;
+        return app(ModelsExecutor::class);
     }
 
     private function rememberPaginationTotal(PreparedQuery $prepared, CachePlan $plan): int
