@@ -2,11 +2,13 @@
 
 namespace NormCache\Tests\Unit;
 
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheManagerFactory;
 use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
@@ -49,6 +51,30 @@ class CacheManagerTest extends TestCase
 
         $classKey = $manager->keys()->classKey(Author::class);
         $this->assertSame("{nc}:factory:ver:{$classKey}:", $manager->keys()->verKey($classKey));
+    }
+
+    public function test_container_scopes_cache_manager_to_the_current_lifecycle(): void
+    {
+        $first = $this->app->make(CacheManager::class);
+        $first->disable();
+
+        $this->app->forgetScopedInstances();
+
+        $second = $this->app->make(CacheManager::class);
+
+        $this->assertNotSame($first, $second);
+        $this->assertTrue($second->isEnabled());
+    }
+
+    public function test_lifecycle_listener_resets_static_cache_metadata(): void
+    {
+        $first = CacheKeyBuilder::prototype(Author::class);
+
+        $this->app['events']->dispatch(new Looping('testing', 'default'));
+
+        $second = CacheKeyBuilder::prototype(Author::class);
+
+        $this->assertNotSame($first, $second);
     }
 
     // -------------------------------------------------------------------------

@@ -74,5 +74,4 @@ trait CachesRelationships
             $relatedPivotKey, $parentKey, $relatedKey, $relationName,
         );
     }
-
 }

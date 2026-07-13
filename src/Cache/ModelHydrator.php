@@ -393,7 +393,9 @@ final class ModelHydrator
         if ($missedQuery === null || !$preserveQueryShape || !$this->canPreserveQueryShape($missedQuery->getQuery())) {
             $builder = $modelClass::query();
             if ($builder instanceof CacheableBuilder) {
-                $missedQuery?->applyRemovedScopesTo($builder);
+                if ($missedQuery !== null) {
+                    $builder->withoutGlobalScopes($missedQuery->removedScopes());
+                }
 
                 return $builder->withoutCache();
             }
@@ -410,7 +412,7 @@ final class ModelHydrator
             ->setModel($missedQuery->getModel())
             ->withoutCache();
 
-        $missedQuery->applyRemovedScopesTo($builder);
+        $builder->withoutGlobalScopes($missedQuery->removedScopes());
 
         return $builder;
     }

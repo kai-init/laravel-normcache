@@ -63,7 +63,7 @@ class CacheServiceProvider extends ServiceProvider
             );
         });
 
-        $this->app->singleton(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
+        $this->app->scoped(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
 
         $this->app->alias(CacheManager::class, 'normcache');
     }
@@ -82,24 +82,14 @@ class CacheServiceProvider extends ServiceProvider
                     $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
                 }
             });
+            Event::listen(JobProcessed::class, CacheKeyBuilder::reset(...));
+            Event::listen(Looping::class, CacheKeyBuilder::reset(...));
 
-            // Re-enable optimistically between queue jobs. If Redis is still down, fallback() will
-            // disable again on the first failed call — worst case is one extra Redis attempt per job.
-            $resetManager = function () {
-                CacheKeyBuilder::reset();
-                $manager = $this->app->make(CacheManager::class);
-                $manager->discardAllPending();
-                $manager->enable();
-            };
-
-            Event::listen(JobProcessed::class, $resetManager);
-            Event::listen(Looping::class, $resetManager);
-
-            // Re-enable (in case fallback disabled it) between Octane requests.
+            // Reset static metadata between Octane requests and tasks.
             foreach (['RequestReceived', 'TaskReceived'] as $event) {
                 $octaneEvent = "Laravel\\Octane\\Events\\$event";
                 if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, $resetManager);
+                    Event::listen($octaneEvent, CacheKeyBuilder::reset(...));
                 }
             }
 

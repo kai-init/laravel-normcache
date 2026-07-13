@@ -460,18 +460,6 @@ class CacheableBuilder extends Builder
             : $collection;
     }
 
-    public function applyRemovedScopesTo(self $target): void
-    {
-        foreach ($this->removedScopes as $scope) {
-            $target->withoutGlobalScope($scope);
-        }
-    }
-
-    public function hasRemovedScopes(): bool
-    {
-        return !empty($this->removedScopes);
-    }
-
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
