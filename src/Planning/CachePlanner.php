@@ -3,6 +3,7 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
@@ -200,6 +201,7 @@ final class CachePlanner
             $context->columns,
             [$model->getKeyName(), $model->getQualifiedKeyName()],
             includeTables: $explain,
+            softDeleteScopeColumn: $this->activeSoftDeleteScopeColumn($builder, $model),
         );
 
         if ($this->qualifiesForDirectModels($explain, $insideTransaction, $hasExplicit, $context, $inferred, $inspection)) {
@@ -378,6 +380,17 @@ final class CachePlanner
             [],
             $collectTables,
         );
+    }
+
+    private function activeSoftDeleteScopeColumn(CacheableBuilder $builder, Model $model): ?string
+    {
+        if (!$model::hasGlobalScope(SoftDeletingScope::class)
+            || in_array(SoftDeletingScope::class, $builder->removedScopes(), true)
+            || !method_exists($model, 'getQualifiedDeletedAtColumn')) {
+            return null;
+        }
+
+        return $model->getQualifiedDeletedAtColumn();
     }
 
     private function qualifiesForDirectModels(

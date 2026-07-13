@@ -48,6 +48,36 @@ class CachePlannerTest extends UnitTestCase
         $this->assertSame([], $plan->bypassReasons);
     }
 
+    public function test_active_soft_delete_scope_allows_a_direct_primary_key_plan(): void
+    {
+        $prepared = Post::whereKey([3, 1, 2])->prepareCacheExecution();
+
+        $plan = (new CachePlanner)->plan(
+            $prepared->builder,
+            $prepared->base,
+            CachePlanContext::models(),
+        );
+
+        $this->assertSame(CacheStrategy::DirectModels, $plan->strategy);
+        $this->assertSame([1, 2, 3], $plan->primaryKeys);
+    }
+
+    public function test_removed_soft_delete_scope_does_not_ignore_a_manual_null_constraint(): void
+    {
+        $prepared = Post::withTrashed()
+            ->whereNull('posts.deleted_at')
+            ->whereKey([3, 1, 2])
+            ->prepareCacheExecution();
+
+        $plan = (new CachePlanner)->plan(
+            $prepared->builder,
+            $prepared->base,
+            CachePlanContext::models(),
+        );
+
+        $this->assertSame(CacheStrategy::NormalizedQuery, $plan->strategy);
+    }
+
     public function test_bypass_plan_still_contains_human_readable_reasons(): void
     {
         $prepared = Author::orderByRaw('CASE WHEN id = ? THEN 0 ELSE 1 END', [1])

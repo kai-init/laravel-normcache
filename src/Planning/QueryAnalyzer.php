@@ -28,12 +28,13 @@ final class QueryAnalyzer
         ?array $resolvedColumns,
         array $primaryKeyIdentifiers = [],
         bool $includeTables = false,
+        ?string $softDeleteScopeColumn = null,
     ): QueryInspection {
         return new QueryInspection(
             flags: $this->flags($base, $table, $resolvedColumns),
             primaryKeys: $primaryKeyIdentifiers === []
                 ? null
-                : self::extractPrimaryKeys($base, $primaryKeyIdentifiers),
+                : self::extractPrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn),
             tables: $includeTables ? $this->extractTables($base, $table) : null,
         );
     }
@@ -159,8 +160,11 @@ final class QueryAnalyzer
         return preg_replace('/\s+as\s+\S+$/i', '', $table);
     }
 
-    public static function extractPrimaryKeys(QueryBuilder $base, array $primaryKeyIdentifiers): ?array
-    {
+    public static function extractPrimaryKeys(
+        QueryBuilder $base,
+        array $primaryKeyIdentifiers,
+        ?string $softDeleteScopeColumn = null,
+    ): ?array {
         if ($base->offset > 0) {
             return null;
         }
@@ -169,11 +173,16 @@ final class QueryAnalyzer
             return [];
         }
 
-        if (count($base->wheres) !== 1) {
+        $wheres = array_values(array_filter(
+            $base->wheres,
+            static fn(array $where): bool => !self::isSoftDeleteScopeConstraint($where, $softDeleteScopeColumn),
+        ));
+
+        if (count($wheres) !== 1) {
             return null;
         }
 
-        $where = $base->wheres[0];
+        $where = $wheres[0];
         $column = $where['column'] ?? null;
 
         if (!in_array($column, $primaryKeyIdentifiers, true)) {
@@ -203,6 +212,15 @@ final class QueryAnalyzer
         }
 
         return null;
+    }
+
+    private static function isSoftDeleteScopeConstraint(array $where, ?string $column): bool
+    {
+        return $column !== null
+            && ($where['type'] ?? null) === 'Null'
+            && ($where['boolean'] ?? 'and') === 'and'
+            && !($where['not'] ?? false)
+            && ($where['column'] ?? null) === $column;
     }
 
     private function inspectWheres(array $wheres): int

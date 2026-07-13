@@ -121,6 +121,44 @@ class QueryAnalyzerTest extends TestCase
         $this->assertSame([1, 2, 3], $inspection->primaryKeys);
     }
 
+    public function test_primary_keys_allow_the_model_soft_delete_constraint(): void
+    {
+        $query = $this->makeBaseQuery(from: 'posts');
+        $query->wheres = [
+            ['type' => 'Null', 'column' => 'posts.deleted_at', 'boolean' => 'and'],
+            ['type' => 'In', 'column' => 'posts.id', 'values' => [3, 1, 2]],
+        ];
+
+        $inspection = (new QueryAnalyzer)->inspect(
+            $query,
+            'posts',
+            null,
+            ['id', 'posts.id'],
+            softDeleteScopeColumn: 'posts.deleted_at',
+        );
+
+        $this->assertSame([1, 2, 3], $inspection->primaryKeys);
+    }
+
+    public function test_primary_keys_do_not_ignore_an_arbitrary_null_constraint(): void
+    {
+        $query = $this->makeBaseQuery(from: 'posts');
+        $query->wheres = [
+            ['type' => 'Null', 'column' => 'posts.published_at', 'boolean' => 'and'],
+            ['type' => 'In', 'column' => 'posts.id', 'values' => [3, 1, 2]],
+        ];
+
+        $inspection = (new QueryAnalyzer)->inspect(
+            $query,
+            'posts',
+            null,
+            ['id', 'posts.id'],
+            softDeleteScopeColumn: 'posts.deleted_at',
+        );
+
+        $this->assertNull($inspection->primaryKeys);
+    }
+
     public function test_expression_values_are_subquery_bypasses(): void
     {
         $expression = $this->createStub(Expression::class);
