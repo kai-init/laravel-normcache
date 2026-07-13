@@ -8,11 +8,6 @@ use Illuminate\Database\Eloquent\Model;
 
 trait CachesRelationships
 {
-    protected function newBelongsTo(Builder $query, Model $child, $foreignKey, $ownerKey, $relation)
-    {
-        return new CacheableBelongsTo($query, $child, $foreignKey, $ownerKey, $relation);
-    }
-
     protected function newHasOne(Builder $query, Model $parent, $foreignKey, $localKey)
     {
         return new CacheableHasOne($query, $parent, $foreignKey, $localKey);
@@ -80,14 +75,4 @@ trait CachesRelationships
         );
     }
 
-    protected function newMorphTo(
-        Builder $query,
-        Model $parent,
-        $foreignKey,
-        $ownerKey,
-        $type,
-        $relation,
-    ) {
-        return new CacheableMorphTo($query, $parent, $foreignKey, $ownerKey, $type, $relation);
-    }
 }
