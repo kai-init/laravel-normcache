@@ -256,8 +256,6 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    // MGET in input order, with null for missing keys. All keys share the same hash tag so
-    // a plain MGET is safe on Redis Cluster (same slot guaranteed).
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {

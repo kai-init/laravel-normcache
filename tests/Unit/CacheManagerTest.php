@@ -57,10 +57,10 @@ class CacheManagerTest extends TestCase
 
     public function test_store_get_many_returns_values_in_key_order(): void
     {
-        $this->manager->store()->set('a', 'alpha', 60);
-        $this->manager->store()->set('c', 'gamma', 60);
+        $this->manager->store()->set('{nc}:a', 'alpha', 60);
+        $this->manager->store()->set('{nc}:c', 'gamma', 60);
 
-        $result = $this->manager->store()->getMany(['a', 'b', 'c']);
+        $result = $this->manager->store()->getMany(['{nc}:a', '{nc}:b', '{nc}:c']);
 
         $this->assertSame(['alpha', null, 'gamma'], $result);
     }

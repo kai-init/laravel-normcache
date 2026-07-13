@@ -72,10 +72,10 @@ class RedisStoreTest extends TestCase
 
     public function test_it_can_get_many_values(): void
     {
-        $this->store->set('foo', 'bar', 60);
-        $this->store->set('baz', 'qux', 60);
+        $this->store->set('{nc}:foo', 'bar', 60);
+        $this->store->set('{nc}:baz', 'qux', 60);
 
-        $results = $this->store->getMany(['foo', 'baz', 'missing']);
+        $results = $this->store->getMany(['{nc}:foo', '{nc}:baz', '{nc}:missing']);
 
         $this->assertSame(['bar', 'qux', null], $results);
     }
