@@ -82,14 +82,23 @@ class CacheServiceProvider extends ServiceProvider
                     $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
                 }
             });
-            Event::listen(JobProcessed::class, CacheKeyBuilder::reset(...));
-            Event::listen(Looping::class, CacheKeyBuilder::reset(...));
 
-            // Reset static metadata between Octane requests and tasks.
+            $resetManager = function () {
+                CacheKeyBuilder::reset();
+
+                $manager = $this->app->make(CacheManager::class);
+                $manager->discardAllPending();
+                $manager->enable();
+            };
+
+            Event::listen(JobProcessed::class, $resetManager);
+            Event::listen(Looping::class, $resetManager);
+
+            // Reset request-scoped runtime state between Octane requests and tasks.
             foreach (['RequestReceived', 'TaskReceived'] as $event) {
                 $octaneEvent = "Laravel\\Octane\\Events\\$event";
                 if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, CacheKeyBuilder::reset(...));
+                    Event::listen($octaneEvent, $resetManager);
                 }
             }
 

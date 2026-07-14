@@ -188,27 +188,37 @@ class CacheSpaceRegistryTest extends UnitTestCase
         );
     }
 
-    public function test_failed_table_space_lookup_is_not_treated_as_default_only(): void
+    public function test_failed_table_space_lookup_falls_back_without_memoizing_the_failure(): void
     {
         $connection = new class extends PredisConnection
         {
+            private int $lookups = 0;
+
             public function __construct() {}
 
             public function command($method, array $parameters = [])
             {
-                if (strtolower($method) === 'smembers') {
+                if (strtolower($method) !== 'smembers') {
+                    return null;
+                }
+
+                if ($this->lookups++ === 0) {
                     throw new RuntimeException('SMEMBERS denied');
                 }
 
-                return null;
+                return ['content'];
             }
         };
         $registry = $this->registryWithConnection($connection);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('SMEMBERS denied');
-
-        $registry->spacesForTable('mysql:legacy_flags');
+        $this->assertSame(
+            ['default'],
+            array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
+        );
+        $this->assertSame(
+            ['default', 'content'],
+            array_map(fn($s) => $s->name, $registry->spacesForTable('mysql:legacy_flags')),
+        );
     }
 
     public function test_single_base_model_dependencies_do_not_need_validation(): void

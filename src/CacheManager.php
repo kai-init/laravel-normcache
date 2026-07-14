@@ -97,6 +97,11 @@ class CacheManager
         return $this->config->dispatchEvents;
     }
 
+    public function enable(): void
+    {
+        $this->config->enabled = true;
+    }
+
     public function disable(): void
     {
         $this->config->enabled = false;

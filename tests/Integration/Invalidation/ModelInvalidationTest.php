@@ -2,7 +2,10 @@
 
 namespace NormCache\Tests\Integration\Invalidation;
 
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobProcessed;
 use NormCache\Facades\NormCache;
+use NormCache\Support\CacheFallback;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -36,6 +39,20 @@ class ModelInvalidationTest extends TestCase
 
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
+    public function test_save_invalidates_again_after_job_processed_reenables_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $manager = $this->cacheManager();
+        $versionBefore = $manager->currentVersion(Author::class);
+
+        CacheFallback::fallback($manager->config(), new \RuntimeException('simulated Redis error'));
+        $this->app['events']->dispatch(new JobProcessed('testing', $this->createStub(Job::class)));
+        $author->update(['name' => 'Alicia']);
+
+        $this->assertTrue($manager->isEnabled());
+        $this->assertGreaterThan($versionBefore, $manager->currentVersion(Author::class));
     }
 
     public function test_deleting_model_flushes_model_key_and_increments_version(): void

@@ -2,12 +2,15 @@
 
 namespace NormCache\Tests\Unit;
 
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheManagerFactory;
 use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -64,6 +67,41 @@ class CacheManagerTest extends TestCase
 
         $this->assertNotSame($first, $second);
         $this->assertTrue($second->isEnabled());
+    }
+
+    public function test_enable_reenables_cache_after_fallback(): void
+    {
+        CacheFallback::fallback($this->manager->config(), new \RuntimeException('Redis unavailable'));
+
+        $this->assertFalse($this->manager->isEnabled());
+
+        $this->manager->enable();
+
+        $this->assertTrue($this->manager->isEnabled());
+    }
+
+    public function test_job_processed_listener_reenables_cache_and_discards_pending_invalidations(): void
+    {
+        $before = $this->manager->currentVersion(Author::class);
+
+        DB::beginTransaction();
+
+        try {
+            $this->manager->invalidateVersion(new Author);
+            CacheFallback::fallback($this->manager->config(), new \RuntimeException('Redis unavailable'));
+
+            $this->app['events']->dispatch(new JobProcessed('testing', $this->createStub(Job::class)));
+
+            $this->assertTrue($this->manager->isEnabled());
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        $this->assertSame($before, $this->manager->currentVersion(Author::class));
     }
 
     public function test_lifecycle_listener_resets_static_cache_metadata(): void

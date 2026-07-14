@@ -251,10 +251,16 @@ final class CacheSpaceRegistry
             return [];
         }
 
-        return array_values(array_filter(
-            $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
-            fn(string $name) => $this->validSpaceName($name),
-        ));
+        try {
+            return array_values(array_filter(
+                $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
+                fn(string $name) => $this->validSpaceName($name),
+            ));
+        } catch (\Throwable $e) {
+            report($e);
+
+            return [];
+        }
     }
 
     private function rememberSpace(string $name): void
