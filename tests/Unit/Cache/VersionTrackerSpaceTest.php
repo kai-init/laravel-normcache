@@ -26,4 +26,19 @@ class VersionTrackerSpaceTest extends TestCase
         // The default space's version key was never seeded.
         $this->assertSame(0, $tracker->currentVersion(Post::class));
     }
+
+    public function test_build_lock_tokens_are_random_128_bit_values(): void
+    {
+        $tracker = new VersionTracker(
+            new RedisStore('normcache-test'),
+            new CacheKeyBuilder,
+        );
+
+        $first = $tracker->buildLockToken();
+        $second = $tracker->buildLockToken();
+
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{32}$/', $first);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{32}$/', $second);
+        $this->assertNotSame($first, $second);
+    }
 }

@@ -97,4 +97,13 @@ class CacheKeyBuilderTest extends UnitTestCase
         $this->assertSame('{nc}:test:query:mysql:posts:', $keys->queryPrefix('mysql:posts'));
         $this->assertSame('{nc}:test:query:*', $keys->prefixed('query:*'));
     }
+
+    public function test_result_build_identity_uses_xxh128(): void
+    {
+        $keys = new CacheKeyBuilder;
+        $hash = $keys->resultBuildIdentityHash('scalar', 'report', 'query-hash');
+
+        $this->assertSame(32, strlen($hash));
+        $this->assertSame(hash('xxh128', 'scalar:report:query-hash'), $hash);
+    }
 }

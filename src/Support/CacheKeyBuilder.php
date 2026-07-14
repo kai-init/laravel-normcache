@@ -311,7 +311,7 @@ class CacheKeyBuilder
 
     public function resultBuildIdentityHash(string $namespace, ?string $tag, string $hash): string
     {
-        return hash('xxh3', $namespace . ':' . $this->tagSegment($tag) . $hash);
+        return hash('xxh128', $namespace . ':' . $this->tagSegment($tag) . $hash);
     }
 
     // -------------------------------------------------------------------------

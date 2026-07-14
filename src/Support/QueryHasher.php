@@ -107,7 +107,7 @@ final class QueryHasher
 
     public static function hash(string $data): string
     {
-        return hash('xxh3', $data);
+        return hash('xxh128', $data);
     }
 
     public static function normalizeValueForHash(mixed $value, ?QueryBuilder $base = null): mixed
