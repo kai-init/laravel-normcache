@@ -54,7 +54,7 @@ final class ResultExecutor
                     $this->storeResult($result, $value['value'], $ttl);
                 },
                 onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, $structuredPayload, $ttl) {
-                    if (!is_array($result->payload) || (!$structuredPayload && !array_key_exists(0, $result->payload))) {
+                    if (!$structuredPayload && !array_key_exists(0, $result->payload)) {
                         $value = $compute();
                         $this->storeResult($result, $value, $ttl);
 
