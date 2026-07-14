@@ -37,7 +37,8 @@ class SpaceResolutionTest extends TestCase
 
         $this->assertFalse($plan->isCacheable(), 'SpacedPost(content) depending on Author(default) must bypass');
         $this->assertSame(CacheOperation::Models, $plan->operation);
-        $this->assertTrue($plan->hasBypassReason('dependency'));
+        $this->assertTrue($plan->hasBypassReason('space'));
+        $this->assertFalse($plan->hasBypassReason('dependency'));
     }
 
     public function test_same_space_dependency_still_caches(): void

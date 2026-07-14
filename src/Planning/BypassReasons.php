@@ -12,6 +12,7 @@ final class BypassReasons
      *   dependency    — dependency tracking can't safely cover this query
      *   normalization — result can't be decomposed into model cache keys
      *   safety        — bypassed for query correctness; no caching workaround
+     *   space         — cache-space membership or registration prevents caching
      *
      * @param  array<int,mixed>|null  $resolvedColumns  null skips the calculated-column check
      * @return array<string, list<string>>
@@ -93,6 +94,7 @@ final class BypassReasons
             'dependency' => "can't infer cache dependency",
             'normalization' => "result can't be normalized into model keys",
             'safety' => 'bypassed for query correctness',
+            'space' => 'cross-space dependencies',
             'opted_out' => 'explicitly disabled',
         ];
     }

@@ -58,7 +58,7 @@ final class CachePlanSpaceValidator
                 return CachePlan::bypass(
                     operation: $plan->operation,
                     dependencies: $plan->dependencies,
-                    bypassReasons: ['dependency' => ['failed to register table-space dependencies']],
+                    bypassReasons: ['space' => ['failed to register table-space dependencies']],
                 )->withSpace($space);
             }
 
@@ -83,7 +83,7 @@ final class CachePlanSpaceValidator
         return CachePlan::bypass(
             operation: $plan->operation,
             dependencies: $plan->dependencies,
-            bypassReasons: ['dependency' => [$reason]],
+            bypassReasons: ['space' => [$reason]],
         )->withSpace($space);
     }
 }
