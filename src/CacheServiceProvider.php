@@ -85,6 +85,7 @@ class CacheServiceProvider extends ServiceProvider
 
             $resetManager = function () {
                 CacheKeyBuilder::reset();
+                $this->app->make(CacheSpaceRegistry::class)->resetMetadataMemo();
 
                 $manager = $this->app->make(CacheManager::class);
                 $manager->discardAllPending();

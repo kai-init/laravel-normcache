@@ -26,6 +26,9 @@ final class CacheSpaceRegistry
     /** @var list<string>|null */
     private ?array $metadataSpaceNames = null;
 
+    /** @var array<string, list<string>> table key => persisted space names */
+    private array $metadataTableSpaceNames = [];
+
     /** @var array<string, string> hash tag => logical space name */
     private array $hashTagOwners = [];
 
@@ -71,15 +74,19 @@ final class CacheSpaceRegistry
     /** @return list<CacheSpace> */
     public function spacesForTable(string $table): array
     {
-        $spaces = $this->tableSpaces[$table] ?? [$this->defaultSpace()];
+        return $this->mergeTableSpaces($table, $this->resolveTableSpaces($table));
+    }
 
-        foreach ($this->resolveTableSpaces($table) as $space) {
-            if (!$this->isAllowed($spaces, $space)) {
-                $spaces[] = $space;
-            }
-        }
+    /** @return list<CacheSpace> */
+    public function freshSpacesForTable(string $table): array
+    {
+        return $this->mergeTableSpaces($table, $this->resolveTableSpaces($table, fresh: true));
+    }
 
-        return $this->tableSpaces[$table] = $spaces;
+    public function resetMetadataMemo(): void
+    {
+        $this->metadataSpaceNames = null;
+        $this->metadataTableSpaceNames = [];
     }
 
     public function modelAllowedInSpace(string $modelClass, CacheSpace|string $space): bool
@@ -159,14 +166,31 @@ final class CacheSpaceRegistry
     }
 
     /** @return list<CacheSpace> */
-    private function resolveTableSpaces(string $table): array
+    private function resolveTableSpaces(string $table, bool $fresh = false): array
     {
         $names = array_values(array_unique([
             self::DEFAULT_SPACE,
-            ...$this->metadataTableSpaces($table),
+            ...$this->metadataTableSpaces($table, $fresh),
         ]));
 
         return array_map(fn(string $name) => $this->materializeSpace($name, remember: false), $names);
+    }
+
+    /**
+     * @param  list<CacheSpace>  $resolved
+     * @return list<CacheSpace>
+     */
+    private function mergeTableSpaces(string $table, array $resolved): array
+    {
+        $spaces = $this->tableSpaces[$table] ?? [$this->defaultSpace()];
+
+        foreach ($resolved as $space) {
+            if (!$this->isAllowed($spaces, $space)) {
+                $spaces[] = $space;
+            }
+        }
+
+        return $this->tableSpaces[$table] = $spaces;
     }
 
     private function materializeSpace(string $name, bool $remember = true): CacheSpace
@@ -245,14 +269,18 @@ final class CacheSpaceRegistry
     }
 
     /** @return list<string> */
-    private function metadataTableSpaces(string $table): array
+    private function metadataTableSpaces(string $table, bool $fresh = false): array
     {
         if ($this->metadataStore === null) {
             return [];
         }
 
+        if (!$fresh && array_key_exists($table, $this->metadataTableSpaceNames)) {
+            return $this->metadataTableSpaceNames[$table];
+        }
+
         try {
-            return array_values(array_filter(
+            return $this->metadataTableSpaceNames[$table] = array_values(array_filter(
                 $this->metadataStore->setMembers($this->metadataTableSpacesKey($table)),
                 fn(string $name) => $this->validSpaceName($name),
             ));

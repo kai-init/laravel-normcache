@@ -303,7 +303,7 @@ class CacheManagerTest extends TestCase
         );
     }
 
-    public function test_table_space_lookup_refreshes_mappings_registered_by_another_registry(): void
+    public function test_lifecycle_listener_refreshes_table_space_mappings_registered_by_another_registry(): void
     {
         $tableKey = 'testing:authors';
         $registry = $this->app->make(CacheSpaceRegistry::class);
@@ -319,10 +319,46 @@ class CacheManagerTest extends TestCase
         );
         $this->assertTrue($otherRegistry->registerTableDependencies($otherRegistry->space('content'), [$tableKey]));
 
+        $this->app['events']->dispatch(new Looping('testing', 'default'));
+
         $this->assertContains(
             'content',
             array_map(fn($space) => $space->name, $registry->spacesForTable($tableKey)),
         );
+    }
+
+    public function test_transaction_commit_resolves_table_spaces_registered_after_queueing(): void
+    {
+        $tableKey = 'testing:authors';
+        $registry = $this->app->make(CacheSpaceRegistry::class);
+        $content = $registry->space('content');
+
+        $this->assertSame(
+            ['default'],
+            array_map(fn($space) => $space->name, $registry->spacesForTable($tableKey)),
+        );
+
+        DB::beginTransaction();
+
+        try {
+            $this->manager->invalidateTableVersion('testing', 'authors');
+
+            $otherRegistry = new CacheSpaceRegistry(
+                metadataStore: $this->manager->store(),
+                metadataKeyPrefix: 'test:',
+            );
+            $this->assertTrue($otherRegistry->registerTableDependencies($content, [$tableKey]));
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
+
+        $versionKey = $this->manager->keys()->verKey($tableKey, $content);
+
+        $this->assertSame('1', $this->manager->store()->getRaw($versionKey));
     }
 
     public function test_flush_all_can_target_one_space(): void

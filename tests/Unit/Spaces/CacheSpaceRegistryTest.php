@@ -221,6 +221,38 @@ class CacheSpaceRegistryTest extends UnitTestCase
         );
     }
 
+    public function test_table_space_lookup_is_memoized_until_runtime_reset(): void
+    {
+        $connection = new class extends PredisConnection
+        {
+            public int $lookups = 0;
+
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                if (strtolower($method) === 'smembers') {
+                    $this->lookups++;
+
+                    return ['content'];
+                }
+
+                return null;
+            }
+        };
+        $registry = $this->registryWithConnection($connection);
+
+        $registry->spacesForTable('mysql:legacy_flags');
+        $registry->spacesForTable('mysql:legacy_flags');
+
+        $this->assertSame(1, $connection->lookups);
+
+        $registry->resetMetadataMemo();
+        $registry->spacesForTable('mysql:legacy_flags');
+
+        $this->assertSame(2, $connection->lookups);
+    }
+
     public function test_single_base_model_dependencies_do_not_need_validation(): void
     {
         $registry = $this->registry();
