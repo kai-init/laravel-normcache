@@ -131,7 +131,7 @@ trait CachesScalarResults
             return $fallback();
         }
 
-        if (($kind === ResultKind::Pluck || $kind === ResultKind::Value) && $this->hasAfterQueryCallbacks()) {
+        if (($kind === ResultKind::Pluck || $kind === ResultKind::Value) && $this->afterQueryCallbacks !== []) {
             return $fallback();
         }
 

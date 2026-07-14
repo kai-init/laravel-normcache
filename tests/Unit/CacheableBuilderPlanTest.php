@@ -24,7 +24,7 @@ class CacheableBuilderPlanTest extends UnitTestCase
 
         $direct = $builder->cachePlan($prepared->base, CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, ['*']),
-            $builder->inferAggregateDependencies(),
+            $builder->inferRelationDependencies(),
             selectAll: true,
         ));
 

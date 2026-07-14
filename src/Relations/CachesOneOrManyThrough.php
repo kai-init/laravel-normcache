@@ -167,7 +167,7 @@ trait CachesOneOrManyThrough
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $builder->inferAggregateDependencies(),
+            $builder->inferRelationDependencies(),
             DependencySet::singleModel($this->throughParent::class),
         ));
 
@@ -236,6 +236,6 @@ trait CachesOneOrManyThrough
 
     private function getFromPreparedBuilder(PreparedQuery $prepared, bool $applyAfterCallbacks = true): Collection
     {
-        return $prepared->builder->collectFromPrepared($prepared, applyAfterCallbacks: $applyAfterCallbacks);
+        return $prepared->collect(applyAfterCallbacks: $applyAfterCallbacks);
     }
 }

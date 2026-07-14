@@ -23,7 +23,7 @@ final class ModelsExecutor
     ): Collection {
         $executionBuilder = $prepared->builder;
 
-        return $executionBuilder->finalizeResult(NormCache::hydrator()->getModels(
+        return $prepared->finalizeModels(NormCache::hydrator()->getModels(
             $primaryKeys,
             $model,
             $selectedCols,
@@ -31,7 +31,7 @@ final class ModelsExecutor
             $executionBuilder,
             false,
             $prototype
-        ), $prepared);
+        ));
     }
 
     public function runNormalized(
@@ -57,9 +57,8 @@ final class ModelsExecutor
             onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $prototype) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
-                return $executionBuilder->finalizeResult(
-                    NormCache::hydrator()->getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype),
-                    $prepared
+                return $prepared->finalizeModels(
+                    NormCache::hydrator()->getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype)
                 );
             },
             onMiss: function ($result) use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $queryTtl, $prototype) {
@@ -73,9 +72,8 @@ final class ModelsExecutor
                     $result->build,
                 );
 
-                return $executionBuilder->finalizeResult(
-                    NormCache::hydrator()->getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype),
-                    $prepared
+                return $prepared->finalizeModels(
+                    NormCache::hydrator()->getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype)
                 );
             },
             onHit: function ($result) use ($prepared, $executionBuilder, $model, $selectedCols, $debugbarStart, $prototype) {
@@ -85,9 +83,8 @@ final class ModelsExecutor
                     'contains_model' => $result->ids,
                 ]);
 
-                return $executionBuilder->finalizeResult(
-                    NormCache::hydrator()->getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype),
-                    $prepared
+                return $prepared->finalizeModels(
+                    NormCache::hydrator()->getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype)
                 );
             },
         );

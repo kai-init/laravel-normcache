@@ -48,7 +48,7 @@ final class CachePlanner
             ? $this->analyzer->inferJoinDependencies($base, $builder->getModel()->getConnection()->getName())
             : DependencySet::empty();
 
-        return $builder->inferAggregateDependencies()->merge($joinDeps);
+        return $builder->inferRelationDependencies()->merge($joinDeps);
     }
 
     public function plan(
@@ -73,10 +73,10 @@ final class CachePlanner
         }
 
         $plan = match ($context->operation) {
-            CacheOperation::Scalar => $this->planScalarLike($builder, $model, $base, $context, $insideTransaction, $explain, self::SIMPLE_RESULT_FAST_PATH_BLOCKERS),
-            CacheOperation::PaginationCount => $this->planScalarLike($builder, $model, $base, $context, $insideTransaction, $explain, self::SIMPLE_PAGINATION_FAST_PATH_BLOCKERS),
+            CacheOperation::Scalar => $this->planInspectedResult($builder, $base, $context, $insideTransaction, $explain, self::SIMPLE_RESULT_FAST_PATH_BLOCKERS),
+            CacheOperation::PaginationCount => $this->planInspectedResult($builder, $base, $context, $insideTransaction, $explain, self::SIMPLE_PAGINATION_FAST_PATH_BLOCKERS),
             CacheOperation::Pivot,
-            CacheOperation::Through => $this->planRelationResult($builder, $base, $context, $insideTransaction, $explain),
+            CacheOperation::Through => $this->planInspectedResult($builder, $base, $context, $insideTransaction, $explain, strictRelation: true),
             CacheOperation::Models => $this->planModels($builder, $model, $base, $context, $insideTransaction, $explain),
         };
 
@@ -129,52 +129,6 @@ final class CachePlanner
             operation: $context->operation,
             dependencies: $this->dependencies->resolveBase($builder, $model, $context),
             bypassReasons: ['safety' => $reasons],
-        );
-    }
-
-    private function planScalarLike(
-        CacheableBuilder $builder,
-        Model $model,
-        QueryBuilder $base,
-        CachePlanContext $context,
-        bool $insideTransaction,
-        bool $explain,
-        int $simpleBypassFlags,
-    ): CachePlan {
-        $hasExplicit = $builder->hasExplicitDependencies();
-
-        if (!$explain && !$insideTransaction && !$hasExplicit && $context->contextReasons === []) {
-            $plan = $this->trySimpleResultPlan($model, $base, $context, $simpleBypassFlags);
-
-            if ($plan !== null) {
-                return $plan;
-            }
-        }
-
-        return $this->planInspectedResult(
-            builder: $builder,
-            base: $base,
-            context: $context,
-            insideTransaction: $insideTransaction,
-            explain: $explain,
-            scalarLike: true,
-        );
-    }
-
-    private function planRelationResult(
-        CacheableBuilder $builder,
-        QueryBuilder $base,
-        CachePlanContext $context,
-        bool $insideTransaction,
-        bool $explain,
-    ): CachePlan {
-        return $this->planInspectedResult(
-            builder: $builder,
-            base: $base,
-            context: $context,
-            insideTransaction: $insideTransaction,
-            explain: $explain,
-            strictRelation: true,
         );
     }
 
@@ -268,7 +222,7 @@ final class CachePlanner
         CachePlanContext $context,
         bool $insideTransaction,
         bool $explain,
-        bool $scalarLike = false,
+        ?int $simpleBypassFlags = null,
         bool $strictRelation = false,
     ): CachePlan {
         $model = $builder->getModel();
@@ -278,6 +232,15 @@ final class CachePlanner
         $explicitModels = $builder->explicitDependencies();
         $explicitTables = $builder->explicitTableDependencies();
         $hasExplicit = $builder->hasExplicitDependencies();
+
+        if ($simpleBypassFlags !== null
+            && !$explain
+            && !$insideTransaction
+            && !$hasExplicit
+            && $context->contextReasons === []
+            && ($plan = $this->trySimpleResultPlan($model, $base, $context, $simpleBypassFlags)) !== null) {
+            return $plan;
+        }
 
         $inspection = $this->inspect($model, $base, $context, collectTables: $explain);
         $dependencies = $this->dependencies->resolve(
@@ -293,7 +256,7 @@ final class CachePlanner
             return $bypass;
         }
 
-        if ($scalarLike
+        if ($simpleBypassFlags !== null
             && !$hasExplicit
             && $inferred->hasNoDependencies()
             && $dependencies->safe

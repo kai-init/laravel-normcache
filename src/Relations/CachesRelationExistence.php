@@ -17,29 +17,24 @@ use NormCache\Values\RelationDependency;
  */
 trait CachesRelationExistence
 {
-    private int $totalHasCalls = 0;
+    private ?DependencySet $existenceDependencies = null;
 
-    private int $simpleHasCalls = 0;
-
-    private array $existenceDependencies = [];
-
-    private array $existenceTableDependencies = [];
+    private bool $existenceInferenceFailed = false;
 
     public function has($relation, $operator = '>=', $count = 1, $boolean = 'and', ?Closure $callback = null): static
     {
-        // whereHasMorph/nested has('a.b') run their inner has() calls on a cloned
-        // builder, so they never touch this trait's state — the outer call sees
-        // no dependency and bypasses safely.
-        $this->totalHasCalls++;
+        $dependency = is_string($relation) && !str_contains($relation, '.')
+            ? $this->classifyExistenceRelation($relation, $callback)
+            : null;
 
-        if (is_string($relation) && !str_contains($relation, '.')) {
-            $dependency = $this->classifyExistenceRelation($relation, $callback);
-
-            if ($dependency !== null) {
-                $this->simpleHasCalls++;
-                array_push($this->existenceDependencies, ...$dependency->modelDependencies());
-                array_push($this->existenceTableDependencies, ...$dependency->tableDependencies());
-            }
+        if ($dependency === null) {
+            $this->existenceInferenceFailed = true;
+        } else {
+            $resolved = new DependencySet(
+                models: $dependency->modelDependencies(),
+                tables: $dependency->tableDependencies(),
+            );
+            $this->existenceDependencies = ($this->existenceDependencies ?? DependencySet::empty())->merge($resolved);
         }
 
         return parent::has($relation, $operator, $count, $boolean, $callback);
@@ -47,18 +42,9 @@ trait CachesRelationExistence
 
     public function inferExistenceDependencies(): DependencySet
     {
-        if ($this->totalHasCalls === 0) {
-            return DependencySet::empty();
-        }
-
-        if ($this->totalHasCalls !== $this->simpleHasCalls) {
-            return DependencySet::unsafe('whereHas/has dependencies could not be fully inferred.');
-        }
-
-        return new DependencySet(
-            models: array_values(array_unique($this->existenceDependencies)),
-            tables: array_values(array_unique($this->existenceTableDependencies)),
-        );
+        return $this->existenceInferenceFailed
+            ? DependencySet::unsafe('whereHas/has dependencies could not be fully inferred.')
+            : ($this->existenceDependencies ?? DependencySet::empty());
     }
 
     private function classifyExistenceRelation(string $name, ?callable $constraint): ?RelationDependency

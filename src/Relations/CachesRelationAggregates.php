@@ -10,13 +10,9 @@ use NormCache\Values\RelationDependency;
 
 trait CachesRelationAggregates
 {
-    private bool $cacheAggregates = true;
+    private ?bool $aggregateCaching = true;
 
-    private bool $aggregateInferenceFailed = false;
-
-    private array $aggregateDependencies = [];
-
-    private array $aggregateTableDependencies = [];
+    private ?DependencySet $aggregateDependencies = null;
 
     private array $aggregateAliases = [];
 
@@ -29,7 +25,7 @@ trait CachesRelationAggregates
 
     public function withAggregate($relations, $column, $function = null): static
     {
-        if (!$this->cacheAggregates) {
+        if ($this->aggregateCaching !== true) {
             return parent::withAggregate($relations, $column, $function);
         }
 
@@ -54,7 +50,7 @@ trait CachesRelationAggregates
 
             if ($dependency === null) {
                 $result = parent::withAggregate($relations, $column, $function);
-                $this->clearAggregateTracking(true);
+                $this->clearAggregateTracking(null);
 
                 return $result;
             }
@@ -73,8 +69,11 @@ trait CachesRelationAggregates
             $aliases[] = $this->resolveAlias($col, $names[$i] ?? null, $function, $column);
         }
 
-        $this->aggregateDependencies = array_values(array_unique([...$this->aggregateDependencies, ...$dependencies]));
-        $this->aggregateTableDependencies = array_values(array_unique([...$this->aggregateTableDependencies, ...$tableDependencies]));
+        $resolved = new DependencySet(
+            models: array_values(array_unique($dependencies)),
+            tables: array_values(array_unique($tableDependencies)),
+        );
+        $this->aggregateDependencies = ($this->aggregateDependencies ?? DependencySet::empty())->merge($resolved);
         $this->aggregateAliases = array_values(array_unique([...$this->aggregateAliases, ...$aliases]));
 
         return $result;
@@ -97,12 +96,10 @@ trait CachesRelationAggregates
         return Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$lowerFunction} {$colValue}"));
     }
 
-    private function clearAggregateTracking(bool $failed = false): void
+    private function clearAggregateTracking(?bool $state = false): void
     {
-        $this->cacheAggregates = false;
-        $this->aggregateInferenceFailed = $failed;
-        $this->aggregateDependencies = [];
-        $this->aggregateTableDependencies = [];
+        $this->aggregateCaching = $state;
+        $this->aggregateDependencies = null;
         $this->aggregateAliases = [];
     }
 
@@ -117,16 +114,12 @@ trait CachesRelationAggregates
         return (new RelationDependencyClassifier)->classify($this->model->{$name}(), $constraint);
     }
 
-    public function inferAggregateDependencies(): DependencySet
+    public function inferRelationDependencies(): DependencySet
     {
-        $aggregate = match (true) {
-            !$this->cacheAggregates && $this->aggregateInferenceFailed => DependencySet::unsafe('Aggregate dependencies could not be inferred.'),
-            !$this->cacheAggregates => DependencySet::empty(),
-            $this->aggregateDependencies === [] && $this->aggregateTableDependencies === [] => DependencySet::empty(),
-            default => new DependencySet(
-                models: $this->aggregateDependencies,
-                tables: $this->aggregateTableDependencies,
-            ),
+        $aggregate = match ($this->aggregateCaching) {
+            null => DependencySet::unsafe('Aggregate dependencies could not be inferred.'),
+            false => DependencySet::empty(),
+            true => $this->aggregateDependencies ?? DependencySet::empty(),
         };
 
         return $aggregate->merge($this->inferExistenceDependencies());

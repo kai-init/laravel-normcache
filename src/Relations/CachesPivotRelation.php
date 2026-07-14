@@ -184,7 +184,7 @@ trait CachesPivotRelation
 
         $plan = $builder->cachePlan($base, CachePlanContext::pivot(
             $resolvedColumns ?? [],
-            $builder->inferAggregateDependencies()
+            $builder->inferRelationDependencies()
         ));
 
         if (!$plan->usesResultCache()) {
@@ -334,8 +334,7 @@ trait CachesPivotRelation
         PreparedQuery $prepared,
         bool $applyAfterCallbacks = true,
     ): Collection {
-        return $prepared->builder->collectFromPrepared(
-            $prepared,
+        return $prepared->collect(
             applyAfterCallbacks: $applyAfterCallbacks,
             beforeEagerLoad: fn(array $models) => $this->hydratePivotRelation($models),
         );

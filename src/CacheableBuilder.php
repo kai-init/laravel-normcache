@@ -232,7 +232,7 @@ class CacheableBuilder extends Builder
     public function get($columns = ['*']): Collection
     {
         if ($this->skipCache || !NormCache::isEnabled()) {
-            return $this->getWithoutCache($columns);
+            return parent::get($columns);
         }
 
         $debugbarStart = CacheReporter::beginMeasure();
@@ -252,12 +252,12 @@ class CacheableBuilder extends Builder
             CacheStrategy::DirectModels => CacheFallback::rescue(
                 NormCache::config(),
                 fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
-                fn() => $this->collectFromPrepared($prepared, $columns),
+                fn() => $prepared->collect($columns),
             ),
             CacheStrategy::NormalizedQuery => CacheFallback::rescue(
                 NormCache::config(),
                 fn() => $this->modelsExecutor()->runNormalized($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
-                fn() => $this->collectFromPrepared($prepared, $columns)
+                fn() => $prepared->collect($columns)
             ),
             CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
             CacheStrategy::LiveQuery => $this->bypassAndReturn($model, $plan->bypassReasons, $debugbarStart, $prepared, $columns),
@@ -278,16 +278,14 @@ class CacheableBuilder extends Builder
             $columns,
             function () use ($prepared, $columns) {
                 if ($this->hasAggregateColumns()) {
-                    $rawModels = $this->collectFromPrepared($prepared, $columns, false);
-
-                    return $this->resultPayloadFromEloquentModels($rawModels);
+                    return $this->resultPayloadFromEloquentModels($prepared->collect($columns, false));
                 }
 
-                return $this->buildResultPayloadFromQuery($prepared->baseWithColumns($columns));
+                return $prepared->baseWithColumns($columns)->get()->map(fn($row) => (array) $row)->all();
             }
         );
 
-        return $this->hydrateResultPayload($payload, $model, $cached, $prepared);
+        return $prepared->finalizeModels(NormCache::hydrator()->hydrateResult($payload, $this->model, $cached));
     }
 
     private function bypassAndReturn(
@@ -299,7 +297,7 @@ class CacheableBuilder extends Builder
     ): Collection {
         CacheReporter::queryBypassed($model, $bypassReasons, $debugbarStart);
 
-        return $this->collectFromPrepared($prepared, $columns);
+        return $prepared->collect($columns);
     }
 
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null): LengthAwarePaginator
@@ -390,39 +388,6 @@ class CacheableBuilder extends Builder
     // Infrastructure
     // -------------------------------------------------------------------------
 
-    public function buildResultPayloadFromQuery(QueryBuilder $base): array
-    {
-        return $base->get()->map(fn($r) => (array) $r)->all();
-    }
-
-    public function hydrateResultPayload(
-        array $payload,
-        string $model,
-        bool $cached,
-        PreparedQuery $prepared,
-    ): Collection {
-        return $this->finalizeResult(NormCache::hydrator()->hydrateResult($payload, $this->model, $cached), $prepared);
-    }
-
-    public function finalizeResult(array $models, PreparedQuery $prepared): Collection
-    {
-        if ($models && $prepared->builder->getEagerLoads()) {
-            $models = $prepared->builder->eagerLoadRelations($models);
-        }
-
-        return $prepared->applyAfterCallbacks($this->model->newCollection($models));
-    }
-
-    public function getWithoutCache($columns): Collection
-    {
-        return parent::get($columns);
-    }
-
-    public function hasAfterQueryCallbacks(): bool
-    {
-        return $this->afterQueryCallbacks !== [];
-    }
-
     public function prepareCacheExecution(): PreparedQuery
     {
         return $this->prepareScopedQuery()->applyBeforeCallbacks();
@@ -434,30 +399,6 @@ class CacheableBuilder extends Builder
         $builder = $this->applyScopes();
 
         return new PreparedQuery($builder, $builder->getQuery());
-    }
-
-    public function collectFromPrepared(
-        PreparedQuery $prepared,
-        array $columns = ['*'],
-        bool $applyAfterCallbacks = true,
-        ?\Closure $beforeEagerLoad = null,
-    ): Collection {
-        $builder = $prepared->builder;
-        $models = $builder->getModels($columns);
-
-        if ($beforeEagerLoad !== null) {
-            $beforeEagerLoad($models);
-        }
-
-        if (count($models) > 0) {
-            $models = $builder->eagerLoadRelations($models);
-        }
-
-        $collection = $builder->getModel()->newCollection($models);
-
-        return $applyAfterCallbacks
-            ? $prepared->applyAfterCallbacks($collection)
-            : $collection;
     }
 
     // -------------------------------------------------------------------------
