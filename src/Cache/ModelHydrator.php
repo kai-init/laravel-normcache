@@ -49,12 +49,14 @@ final class ModelHydrator
 
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
-        $classKey = $this->keys->classKey($modelClass);
+        $connection = ($prototype ?? $missedQuery?->getModel())?->getConnectionName()
+            ?? $this->keys->declaredConnection($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
 
         // Pre-supplied $raw skips the version GET; resolve lazily only if there are misses.
         if ($raw === null) {
-            $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
+            $modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace(), $connection);
             $raw = $this->store->getMany($this->modelKeysFor($classKey, $modelVersion, $ids));
         } else {
             $modelVersion = 0; // deferred
@@ -84,7 +86,7 @@ final class ModelHydrator
         }
 
         if ($versionDeferred) {
-            $context->modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace());
+            $context->modelVersion = $this->versions->currentVersion($modelClass, $this->keys->activeSpace(), $connection);
         }
 
         if ($reporting) {
@@ -391,7 +393,10 @@ final class ModelHydrator
     private function prepareMissedQuery(string $modelClass, ?CacheableBuilder $missedQuery, bool $preserveQueryShape): EloquentBuilder
     {
         if ($missedQuery === null || !$preserveQueryShape || !$this->canPreserveQueryShape($missedQuery->getQuery())) {
-            $builder = $modelClass::query();
+            $builder = $missedQuery !== null
+                ? $missedQuery->getModel()->newQuery()
+                : $modelClass::query();
+
             if ($builder instanceof CacheableBuilder) {
                 if ($missedQuery !== null) {
                     $builder->withoutGlobalScopes($missedQuery->removedScopes());

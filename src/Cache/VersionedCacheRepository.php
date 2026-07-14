@@ -40,10 +40,21 @@ abstract class VersionedCacheRepository
     ): QueryCacheResult|ThroughCacheResult;
 
     /** @return TResult */
-    public function fetch(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult|ThroughCacheResult
-    {
-        $classKey = $this->keys->classKey($modelClass);
-        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
+    public function fetch(
+        string $modelClass,
+        string $hash,
+        ?string $tag,
+        array $depClasses,
+        array $depTableKeys,
+        ?string $connection = null,
+    ): QueryCacheResult|ThroughCacheResult {
+        $classKey = $this->keys->classKey($modelClass, $connection);
+        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs(
+            $classKey,
+            $depClasses,
+            $depTableKeys,
+            connection: $connection,
+        );
         $queryPrefix = $this->queryPrefix($classKey, $tag);
         $lockToken = $this->versions->buildLockToken();
 
@@ -89,12 +100,18 @@ abstract class VersionedCacheRepository
     }
 
     /** @return TResult|null */
-    public function waitForBuild(string $modelClass, string $hash, ?string $tag, array $depClasses, array $depTableKeys): QueryCacheResult|ThroughCacheResult|null
-    {
-        $classKey = $this->keys->classKey($modelClass);
+    public function waitForBuild(
+        string $modelClass,
+        string $hash,
+        ?string $tag,
+        array $depClasses,
+        array $depTableKeys,
+        ?string $connection = null,
+    ): QueryCacheResult|ThroughCacheResult|null {
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $this->store->brpop($this->keys->wakeKey($classKey, $hash), $this->stampedeWaitMs / 1000.0);
 
-        $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys);
+        $result = $this->fetch($modelClass, $hash, $tag, $depClasses, $depTableKeys, $connection);
 
         return $result->status === CacheStatus::Building ? null : $result;
     }

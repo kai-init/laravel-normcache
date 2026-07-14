@@ -13,10 +13,13 @@ final class VersionTracker
         private readonly CacheKeyBuilder $keys,
     ) {}
 
-    public function currentVersion(string $modelClass, ?CacheSpace $space = null): int
-    {
+    public function currentVersion(
+        string $modelClass,
+        ?CacheSpace $space = null,
+        ?string $connection = null,
+    ): int {
         return $this->normalizeVersion(
-            $this->fetchVersionWithCooldown($this->keys->classKey($modelClass), $space)
+            $this->fetchVersionWithCooldown($this->keys->classKey($modelClass, $connection), $space)
         );
     }
 

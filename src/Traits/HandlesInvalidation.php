@@ -50,8 +50,8 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class), $this->modelSpaces($model::class)),
-            fn() => $this->doInvalidateVersion($model::class),
+            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class, $conn), $this->modelSpaces($model::class)),
+            fn() => $this->doInvalidateVersion($model::class, $conn),
         );
     }
 
@@ -69,7 +69,7 @@ trait HandlesInvalidation
         $this->queueOrRun(
             $conn,
             fn() => $this->queueModelFlush($conn, $modelClass),
-            fn() => $this->forceFlushModel($modelClass),
+            fn() => $this->forceFlushModel($modelClass, $conn),
         );
     }
 
@@ -121,9 +121,9 @@ trait HandlesInvalidation
         );
     }
 
-    public function forceFlushModel(string $modelClass): void
+    public function forceFlushModel(string $modelClass, ?string $connectionName = null): void
     {
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connectionName);
 
         foreach ($this->modelSpaces($modelClass) as $space) {
             $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl()); // bypass cooldown
@@ -212,12 +212,12 @@ trait HandlesInvalidation
                 $conn,
                 function () use ($conn, $classes) {
                     foreach ($classes as $modelClass) {
-                        $this->queueVersionFlush($conn, $this->keys->classKey($modelClass), $this->modelSpaces($modelClass));
+                        $this->queueVersionFlush($conn, $this->keys->classKey($modelClass, $conn), $this->modelSpaces($modelClass));
                     }
                 },
-                function () use ($classes) {
+                function () use ($classes, $conn) {
                     foreach ($classes as $modelClass) {
-                        $this->doInvalidateVersion($modelClass);
+                        $this->doInvalidateVersion($modelClass, $conn);
                     }
                 },
             );
@@ -237,12 +237,12 @@ trait HandlesInvalidation
 
         CacheFallback::attempt(
             $this->config,
-            function () use ($flushes, $versions) {
+            function () use ($connectionName, $flushes, $versions) {
                 foreach ($flushes as $modelClass) {
-                    $this->forceFlushModel($modelClass);
+                    $this->forceFlushModel($modelClass, $connectionName);
                 }
 
-                $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
+                $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class, $connectionName), $flushes);
 
                 foreach ($versions as $classKey => $spaces) {
                     if (!in_array($classKey, $flushClassKeys, true)) {
@@ -278,9 +278,9 @@ trait HandlesInvalidation
         CacheFallback::attempt($this->config, $immediate);
     }
 
-    private function doInvalidateVersion(string $modelClass): void
+    private function doInvalidateVersion(string $modelClass, ?string $connectionName = null): void
     {
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connectionName);
 
         foreach ($this->modelSpaces($modelClass) as $space) {
             $this->doInvalidateKey($classKey, $space);

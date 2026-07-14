@@ -17,12 +17,16 @@ final class ModelCacheRepository
         private readonly CacheConfig $config,
     ) {}
 
-    public function store(string $modelClass, array $modelAttrs, ?CacheSpace $space = null): void
-    {
+    public function store(
+        string $modelClass,
+        array $modelAttrs,
+        ?CacheSpace $space = null,
+        ?string $connection = null,
+    ): void {
         $space ??= $this->keys->activeSpace();
-        $modelVersion = $this->versions->currentVersion($modelClass, $space);
+        $modelVersion = $this->versions->currentVersion($modelClass, $space, $connection);
 
-        $this->storeForVersion($modelClass, $modelAttrs, $modelVersion, $space);
+        $this->storeForVersion($modelClass, $modelAttrs, $modelVersion, $space, $connection);
     }
 
     public function storeForBuild(
@@ -30,15 +34,16 @@ final class ModelCacheRepository
         array $modelAttrs,
         BuildHandle $build,
         ?CacheSpace $space = null,
+        ?string $connection = null,
     ): void {
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $index = array_search($this->keys->verKey($classKey, $space), $build->versionKeys, true);
 
         if ($index === false || !isset($build->expectedVersions[$index])) {
             return;
         }
 
-        $this->storeForVersion($modelClass, $modelAttrs, (int) $build->expectedVersions[$index], $space);
+        $this->storeForVersion($modelClass, $modelAttrs, (int) $build->expectedVersions[$index], $space, $connection);
     }
 
     public function storeForVersion(
@@ -46,12 +51,13 @@ final class ModelCacheRepository
         array $modelAttrs,
         int $expectedVersion,
         ?CacheSpace $space = null,
+        ?string $connection = null,
     ): void {
         if (empty($modelAttrs)) {
             return;
         }
 
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $attrsByKey = [];
 
         foreach ($modelAttrs as $id => $attrs) {

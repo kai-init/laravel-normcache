@@ -26,11 +26,17 @@ final class ResultCacheRepository
     public function fetch(
         string $modelClass, array $depClasses, string $hash,
         ?string $tag, array $depTableKeys,
-        string $namespace = CacheKeyBuilder::K_RESULT
+        string $namespace = CacheKeyBuilder::K_RESULT,
+        ?string $connection = null,
     ): ResultCacheResult {
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $lockSuffix = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
-        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs($classKey, $depClasses, $depTableKeys);
+        [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs(
+            $classKey,
+            $depClasses,
+            $depTableKeys,
+            connection: $connection,
+        );
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
         $lockToken = $this->versions->buildLockToken();
 
@@ -236,13 +242,14 @@ final class ResultCacheRepository
     public function waitForBuild(
         string $modelClass, array $depClasses, string $hash,
         ?string $tag, array $depTableKeys,
-        string $namespace = CacheKeyBuilder::K_RESULT
+        string $namespace = CacheKeyBuilder::K_RESULT,
+        ?string $connection = null,
     ): ?ResultCacheResult {
-        $classKey = $this->keys->classKey($modelClass);
+        $classKey = $this->keys->classKey($modelClass, $connection);
         $wakeSuffix = $this->keys->resultBuildIdentityHash($namespace, $tag, $hash);
         $this->store->brpop($this->keys->wakePrefix($classKey) . $wakeSuffix, $this->stampedeWaitMs / 1000.0);
 
-        $result = $this->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace);
+        $result = $this->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace, $connection);
 
         return $result->status === CacheStatus::Building ? null : $result;
     }

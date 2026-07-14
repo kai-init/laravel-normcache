@@ -49,10 +49,11 @@ final class ModelsExecutor
         $hash = QueryHasher::forNormalizedQuery($executionBuilder, $base);
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
+        $connection = $prototype->getConnectionName();
 
         return NormCache::engine()->runNormalized(
-            fetch: fn() => NormCache::queries()->fetch($model, $hash, $cacheTag, $depClasses, $depTableKeys),
-            waitForBuild: fn() => NormCache::queries()->waitForBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys),
+            fetch: fn() => NormCache::queries()->fetch($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection),
+            waitForBuild: fn() => NormCache::queries()->waitForBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection),
             onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $prototype) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 

@@ -29,7 +29,9 @@ final class ResultExecutor
         Closure $compute,
     ): array {
         $builder = $prepared->builder;
-        $modelClass = $builder->getModel()::class;
+        $model = $builder->getModel();
+        $modelClass = $model::class;
+        $connection = $model->getConnectionName();
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
         $debugbarStart = CacheReporter::beginMeasure();
@@ -43,8 +45,8 @@ final class ResultExecutor
         $execution = CacheFallback::rescue(
             $this->config,
             fn() => $this->engine->runScalar(
-                fetch: fn() => $this->results->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-                waitForBuild: fn() => $this->results->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+                fetch: fn() => $this->results->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace, $connection),
+                waitForBuild: fn() => $this->results->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace, $connection),
                 compute: fn() => ['value' => $compute(), 'cached' => false],
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);

@@ -127,9 +127,16 @@ class CacheKeyBuilder
     // High-level resolution
     // -------------------------------------------------------------------------
 
-    public function classKey(string $class): string
+    public function classKey(string $class, ?string $connection = null): string
     {
-        return self::$classKeys[$class] ??= $this->resolveClassKey($class);
+        $connection ??= $this->declaredConnection($class);
+
+        return self::$classKeys[$connection][$class] ??= $this->resolveClassKey($class, $connection);
+    }
+
+    public function declaredConnection(string $class): string
+    {
+        return self::prototype($class)->getConnectionName() ?? DB::getDefaultConnection();
     }
 
     // Clear all static metadata caches. Call this after switching tenant connections.
@@ -232,8 +239,13 @@ class CacheKeyBuilder
     /**
      * @return array{0: list<string>, 1: list<string>} [versionKeys, scheduledKeys]
      */
-    public function depKeyPairs(string $classKey, array $depClasses, array $depTableKeys = [], ?CacheSpace $space = null): array
-    {
+    public function depKeyPairs(
+        string $classKey,
+        array $depClasses,
+        array $depTableKeys = [],
+        ?CacheSpace $space = null,
+        ?string $connection = null,
+    ): array {
         $space ??= $this->activeSpace;
 
         if ($depClasses === [] && $depTableKeys === []) {
@@ -251,8 +263,8 @@ class CacheKeyBuilder
         $seen[$classKey] = true;
         $all[] = $classKey;
 
-        foreach ($this->sortClassesByKey($depClasses) as $class) {
-            $key = $this->classKey($class);
+        foreach ($this->sortClassesByKey($depClasses, $connection) as $class) {
+            $key = $this->classKey($class, $connection);
 
             if (!isset($seen[$key])) {
                 $seen[$key] = true;
@@ -311,10 +323,9 @@ class CacheKeyBuilder
         return $this->keyPrefix . '|' . $this->tagPrefix($space) . '|' . $classKey;
     }
 
-    private function resolveClassKey(string $class): string
+    private function resolveClassKey(string $class, string $connection): string
     {
         $model = self::prototype($class);
-        $connection = $model->getConnectionName() ?? DB::getDefaultConnection();
 
         if (str_contains($connection, ':')) {
             throw new \InvalidArgumentException(
@@ -325,9 +336,9 @@ class CacheKeyBuilder
         return "{$connection}:{$model->getTable()}";
     }
 
-    private function sortClassesByKey(array $classes): array
+    private function sortClassesByKey(array $classes, ?string $connection = null): array
     {
-        usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
+        usort($classes, fn($a, $b) => strcmp($this->classKey($a, $connection), $this->classKey($b, $connection)));
 
         return $classes;
     }

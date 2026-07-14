@@ -4,6 +4,7 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Database\Eloquent\Model;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheSpace;
 
@@ -25,6 +26,14 @@ class CacheKeyBuilderTest extends UnitTestCase
         $keys = new CacheKeyBuilder('{nc}:', 'test:');
 
         $this->assertSame('{nc}:test:ver:mysql:posts:', $keys->verKey('mysql:posts'));
+    }
+
+    public function test_class_key_can_be_scoped_to_an_effective_connection(): void
+    {
+        $keys = new CacheKeyBuilder;
+
+        $this->assertSame('testing:authors', $keys->classKey(Author::class));
+        $this->assertSame('secondary_testing:authors', $keys->classKey(Author::class, 'secondary_testing'));
     }
 
     public function test_class_key_rejects_connection_name_containing_colon(): void

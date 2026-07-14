@@ -144,9 +144,9 @@ class CacheManager
         return $this->withSpace($this->spaceFor($modelClass, $explicitSpace), $callback);
     }
 
-    public function currentVersion(string $modelClass): int
+    public function currentVersion(string $modelClass, ?string $connection = null): int
     {
-        return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0]);
+        return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0], $connection);
     }
 
     public function currentTableVersion(string $connectionName, string $table): int
