@@ -29,7 +29,7 @@ class StampedeProtectionTest extends TestCase
 
     private function setKey(string $key, string $value, ?int $ttl = null): void
     {
-        $prefixed = 'test:' . $key;
+        $prefixed = '{nc}:test:' . $key;
         $ttl !== null
             ? $this->redis()->setex($prefixed, $ttl, $value)
             : $this->redis()->set($prefixed, $value);
@@ -46,17 +46,17 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         Author::get();
 
-        $this->redis()->incr("test:ver:{{$ck}}:");
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
         $newVersion = NormCache::currentVersion(Author::class);
 
-        $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
-        $this->redis()->lpush("test:wake:{{$ck}}:{$hash}", '1');
-        $this->setKey("query:{{$ck}}:v{$newVersion}:{$hash}", json_encode([(string) Author::first()->id], JSON_THROW_ON_ERROR), 60);
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
+        $this->redis()->lpush("{nc}:test:wake:{$ck}:{$hash}", '1');
+        $this->setKey("query:{$ck}:v{$newVersion}:{$hash}", json_encode([(string) Author::first()->id], JSON_THROW_ON_ERROR), 60);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -73,11 +73,12 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        $this->redis()->incr("test:ver:{{$ck}}:");
-        $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
+        $newVersion = NormCache::currentVersion(Author::class);
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -94,11 +95,12 @@ class StampedeProtectionTest extends TestCase
     {
         Author::create(['name' => 'Alice']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
-        $this->redis()->incr("test:ver:{{$ck}}:");
-        $this->redis()->set("test:building:{{$ck}}:{$hash}", '1');
+        $this->redis()->incr("{nc}:test:ver:{$ck}:");
+        $newVersion = NormCache::currentVersion(Author::class);
+        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount) {
@@ -116,7 +118,7 @@ class StampedeProtectionTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
 
-        $ck = NormCache::classKey(Author::class);
+        $ck = NormCache::keys()->classKey(Author::class);
         $hash = $this->authorQueryHash();
 
         $queryCount = 0;
@@ -128,7 +130,7 @@ class StampedeProtectionTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount);
         $this->assertCount(2, $results);
-        $this->assertGreaterThan(0, $this->redis()->llen("test:wake:{{$ck}}:{$hash}"));
+        $this->assertGreaterThan(0, $this->redis()->llen("{nc}:test:wake:{$ck}:{$hash}"));
 
         $queryCount = 0;
         Author::get();

@@ -22,6 +22,13 @@ trait Cacheable
         NormCache::flushInstance($this);
     }
 
+    // Cache spaces this model belongs to (empty = default), via $normCacheSpaces.
+    /** @return list<string> */
+    public static function normCacheSpaces(): array
+    {
+        return property_exists(static::class, 'normCacheSpaces') ? (array) static::$normCacheSpaces : [];
+    }
+
     // -------------------------------------------------------------------------
     // Public overrides
     // -------------------------------------------------------------------------
@@ -55,6 +62,13 @@ trait Cacheable
 
     public function save(array $options = []): bool
     {
+        if ($this->exists && $this->isDirty()
+            && $this->getConnection()->transactionLevel() === 0
+            && !$this->isPendingRestoreSave()
+        ) {
+            NormCache::flushInstance($this);
+        }
+
         return $this->saveWithCacheInvalidation(fn() => parent::save($options));
     }
 
@@ -90,8 +104,6 @@ trait Cacheable
         $existsBefore = $this->exists;
         $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
 
-        $this->evictBeforeSaveForObservers($existsBefore, $originalKey);
-
         $result = $save();
 
         if ($result) {
@@ -119,37 +131,18 @@ trait Cacheable
             return;
         }
 
-        if ($originalKey !== null && $originalKey !== $this->getKey()) {
-            NormCache::evictModelKey(static::class, $originalKey);
-        }
-
         NormCache::flushInstance($this);
     }
 
-    // Evict before save so observers do not read an outdated model payload.
-    private function evictBeforeSaveForObservers(bool $existsBefore, mixed $originalKey = null): void
+    private function isPendingRestoreSave(): bool
     {
-        if (!$existsBefore) {
-            return;
+        if (!method_exists($this, 'getDeletedAtColumn')) {
+            return false;
         }
 
-        if (!$this->isDirty()) {
-            return;
-        }
+        $col = $this->getDeletedAtColumn();
 
-        if ($this->isPendingRestoreSave()) {
-            return;
-        }
-
-        if (!NormCache::isEnabled()) {
-            return;
-        }
-
-        if ($this->getConnection()->transactionLevel() !== 0) {
-            return;
-        }
-
-        NormCache::evictModelKey(static::class, $originalKey ?? $this->getKey());
+        return $this->isDirty($col) && $this->getAttribute($col) === null;
     }
 
     private function isRestoreSave(bool $existsBefore): bool
@@ -161,17 +154,6 @@ trait Cacheable
         $deletedAtColumn = $this->getDeletedAtColumn();
 
         return $this->wasChanged($deletedAtColumn) && $this->{$deletedAtColumn} === null;
-    }
-
-    private function isPendingRestoreSave(): bool
-    {
-        if (!method_exists($this, 'getDeletedAtColumn')) {
-            return false;
-        }
-
-        $deletedAtColumn = $this->getDeletedAtColumn();
-
-        return $this->isDirty($deletedAtColumn) && $this->{$deletedAtColumn} === null;
     }
 
     private function runWithoutCache(callable $callback)

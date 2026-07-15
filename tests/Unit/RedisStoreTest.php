@@ -18,18 +18,7 @@ class RedisStoreTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->store = new RedisStore('normcache-test', 'test:', false, '{nc}:');
-    }
-
-    public function test_it_prefixes_keys(): void
-    {
-        $this->assertSame('{nc}:test:foo', $this->store->prefix('foo'));
-    }
-
-    public function test_it_prefixes_keys_in_slotting_mode(): void
-    {
-        $store = new RedisStore('normcache-test', 'test:', true, '');
-        $this->assertSame('test:foo', $store->prefix('foo'));
+        $this->store = new RedisStore('normcache-test');
     }
 
     public function test_it_can_set_and_get_values(): void
@@ -64,56 +53,62 @@ class RedisStoreTest extends TestCase
 
     public function test_it_can_release_building_locks(): void
     {
-        $this->store->set('build:foo', '1', 60);
-        $this->store->releaseBuilding('build:foo', 'wake:foo');
+        $this->store->set('{t}:build:foo', '1', 60);
+        $this->store->releaseBuilding('{t}:build:foo', '{t}:wake:foo');
 
-        $this->assertNull($this->store->getRaw('build:foo'));
-        $this->assertTrue($this->store->brpop('wake:foo', 1));
+        $this->assertNull($this->store->getRaw('{t}:build:foo'));
+        $this->assertTrue($this->store->brpop('{t}:wake:foo', 1));
     }
 
     public function test_release_building_pushes_configured_wake_tokens(): void
     {
-        $store = new RedisStore('normcache-test', 'test:', false, '{nc}:', wakeTokenCount: 3);
+        $store = new RedisStore('normcache-test', wakeTokenCount: 3);
 
-        $store->set('build:tokens', '1', 60);
-        $store->releaseBuilding('build:tokens', 'wake:tokens');
+        $store->set('{t}:build:tokens', '1', 60);
+        $store->releaseBuilding('{t}:build:tokens', '{t}:wake:tokens');
 
-        $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['wake:tokens']));
+        $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['{t}:wake:tokens']));
     }
 
     public function test_it_can_get_many_values(): void
     {
-        $this->store->set('foo', 'bar', 60);
-        $this->store->set('baz', 'qux', 60);
+        $this->store->set('{nc}:foo', 'bar', 60);
+        $this->store->set('{nc}:baz', 'qux', 60);
 
-        $results = $this->store->getMany(['foo', 'baz', 'missing']);
+        $results = $this->store->getMany(['{nc}:foo', '{nc}:baz', '{nc}:missing']);
 
         $this->assertSame(['bar', 'qux', null], $results);
     }
 
-    public function test_it_can_set_many_values(): void
+    public function test_predis_cluster_get_many_uses_one_same_slot_mget_command(): void
     {
-        $this->store->setMany(['foo' => 'bar', 'baz' => 'qux'], 60);
+        $connection = new class extends PredisClusterConnection
+        {
+            public array $commands = [];
 
-        $this->assertSame('bar', $this->store->get('foo'));
-        $this->assertSame('qux', $this->store->get('baz'));
-    }
+            public array $values = [];
 
-    public function test_it_can_group_keys_by_tag_in_slotting_mode(): void
-    {
-        $store = new RedisStore('normcache-test', 'test:', true, '');
+            public function __construct() {}
 
-        $method = new \ReflectionMethod(RedisStore::class, 'groupByTag');
-        $method->setAccessible(true);
+            public function command($method, array $parameters = [])
+            {
+                $this->commands[] = [$method, $parameters];
 
-        $keys = ['{user:1}:a', '{user:1}:b', '{user:2}:c', 'no-tag'];
-        $groups = $method->invoke($store, $keys);
+                return array_map(fn($key) => $this->values[$key] ?? null, $parameters);
+            }
+        };
 
-        $this->assertSame([
-            'user:1' => ['{user:1}:a', '{user:1}:b'],
-            'user:2' => ['{user:2}:c'],
-            'no-tag' => ['no-tag'],
-        ], $groups);
+        $store = new RedisStore('normcache-test');
+        $connection->values = [
+            '{nc}:foo' => $store->serialize('bar'),
+            '{nc}:baz' => $store->serialize('qux'),
+        ];
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $keys = ['{nc}:foo', '{nc}:baz', '{nc}:missing'];
+
+        $this->assertSame(['bar', 'qux', null], $store->getMany($keys));
+        $this->assertSame([['mget', $keys]], $connection->commands);
     }
 
     public function test_it_can_run_lua_scripts(): void
@@ -126,106 +121,104 @@ class RedisStoreTest extends TestCase
         $this->assertSame('bar', $this->store->unserialize($result));
     }
 
-    public function test_it_can_set_many_tracked_if_version(): void
+    public function test_it_can_set_many_if_version(): void
     {
-        $this->store->delete(['member:1', 'ver:1', 'key:1', 'key:2']);
-        $this->store->setRaw('ver:1', '1', 60);
+        $this->store->delete(['{t}:ver:1', '{t}:key:1', '{t}:key:2']);
+        $this->store->setRaw('{t}:ver:1', '1', 60);
 
         $attrs = [
-            'key:1' => ['id' => 1, 'name' => 'Alice'],
-            'key:2' => ['id' => 2, 'name' => 'Bob'],
+            '{t}:key:1' => ['id' => 1, 'name' => 'Alice'],
+            '{t}:key:2' => ['id' => 2, 'name' => 'Bob'],
         ];
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:1', 'ver:1', 1);
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:1', 1);
 
-        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
-        $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('key:2'));
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('{t}:key:1'));
+        $this->assertSame(['id' => 2, 'name' => 'Bob'], $this->store->get('{t}:key:2'));
 
         // Should NOT update if version mismatch
-        $attrs2 = ['key:1' => ['id' => 1, 'name' => 'Charlie']];
-        $this->store->setManyTrackedIfVersion($attrs2, 60, 'member:1', 'ver:1', 2);
+        $attrs2 = ['{t}:key:1' => ['id' => 1, 'name' => 'Charlie']];
+        $this->store->setManyIfVersion($attrs2, 60, '{t}:ver:1', 2);
 
-        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('key:1'));
+        $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('{t}:key:1'));
     }
 
-    public function test_it_can_set_many_tracked_if_version_with_lock_release(): void
+    public function test_it_can_set_many_if_version_with_lock_release(): void
     {
-        $this->store->delete(['member:2', 'ver:2', 'key:3', 'key:4', 'lock:2', 'wake:2']);
-        $this->store->setRaw('ver:2', '1', 60);
-        $this->store->setNxEx('lock:2', 'tok', 60);
+        $this->store->delete(['{t}:ver:2', '{t}:key:3', '{t}:key:4', '{t}:lock:2', '{t}:wake:2']);
+        $this->store->setRaw('{t}:ver:2', '1', 60);
+        $this->store->setNxEx('{t}:lock:2', 'tok', 60);
 
         $attrs = [
-            'key:3' => ['id' => 3, 'name' => 'Dee'],
-            'key:4' => ['id' => 4, 'name' => 'Eve'],
+            '{t}:key:3' => ['id' => 3, 'name' => 'Dee'],
+            '{t}:key:4' => ['id' => 4, 'name' => 'Eve'],
         ];
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:2', 'ver:2', 1, 'lock:2', 'wake:2', 'tok');
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:2', 1, '{t}:lock:2', '{t}:wake:2', 'tok');
 
-        $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('key:3'));
-        $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('key:4'));
-        $this->assertNull($this->store->getRaw('lock:2'), 'build lock should be released after the write');
+        $this->assertSame(['id' => 3, 'name' => 'Dee'], $this->store->get('{t}:key:3'));
+        $this->assertSame(['id' => 4, 'name' => 'Eve'], $this->store->get('{t}:key:4'));
+        $this->assertNull($this->store->getRaw('{t}:lock:2'), 'build lock should be released after the write');
     }
 
-    public function test_set_many_tracked_if_version_handles_large_script_batches(): void
+    public function test_set_many_if_version_handles_large_script_batches(): void
     {
-        $this->store->delete(['member:large', 'ver:large']);
-        $this->store->setRaw('ver:large', '1', 60);
+        $this->store->delete(['{t}:ver:large']);
+        $this->store->setRaw('{t}:ver:large', '1', 60);
 
         $attrs = [];
         for ($i = 0; $i < 10000; $i++) {
-            $attrs["key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
+            $attrs["{t}:key:large:{$i}"] = ['id' => $i, 'name' => "Name {$i}"];
         }
 
-        $this->store->setManyTrackedIfVersion($attrs, 60, 'member:large', 'ver:large', 1);
+        $this->store->setManyIfVersion($attrs, 60, '{t}:ver:large', 1);
 
-        $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('key:large:9999'));
-        $this->assertSame(10000, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:large']));
+        $this->assertSame(['id' => 9999, 'name' => 'Name 9999'], $this->store->get('{t}:key:large:9999'));
     }
 
-    public function test_set_many_tracked_script_chunks_sadd_internally(): void
+    public function test_set_many_if_version_script_chunks_internally(): void
     {
-        $this->store->setRaw('ver:script-large', '1', 60);
+        $this->store->setRaw('{t}:ver:script-large', '1', 60);
 
         $count = 8200;
         $keys = [];
         $values = [];
         for ($i = 0; $i < $count; $i++) {
-            $keys[] = "key:script-large:{$i}";
+            $keys[] = "{t}:key:script-large:{$i}";
             $values[] = $this->store->serialize(['id' => $i]);
         }
 
         $result = $this->store->script(
-            RedisScripts::get('store_many_tracked_if_version'),
-            array_merge(['ver:script-large', 'member:script-large', '', ''], $keys),
+            RedisScripts::get('store_model_attrs'),
+            array_merge(['{t}:ver:script-large'], $keys),
             array_merge(['1', '60', (string) $count, ''], $values)
         );
 
         $this->assertSame($count, (int) $result);
-        $this->assertSame($count, (int) $this->store->script("return redis.call('SCARD', KEYS[1])", ['member:script-large']));
     }
 
     public function test_it_skips_write_but_still_releases_on_version_mismatch(): void
     {
-        $this->store->delete(['member:3', 'ver:3', 'key:5', 'lock:3', 'wake:3']);
-        $this->store->setRaw('ver:3', '2', 60);
-        $this->store->setNxEx('lock:3', 'tok', 60);
+        $this->store->delete(['{t}:ver:3', '{t}:key:5', '{t}:lock:3', '{t}:wake:3']);
+        $this->store->setRaw('{t}:ver:3', '2', 60);
+        $this->store->setNxEx('{t}:lock:3', 'tok', 60);
 
-        $this->store->setManyTrackedIfVersion(
-            ['key:5' => ['id' => 5]], 60, 'member:3', 'ver:3', 1, 'lock:3', 'wake:3', 'tok'
+        $this->store->setManyIfVersion(
+            ['{t}:key:5' => ['id' => 5]], 60, '{t}:ver:3', 1, '{t}:lock:3', '{t}:wake:3', 'tok'
         );
 
-        $this->assertNull($this->store->get('key:5'));
-        $this->assertNull($this->store->getRaw('lock:3'), 'build lock should still be released even when the write is skipped');
+        $this->assertNull($this->store->get('{t}:key:5'));
+        $this->assertNull($this->store->getRaw('{t}:lock:3'), 'build lock should still be released even when the write is skipped');
     }
 
     public function test_it_releases_lock_unconditionally_when_there_is_nothing_to_write(): void
     {
-        $this->store->delete(['lock:4', 'wake:4']);
-        $this->store->setNxEx('lock:4', 'tok', 60);
+        $this->store->delete(['{t}:lock:4', '{t}:wake:4']);
+        $this->store->setNxEx('{t}:lock:4', 'tok', 60);
 
-        $this->store->setManyTrackedIfVersion([], 60, 'member:4', 'ver:4', 1, 'lock:4', 'wake:4', 'tok');
+        $this->store->setManyIfVersion([], 60, '{t}:ver:4', 1, '{t}:lock:4', '{t}:wake:4', 'tok');
 
-        $this->assertNull($this->store->getRaw('lock:4'));
+        $this->assertNull($this->store->getRaw('{t}:lock:4'));
     }
 
     public function test_it_can_flush_by_patterns(): void
@@ -242,6 +235,41 @@ class RedisStoreTest extends TestCase
         $this->assertSame('c', $this->store->get('bar:1'));
     }
 
+    public function test_predis_cluster_delete_batches_keys_by_hash_tag(): void
+    {
+        $connection = new class extends PredisClusterConnection
+        {
+            public array $commands = [];
+
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                $this->commands[] = [$method, $parameters];
+
+                return count($parameters);
+            }
+        };
+
+        $store = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $store->delete([
+            '{nc}:foo:1',
+            '{nc:content}:foo:1',
+            '{nc}:foo:2',
+            'untagged:1',
+            'untagged:2',
+        ]);
+
+        $this->assertSame([
+            ['del', ['{nc}:foo:1', '{nc}:foo:2']],
+            ['del', ['{nc:content}:foo:1']],
+            ['del', ['untagged:1']],
+            ['del', ['untagged:2']],
+        ], $connection->commands);
+    }
+
     public function test_scan_pattern_strips_connection_prefix_from_returned_keys(): void
     {
         if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
@@ -252,10 +280,10 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', false);
-            $store->set('query:abc', [1], 60);
-            $store->set('query:def', [2], 60);
-            $store->set('model:1', ['id' => 1], 60);
+            $store = new RedisStore('normcache-test');
+            $store->set('test:query:abc', [1], 60);
+            $store->set('test:query:def', [2], 60);
+            $store->set('test:model:1', ['id' => 1], 60);
 
             $keys = $store->scanPattern('test:query:*');
 
@@ -280,30 +308,60 @@ class RedisStoreTest extends TestCase
         Redis::purge('normcache-test');
 
         try {
-            $store = new RedisStore('normcache-test', 'test:', false);
-            $store->set('query:1', 'a', 60);
-            $store->set('query:2', 'b', 60);
-            $store->set('model:1', 'c', 60);
+            $store = new RedisStore('normcache-test');
+            $store->set('test:query:1', 'a', 60);
+            $store->set('test:query:2', 'b', 60);
+            $store->set('test:model:1', 'c', 60);
 
-            $count = $store->flushByPatterns(['query:*']);
+            $count = $store->flushByPatterns(['test:query:*']);
 
             $this->assertSame(2, $count);
-            $this->assertNull($store->get('query:1'));
-            $this->assertNull($store->get('query:2'));
-            $this->assertSame('c', $store->get('model:1'));
+            $this->assertNull($store->get('test:query:1'));
+            $this->assertNull($store->get('test:query:2'));
+            $this->assertSame('c', $store->get('test:model:1'));
         } finally {
             Redis::purge('normcache-test');
             config()->set('database.redis.options.prefix', '');
         }
     }
 
-    public function test_flush_by_patterns_scans_all_phpredis_cluster_masters(): void
+    public function test_flush_by_patterns_scans_each_phpredis_cluster_master_once_and_filters_keys(): void
     {
-        $connection = new class extends PhpRedisClusterConnection
+        $client = new class
+        {
+            public array $scans = [];
+
+            public function getOption($option)
+            {
+                return 'laravel:';
+            }
+
+            public function _masters(): array
+            {
+                return ['node-a', 'node-b'];
+            }
+
+            public function scan(&$cursor, $node, $pattern = null, $count = 0)
+            {
+                $this->scans[] = [$node, $pattern];
+                $cursor = 0;
+
+                return match ($node) {
+                    'node-a' => [
+                        'laravel:{nc}:test:model:{testing:posts}:1',
+                        'laravel:{nc}:test:other:keep',
+                    ],
+                    'node-b' => ['laravel:{nc}:test:query:{testing:posts}:v1:abc'],
+                    default => [],
+                };
+            }
+        };
+
+        $connection = new class($client) extends PhpRedisClusterConnection
         {
             public array $unlinked = [];
 
-            public function __construct() {}
+            public function __construct(private object $redisClient) {}
 
             public function _prefix($key)
             {
@@ -312,30 +370,7 @@ class RedisStoreTest extends TestCase
 
             public function client()
             {
-                return new class
-                {
-                    public function getOption($option)
-                    {
-                        return 'laravel:';
-                    }
-
-                    public function _masters(): array
-                    {
-                        return ['node-a', 'node-b'];
-                    }
-
-                    public function scan(&$cursor, $node, $pattern = null, $count = 0)
-                    {
-                        $prev = $cursor;
-                        $cursor = 0;
-
-                        return match ([$pattern, $node, $prev]) {
-                            ['laravel:test:model:*', 'node-a', null] => ['laravel:test:model:{testing:posts}:1'],
-                            ['laravel:test:query:*', 'node-b', null] => ['laravel:test:query:{testing:posts}:v1:abc'],
-                            default => [],
-                        };
-                    }
-                };
+                return $this->redisClient;
             }
 
             public function unlink($keys)
@@ -346,16 +381,20 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', 'test:', true);
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
-        $deleted = $store->flushByPatterns(['model:*', 'query:*']);
+        $deleted = $store->flushByPatterns(['{nc}:test:model:*', '{nc}:test:query:*']);
 
         $this->assertSame(2, $deleted);
         $this->assertSame([
-            ['test:model:{testing:posts}:1'],
-            ['test:query:{testing:posts}:v1:abc'],
-        ], $connection->unlinked);
+            ['node-a', 'laravel:{nc}:test:*'],
+            ['node-b', 'laravel:{nc}:test:*'],
+        ], $client->scans);
+        $this->assertSame([[
+            '{nc}:test:model:{testing:posts}:1',
+            '{nc}:test:query:{testing:posts}:v1:abc',
+        ]], $connection->unlinked);
     }
 
     public function test_flush_by_patterns_scans_all_nodes_on_predis_cluster(): void
@@ -378,23 +417,99 @@ class RedisStoreTest extends TestCase
         $directClient = new PredisClient($standaloneConn);
 
         for ($i = 0; $i < 2500; $i++) {
-            $directClient->setex("testscan:model:{posts}:{$i}", 60, 'x');
+            $directClient->setex("model:{posts}:{$i}", 60, 'x');
         }
 
-        $this->assertCount(2500, $directClient->keys('testscan:*'));
+        $this->assertCount(2500, $directClient->keys('model:*'));
 
         // Use 'predis' cluster type so the client iterates over configured nodes
         // without requiring CLUSTER SLOTS (which standalone Redis doesn't support).
         $predisClient = new PredisClient([$standaloneConn], ['cluster' => 'predis']);
         $clusterConnection = new PredisClusterConnection($predisClient);
 
-        $store = new RedisStore('normcache-test', 'testscan:', false);
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $clusterConnection);
 
         $deleted = $store->flushByPatterns(['model:{posts}:*']);
 
         $this->assertSame(2500, $deleted);
-        $this->assertEmpty($directClient->keys('testscan:*'));
+        $this->assertEmpty($directClient->keys('model:*'));
+    }
+
+    public function test_predis_cluster_scan_targets_owner_for_concrete_hash_tag_pattern(): void
+    {
+        $owner = new class
+        {
+            public array $patterns = [];
+
+            public function scan($cursor, array $options)
+            {
+                $this->patterns[] = $options['match'] ?? null;
+
+                return ['0', ['{nc:content}:test:query:testing:posts:v1:abc']];
+            }
+        };
+
+        $other = new class
+        {
+            public int $calls = 0;
+
+            public function scan($cursor, array $options)
+            {
+                $this->calls++;
+
+                return ['0', []];
+            }
+        };
+
+        $connection = new class($owner, $other) extends PredisClusterConnection
+        {
+            public function __construct(private object $owner, private object $other) {}
+
+            public function client()
+            {
+                return new class($this->owner, $this->other) implements \IteratorAggregate
+                {
+                    public function __construct(private object $owner, private object $other) {}
+
+                    public function getOptions()
+                    {
+                        return new class
+                        {
+                            public $prefix = null;
+                        };
+                    }
+
+                    public function getConnection()
+                    {
+                        return new class($this->owner)
+                        {
+                            public function __construct(private object $owner) {}
+
+                            public function getConnectionBySlot($slot)
+                            {
+                                return $this->owner;
+                            }
+                        };
+                    }
+
+                    public function getIterator(): \Traversable
+                    {
+                        return new \ArrayIterator([$this->owner, $this->other]);
+                    }
+                };
+            }
+        };
+
+        $store = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+
+        $this->assertSame(
+            ['{nc:content}:test:query:testing:posts:v1:abc'],
+            $store->scanPattern('{nc:content}:test:query:*')
+        );
+        $this->assertSame(['{nc:content}:test:query:*'], $owner->patterns);
+        $this->assertSame(0, $other->calls);
     }
 
     public function test_predis_cluster_scan_deduplicates_keys_returned_by_multiple_nodes(): void
@@ -438,7 +553,7 @@ class RedisStoreTest extends TestCase
             }
         };
 
-        $store = new RedisStore('normcache-test', '', true);
+        $store = new RedisStore('normcache-test');
         (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $this->assertSame(
@@ -453,7 +568,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test');
         $data = ['x' => 1];
 
         $this->assertSame($data, $store->unserialize(igbinary_serialize($data)));
@@ -477,7 +592,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
@@ -491,7 +606,7 @@ class RedisStoreTest extends TestCase
     {
         (new ReflectionProperty(RedisStore::class, 'shas'))->setValue(null, []);
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test');
         $script = RedisScripts::get('fetch_version_with_cooldown');
 
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
@@ -510,7 +625,7 @@ class RedisStoreTest extends TestCase
             $this->markTestSkipped('igbinary extension not available in this environment');
         }
 
-        $store = new RedisStore('normcache-test', '', false);
+        $store = new RedisStore('normcache-test');
         $serializer = (new ReflectionProperty($store, 'serializer'))->getValue($store);
         (new ReflectionProperty($serializer, 'igbinary'))->setValue($serializer, false);
 

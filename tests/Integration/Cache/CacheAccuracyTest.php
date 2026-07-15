@@ -274,7 +274,7 @@ class CacheAccuracyTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
-        app('normcache')->getModels([$post->id], Post::class);
+        app('normcache')->hydrator()->getModels([$post->id], Post::class);
 
         $resolved = (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->getValue();
         $this->assertSame('deleted_at', $resolved[Post::class] ?? null);
@@ -307,8 +307,8 @@ class CacheAccuracyTest extends TestCase
         $secondary = SecondaryConnectionAuthor::find(1);
 
         $this->assertSame('Secondary Alice', $secondary->name);
-        $this->assertSame(DB::getDefaultConnection() . ':authors', app('normcache')->classKey(Author::class));
-        $this->assertSame('secondary_testing:authors', app('normcache')->classKey(SecondaryConnectionAuthor::class));
+        $this->assertSame(DB::getDefaultConnection() . ':authors', app('normcache')->keys()->classKey(Author::class));
+        $this->assertSame('secondary_testing:authors', app('normcache')->keys()->classKey(SecondaryConnectionAuthor::class));
     }
 }
 

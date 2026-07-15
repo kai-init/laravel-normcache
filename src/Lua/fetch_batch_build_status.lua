@@ -1,14 +1,13 @@
--- Re-checks missing pivot keys and atomically claims the build lock if still missing.
--- No version key needed — pivot writes are version-gated separately at write time.
+-- Re-checks still-missing model/pivot keys and atomically claims the build lock if
+-- anything is still missing. Used for both model attributes and pivot payloads.
 --
--- KEYS[1..n] = pivot keys to recheck
--- KEYS[n+1]  = lock key
+-- KEYS[1..n] = model/pivot keys to re-check
+-- KEYS[n+1]  = building lock key
 -- KEYS[n+2]  = wake key
 -- ARGV[1] = lock token
--- ARGV[2] = lock ttl
+-- ARGV[2] = lock TTL in seconds
 --
--- Returns: {status, lockTokenOrFalse, rawValues} — rawValues are the raw MGET results in
--- KEYS[1..n] order; the caller unserializes/hydrates them.
+-- Returns: {status, lockTokenOrFalse, false, rawValues}
 local n = #KEYS - 2
 local chunkSize = 500
 local values = {}
@@ -34,12 +33,12 @@ for start = 1, n, chunkSize do
 end
 
 if allHit then
-    return {'hit', false, values}
+    return {'hit', false, false, values}
 end
 
 if redis.call('SET', KEYS[n + 1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2])) then
     redis.call('DEL', KEYS[n + 2])
-    return {'miss', ARGV[1], values}
+    return {'miss', ARGV[1], false, values}
 end
 
-return {'building', false, values}
+return {'building', false, false, values}

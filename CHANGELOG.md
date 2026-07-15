@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [3.0.0] — 2026-07-09
+
+### Added
+
+- **Atomic cache spaces for Redis Cluster:** declare `$normCacheSpaces`, select one with `->space()`, and run cache operations in one hash slot.
+- **Space-targeted flushing:** use `NormCache::flushAll('space')` or `php artisan normcache:flush --space=...`.
+- **Cache-space coverage:** relations, pivot data, and table dependencies participate in cache-space invalidation.
+
+### Changed
+
+- **BREAKING:** model-declared cache spaces replace the `cluster` and `slotting` configuration. Run `php artisan normcache:flush` before deploying.
+- `dependsOnTables()` supports named cache spaces.
+
+### Fixed
+
+- Cache isolation across declared spaces and database connections, including `Model::on()` queries and writes.
+- Repeated `dependsOn()` calls no longer discard previously declared model dependencies.
+- Stale cache entries are not written when a cache rebuild races an invalidating write.
+- Table-dependency invalidation remains visible across application workers.
+- Eloquent observers see invalidated cache state while a model is being saved.
 
 ---
 

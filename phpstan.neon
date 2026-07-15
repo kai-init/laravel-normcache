@@ -16,6 +16,9 @@ parameters:
             identifier: argument.type
             path: src/Support/RedisStore.php
         -
+            identifier: argument.type
+            path: src/Support/RedisScanner.php
+        -
             identifier: trait.unused
             path: src/Traits/Cacheable.php
         -

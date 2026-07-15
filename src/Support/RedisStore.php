@@ -16,14 +16,13 @@ final class RedisStore
 
     private CacheSerializer $serializer;
 
+    private ?RedisScanner $scanner = null;
+
     /** @var array<string, string> SHA1 cache — populated on first use of each script */
     private static array $shas = [];
 
     public function __construct(
         string $redisConnection,
-        private string $keyPrefix,
-        private bool $slotting,
-        private string $slotPrefix = '',
         private int $wakeTokenCount = 64,
     ) {
         $this->serializer = new CacheSerializer;
@@ -34,15 +33,9 @@ final class RedisStore
     // Operations — singular
     // -------------------------------------------------------------------------
 
-    public function prefix(string $key): string
-    {
-        // Follow the expected order: slotPrefix then keyPrefix.
-        return $this->slotPrefix . $this->keyPrefix . $key;
-    }
-
     public function get(string $key): mixed
     {
-        $value = $this->connection->get($this->prefix($key));
+        $value = $this->connection->get($key);
 
         return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
@@ -50,7 +43,7 @@ final class RedisStore
     // Returns the raw string value without deserialization (for JSON-encoded entries).
     public function getRaw(string $key): ?string
     {
-        $value = $this->connection->get($this->prefix($key));
+        $value = $this->connection->get($key);
 
         return ($value !== null && $value !== false) ? $value : null;
     }
@@ -63,13 +56,35 @@ final class RedisStore
 
     public function set(string $key, mixed $value, int $ttl): void
     {
-        $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
+        $this->connection->setex($key, $ttl, $this->serialize($value));
     }
 
     // Set a raw string value without serialization.
     public function setRaw(string $key, string $value, int $ttl): void
     {
-        $this->connection->setex($this->prefix($key), $ttl, $value);
+        $this->connection->setex($key, $ttl, $value);
+    }
+
+    /** @param  list<string>  $values */
+    public function addToSet(string $key, array $values): int
+    {
+        if ($values === []) {
+            return 0;
+        }
+
+        return (int) $this->connection->command('sadd', [$key, ...$values]);
+    }
+
+    /** @return list<string> */
+    public function setMembers(string $key): array
+    {
+        $members = $this->connection->command('smembers', [$key]);
+
+        if (!is_array($members)) {
+            return [];
+        }
+
+        return array_values(array_filter($members, 'is_string'));
     }
 
     // SET NX EX — returns true if the lock was claimed.
@@ -86,21 +101,23 @@ final class RedisStore
 
     public function delete(string|array $keys): void
     {
-        $keys = (array) $keys;
-        if (empty($keys)) {
+        $keys = array_values(array_filter((array) $keys, fn($k) => $k !== ''));
+
+        if ($keys === []) {
             return;
         }
 
-        $prefixed = array_map(fn($k) => $this->prefix($k), $keys);
-        $this->del($prefixed);
+        $this->del($keys);
     }
 
     // DEL building key + LPUSH/EXPIRE wake key atomically when the token still owns the lock.
     public function releaseBuilding(string $buildingKey, string $wakeKey, ?string $token = null): bool
     {
+        $keys = $wakeKey !== '' ? [$buildingKey, $wakeKey] : [$buildingKey];
+
         return (bool) $this->script(
             RedisScripts::get('release_building'),
-            [$buildingKey, $wakeKey],
+            $keys,
             [$token ?? '', (string) $this->wakeTokenCount]
         );
     }
@@ -113,21 +130,103 @@ final class RedisStore
     public function storeRawAndRelease(string $key, string $value, int $ttl, ?string $buildingKey = null, ?string $wakeKey = null, ?string $token = null): bool
     {
         if ($buildingKey === null) {
-            $this->connection->setex($this->prefix($key), $ttl, $value);
+            $this->connection->setex($key, $ttl, $value);
 
             return true;
         }
 
+        return $this->storeVersionedPayload([$key => $value], $ttl, [], [], $buildingKey, $wakeKey, $token);
+    }
+
+    /** @param  array<string, mixed>  $entries  key => pre-encoded payload */
+    public function storeVersionedPayload(
+        array $entries,
+        int $ttl,
+        array $versionKeys,
+        array $expectedVersions,
+        ?string $buildingKey = null,
+        ?string $wakeKey = null,
+        ?string $token = null,
+    ): bool {
+        $keys = array_merge($versionKeys, array_keys($entries));
+        if ($buildingKey !== null) {
+            $keys[] = $buildingKey;
+            if ($wakeKey !== null && $wakeKey !== '') {
+                $keys[] = $wakeKey;
+            }
+        }
+
         return (bool) $this->script(
-            RedisScripts::get('store_many_versioned'),
-            [$key, $buildingKey, $wakeKey ?? ''],
-            ['0', '1', (string) $ttl, $value, $token ?? '', (string) $this->wakeTokenCount]
+            RedisScripts::get('store_versioned_payload'),
+            $keys,
+            array_merge(
+                [(string) count($versionKeys), (string) count($entries), (string) $ttl],
+                $expectedVersions,
+                array_values($entries),
+                [$token ?? '', (string) $this->wakeTokenCount]
+            )
+        );
+    }
+
+    public function fetchVersionedPayload(
+        array $versionKeys,
+        array $scheduledKeys,
+        string $payloadPrefix,
+        string $buildingPrefix,
+        string $wakePrefix,
+        string $hash,
+        string $lockSuffix,
+        string $lockToken,
+        int $lockTtl,
+        bool $cooldown,
+    ): array {
+        return (array) $this->script(
+            RedisScripts::get('fetch_versioned_payload'),
+            array_merge($versionKeys, $cooldown ? $scheduledKeys : [], [$payloadPrefix, $buildingPrefix, $wakePrefix]),
+            [
+                $hash,
+                $lockSuffix,
+                (int) floor(microtime(true) * 1000),
+                $lockTtl,
+                $lockToken,
+                (string) count($versionKeys),
+                $cooldown ? '1' : '0',
+            ]
+        );
+    }
+
+    public function fetchVersionedPivotSegment(array $versionKeys, array $scheduledKeys): string
+    {
+        $result = $this->script(
+            RedisScripts::get('fetch_versioned_pivot'),
+            array_merge($versionKeys, $scheduledKeys),
+            [(string) (int) floor(microtime(true) * 1000)]
+        );
+
+        return (string) ($result ?? '');
+    }
+
+    public function fetchBatchBuildStatus(array $keys, string $lockKey, string $wakeKey, string $token, int $lockTtl): array
+    {
+        return (array) $this->script(
+            RedisScripts::get('fetch_batch_build_status'),
+            [...$keys, $lockKey, $wakeKey],
+            [$token, (string) $lockTtl]
+        );
+    }
+
+    public function fetchVersionWithCooldown(string $verKey, string $scheduledKey): mixed
+    {
+        return $this->script(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$verKey, $scheduledKey],
+            [(string) (int) floor(microtime(true) * 1000)]
         );
     }
 
     public function increment(string $key): int
     {
-        return (int) $this->connection->incr($this->prefix($key));
+        return (int) $this->connection->incr($key);
     }
 
     public function incrementAndExpire(string $key, int $ttl): int
@@ -143,7 +242,7 @@ final class RedisStore
      *  Requires Redis 6.0+ for sub-second precision; older Redis rounds the timeout up to 1s. */
     public function brpop(string $key, float $timeoutSeconds): bool
     {
-        $result = $this->connection->brpop($this->prefix($key), $timeoutSeconds);
+        $result = $this->connection->brpop($key, $timeoutSeconds);
 
         return $result !== null && $result !== false;
     }
@@ -157,51 +256,22 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    // MGET in input order, with null for missing keys; groups by hash tag when slotting or on a real cluster.
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {
             return [];
         }
 
-        if (!$this->slotting && !$this->isCluster()) {
-            $prefixed = [];
-            foreach ($keys as $key) {
-                $prefixed[] = $this->prefix($key);
-            }
+        $raw = $this->connection instanceof PredisClusterConnection
+            ? $this->connection->command('mget', $keys)
+            : $this->connection->mget($keys);
+        $values = [];
 
-            $raw = $this->connection->mget($prefixed);
-            $values = [];
-
-            foreach ($raw as $i => $value) {
-                $values[$i] = $this->mgetValue($value, $unserialize);
-            }
-
-            return $values;
+        foreach ($raw as $i => $value) {
+            $values[$i] = $this->mgetValue($value, $unserialize);
         }
 
-        $results = [];
-
-        foreach ($this->groupByTag($keys) as $groupKeys) {
-            $prefixed = [];
-            foreach ($groupKeys as $key) {
-                $prefixed[] = $this->prefix($key);
-            }
-
-            $raw = $this->connection->mget($prefixed);
-
-            $idx = 0;
-            foreach ($groupKeys as $key) {
-                $results[$key] = $this->mgetValue($raw[$idx++], $unserialize);
-            }
-        }
-
-        $ordered = [];
-        foreach ($keys as $key) {
-            $ordered[] = $results[$key];
-        }
-
-        return $ordered;
+        return $values;
     }
 
     private function mgetValue(mixed $value, bool $unserialize): mixed
@@ -213,32 +283,10 @@ final class RedisStore
         return $unserialize ? $this->unserialize($value) : $value;
     }
 
-    public function setMany(array $pairs, int $ttl): void
-    {
-        if (empty($pairs)) {
-            return;
-        }
-
-        if ($this->isCluster()) {
-            foreach ($pairs as $key => $value) {
-                $this->connection->setex($this->prefix($key), $ttl, $this->serialize($value));
-            }
-
-            return;
-        }
-
-        $this->connection->pipeline(function ($pipe) use ($pairs, $ttl) {
-            foreach ($pairs as $key => $value) {
-                $pipe->setex($this->prefix($key), $ttl, $this->serialize($value));
-            }
-        });
-    }
-
     // CAS write of model attribute entries; releases the build lock as part of the write when given.
-    public function setManyTrackedIfVersion(
+    public function setManyIfVersion(
         array $attrsByKey,
         int $ttl,
-        string $memberKey,
         string $versionKey,
         int $expectedVersion,
         ?string $buildingKey = null,
@@ -253,19 +301,26 @@ final class RedisStore
             return;
         }
 
-        $script = RedisScripts::get('store_many_tracked_if_version');
+        $script = RedisScripts::get('store_model_attrs');
         $chunks = array_chunk($attrsByKey, 500, true);
         $lastChunk = array_key_last($chunks);
 
         foreach ($chunks as $i => $chunk) {
             $isLast = $i === $lastChunk;
 
+            // Only the last chunk releases the build lock; trailing lock/wake keys are
+            // present (and removed below if absent) only on that chunk.
+            $keys = array_merge([$versionKey], array_keys($chunk));
+            if ($isLast && $buildingKey !== null) {
+                $keys[] = $buildingKey;
+                if ($wakeKey !== null && $wakeKey !== '') {
+                    $keys[] = $wakeKey;
+                }
+            }
+
             $this->script(
                 $script,
-                array_merge(
-                    [$versionKey, $memberKey, $isLast ? ($buildingKey ?? '') : '', $isLast ? ($wakeKey ?? '') : ''],
-                    array_keys($chunk)
-                ),
+                $keys,
                 array_merge(
                     [(string) $expectedVersion, (string) $ttl, (string) count($chunk), $isLast ? ($token ?? '') : ''],
                     array_map(fn($attrs) => $this->serialize($attrs), array_values($chunk)),
@@ -275,64 +330,28 @@ final class RedisStore
         }
     }
 
-    // Delete a key and remove it from a tracking set in one atomic operation.
-    public function deleteFromSet(string $key, string $memberKey): void
-    {
-        $this->script(
-            "redis.call('DEL', KEYS[1]); redis.call('SREM', KEYS[2], KEYS[1])",
-            [$key, $memberKey]
-        );
-    }
-
-    public function sscanAndFlushSet(string $prefixedMemberKey): void
-    {
-        // SSCAN members already include the connection prefix; strip it before asyncDel adds it again.
-        $connectionPrefix = $this->connectionPrefix();
-
-        $this->executeScan(
-            function (&$cursor) use ($prefixedMemberKey) {
-                return $this->isPhpRedis()
-                    ? $this->connection->client()->sscan($prefixedMemberKey, $cursor, '*', 1000)
-                    : $this->connection->sscan($prefixedMemberKey, $cursor, ['match' => '*', 'count' => 1000]);
-            },
-            function ($members) use ($connectionPrefix) {
-                if ($connectionPrefix !== '') {
-                    $members = array_map(
-                        static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
-                        $members
-                    );
-                }
-                $this->asyncDel($members);
-            }
-        );
-
-        $this->connection->del($prefixedMemberKey);
-    }
-
     public function asyncDel(array $prefixedKeys): void
     {
         if (empty($prefixedKeys)) {
             return;
         }
 
-        if (!$this->slotting) {
-            foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
-                $this->del($chunk);
-            }
-
-            return;
-        }
-
-        foreach ($this->groupByTag($prefixedKeys) as $keys) {
-            foreach (array_chunk($keys, 1000) as $chunk) {
-                $this->del($chunk);
-            }
+        foreach (array_chunk($prefixedKeys, 1000) as $chunk) {
+            $this->del($chunk);
         }
     }
 
     private function del(array $keys): void
     {
-        // PredisClusterConnection extends PredisConnection, so this covers both.
+        if ($this->connection instanceof PredisClusterConnection) {
+            foreach ($this->groupByHashTag($keys) as $group) {
+                $this->connection->command('del', $group);
+            }
+
+            return;
+        }
+
+        // Standalone Predis accepts Laravel's array form.
         if ($this->connection instanceof PredisConnection) {
             $this->connection->del($keys);
 
@@ -342,51 +361,41 @@ final class RedisStore
         $this->connection->unlink($keys);
     }
 
-    public function flushByPatterns(array $patterns): int
+    /** @return list<list<string>> */
+    private function groupByHashTag(array $keys): array
     {
-        $total = 0;
+        $groups = [];
 
-        foreach ($patterns as $pattern) {
-            $keys = $this->keysForPattern($pattern);
-
-            if (!empty($keys)) {
-                $total += count($keys);
-                $this->asyncDel($keys);
+        foreach ($keys as $key) {
+            if (preg_match('/\{([^{}]+)\}/', $key, $matches) === 1) {
+                $groups['tag:' . $matches[1]][] = $key;
+            } else {
+                $groups['key:' . $key][] = $key;
             }
         }
 
-        return $total;
+        return array_values($groups);
     }
 
-    // Prefixes $keys before passing them to EVALSHA, falling back to EVAL on NOSCRIPT.
+    public function flushByPatterns(array $patterns): int
+    {
+        $keys = ($this->scanner ??= new RedisScanner($this->connection))->scanPatterns($patterns);
+
+        if ($keys === []) {
+            return 0;
+        }
+
+        $this->asyncDel($keys);
+
+        return count($keys);
+    }
+
+    // Runs a Lua script via EVALSHA, falling back to EVAL on NOSCRIPT. All KEYS must
+    // share one hash slot (cluster); optional slots are omitted, never passed empty.
     public function script(string $script, array $keys, array $args = []): mixed
     {
-        $prefixedKeys = [];
-        foreach ($keys as $key) {
-            $prefixedKeys[] = $key === '' ? '' : $this->prefix($key);
-        }
-
-        if ($this->isCluster()) {
-            $tag = null;
-            foreach ($prefixedKeys as $pk) {
-                $hashTag = $this->hashTag($pk, includeBraces: true);
-                if ($hashTag !== null) {
-                    $tag = $hashTag;
-                    break;
-                }
-            }
-
-            if ($tag !== null) {
-                foreach ($prefixedKeys as $i => $prefixedKey) {
-                    if ($prefixedKey === '') {
-                        $prefixedKeys[$i] = "{$tag}:null";
-                    }
-                }
-            }
-        }
-
-        $n = count($prefixedKeys);
-        $allArgs = array_merge($prefixedKeys, $args);
+        $n = count($keys);
+        $allArgs = array_merge($keys, $args);
 
         $sha = self::$shas[$script] ??= sha1($script);
 
@@ -450,183 +459,8 @@ final class RedisStore
             || $this->connection instanceof PredisClusterConnection;
     }
 
-    public function requiresSlotting(bool $slottingEnabled): bool
-    {
-        return $slottingEnabled || ($this->isCluster() && $this->slotPrefix === '');
-    }
-
-    private function isPhpRedis(): bool
-    {
-        // PhpRedisClusterConnection extends PhpRedisConnection, so this covers both.
-        return $this->connection instanceof PhpRedisConnection;
-    }
-
-    private function groupByTag(array $keys): array
-    {
-        $groups = [];
-
-        foreach ($keys as $key) {
-            $tag = $this->hashTag($key) ?? $key;
-            $groups[$tag][] = $key;
-        }
-
-        return $groups;
-    }
-
-    private function hashTag(string $key, bool $includeBraces = false): ?string
-    {
-        $start = strpos($key, '{');
-
-        if ($start === false) {
-            return null;
-        }
-
-        $end = strpos($key, '}', $start + 1);
-
-        if ($end === false || $end === $start + 1) {
-            return null;
-        }
-
-        return $includeBraces
-            ? substr($key, $start, $end - $start + 1)
-            : substr($key, $start + 1, $end - $start - 1);
-    }
-
-    private function connectionPrefix(): string
-    {
-        // *ClusterConnection extends *Connection, so these cover both cluster and standalone.
-        if ($this->connection instanceof PhpRedisConnection) {
-            return (string) $this->connection->client()->getOption(\Redis::OPT_PREFIX);
-        }
-
-        if ($this->connection instanceof PredisConnection) {
-            $prefix = $this->connection->client()->getOptions()->prefix ?? null;
-            if (is_object($prefix) && method_exists($prefix, 'getPrefix')) {
-                return (string) $prefix->getPrefix();
-            }
-        }
-
-        return '';
-    }
-
     public function scanPattern(string $pattern): array
     {
-        if ($this->connection instanceof PhpRedisClusterConnection) {
-            $keys = $this->scanPhpRedisClusterKeys($pattern);
-        } elseif ($this->connection instanceof PredisClusterConnection) {
-            $keys = $this->scanPredisClusterKeys($pattern);
-        } else {
-            $keys = $this->scanKeys($pattern);
-        }
-
-        $connectionPrefix = $this->connectionPrefix();
-
-        if ($connectionPrefix === '') {
-            return $keys;
-        }
-
-        return array_map(
-            static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
-            $keys
-        );
-    }
-
-    private function keysForPattern(string $pattern): array
-    {
-        return $this->scanPattern($this->prefix($pattern));
-    }
-
-    private function scanKeys(string $pattern): array
-    {
-        $keys = [];
-        $connectionPrefix = $this->connectionPrefix();
-
-        $this->executeScan(
-            function (&$cursor) use ($pattern, $connectionPrefix) {
-                $p = $connectionPrefix . $pattern;
-
-                return $this->isPhpRedis()
-                    ? $this->connection->client()->scan($cursor, $p, 1000)
-                    : $this->connection->scan($cursor, ['match' => $p, 'count' => 1000]);
-            },
-            function ($chunk) use (&$keys) {
-                array_push($keys, ...$chunk);
-            }
-        );
-
-        return $keys;
-    }
-
-    private function scanPredisClusterKeys(string $pattern): array
-    {
-        $keys = [];
-        $connectionPrefix = $this->connectionPrefix();
-
-        foreach ($this->connection->client() as $node) {
-            $this->executeScan(
-                fn($cursor) => $node->scan($cursor, ['match' => $connectionPrefix . $pattern, 'count' => 1000]),
-                function ($chunk) use (&$keys) {
-                    array_push($keys, ...$chunk);
-                }
-            );
-        }
-
-        return array_values(array_unique($keys));
-    }
-
-    private function scanPhpRedisClusterKeys(string $pattern): array
-    {
-        $keys = [];
-        $client = $this->connection->client();
-        $connectionPrefix = $this->connectionPrefix();
-
-        foreach ($client->_masters() as $node) {
-            $this->executeScan(
-                function (&$cursor) use ($client, $node, $pattern, $connectionPrefix) {
-                    return $client->scan($cursor, $node, $connectionPrefix . $pattern, 1000);
-                },
-                function ($chunk) use (&$keys) {
-                    array_push($keys, ...$chunk);
-                }
-            );
-        }
-
-        return $keys;
-    }
-
-    /**
-     * @param  \Closure(mixed &): mixed  $scanner
-     * @param  \Closure(array<mixed>): void  $processor
-     */
-    private function executeScan(\Closure $scanner, \Closure $processor): void
-    {
-        if ($this->isPhpRedis()) {
-            // phpredis 6.x SCAN/SSCAN require null to start; updates cursor by reference.
-            $cursor = null;
-            while (true) {
-                $chunk = $scanner($cursor);
-                if (!empty($chunk)) {
-                    $processor($chunk);
-                }
-                if (!$cursor) {
-                    break;
-                }
-            }
-
-            return;
-        }
-
-        // Predis returns [$cursor, $keys]; '0' signals completion.
-        $cursor = '0';
-        do {
-            $result = $scanner($cursor);
-            if (!is_array($result) || !isset($result[1])) {
-                break;
-            }
-            [$cursor, $chunk] = $result;
-            if (!empty($chunk)) {
-                $processor($chunk);
-            }
-        } while ($cursor !== '0');
+        return ($this->scanner ??= new RedisScanner($this->connection))->scanPattern($pattern);
     }
 }

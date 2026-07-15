@@ -8,19 +8,16 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use NormCache\Cache\ExecutionEngine;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\NormalizedThroughReader;
-use NormCache\Cache\ResultCacheReader;
-use NormCache\Cache\ResultExecutor;
-use NormCache\Cache\VersionTracker;
+use NormCache\Cache\ModelsExecutor;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
+use NormCache\Planning\CachePlanner;
+use NormCache\Planning\CachePlanSpaceValidator;
+use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
-use NormCache\Values\CacheConfig;
 
 class CacheServiceProvider extends ServiceProvider
 {
@@ -28,53 +25,45 @@ class CacheServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
 
-        $this->app->singleton(CacheManager::class, function () {
-            $connection = config('normcache.connection');
-            $ttl = (int) config('normcache.ttl');
-            $queryTtl = (int) config('normcache.query_ttl');
-            $keyPrefix = config('normcache.key_prefix');
-            $cooldown = (int) config('normcache.cooldown');
-            $cluster = (bool) config('normcache.cluster', false);
-            $enabled = (bool) config('normcache.enabled', true);
-            $events = (bool) config('normcache.events', false);
-            $fallback = (bool) config('normcache.fallback', true);
-            $fireRetrieved = (bool) config('normcache.fire_retrieved', false);
-            $buildingLockTtl = (int) config('normcache.building_lock_ttl', 5);
-            $stampedeWaitMs = (int) config('normcache.stampede_wait_ms', 200);
-            $stampedeWakeTokens = (int) config('normcache.stampede_wake_tokens', 64);
-            $slotting = (bool) config('normcache.slotting', false);
+        $this->app->singleton(CacheSpaceRegistry::class, function () {
+            $metadataStore = new RedisStore((string) config('normcache.connection'), (int) config('normcache.stampede_wake_tokens', 64));
 
-            $slottingActive = $cluster && $slotting;
-            $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
-            $keys = new CacheKeyBuilder;
-            $versions = new VersionTracker($store, $keys);
-            $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
-            $engine = new ExecutionEngine;
-            $config = new CacheConfig(
-                ttl: $ttl,
-                queryTtl: $queryTtl,
-                cooldown: $cooldown,
-                enabled: $enabled,
-                fallbackEnabled: $fallback,
-                dispatchEvents: $events,
-                cluster: $cluster,
-                slotting: $slottingActive,
-                stampedeWakeTokens: $stampedeWakeTokens,
-            );
-
-            return new CacheManager(
-                queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
-                resultReader: $resultReader,
-                throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
-                result: new ResultExecutor($engine, $resultReader, $config),
-                hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
-                versions: $versions,
-                engine: $engine,
-                store: $store,
-                keys: $keys,
-                config: $config,
+            return new CacheSpaceRegistry(
+                maxPerModel: (int) config('normcache.spaces.max_per_model', 16),
+                placement: (array) config('normcache.spaces.placement', []),
+                metadataStore: $metadataStore,
+                metadataKeyPrefix: (string) config('normcache.key_prefix', ''),
             );
         });
+
+        $this->app->singleton(CacheSpaceResolver::class, function ($app) {
+            return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
+        });
+
+        $this->app->singleton(CachePlanSpaceValidator::class, function ($app) {
+            return new CachePlanSpaceValidator(
+                registry: $app->make(CacheSpaceRegistry::class),
+                resolver: $app->make(CacheSpaceResolver::class),
+                crossSpaceBehavior: (string) config('normcache.spaces.cross_space_behavior', 'bypass'),
+                debug: (bool) config('app.debug', false),
+                logger: $app->make('log'),
+            );
+        });
+
+        $this->app->singleton(CachePlanner::class, function ($app) {
+            return new CachePlanner(spaceValidator: $app->make(CachePlanSpaceValidator::class));
+        });
+
+        $this->app->singleton(ModelsExecutor::class);
+
+        $this->app->singleton(CacheManagerFactory::class, function ($app) {
+            return new CacheManagerFactory(
+                $app->make(CacheSpaceRegistry::class),
+                $app->make(CacheSpaceResolver::class),
+            );
+        });
+
+        $this->app->scoped(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
 
         $this->app->alias(CacheManager::class, 'normcache');
     }
@@ -94,9 +83,10 @@ class CacheServiceProvider extends ServiceProvider
                 }
             });
 
-            // Re-enable optimistically between queue jobs. If Redis is still down, fallback() will
-            // disable again on the first failed call — worst case is one extra Redis attempt per job.
             $resetManager = function () {
+                CacheKeyBuilder::reset();
+                $this->app->make(CacheSpaceRegistry::class)->resetMetadataMemo();
+
                 $manager = $this->app->make(CacheManager::class);
                 $manager->discardAllPending();
                 $manager->enable();
@@ -105,7 +95,7 @@ class CacheServiceProvider extends ServiceProvider
             Event::listen(JobProcessed::class, $resetManager);
             Event::listen(Looping::class, $resetManager);
 
-            // Re-enable (in case fallback disabled it) between Octane requests.
+            // Reset request-scoped runtime state between Octane requests and tasks.
             foreach (['RequestReceived', 'TaskReceived'] as $event) {
                 $octaneEvent = "Laravel\\Octane\\Events\\$event";
                 if (class_exists($octaneEvent)) {

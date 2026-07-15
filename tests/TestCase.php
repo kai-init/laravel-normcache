@@ -10,21 +10,12 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Cache\ExecutionEngine;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheReader;
-use NormCache\Cache\NormalizedThroughReader;
-use NormCache\Cache\ResultCacheReader;
-use NormCache\Cache\ResultExecutor;
-use NormCache\Cache\VersionTracker;
 use NormCache\CacheManager;
+use NormCache\CacheManagerFactory;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisStore;
-use NormCache\Values\CacheConfig;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
-use ReflectionProperty;
 
 abstract class TestCase extends OrchestraTestCase
 {
@@ -90,7 +81,6 @@ abstract class TestCase extends OrchestraTestCase
                     'password' => env('REDIS_PASSWORD', null),
                 ];
             }, $nodes));
-            $app['config']->set('normcache.cluster', true);
         } else {
             $app['config']->set('database.redis.normcache-test', [
                 'host' => env('REDIS_HOST', '127.0.0.1'),
@@ -104,7 +94,6 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
-        $app['config']->set('normcache.slotting', true);
         $app['config']->set('normcache.ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
         $app['config']->set('normcache.cooldown', 0);
@@ -117,34 +106,42 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function resetClassKeyCache(): void
     {
-        (new ReflectionProperty(CacheKeyBuilder::class, 'classKeys'))->setValue(null, []);
-        (new ReflectionProperty(CacheKeyBuilder::class, 'prototypes'))->setValue(null, []);
-        (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->setValue(null, []);
+        CacheKeyBuilder::reset();
     }
 
     protected function modelCacheEntry(string $class, mixed $id): mixed
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
 
-        return $this->cacheManager()->getStore()->get($key);
+        return $manager->store()->get($this->currentModelKey($manager, $class, $id));
     }
 
     protected function evictModelCache(string $class, mixed $id): void
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
-        $this->cacheManager()->getStore()->delete($key);
+        $manager = $this->cacheManager();
+        $manager->store()->delete($this->currentModelKey($manager, $class, $id));
     }
 
     protected function prefixedModelKey(string $class, mixed $id): string
     {
-        $key = 'model:{' . $this->cacheManager()->classKey($class) . '}:' . $id;
+        $manager = $this->cacheManager();
 
-        return $this->cacheManager()->getStore()->prefix($key);
+        return $this->currentModelKey($manager, $class, $id);
+    }
+
+    private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
+    {
+        $classKey = $manager->keys()->classKey($class);
+        $version = $manager->currentVersion($class);
+
+        return $manager->keys()->modelPrefix($classKey, $version) . $id;
     }
 
     protected function redisKeys(string $pattern = '*'): array
     {
-        return $this->cacheManager()->getStore()->scanPattern($pattern);
+        $manager = $this->cacheManager();
+
+        return $manager->store()->scanPattern($manager->keys()->prefixed($pattern));
     }
 
     protected function cacheManager(): CacheManager
@@ -156,12 +153,11 @@ abstract class TestCase extends OrchestraTestCase
     {
         $this->app->forgetInstance(CacheManager::class);
         $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => $enabled]);
     }
 
     /**
      * Build a standalone CacheManager (not bound in the container) for tests
-     * that need specific construction parameters like cooldown or slotting.
+     * that need specific construction parameters like cooldown.
      */
     protected function buildManager(
         string $connection = 'normcache-test',
@@ -169,7 +165,6 @@ abstract class TestCase extends OrchestraTestCase
         ?int $queryTtl = null,
         string $keyPrefix = 'test:',
         int $cooldown = 0,
-        bool $cluster = false,
         bool $enabled = true,
         bool $dispatchEvents = true,
         bool $fallback = false,
@@ -177,41 +172,21 @@ abstract class TestCase extends OrchestraTestCase
         int $buildingLockTtl = 5,
         int $stampedeWaitMs = 200,
         int $stampedeWakeTokens = 64,
-        bool $slotting = false,
     ): CacheManager {
-        $ttl ??= (int) config('normcache.ttl');
-        $queryTtl ??= (int) config('normcache.query_ttl');
-
-        $slottingActive = $cluster && $slotting;
-        $store = new RedisStore($connection, $keyPrefix, $slottingActive, $slotting ? '' : '{nc}:', $stampedeWakeTokens);
-        $keys = new CacheKeyBuilder;
-        $versions = new VersionTracker($store, $keys);
-        $resultReader = new ResultCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens);
-        $engine = new ExecutionEngine;
-        $config = new CacheConfig(
-            ttl: $ttl,
-            queryTtl: $queryTtl,
-            cooldown: $cooldown,
-            enabled: $enabled,
-            fallbackEnabled: $fallback,
-            dispatchEvents: $dispatchEvents,
-            cluster: $cluster,
-            slotting: $slottingActive,
-            stampedeWakeTokens: $stampedeWakeTokens,
-        );
-
-        return new CacheManager(
-            queryReader: new NormalizedCacheReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
-            resultReader: $resultReader,
-            throughReader: new NormalizedThroughReader($store, $keys, $versions, $queryTtl, $buildingLockTtl, $stampedeWaitMs, $slottingActive, $stampedeWakeTokens),
-            result: new ResultExecutor($engine, $resultReader, $config),
-            hydrator: new ModelHydrator($store, $keys, $versions, $ttl, $fireRetrieved, $buildingLockTtl, $stampedeWaitMs),
-            versions: $versions,
-            engine: $engine,
-            store: $store,
-            keys: $keys,
-            config: $config,
-        );
+        return $this->app->make(CacheManagerFactory::class)->make([
+            'connection' => $connection,
+            'ttl' => $ttl ?? (int) config('normcache.ttl'),
+            'query_ttl' => $queryTtl ?? (int) config('normcache.query_ttl'),
+            'key_prefix' => $keyPrefix,
+            'cooldown' => $cooldown,
+            'enabled' => $enabled,
+            'events' => $dispatchEvents,
+            'fallback' => $fallback,
+            'fire_retrieved' => $fireRetrieved,
+            'building_lock_ttl' => $buildingLockTtl,
+            'stampede_wait_ms' => $stampedeWaitMs,
+            'stampede_wake_tokens' => $stampedeWakeTokens,
+        ]);
     }
 
     /** Assert native == cold == warm for a given query. */

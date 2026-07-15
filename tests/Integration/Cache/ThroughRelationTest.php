@@ -53,12 +53,12 @@ class ThroughRelationTest extends TestCase
 
         $first = $country->posts()->get()->pluck('title');
 
-        $keyCountAfterFirst = count($this->redisKeys('test:*'));
+        $keyCountAfterFirst = count($this->redisKeys('*'));
 
         $second = $country->posts()->get()->pluck('title');
 
         $this->assertEquals($first, $second);
-        $this->assertSame($keyCountAfterFirst, count($this->redisKeys('test:*')));
+        $this->assertSame($keyCountAfterFirst, count($this->redisKeys('*')));
     }
 
     public function test_simple_has_many_through_warm_hit_refetches_only_evicted_child_model(): void
@@ -70,7 +70,7 @@ class ThroughRelationTest extends TestCase
         $first = $country->posts()->get();
 
         $this->assertSame(['Hello'], $first->pluck('title')->all());
-        $this->assertNotEmpty($this->redisKeys('test:through:*'));
+        $this->assertNotEmpty($this->redisKeys('through:*'));
 
         Redis::connection('normcache-test')
             ->del($this->prefixedModelKey(Post::class, $post->id));
@@ -98,7 +98,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->get();
 
-        $queryKey = collect($this->redisKeys('test:through:*'))->first();
+        $queryKey = collect($this->redisKeys('through:*'))->first();
         $this->assertNotNull($queryKey);
 
         Redis::connection('normcache-test')->set($queryKey, 'NOT_JSON');
@@ -127,11 +127,11 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->tag('homepage')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:through:*:homepage:*'));
+        $this->assertNotEmpty($this->redisKeys('through:*:homepage:*'));
 
         NormCache::flushTag(Post::class, 'homepage');
 
-        $this->assertEmpty($this->redisKeys('test:through:*:homepage:*'));
+        $this->assertEmpty($this->redisKeys('through:*:homepage:*'));
     }
 
     public function test_has_many_through_cache_invalidated_when_post_version_changes(): void
@@ -221,7 +221,7 @@ class ThroughRelationTest extends TestCase
             ->get();
 
         $this->assertSame([$post->id], $posts->modelKeys());
-        $this->assertEmpty($this->redisKeys('test:through:*'));
+        $this->assertEmpty($this->redisKeys('through:*'));
     }
 
     public function test_outdated_through_cache_entry_can_remain_after_through_model_version_bump(): void
@@ -239,7 +239,7 @@ class ThroughRelationTest extends TestCase
 
         $this->assertGreaterThan($oldAuthorVersion, NormCache::currentVersion(Author::class));
 
-        $orphanedKeys = $this->redisKeys("test:through:*:v{$oldPostVersion}:v{$oldAuthorVersion}:*");
+        $orphanedKeys = $this->redisKeys("through:*:v{$oldPostVersion}:v{$oldAuthorVersion}:*");
 
         $this->assertNotEmpty($orphanedKeys);
         $this->assertSame(['Hello'], $country->posts()->get()->pluck('title')->all());
@@ -303,6 +303,7 @@ class ThroughRelationTest extends TestCase
 
         // Remove the only comment: the whereExists no longer matches the post.
         DB::table('comments')->where('commentable_id', $post->id)->delete();
+        NormCache::invalidateTableVersion(DB::getDefaultConnection(), 'comments');
 
         $after = $country->posts()
             ->whereExists(function ($q) {
@@ -321,7 +322,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->select('posts.*')->selectRaw('2 as polluted')->get();
 
-        $cached = NormCache::getModels([$post->id], Post::class);
+        $cached = NormCache::hydrator()->getModels([$post->id], Post::class);
         $this->assertArrayNotHasKey('polluted', $cached[0]->getRawOriginal());
     }
 

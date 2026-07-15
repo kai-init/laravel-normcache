@@ -4,14 +4,15 @@ namespace NormCache\Relations;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
-use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\QueryHasher;
+use NormCache\Support\RawAttributes;
 use NormCache\Support\RelationCacheGuards;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
@@ -21,8 +22,6 @@ use NormCache\Values\QueryInspection;
 
 trait CachesOneOrManyThrough
 {
-    use CollectsRelatedModels;
-
     public function get($columns = ['*']): Collection
     {
         if (!$this->query instanceof CacheableBuilder) {
@@ -69,10 +68,11 @@ trait CachesOneOrManyThrough
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
 
-        return NormCache::rescue(
-            fn() => NormCache::engine()->runThrough(
-                fetch: fn() => NormCache::getThroughCache($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
-                waitForBuild: fn() => NormCache::waitForThroughBuild(
+        $runThrough = fn() => CacheFallback::rescue(
+            NormCache::config(),
+            fn() => NormCache::engine()->runNormalized(
+                fetch: fn() => NormCache::through()->fetch($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
+                waitForBuild: fn() => NormCache::through()->waitForBuild(
                     $relatedClass, $hash, $tag, $depClasses, $depTableKeys
                 ),
                 onBuild: fn() => $this->getFromPreparedBuilder($prepared),
@@ -91,14 +91,29 @@ trait CachesOneOrManyThrough
                     }
 
                     $cachePayload = $this->cachePayloadFromResult($rawModels);
+                    $space = NormCache::keys()->activeSpace();
 
-                    NormCache::attempt(function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs) {
-                        NormCache::storeThroughIds(
-                            $result->key, $cachePayload['ids'], $cachePayload['throughKeys'], $ttl,
-                            $result->buildingKey, $result->versionKeys, $result->expectedVersions, $result->buildingToken
-                        );
-                        NormCache::cacheModelAttrs($relatedClass, $modelAttrs);
-                    });
+                    CacheFallback::attempt(
+                        NormCache::config(),
+                        function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
+                            $stored = NormCache::through()->store(
+                                $result->key,
+                                $cachePayload['ids'],
+                                $cachePayload['throughKeys'],
+                                $ttl,
+                                $result->build,
+                            );
+
+                            if ($stored) {
+                                NormCache::models()->storeForBuild(
+                                    $relatedClass,
+                                    $modelAttrs,
+                                    $result->build,
+                                    $space,
+                                );
+                            }
+                        },
+                    );
 
                     return $prepared->applyAfterCallbacks($rawModels);
                 },
@@ -118,6 +133,8 @@ trait CachesOneOrManyThrough
             ),
             fn() => $this->getFromPreparedBuilder($prepared)
         );
+
+        return NormCache::withSpace($plan->space, $runThrough);
     }
 
     private function applyOneOfManyDependency(CacheableBuilder $query): void
@@ -130,17 +147,27 @@ trait CachesOneOrManyThrough
     private function shouldUseCache(CacheableBuilder $builder, Builder $base): ?CachePlan
     {
         if ($this->isSimpleThroughQuery($base, $builder)) {
-            return CachePlan::result(
+            $space = NormCache::spaceFor($this->related::class, $builder->getSpace());
+            $dependencies = DependencySet::singleModel($this->throughParent::class);
+            $plan = CachePlan::result(
                 operation: CacheOperation::Through,
-                dependencies: new DependencySet(models: [$this->throughParent::class]),
+                dependencies: $dependencies,
+            )->withSpace($space);
+
+            $plan = $builder->planner()->applySpaceValidation(
+                $plan,
+                $builder,
+                $this->related,
             );
+
+            return $plan->usesResultCache() ? $plan : null;
         }
 
         $projection = ProjectionClassifier::resolve($base, null);
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $builder->inferAggregateDependencies()
+            DependencySet::singleModel($this->throughParent::class),
         ));
 
         return $plan->usesResultCache() ? $plan : null;
@@ -185,11 +212,11 @@ trait CachesOneOrManyThrough
         ?array $raw = null,
     ): Collection {
         $builder = $prepared->builder;
-        $models = NormCache::getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
+        $models = NormCache::hydrator()->getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
 
         if ($throughKeys !== []) {
-            $getAttribute = ModelHydrator::getAttributeDirectClosure();
-            $setAttribute = ModelHydrator::setAttributeDirectClosure();
+            $getAttribute = RawAttributes::getAttributeClosure();
+            $setAttribute = RawAttributes::setAttributeClosure();
             $keyName = $this->related->getKeyName();
             foreach ($models as $model) {
                 $id = $getAttribute($model, $keyName);
@@ -208,6 +235,6 @@ trait CachesOneOrManyThrough
 
     private function getFromPreparedBuilder(PreparedQuery $prepared, bool $applyAfterCallbacks = true): Collection
     {
-        return $this->collectFromPreparedBuilder($prepared, $applyAfterCallbacks);
+        return $prepared->collect(applyAfterCallbacks: $applyAfterCallbacks);
     }
 }

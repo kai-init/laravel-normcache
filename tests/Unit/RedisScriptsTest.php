@@ -3,22 +3,19 @@
 namespace NormCache\Tests\Unit;
 
 use NormCache\Support\RedisScripts;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 use ReflectionProperty;
 
-class RedisScriptsTest extends TestCase
+class RedisScriptsTest extends UnitTestCase
 {
     private static array $knownScripts = [
+        'fetch_batch_build_status',
         'fetch_version_with_cooldown',
-        'fetch_model_build_status',
-        'fetch_multi_versioned_query',
-        'fetch_pivot_build_status',
+        'fetch_versioned_payload',
         'fetch_versioned_pivot',
-        'fetch_versioned_query',
-        'fetch_versioned_result',
         'release_building',
-        'store_many_tracked_if_version',
-        'store_many_versioned',
+        'store_model_attrs',
+        'store_versioned_payload',
     ];
 
     protected function setUp(): void
@@ -42,8 +39,8 @@ class RedisScriptsTest extends TestCase
 
     public function test_it_caches_loaded_scripts_statically(): void
     {
-        $first = RedisScripts::get('fetch_versioned_query');
-        $second = RedisScripts::get('fetch_versioned_query');
+        $first = RedisScripts::get('fetch_versioned_payload');
+        $second = RedisScripts::get('fetch_versioned_payload');
 
         $this->assertSame($first, $second);
 
@@ -51,12 +48,12 @@ class RedisScriptsTest extends TestCase
         $cache->setAccessible(true);
         $stored = $cache->getValue();
 
-        $this->assertArrayHasKey('fetch_versioned_query', $stored);
-        $this->assertSame($first, $stored['fetch_versioned_query']);
+        $this->assertArrayHasKey('fetch_versioned_payload', $stored);
+        $this->assertSame($first, $stored['fetch_versioned_payload']);
 
-        RedisScripts::get('store_many_versioned');
+        RedisScripts::get('store_versioned_payload');
         $stored = $cache->getValue();
-        $this->assertArrayHasKey('store_many_versioned', $stored);
+        $this->assertArrayHasKey('store_versioned_payload', $stored);
     }
 
     public function test_it_throws_exception_for_missing_scripts(): void

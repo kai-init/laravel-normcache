@@ -49,21 +49,6 @@ final class ProjectionClassifier
         return true;
     }
 
-    public static function containsWildcard(?array $columns): bool
-    {
-        if ($columns === null) {
-            return false;
-        }
-
-        foreach ($columns as $column) {
-            if (is_string($column) && str_ends_with($column, '*')) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     public static function hasRequiredKey(array $columns, string $table, string $key): bool
     {
         $qualified = "{$table}.{$key}";

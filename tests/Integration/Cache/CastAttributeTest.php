@@ -104,7 +104,7 @@ class CastAttributeTest extends TestCase
 
     public function test_pluck_fires_retrieved_once_per_row_not_once_per_batch(): void
     {
-        // ModelHydrator::transformScalars() clones a template pivot-like instance per
+        // ScalarTransformer::transformScalars() clones a template pivot-like instance per
         // row when a retrieved listener forces the slow path. Guard against the clone
         // optimization collapsing N rows into a single fired event.
         $author = Author::create(['name' => 'Alice']);

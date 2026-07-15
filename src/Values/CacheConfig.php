@@ -3,8 +3,8 @@
 namespace NormCache\Values;
 
 /**
- * Runtime configuration for the cache manager. Mutable so tests and runtime
- * toggles (fallback, cooldown experiments) can adjust knobs on the live instance.
+ * Runtime configuration for the cache manager. Mutable so tests, fallback,
+ * and cooldown experiments can adjust the live request-scoped instance.
  */
 final class CacheConfig
 {
@@ -15,8 +15,12 @@ final class CacheConfig
         public bool $enabled = true,
         public bool $fallbackEnabled = true,
         public bool $dispatchEvents = true,
-        public bool $cluster = false,
-        public bool $slotting = false,
         public int $stampedeWakeTokens = 64,
     ) {}
+
+    // Live runtime toggle; only payload reads honor it — pivot/standalone version reads always check scheduled keys.
+    public function cooldownEnabled(): bool
+    {
+        return $this->cooldown > 0;
+    }
 }

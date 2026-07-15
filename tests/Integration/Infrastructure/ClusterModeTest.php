@@ -11,9 +11,8 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
 /**
- * Verifies that cross-model cache operations produce correct results when cluster mode is
- * enabled. A single Redis instance is used — the per-slot version resolution logic is
- * exercised even though all keys happen to land on the same node.
+ * Verifies that cross-model cache operations produce correct results when a Redis Cluster
+ * connection is used. All keys share the {nc} hash tag, preserving Lua atomicity.
  */
 class ClusterModeTest extends TestCase
 {
@@ -23,30 +22,64 @@ class ClusterModeTest extends TestCase
         $this->setClusterMode(true);
     }
 
-    // dependsOn result cache
-
-    public function test_multi_dependency_normalized_query_routes_to_result_when_slotting_is_enabled(): void
+    public function test_predis_cluster_bulk_reads_preserve_order_and_missing_values_across_spaces(): void
     {
-        Author::create(['name' => 'Alice']);
+        $this->requirePredisCluster();
 
-        Author::query()->dependsOn([Post::class, Tag::class])->get();
+        $store = $this->cacheManager()->store();
+        $defaultKeys = [
+            '{nc}:test:bulk:1',
+            '{nc}:test:bulk:missing',
+            '{nc}:test:bulk:2',
+        ];
+        $contentKeys = [
+            '{nc:content}:test:bulk:1',
+            '{nc:content}:test:bulk:missing',
+            '{nc:content}:test:bulk:2',
+        ];
 
-        $this->assertEmpty($this->redisKeys('test:query:*'), 'Slotting mode should avoid multi-dependency normalized query keys');
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Slotting mode should use result cache for multi-dependency queries');
+        $store->set($defaultKeys[0], 'default-one', 60);
+        $store->set($defaultKeys[2], 'default-two', 60);
+        $store->set($contentKeys[0], 'content-one', 60);
+        $store->set($contentKeys[2], 'content-two', 60);
+
+        $this->assertSame(['default-one', null, 'default-two'], $store->getMany($defaultKeys));
+        $this->assertSame(['content-one', null, 'content-two'], $store->getMany($contentKeys));
     }
 
-    public function test_multi_dependency_normalized_query_stays_normalized_when_cluster_uses_fixed_hash_tag(): void
+    public function test_predis_cluster_delete_groups_mixed_space_keys_without_crossslot_errors(): void
     {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
+        $this->requirePredisCluster();
 
+        $store = $this->cacheManager()->store();
+        $keys = [
+            '{nc}:test:delete:1',
+            '{nc}:test:delete:2',
+            '{nc:content}:test:delete:1',
+            '{nc:content}:test:delete:2',
+        ];
+
+        foreach ($keys as $key) {
+            $store->set($key, 'value', 60);
+        }
+
+        $store->delete($keys);
+
+        foreach ($keys as $key) {
+            $this->assertNull($store->get($key));
+        }
+    }
+
+    // dependsOn — multi-dependency normalized query stays normalized (no forced result cache)
+
+    public function test_multi_dependency_normalized_query_stays_normalized_in_cluster_mode(): void
+    {
         Author::create(['name' => 'Alice']);
 
         Author::query()->dependsOn([Post::class, Tag::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('{nc}:test:query:*'), 'Fixed hash tag cluster mode should allow normalized query keys');
-        $this->assertEmpty($this->redisKeys('{nc}:test:result:*'), 'Fixed hash tag cluster mode should not force result cache');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'Multi-dependency normalized queries should use query keys in cluster mode');
+        $this->assertEmpty($this->redisKeys('result:*'), 'Multi-dependency normalized queries should not fall back to result cache');
     }
 
     public function test_depends_on_returns_correct_results_in_cluster_mode(): void
@@ -210,11 +243,11 @@ class ClusterModeTest extends TestCase
         Author::get();
         Author::orderBy('name')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:*'));
+        $this->assertNotEmpty($this->redisKeys('*'));
 
         $this->cacheManager()->flushAll();
 
-        $this->assertEmpty($this->redisKeys('test:*'));
+        $this->assertEmpty($this->redisKeys('*'));
     }
 
     public function test_flush_tag_clears_only_tagged_keys_in_cluster_mode(): void
@@ -224,13 +257,13 @@ class ClusterModeTest extends TestCase
         Author::tag('homepage')->get();
         Author::get();
 
-        $taggedKeys = $this->redisKeys('test:query:*:homepage:*');
+        $taggedKeys = $this->redisKeys('query:*:homepage:*');
         $this->assertNotEmpty($taggedKeys, 'tagged query keys must exist before flush');
 
         $this->cacheManager()->flushTag(Author::class, 'homepage');
 
-        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must be gone after flushTag');
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive flushTag');
+        $this->assertEmpty($this->redisKeys('query:*:homepage:*'), 'tagged keys must be gone after flushTag');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'untagged query keys must survive flushTag');
     }
 
     public function test_flush_tag_across_models_clears_tagged_keys_for_all_models_in_cluster_mode(): void
@@ -242,12 +275,12 @@ class ClusterModeTest extends TestCase
         Post::tag('homepage')->get();
         Author::get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*:homepage:*'), 'tagged keys must exist before flush');
+        $this->assertNotEmpty($this->redisKeys('query:*:homepage:*'), 'tagged keys must exist before flush');
 
         $this->cacheManager()->flushTagAcrossModels('homepage');
 
-        $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'), 'all tagged keys must be gone after flushTagAcrossModels');
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'untagged query keys must survive');
+        $this->assertEmpty($this->redisKeys('query:*:homepage:*'), 'all tagged keys must be gone after flushTagAcrossModels');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'untagged query keys must survive');
     }
 
     public function test_prefix_sensitive_scan_and_flush_operations_work_in_cluster_mode(): void
@@ -265,28 +298,28 @@ class ClusterModeTest extends TestCase
             Post::tag('homepage')->get();
             Author::get();
 
-            $this->assertNotEmpty($this->redisKeys('test:query:*'));
-            foreach ($this->redisKeys('test:*') as $key) {
+            $this->assertNotEmpty($this->redisKeys('query:*'));
+            foreach ($this->redisKeys('*') as $key) {
                 $this->assertStringNotContainsString('laravel:', $key);
             }
 
             $this->cacheManager()->flushTag(Author::class, 'homepage');
-            $this->assertEmpty($this->redisKeys('test:query:{testing:authors}:homepage:*'));
-            $this->assertNotEmpty($this->redisKeys('test:query:{testing:posts}:homepage:*'));
+            $this->assertEmpty($this->redisKeys('query:testing:authors:homepage:*'), 'author tagged keys must be gone');
+            $this->assertNotEmpty($this->redisKeys('query:testing:posts:homepage:*'), 'post tagged keys must survive');
 
             $this->cacheManager()->flushTagAcrossModels('homepage');
-            $this->assertEmpty($this->redisKeys('test:query:*:homepage:*'));
-            $this->assertNotEmpty($this->redisKeys('test:query:*'));
+            $this->assertEmpty($this->redisKeys('query:*:homepage:*'));
+            $this->assertNotEmpty($this->redisKeys('query:*'));
 
-            $removed = $this->cacheManager()->getStore()->flushByPatterns(['query:*']);
+            $removed = $this->cacheManager()->store()->flushByPatterns([$this->cacheManager()->keys()->prefixed('query:*')]);
             $this->assertGreaterThan(0, $removed);
-            $this->assertEmpty($this->redisKeys('test:query:*'));
+            $this->assertEmpty($this->redisKeys('query:*'));
 
             Author::get();
-            $this->assertNotEmpty($this->redisKeys('test:*'));
+            $this->assertNotEmpty($this->redisKeys('*'));
 
             $this->cacheManager()->flushAll();
-            $this->assertEmpty($this->redisKeys('test:*'));
+            $this->assertEmpty($this->redisKeys('*'));
         } finally {
             Redis::purge('normcache-test');
             config()->set('database.redis.options.prefix', '');
@@ -325,34 +358,17 @@ class ClusterModeTest extends TestCase
 
     // Version key TTL — incrementAndExpire cluster-safety (ensures hash tags route EVAL to owning node)
 
-    public function test_version_key_has_ttl_in_slotting_cluster_mode(): void
+    public function test_version_key_has_ttl_in_cluster_mode(): void
     {
         Author::create(['name' => 'Alice']);
 
         $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->classKey(Author::class);
-        $verKey = 'test:ver:{' . $classKey . '}:';
+        $classKey = $this->cacheManager()->keys()->classKey(Author::class);
+        $verKey = '{nc}:test:ver:' . $classKey . ':';
 
         $ttl = $redis->ttl($verKey);
 
-        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in slotting cluster mode');
-    }
-
-    public function test_version_key_has_ttl_in_fixed_hashtag_cluster_mode(): void
-    {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
-        config(['normcache.cluster' => true, 'normcache.slotting' => false]);
-
-        Author::create(['name' => 'Alice']);
-
-        $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->classKey(Author::class);
-        $verKey = '{nc}:test:ver:{' . $classKey . '}:';
-
-        $ttl = $redis->ttl($verKey);
-
-        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in fixed-hashtag cluster mode');
+        $this->assertGreaterThan(0, $ttl, 'version key must carry a TTL in cluster mode');
     }
 
     // count() pagination total (getNamespacedCache)
@@ -368,5 +384,14 @@ class ClusterModeTest extends TestCase
 
         $this->assertSame(3, $cold->total());
         $this->assertSame(3, $warm->total());
+    }
+
+    private function requirePredisCluster(): void
+    {
+        $cluster = env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true;
+
+        if (!$cluster || env('REDIS_CLIENT') !== 'predis') {
+            $this->markTestSkipped('Requires a real Predis Redis Cluster connection.');
+        }
     }
 }

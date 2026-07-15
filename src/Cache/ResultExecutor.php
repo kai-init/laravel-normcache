@@ -4,9 +4,9 @@ namespace NormCache\Cache;
 
 use Closure;
 use NormCache\Enums\ResultKind;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
-use NormCache\Support\FallbackHandler;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CachePlan;
@@ -17,7 +17,7 @@ final class ResultExecutor
 {
     public function __construct(
         private readonly ExecutionEngine $engine,
-        private readonly ResultCacheReader $resultReader,
+        private readonly ResultCacheRepository $results,
         private readonly CacheConfig $config,
     ) {}
 
@@ -29,7 +29,9 @@ final class ResultExecutor
         Closure $compute,
     ): array {
         $builder = $prepared->builder;
-        $modelClass = $builder->getModel()::class;
+        $model = $builder->getModel();
+        $modelClass = $model::class;
+        $connection = $model->getConnectionName();
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
         $debugbarStart = CacheReporter::beginMeasure();
@@ -40,11 +42,11 @@ final class ResultExecutor
         $depTableKeys = $plan->dependencies->tables;
         $structuredPayload = $kind === ResultKind::Collection;
 
-        $execution = FallbackHandler::rescue(
+        $execution = CacheFallback::rescue(
             $this->config,
             fn() => $this->engine->runScalar(
-                fetch: fn() => $this->resultReader->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
-                waitForBuild: fn() => $this->resultReader->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace),
+                fetch: fn() => $this->results->fetch($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace, $connection),
+                waitForBuild: fn() => $this->results->waitForBuild($modelClass, $depClasses, $hash, $tag, $depTableKeys, $namespace, $connection),
                 compute: fn() => ['value' => $compute(), 'cached' => false],
                 onStore: function ($value, $result) use ($modelClass, $ttl, $debugbarStart, $kind) {
                     CacheReporter::queryMiss($modelClass, $result->key, $debugbarStart, ['kind' => $kind->value]);
@@ -52,7 +54,7 @@ final class ResultExecutor
                     $this->storeResult($result, $value['value'], $ttl);
                 },
                 onHit: function ($result) use ($modelClass, $debugbarStart, $kind, $compute, $structuredPayload, $ttl) {
-                    if (!is_array($result->payload) || (!$structuredPayload && !array_key_exists(0, $result->payload))) {
+                    if (!$structuredPayload && !array_key_exists(0, $result->payload)) {
                         $value = $compute();
                         $this->storeResult($result, $value, $ttl);
 
@@ -76,15 +78,11 @@ final class ResultExecutor
 
     private function storeResult(ResultCacheResult $result, mixed $payload, ?int $ttl): void
     {
-        $this->resultReader->store(
+        $this->results->store(
             $result->key,
             is_array($payload) ? $payload : [$payload],
-            $result->buildingKey,
             $ttl,
-            $result->wakeKey,
-            $result->versionKeys,
-            $result->expectedVersions,
-            $result->buildingToken
+            $result->build,
         );
     }
 
@@ -102,12 +100,7 @@ final class ResultExecutor
         $query = $prepared->base;
 
         if ($kind === ResultKind::Collection) {
-            if (empty($query->columns) && $columns !== ['*']) {
-                $query = $query->cloneWithout([]);
-                $query->columns = $columns;
-            }
-
-            return QueryHasher::forResultQuery($prepared->builder, $query);
+            return QueryHasher::forResultQuery($prepared->builder, $prepared->baseWithColumns($columns));
         }
 
         return match ($kind) {

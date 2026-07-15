@@ -4,7 +4,7 @@ return [
     // Redis connection from config/database.php.
     'connection' => env('NORMCACHE_CONNECTION', 'cache'),
 
-    // Master switch; false bypasses the cache.
+    // Boot-time master switch; false bypasses the cache.
     'enabled' => env('NORMCACHE_ENABLED', true),
 
     // Model attribute payload TTL (seconds).
@@ -15,10 +15,6 @@ return [
 
     // Prefix every NormCache key. Useful when sharing a Redis database.
     'key_prefix' => env('NORMCACHE_PREFIX', ''),
-
-    // false keeps all keys in {nc}, preserving cross-model Lua atomicity on Cluster.
-    // true slots by model/table, spreading load but limiting atomic operations to each slot.
-    'slotting' => (bool) env('NORMCACHE_SLOTTING', false),
 
     // Debounce automatic version bumps on write-heavy models; 0 bumps immediately (seconds).
     'cooldown' => (int) env('NORMCACHE_COOLDOWN', 0),
@@ -32,9 +28,6 @@ return [
     // Wake tokens pushed when a cache build releases. Raise for high same-key concurrency.
     'stampede_wake_tokens' => (int) env('NORMCACHE_STAMPEDE_WAKE_TOKENS', 64),
 
-    // Use Redis Cluster-safe command paths when the configured Redis connection is clustered.
-    'cluster' => (bool) env('NORMCACHE_CLUSTER', false),
-
     // Dispatch cache hit, miss, and bypass events. Enable only if something consumes them.
     'events' => (bool) env('NORMCACHE_EVENTS', false),
 
@@ -46,4 +39,17 @@ return [
 
     // Register the Laravel Debugbar collector for local cache inspection.
     'debugbar' => env('NORMCACHE_DEBUGBAR', false),
+    // Redis Cluster sharding via model-declared cache spaces.
+    'spaces' => [
+        // Max spaces per model. Writes bump one version key per space.
+        'max_per_model' => 16,
+
+        // Cross-space dependency handling: 'bypass' or 'throw'.
+        'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
+
+        // Optional space => hash-tag override. Default: content => {nc:content}.
+        'placement' => [
+            // 'catalog' => ['hash_tag' => 'nc:catalog'],
+        ],
+    ],
 ];

@@ -2,8 +2,10 @@
 
 namespace NormCache\Tests\Integration\Invalidation;
 
-use Illuminate\Support\Facades\Redis;
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobProcessed;
 use NormCache\Facades\NormCache;
+use NormCache\Support\CacheFallback;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -37,6 +39,20 @@ class ModelInvalidationTest extends TestCase
 
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
+    }
+
+    public function test_save_invalidates_again_after_job_processed_reenables_cache(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $manager = $this->cacheManager();
+        $versionBefore = $manager->currentVersion(Author::class);
+
+        CacheFallback::fallback($manager->config(), new \RuntimeException('simulated Redis error'));
+        $this->app['events']->dispatch(new JobProcessed('testing', $this->createStub(Job::class)));
+        $author->update(['name' => 'Alicia']);
+
+        $this->assertTrue($manager->isEnabled());
+        $this->assertGreaterThan($versionBefore, $manager->currentVersion(Author::class));
     }
 
     public function test_deleting_model_flushes_model_key_and_increments_version(): void
@@ -77,36 +93,6 @@ class ModelInvalidationTest extends TestCase
         $post->increment('views');
 
         $this->assertSame($versionBefore + 1, NormCache::currentVersion(Post::class));
-    }
-
-    public function test_members_set_has_ttl_matching_model_ttl(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $classKey = NormCache::classKey(Author::class);
-        $memberKey = 'test:members:model:{' . $classKey . '}';
-        $redis = Redis::connection('normcache-test');
-
-        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members:model: set must have a TTL');
-    }
-
-    public function test_members_set_dead_keys_are_bounded_by_ttl(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $classKey = NormCache::classKey(Author::class);
-        $memberKey = 'test:members:model:{' . $classKey . '}';
-        $modelKey = $this->prefixedModelKey(Author::class, $author->id);
-        $redis = Redis::connection('normcache-test');
-
-        // Simulate model key expiry by deleting it directly.
-        $redis->del($modelKey);
-        $this->assertFalse((bool) $redis->exists($modelKey));
-
-        // Dead keys can accumulate in the members set, but the set's own TTL bounds that growth.
-        $this->assertGreaterThan(0, $redis->ttl($memberKey), 'members set must expire, bounding dead-key accumulation');
     }
 
     public function test_quiet_instance_writes_still_invalidate_cache(): void
@@ -193,40 +179,49 @@ class ModelInvalidationTest extends TestCase
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
-    public function test_instance_update_only_evicts_that_model_key(): void
+    public function test_instance_update_bumps_version_and_invalidates_all_model_keys(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
+
+        $versionBefore = NormCache::currentVersion(Author::class);
 
         $a1->update(['name' => 'Alicia']);
 
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
-    public function test_instance_increment_only_evicts_that_model_key(): void
+    public function test_instance_increment_bumps_version_and_invalidates_all_model_keys(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
+
+        $versionBefore = NormCache::currentVersion(Author::class);
 
         $a1->increment('id', 0);
 
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
-    public function test_instance_decrement_only_evicts_that_model_key(): void
+    public function test_instance_decrement_bumps_version_and_invalidates_all_model_keys(): void
     {
         $a1 = Author::create(['name' => 'Alice']);
         $a2 = Author::create(['name' => 'Bob']);
         Author::all();
 
+        $versionBefore = NormCache::currentVersion(Author::class);
+
         $a1->decrement('id', 0);
 
+        $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertNull($this->modelCacheEntry(Author::class, $a1->id));
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $a2->id));
+        $this->assertNull($this->modelCacheEntry(Author::class, $a2->id));
     }
 
     public function test_new_query_from_existing_instance_update_invalidates_cache(): void
@@ -308,10 +303,11 @@ class ModelInvalidationTest extends TestCase
 
         $after = NormCache::currentVersion(Post::class);
 
+        // Pre-save flush (observer safety) + post-save flush = two version bumps outside a transaction.
         $this->assertSame(
-            $before + 1,
+            $before + 2,
             $after,
-            'Dirty existing model save should invalidate the model version exactly once.'
+            'Dirty existing model save outside a transaction bumps the version twice.'
         );
     }
 

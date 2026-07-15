@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
-use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -20,7 +19,7 @@ class ModelCachingTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_flush_command_without_model_flushes_all_keys(): void
@@ -28,26 +27,25 @@ class ModelCachingTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all();
 
-        $this->assertNotEmpty($this->redisKeys('test:*'));
+        $this->assertNotEmpty($this->redisKeys('*'));
 
         $this->artisan('normcache:flush')->assertSuccessful();
 
-        $this->assertEmpty($this->redisKeys('test:*'));
+        $this->assertEmpty($this->redisKeys('*'));
     }
 
     public function test_flush_command_with_model_flushes_only_that_model(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Author::all();
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
         Post::all();
 
         $this->artisan('normcache:flush', ['--model' => Author::class])->assertSuccessful();
 
-        $default = DB::getDefaultConnection();
-
-        $this->assertEmpty($this->redisKeys('test:model:{' . $default . ':authors}:*'));
-        $this->assertNotEmpty($this->redisKeys('test:model:{' . $default . ':posts}:*'));
+        // Author entries are unreachable after the version bump; Post cache is unaffected.
+        $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
+        $this->assertNotNull($this->modelCacheEntry(Post::class, $post->id));
     }
 
     public function test_flush_command_rejects_nonexistent_class(): void

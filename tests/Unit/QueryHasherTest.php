@@ -6,9 +6,9 @@ use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
-use NormCache\Tests\TestCase;
+use NormCache\Tests\UnitTestCase;
 
-class QueryHasherTest extends TestCase
+class QueryHasherTest extends UnitTestCase
 {
     private function makeBuilder(): Builder
     {
@@ -56,8 +56,8 @@ class QueryHasherTest extends TestCase
     {
         $hash = QueryHasher::hash('some data');
         $this->assertIsString($hash);
-        $this->assertEquals(16, strlen($hash));
-        $this->assertSame(hash('xxh3', 'some data'), $hash);
+        $this->assertEquals(32, strlen($hash));
+        $this->assertSame(hash('xxh128', 'some data'), $hash);
     }
 
     public function test_pagination_count_hash_differs_from_normalized_query_hash(): void

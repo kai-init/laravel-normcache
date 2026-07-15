@@ -5,8 +5,9 @@ namespace NormCache\Traits;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\CacheManager;
+use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\RedisScripts;
+use NormCache\Values\CacheSpace;
 
 /**
  * @phpstan-require-extends CacheManager
@@ -16,11 +17,46 @@ trait HandlesInvalidation
     /** @var array<string, array<string, true>> */
     private array $flushQueue = [];
 
-    /** @var array<string, array<string, true>> */
+    /** @var array<string, array<string, list<CacheSpace>>> conn => classKey => spaces */
     private array $versionQueue = [];
 
-    /** @var array<string, list<array{string, string, string}>> model class, model key, members key */
-    private array $instanceEvictQueue = [];
+    /** @var array<string, array<class-string<Model>, true>> */
+    private array $modelVersionQueue = [];
+
+    /** @var array<string, array<string, true>> conn => table classKey => true */
+    private array $tableVersionQueue = [];
+
+    /** @return list<CacheSpace> the spaces a model/table version key lives in */
+    private function modelSpaces(
+        string $modelClass,
+        ?string $connectionName = null,
+        bool $freshTableSpaces = false,
+    ): array {
+        $connectionName ??= $this->keys->declaredConnection($modelClass);
+        $tableKey = $this->keys->classKey($modelClass, $connectionName);
+        $spaces = [];
+        $tableSpaces = $freshTableSpaces
+            ? $this->spaceRegistry->freshSpacesForTable($tableKey)
+            : $this->spaceRegistry->spacesForTable($tableKey);
+
+        foreach ([...$this->spaceRegistry->spacesForModel($modelClass), ...$tableSpaces] as $space) {
+            $spaces[$space->name] = $space;
+        }
+
+        return array_values($spaces);
+    }
+
+    /** @return list<CacheSpace> the spaces a table's version key lives in */
+    private function tableInvalidationSpaces(string $tableKey): array
+    {
+        return $this->spaceRegistry->freshSpacesForTable($tableKey);
+    }
+
+    /** @return list<CacheSpace> */
+    private function knownSpaces(): array
+    {
+        return $this->spaceRegistry->knownSpaces();
+    }
 
     // Invalidation
 
@@ -34,8 +70,8 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class)),
-            fn() => $this->doInvalidateVersion($model::class),
+            fn() => $this->modelVersionQueue[$conn][$model::class] = true,
+            fn() => $this->doInvalidateVersion($model::class, $conn),
         );
     }
 
@@ -53,32 +89,14 @@ trait HandlesInvalidation
         $this->queueOrRun(
             $conn,
             fn() => $this->queueModelFlush($conn, $modelClass),
-            fn() => $this->forceFlushModel($modelClass),
+            fn() => $this->forceFlushModel($modelClass, $conn),
         );
     }
 
+    /** Alias of invalidateVersion(); kept as the model-instance-facing entry point. */
     public function flushInstance(Model $model): void
     {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $conn = $model->getConnection()->getName();
-        $class = $model::class;
-        $key = $this->keys->modelKey($class, $model->getKey());
-        $classKey = $this->keys->classKey($class);
-
-        $this->queueOrRun(
-            $conn,
-            function () use ($conn, $class, $key, $classKey) {
-                $this->queueVersionFlush($conn, $classKey);
-                $this->queueInstanceEvict($conn, $class, $key, $this->keys->membersKey($classKey));
-            },
-            function () use ($class, $key, $classKey) {
-                $this->doInvalidateVersion($class);
-                $this->store->deleteFromSet($key, $this->keys->membersKey($classKey));
-            },
-        );
+        $this->invalidateVersion($model);
     }
 
     public function invalidateTableVersion(string $connectionName, string $table): void
@@ -91,41 +109,52 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $connectionName,
-            fn() => $this->queueVersionFlush($connectionName, $classKey),
-            fn() => $this->doInvalidateKey($classKey),
+            fn() => $this->queueTableVersionFlush($connectionName, $classKey),
+            fn() => $this->doInvalidateTable($classKey),
         );
     }
 
-    public function evictModelKey(string $modelClass, mixed $id): void
+    /** Bump the pivot table version only in the spaces belonging to the involved models. */
+    public function invalidatePivotTableVersion(string $connectionName, string $table, array $modelClasses): void
     {
         if (!$this->isEnabled()) {
             return;
         }
 
-        $this->attempt(function () use ($modelClass, $id) {
-            $classKey = $this->keys->classKey($modelClass);
-            $key = $this->keys->modelPrefix($classKey) . $id;
-            $this->store->deleteFromSet(
-                $key,
-                $this->keys->membersKey($classKey)
-            );
-        });
+        $classKey = $this->keys->tableKey($connectionName, $table);
+        $spaces = [];
+        foreach ($modelClasses as $modelClass) {
+            foreach ($this->modelSpaces($modelClass, freshTableSpaces: true) as $space) {
+                $spaces[$space->name] = $space;
+            }
+        }
+        $spaces = array_values($spaces);
+
+        $this->queueOrRun(
+            $connectionName,
+            fn() => $this->queueVersionFlush($connectionName, $classKey, $spaces),
+            function () use ($classKey, $spaces) {
+                foreach ($spaces as $space) {
+                    $this->doInvalidateKey($classKey, $space);
+                }
+            },
+        );
     }
 
-    public function forceFlushModel(string $modelClass): void
+    public function forceFlushModel(string $modelClass, ?string $connectionName = null): void
     {
-        $classKey = $this->keys->classKey($modelClass);
-        $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl()); // bypass cooldown
+        $classKey = $this->keys->classKey($modelClass, $connectionName);
 
-        $this->store->sscanAndFlushSet($this->store->prefix($this->keys->membersKey($classKey)));
+        foreach ($this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true) as $space) {
+            $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl()); // bypass cooldown
+        }
     }
 
-    public function flushAll(): int
+    public function flushAll(CacheSpace|string|null $space = null): int
     {
-        return $this->store->flushByPatterns([
+        $patterns = [
             CacheKeyBuilder::K_QUERY . ':*',
             CacheKeyBuilder::K_MODEL . ':*',
-            CacheKeyBuilder::K_MEMBERS . ':*',
             CacheKeyBuilder::K_VER . ':*',
             CacheKeyBuilder::K_COUNT . ':*',
             CacheKeyBuilder::K_SCALAR . ':*',
@@ -135,7 +164,19 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_BUILDING . ':*',
             CacheKeyBuilder::K_WAKE . ':*',
             CacheKeyBuilder::K_RESULT . ':*',
-        ]);
+        ];
+
+        if (!$this->store->isCluster()) {
+            if ($space === null) {
+                return $this->store->flushByPatterns($this->prefixedForAnySpace($patterns));
+            }
+        }
+
+        $spaces = $space === null
+            ? $this->knownSpaces()
+            : [is_string($space) ? $this->spaceRegistry->space($space) : $space];
+
+        return $this->store->flushByPatterns($this->prefixedForSpaces($patterns, $spaces));
     }
 
     public function flushTag(string $modelClass, string $tag): int
@@ -144,98 +185,149 @@ trait HandlesInvalidation
 
         $classKey = $this->keys->classKey($modelClass);
 
-        return $this->store->flushByPatterns([
-            CacheKeyBuilder::K_RESULT . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_QUERY . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_COUNT . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_SCALAR . ':{' . $classKey . '}:' . $tag . ':*',
-            CacheKeyBuilder::K_THROUGH . ':{' . $classKey . '}:' . $tag . ':*',
-        ]);
+        return $this->store->flushByPatterns($this->prefixedForSpaces([
+            CacheKeyBuilder::K_RESULT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_QUERY . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*',
+            CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*',
+        ], $this->modelSpaces($modelClass, freshTableSpaces: true)));
     }
 
     public function flushTagAcrossModels(string $tag): int
     {
         CacheKeyBuilder::assertValidTag($tag);
 
-        return $this->store->flushByPatterns([
+        $patterns = [
             CacheKeyBuilder::K_RESULT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_QUERY . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_COUNT . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':*:' . $tag . ':*',
             CacheKeyBuilder::K_THROUGH . ':*:' . $tag . ':*',
-        ]);
+        ];
+
+        if (!$this->store->isCluster()) {
+            return $this->store->flushByPatterns($this->prefixedForAnySpace($patterns));
+        }
+
+        return $this->store->flushByPatterns($this->prefixedForSpaces($patterns, $this->knownSpaces()));
     }
 
     public function invalidateMultipleVersions(array $modelClasses, ?string $connectionName = null): void
     {
-        if (!$this->isEnabled()) {
+        if (!$this->isEnabled() || $modelClasses === []) {
             return;
         }
 
-        $this->queueOrRun(
-            $connectionName,
-            function () use ($connectionName, $modelClasses) {
-                foreach ($modelClasses as $modelClass) {
-                    $this->queueVersionFlush($connectionName, $this->keys->classKey($modelClass));
-                }
-            },
-            function () use ($modelClasses) {
-                foreach ($modelClasses as $modelClass) {
-                    $this->doInvalidateVersion($modelClass);
-                }
-            },
-        );
+        $groups = [];
+
+        foreach ($modelClasses as $modelClass) {
+            $conn = $connectionName
+                ?? ($this->keys->prototype($modelClass)->getConnectionName() ?? DB::getDefaultConnection());
+            $groups[$conn][] = $modelClass;
+        }
+
+        foreach ($groups as $conn => $classes) {
+            $this->queueOrRun(
+                $conn,
+                function () use ($conn, $classes) {
+                    foreach ($classes as $modelClass) {
+                        $this->modelVersionQueue[$conn][$modelClass] = true;
+                    }
+                },
+                function () use ($classes, $conn) {
+                    foreach ($classes as $modelClass) {
+                        $this->doInvalidateVersion($modelClass, $conn);
+                    }
+                },
+            );
+        }
     }
 
     public function commitPending(string $connectionName): void
     {
         $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
-        $versions = array_keys($this->versionQueue[$connectionName] ?? []);
-        $evicts = $this->instanceEvictQueue[$connectionName] ?? [];
+        $models = array_keys($this->modelVersionQueue[$connectionName] ?? []);
+        $versions = $this->versionQueue[$connectionName] ?? [];
+        $tables = array_keys($this->tableVersionQueue[$connectionName] ?? []);
 
-        unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName], $this->instanceEvictQueue[$connectionName]);
+        unset(
+            $this->flushQueue[$connectionName],
+            $this->modelVersionQueue[$connectionName],
+            $this->versionQueue[$connectionName],
+            $this->tableVersionQueue[$connectionName],
+        );
 
-        if ((empty($flushes) && empty($versions) && empty($evicts)) || !$this->isEnabled()) {
+        if ((empty($flushes) && empty($models) && empty($versions) && empty($tables)) || !$this->isEnabled()) {
             return;
         }
 
-        $this->attempt(function () use ($flushes, $versions, $evicts) {
-            foreach ($flushes as $modelClass) {
-                $this->forceFlushModel($modelClass);
-            }
+        CacheFallback::attempt(
+            $this->config,
+            function () use ($connectionName, $flushes, $models, $versions, $tables) {
+                /** @var array<string, array<string, true>> $invalidated class key => space name => true */
+                $invalidated = [];
+                /** @var array<string, array<string, CacheSpace>> $pending class key => space name => space */
+                $pending = [];
 
-            $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class), $flushes);
-            $evictClasses = array_unique(array_column($evicts, 0));
-            $evictClassKeys = array_map(fn($class) => $this->keys->classKey($class), $evictClasses);
+                $queue = function (string $classKey, array $spaces) use (&$pending, &$invalidated): void {
+                    foreach ($spaces as $space) {
+                        if (!isset($invalidated[$classKey][$space->name])) {
+                            $pending[$classKey][$space->name] = $space;
+                        }
+                    }
+                };
 
-            foreach ($versions as $classKey) {
-                if (!in_array($classKey, $evictClassKeys, true) && !in_array($classKey, $flushClassKeys, true)) {
-                    $this->doInvalidateKey($classKey);
+                foreach ($flushes as $modelClass) {
+                    $classKey = $this->keys->classKey($modelClass, $connectionName);
+                    $spaces = $this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true);
+                    $this->forceFlushModel($modelClass, $connectionName);
+
+                    foreach ($spaces as $space) {
+                        $invalidated[$classKey][$space->name] = true;
+                    }
                 }
-            }
 
-            foreach ($evictClasses as $class) {
-                if (!in_array($this->keys->classKey($class), $flushClassKeys, true)) {
-                    $this->doInvalidateVersion($class);
+                foreach ($models as $modelClass) {
+                    $queue(
+                        $this->keys->classKey($modelClass, $connectionName),
+                        $this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true),
+                    );
                 }
-            }
 
-            foreach ($evicts as [, $key, $membersKey]) {
-                $this->store->deleteFromSet($key, $membersKey);
-            }
-        });
+                foreach ($versions as $classKey => $spaces) {
+                    $queue($classKey, $spaces);
+                }
+
+                foreach ($tables as $classKey) {
+                    $queue($classKey, $this->tableInvalidationSpaces($classKey));
+                }
+
+                foreach ($pending as $classKey => $spaces) {
+                    foreach ($spaces as $space) {
+                        $this->doInvalidateKey($classKey, $space);
+                    }
+                }
+            },
+        );
     }
 
     public function discardPending(string $connectionName): void
     {
-        unset($this->flushQueue[$connectionName], $this->versionQueue[$connectionName], $this->instanceEvictQueue[$connectionName]);
+        unset(
+            $this->flushQueue[$connectionName],
+            $this->modelVersionQueue[$connectionName],
+            $this->versionQueue[$connectionName],
+            $this->tableVersionQueue[$connectionName],
+        );
     }
 
     public function discardAllPending(): void
     {
         $this->flushQueue = [];
+        $this->modelVersionQueue = [];
         $this->versionQueue = [];
-        $this->instanceEvictQueue = [];
+        $this->tableVersionQueue = [];
     }
 
     // Private — invalidation internals
@@ -247,24 +339,35 @@ trait HandlesInvalidation
             return;
         }
 
-        $this->attempt($immediate);
+        CacheFallback::attempt($this->config, $immediate);
     }
 
-    private function doInvalidateVersion(string $modelClass): void
+    private function doInvalidateVersion(string $modelClass, ?string $connectionName = null): void
     {
-        $this->doInvalidateKey($this->keys->classKey($modelClass));
+        $classKey = $this->keys->classKey($modelClass, $connectionName);
+
+        foreach ($this->modelSpaces($modelClass, $connectionName) as $space) {
+            $this->doInvalidateKey($classKey, $space);
+        }
     }
 
-    private function doInvalidateKey(string $classKey): void
+    private function doInvalidateTable(string $classKey): void
+    {
+        foreach ($this->tableInvalidationSpaces($classKey) as $space) {
+            $this->doInvalidateKey($classKey, $space);
+        }
+    }
+
+    private function doInvalidateKey(string $classKey, ?CacheSpace $space = null): void
     {
         if ($this->config->cooldown <= 0) {
-            $this->store->incrementAndExpire($this->keys->verKey($classKey), $this->versionTtl());
+            $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl());
 
             return;
         }
 
-        $this->resolveCurrentVersion($classKey);
-        $this->scheduleInvalidation($classKey);
+        $this->resolveCurrentVersion($classKey, $space);
+        $this->scheduleInvalidation($classKey, $space);
     }
 
     private function versionTtl(): int
@@ -272,24 +375,23 @@ trait HandlesInvalidation
         return max($this->config->ttl, $this->config->queryTtl) * 2;
     }
 
-    private function resolveCurrentVersion(string $classKey): string|int|null
+    private function resolveCurrentVersion(string $classKey, ?CacheSpace $space = null): string|int|null
     {
         if ($this->config->cooldown <= 0) {
-            return $this->store->getRaw($this->keys->verKey($classKey));
+            return $this->store->getRaw($this->keys->verKey($classKey, $space));
         }
 
-        return $this->store->script(
-            RedisScripts::get('fetch_version_with_cooldown'),
-            [$this->keys->verKey($classKey), $this->keys->scheduledKey($classKey)],
-            [(string) (int) floor(microtime(true) * 1000)]
+        return $this->store->fetchVersionWithCooldown(
+            $this->keys->verKey($classKey, $space),
+            $this->keys->scheduledKey($classKey, $space)
         );
     }
 
-    private function scheduleInvalidation(string $classKey): void
+    private function scheduleInvalidation(string $classKey, ?CacheSpace $space = null): void
     {
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($this->config->cooldown * 1000);
 
-        $this->store->setNxEx($this->keys->scheduledKey($classKey), (string) $dueAtMs, $this->config->cooldown + $this->versionTtl());
+        $this->store->setNxEx($this->keys->scheduledKey($classKey, $space), (string) $dueAtMs, $this->config->cooldown + $this->versionTtl());
     }
 
     private function queueModelFlush(string $connectionName, string $modelClass): void
@@ -297,13 +399,54 @@ trait HandlesInvalidation
         $this->flushQueue[$connectionName][$modelClass] = true;
     }
 
-    private function queueVersionFlush(string $connectionName, string $classKey): void
+    /**
+     * @param  list<string>  $patterns
+     * @param  list<CacheSpace>  $spaces
+     * @return list<string>
+     */
+    private function prefixedForSpaces(array $patterns, array $spaces): array
     {
-        $this->versionQueue[$connectionName][$classKey] = true;
+        $prefixed = [];
+
+        foreach ($spaces as $space) {
+            foreach ($patterns as $pattern) {
+                $prefixed[] = $this->keys->prefixed($pattern, $space);
+            }
+        }
+
+        return $prefixed;
     }
 
-    private function queueInstanceEvict(string $connectionName, string $modelClass, string $key, string $membersKey): void
+    /**
+     * @param  list<string>  $patterns
+     * @return list<string>
+     */
+    private function prefixedForAnySpace(array $patterns): array
     {
-        $this->instanceEvictQueue[$connectionName][] = [$modelClass, $key, $membersKey];
+        return array_map(
+            fn(string $pattern) => preg_replace('/^\{[^}]+\}:/', '{*}:', $this->keys->prefixed($pattern)),
+            $patterns,
+        );
+    }
+
+    /** @param  list<CacheSpace>  $spaces */
+    private function queueVersionFlush(string $connectionName, string $classKey, array $spaces): void
+    {
+        $queued = [];
+
+        foreach ($this->versionQueue[$connectionName][$classKey] ?? [] as $space) {
+            $queued[$space->name] = $space;
+        }
+
+        foreach ($spaces as $space) {
+            $queued[$space->name] = $space;
+        }
+
+        $this->versionQueue[$connectionName][$classKey] = array_values($queued);
+    }
+
+    private function queueTableVersionFlush(string $connectionName, string $classKey): void
+    {
+        $this->tableVersionQueue[$connectionName][$classKey] = true;
     }
 }

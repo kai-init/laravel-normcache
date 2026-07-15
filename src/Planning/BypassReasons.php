@@ -12,6 +12,7 @@ final class BypassReasons
      *   dependency    — dependency tracking can't safely cover this query
      *   normalization — result can't be decomposed into model cache keys
      *   safety        — bypassed for query correctness; no caching workaround
+     *   space         — cache-space membership or registration prevents caching
      *
      * @param  array<int,mixed>|null  $resolvedColumns  null skips the calculated-column check
      * @return array<string, list<string>>
@@ -38,10 +39,6 @@ final class BypassReasons
 
         if ($inspection->has(QueryInspection::RAW_WHERE)) {
             $dependency[] = 'raw WHERE expression';
-        }
-
-        if ($inspection->has(QueryInspection::SUBQUERY_WHERE | QueryInspection::EXISTS_WHERE)) {
-            $dependency[] = 'subquery WHERE (whereHas/whereExists)';
         }
 
         if ($inspection->has(QueryInspection::NON_CANONICAL_FROM)) {
@@ -80,11 +77,11 @@ final class BypassReasons
             $normalization[] = 'calculated or raw SELECT expressions';
         }
 
-        return array_filter([
+        return self::merge([
             'dependency' => $dependency,
             'normalization' => $normalization,
             'safety' => $safety,
-        ]);
+        ], $inspection->contextReasons);
     }
 
     public static function labels(): array
@@ -93,6 +90,7 @@ final class BypassReasons
             'dependency' => "can't infer cache dependency",
             'normalization' => "result can't be normalized into model keys",
             'safety' => 'bypassed for query correctness',
+            'space' => 'cross-space dependencies',
             'opted_out' => 'explicitly disabled',
         ];
     }

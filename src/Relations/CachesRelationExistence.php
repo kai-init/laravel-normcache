@@ -3,88 +3,70 @@
 namespace NormCache\Relations;
 
 use Closure;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
-use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
-use NormCache\Values\DependencySet;
+use NormCache\Traits\Cacheable;
 
-/**
- * @mixin CacheableBuilder
- */
+/** @mixin CacheableBuilder */
 trait CachesRelationExistence
 {
-    private int $totalHasCalls = 0;
-
-    private int $simpleHasCalls = 0;
-
-    private array $existenceDependencies = [];
-
-    private array $existenceTableDependencies = [];
-
     public function has($relation, $operator = '>=', $count = 1, $boolean = 'and', ?Closure $callback = null): static
     {
-        // whereHasMorph/nested has('a.b') run their inner has() calls on a cloned
-        // builder, so they never touch this trait's state — the outer call sees
-        // no dependency and bypasses safely.
-        $this->totalHasCalls++;
+        if (!is_string($relation) || str_contains($relation, '.')) {
+            $this->addCapturedContextReason('dependency', 'whereHas/has relation semantics could not be fully verified');
+        } else {
+            $this->captureRelationSemantics($relation);
+        }
 
-        if (is_string($relation) && !str_contains($relation, '.')) {
-            $entry = $this->classifyExistenceRelation($relation, $callback);
+        if (!($operator === '>=' && $count === 1)
+            && !($operator === '<' && $count === 1)) {
+            $this->addCapturedContextReason('dependency', 'has() count threshold requires explicit dependencies');
+        }
 
-            if ($entry !== null) {
-                $this->simpleHasCalls++;
-                $this->existenceDependencies[] = $entry['relatedClass'];
+        if ($callback !== null) {
+            $constraint = $callback;
+            $callback = function ($query) use ($constraint) {
+                $result = $constraint($query);
+                $this->captureConstrainedRelationQuery($query);
 
-                if ($entry['throughClass'] ?? null) {
-                    $this->existenceDependencies[] = $entry['throughClass'];
-                }
-
-                if ($entry['tableKey'] ?? null) {
-                    $this->existenceTableDependencies[] = $entry['tableKey'];
-                }
-
-                array_push($this->existenceDependencies, ...$entry['constraintModels']);
-                array_push($this->existenceTableDependencies, ...$entry['constraintTables']);
-            }
+                return $result;
+            };
         }
 
         return parent::has($relation, $operator, $count, $boolean, $callback);
     }
 
-    public function inferExistenceDependencies(): DependencySet
+    protected function captureRelationSemantics(string $name): void
     {
-        if ($this->totalHasCalls === 0) {
-            return DependencySet::empty();
-        }
+        try {
+            $relation = $this->getRelationWithoutConstraints($name);
+            $related = $relation->getRelated();
+            $query = $relation->getQuery();
 
-        if ($this->totalHasCalls !== $this->simpleHasCalls) {
-            return DependencySet::unsafe('whereHas/has dependencies could not be fully inferred.');
-        }
+            if ($relation instanceof MorphTo) {
+                $this->addCapturedContextReason('dependency', 'polymorphic relation dependency could not be fully inferred');
+            }
 
-        return new DependencySet(
-            models: array_values(array_unique($this->existenceDependencies)),
-            tables: array_values(array_unique($this->existenceTableDependencies)),
-        );
+            if (!in_array(Cacheable::class, class_uses_recursive($related::class), true)) {
+                $this->addCapturedContextReason('dependency', 'related model does not provide automatic table invalidation');
+            }
+
+            if ($query->toBase()->lock !== null) {
+                $this->addCapturedContextReason('safety', 'relation query uses a lock');
+            }
+        } catch (\Throwable) {
+            $this->addCapturedContextReason('dependency', 'relation semantics could not be inspected');
+        }
     }
 
-    private function classifyExistenceRelation(string $name, ?callable $constraint): ?array
+    private function captureConstrainedRelationQuery(mixed $query): void
     {
-        $relation = $this->getRelationWithoutConstraints($name);
-
-        if ($relation instanceof MorphTo) {
-            return null;
+        if ($query instanceof CacheableBuilder) {
+            $this->mergeCapturedBuilderState($query);
         }
 
-        if (!($relation instanceof HasOneOrMany
-            || $relation instanceof BelongsTo
-            || $relation instanceof BelongsToMany
-            || $relation instanceof HasOneOrManyThrough)) {
-            return null;
+        if (method_exists($query, 'toBase') && $query->toBase()->lock !== null) {
+            $this->addCapturedContextReason('safety', 'relation query uses a lock');
         }
-
-        return (new RelationDependencyClassifier)->classify($relation, $constraint);
     }
 }

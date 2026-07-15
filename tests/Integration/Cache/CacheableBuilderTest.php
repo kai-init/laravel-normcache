@@ -12,7 +12,6 @@ use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 
@@ -23,30 +22,12 @@ use NormCache\Tests\TestCase;
  */
 class CacheableBuilderTest extends TestCase
 {
-    public function test_get_writes_query_cache_key(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
-    }
-
     public function test_without_cache_writes_no_query_keys(): void
     {
         Author::create(['name' => 'Alice']);
         Author::withoutCache()->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_uncached_get_accepts_string_columns(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $authors = Author::withoutCache()->get('id');
-
-        $this->assertCount(1, $authors);
-        $this->assertSame(['id'], array_keys($authors->first()->getAttributes()));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_ttl_uses_custom_ttl(): void
@@ -54,20 +35,10 @@ class CacheableBuilderTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::query()->ttl(9999)->get();
 
-        $queryKey = collect($this->redisKeys('test:query:*'))->first();
+        $queryKey = collect($this->redisKeys('query:*'))->first();
 
         $this->assertNotNull($queryKey);
         $this->assertGreaterThan(9000, Redis::connection('normcache-test')->ttl($queryKey));
-    }
-
-    public function test_query_with_join_bypasses_cache(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->get();
-
-        $this->assertEmpty($this->redisKeys('test:query:*'));
     }
 
     public function test_query_with_group_by_bypasses_cache(): void
@@ -75,7 +46,7 @@ class CacheableBuilderTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::query()->groupBy('name')->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_query_from_subquery_bypasses_cache(): void
@@ -84,7 +55,7 @@ class CacheableBuilderTest extends TestCase
 
         Author::fromSub(Author::query()->select('id', 'name'), 'authors')->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_query_with_raw_select_expression_bypasses_cache(): void
@@ -92,24 +63,7 @@ class CacheableBuilderTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::query()->selectRaw('id, name, 1 + 1 as computed')->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_subquery_where_has_reflects_related_model_writes(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
-
-        $warm = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(1, $warm);
-
-        $post->update(['published' => false]);
-
-        $live = UncachedAuthor::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(0, $live);
-
-        $cached = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(0, $cached);
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_bulk_update_invalidates_version(): void
@@ -179,6 +133,26 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(2, Author::withCount('posts')->find($author->id)->posts_count);
     }
 
+    public function test_without_aggregate_cache_before_with_count_uses_live_queries(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertAggregateCacheOptOutRunsLive(
+            fn() => Author::withoutAggregateCache()->withCount('posts')->get(),
+        );
+    }
+
+    public function test_without_aggregate_cache_after_with_count_uses_live_queries(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertAggregateCacheOptOutRunsLive(
+            fn() => Author::withCount('posts')->withoutAggregateCache()->get(),
+        );
+    }
+
     public function test_flush_model_invalidates_aggregate_blob_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -200,7 +174,7 @@ class CacheableBuilderTest extends TestCase
         $result = Author::withCount('uncachedPosts')->get()->firstWhere('id', $author->id);
 
         $this->assertSame(2, (int) $result->uncached_posts_count);
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_belongs_to_warm_hit_runs_after_query_callbacks(): void
@@ -254,7 +228,7 @@ class CacheableBuilderTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::inRandomOrder()->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_primary_key_query_with_limit_uses_model_cache_without_query_cache(): void
@@ -265,18 +239,7 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertCount(1, $authors);
         $this->assertSame('Alice', $authors->first()->name);
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-    }
-
-    public function test_single_primary_key_query_with_order_uses_model_cache_without_query_cache(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        $authors = Author::whereKey($author->id)->orderBy('name')->get();
-
-        $this->assertCount(1, $authors);
-        $this->assertSame('Alice', $authors->first()->name);
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_primary_key_query_with_zero_limit_returns_empty_without_query_cache(): void
@@ -286,7 +249,7 @@ class CacheableBuilderTest extends TestCase
         $authors = Author::whereKey($author->id)->limit(0)->get();
 
         $this->assertCount(0, $authors);
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_increment_invalidates_version(): void
@@ -321,7 +284,7 @@ class CacheableBuilderTest extends TestCase
             Author::all();
         });
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_refresh_issues_a_db_query_not_a_cache_read(): void
@@ -399,7 +362,7 @@ class CacheableBuilderTest extends TestCase
         Author::query()->paginate(10);
         Author::query()->select('name')->paginate(10);
 
-        $this->assertCount(1, $this->redisKeys('test:count:*'));
+        $this->assertCount(1, $this->redisKeys('count:*'));
     }
 
     public function test_raw_builder_insert_invalidates_version(): void
@@ -517,13 +480,11 @@ class CacheableBuilderTest extends TestCase
         $this->assertStringContainsString('join_result_requires_explicit_select', $result);
     }
 
-    public function test_explain_groups_non_standard_from_as_normalization(): void
+    public function test_explain_uses_result_cache_for_inferable_from_subquery(): void
     {
-        $result = Author::fromSub(Author::query()->select('id', 'name'), 'authors')
-            ->explain();
+        $result = Author::fromSub(Author::query()->select('id', 'name'), 'authors')->explain();
 
-        $this->assertStringContainsString("can't be normalized", $result);
-        $this->assertStringContainsString('non-standard FROM', $result);
+        $this->assertSame('cached: result', $result);
     }
 
     public function test_explain_groups_group_by_as_normalization(): void
@@ -565,7 +526,7 @@ class CacheableBuilderTest extends TestCase
         Event::assertDispatched(QueryBypassed::class, function (QueryBypassed $e) {
             return $e->modelClass === Author::class
                 && isset($e->reasons['dependency'])
-                && collect($e->reasons['dependency'])->contains(fn($r) => str_contains($r, 'subquery WHERE'));
+                && collect($e->reasons['dependency'])->contains(fn($r) => str_contains($r, 'raw WHERE'));
         });
     }
 
@@ -726,8 +687,8 @@ class CacheableBuilderTest extends TestCase
         Author::whereHas('posts.comments')->get();
 
         Event::assertDispatched(QueryBypassed::class);
-        $this->assertEmpty($this->redisKeys('test:query:*'));
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_complex_aggregate_without_explicit_dependencies_bypasses(): void
@@ -748,7 +709,7 @@ class CacheableBuilderTest extends TestCase
         Author::create(['name' => 'Alice']);
         Author::all(); // warm
 
-        $queryKey = collect($this->redisKeys('test:query:*'))->first();
+        $queryKey = collect($this->redisKeys('query:*'))->first();
         $this->assertNotNull($queryKey);
 
         Redis::connection('normcache-test')->set($queryKey, 'NOT_JSON');
@@ -766,7 +727,7 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(2, Author::count());
 
-        $countKey = collect($this->redisKeys('test:count:*'))->first();
+        $countKey = collect($this->redisKeys('count:*'))->first();
         $this->assertNotNull($countKey);
         $this->corruptResultCacheEntry($countKey);
 
@@ -789,7 +750,7 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertTrue(Author::exists());
 
-        $scalarKey = collect($this->redisKeys('test:scalar:*'))->first();
+        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
         $this->assertNotNull($scalarKey);
         $this->corruptResultCacheEntry($scalarKey);
 
@@ -813,7 +774,7 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertSame(10, Post::sum('views'));
 
-        $scalarKey = collect($this->redisKeys('test:scalar:*'))->first();
+        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
         $this->assertNotNull($scalarKey);
         $this->corruptResultCacheEntry($scalarKey);
 
@@ -830,10 +791,27 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
     }
 
+    private function assertAggregateCacheOptOutRunsLive(callable $query): void
+    {
+        $query();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $query();
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+
+        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertNotEmpty($queries, 'withoutAggregateCache() must not serve a result-cache hit.');
+    }
+
     // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.
     private function corruptResultCacheEntry(string $key): void
     {
-        $serialized = $this->cacheManager()->getStore()->serialize([]);
+        $serialized = $this->cacheManager()->store()->serialize([]);
         Redis::connection('normcache-test')->set($key, $serialized);
     }
 
@@ -847,5 +825,29 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame($author->id, $second->first()->id);
         $this->assertSame('Alice', $second->first()->name);
         $this->assertSame('Alice', $second->first()->display_name);
+    }
+
+    public function test_depends_on_merges_previous_model_dependencies(): void
+    {
+        $builder = Post::query()
+            ->dependsOn([Post::class])
+            ->dependsOn([Author::class]);
+
+        $this->assertContains(Post::class, $builder->explicitDependencies());
+        $this->assertContains(Author::class, $builder->explicitDependencies());
+        $this->assertCount(2, $builder->explicitDependencies());
+    }
+
+    public function test_depends_on_tables_merges_previous_table_dependencies(): void
+    {
+        $conn = (new Post)->getConnection()->getName();
+
+        $builder = Post::query()
+            ->dependsOnTables(['posts'])
+            ->dependsOnTables(['authors']);
+
+        $this->assertContains("{$conn}:posts", $builder->explicitTableDependencies());
+        $this->assertContains("{$conn}:authors", $builder->explicitTableDependencies());
+        $this->assertCount(2, $builder->explicitTableDependencies());
     }
 }

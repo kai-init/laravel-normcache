@@ -12,9 +12,6 @@ final readonly class ThroughCacheResult
         public ?array $ids,
         public ?array $throughKeys,
         public ?array $models,
-        public ?string $buildingKey,
-        public ?string $buildingToken,
-        public array $versionKeys,
-        public array $expectedVersions,
+        public BuildHandle $build = new BuildHandle,
     ) {}
 }

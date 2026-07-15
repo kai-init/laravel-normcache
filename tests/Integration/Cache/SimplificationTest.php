@@ -20,8 +20,8 @@ class SimplificationTest extends TestCase
 
         // First call - miss
         Author::query()->get();
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'Query key should be created');
-        $this->assertEmpty($this->redisKeys('test:result:*'), 'Result key should not be created');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'Query key should be created');
+        $this->assertEmpty($this->redisKeys('result:*'), 'Result key should not be created');
 
         // Second call - hit
         DB::enableQueryLog();
@@ -34,17 +34,13 @@ class SimplificationTest extends TestCase
 
     public function test_simple_query_with_depends_on_keeps_normalized_cache_and_honors_versions(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('In slotting mode, multi-dependency queries route to result cache — see ClusterModeTest');
-        }
-
         $author = Author::create(['name' => 'Alice']);
 
         // First call - miss
         Author::query()->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'), 'Should use normalized query cache');
-        $this->assertEmpty($this->redisKeys('test:result:*'), 'Should not use result cache');
+        $this->assertNotEmpty($this->redisKeys('query:*'), 'Should use normalized query cache');
+        $this->assertEmpty($this->redisKeys('result:*'), 'Should not use result cache');
 
         // Second call - hit
         DB::enableQueryLog();
@@ -70,7 +66,7 @@ class SimplificationTest extends TestCase
         // First call - miss
         Author::whereHas('posts')->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Should use result cache');
+        $this->assertNotEmpty($this->redisKeys('result:*'), 'Should use result cache');
     }
 
     public function test_simple_aggregate_uses_result_with_inferred_dependencies(): void
@@ -81,7 +77,7 @@ class SimplificationTest extends TestCase
         // withCount('posts') should infer Post dependency
         Author::withCount('posts')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Simple aggregate should use result cache');
+        $this->assertNotEmpty($this->redisKeys('result:*'), 'Simple aggregate should use result cache');
 
         // Verify it hits
         DB::enableQueryLog();

@@ -93,7 +93,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
     }
 
     public function test_belongs_to_many_warm_hit_zero_sql(): void
@@ -114,20 +114,16 @@ class PivotCacheTest extends TestCase
 
     public function test_pivot_eager_load_falls_back_to_database_when_build_lock_is_held_elsewhere(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('Pivot caching does not claim a build lock in slotting mode — see ClusterModeTest');
-        }
-
         $author = Author::create(['name' => 'Alice']);
         $tag = Tag::create(['name' => 'Fiction']);
         $author->tags()->attach($tag->id);
 
         $constraintHash = $this->callConstraintHash($author->tags());
-        $pivotTableKey = NormCache::tableKey($author->getConnection()->getName(), 'author_tag');
+        $pivotTableKey = NormCache::keys()->tableKey($author->getConnection()->getName(), 'author_tag');
 
         // Claim the same build lock another concurrent request would, before the eager load runs.
-        $claimed = NormCache::getPivotCache(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
-        $this->assertNotNull($claimed->buildingKey);
+        $claimed = NormCache::results()->fetchPivot(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
+        $this->assertNotNull($claimed->build->buildingKey);
 
         DB::enableQueryLog();
         $authors = Author::with('tags')->get();
@@ -138,8 +134,8 @@ class PivotCacheTest extends TestCase
         $this->assertCount(1, $pivotQueries, 'Should fall back to a single direct DB query for the pivot relation while its build lock is held elsewhere');
         $this->assertSame(['Fiction'], $authors->first()->tags->pluck('name')->all());
         $this->assertSame(
-            $claimed->buildingToken,
-            NormCache::getStore()->getRaw($claimed->buildingKey),
+            $claimed->build->buildingToken,
+            NormCache::store()->getRaw($claimed->build->buildingKey),
             'The foreign build lock must remain untouched'
         );
     }
@@ -150,7 +146,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
 
         $authors = Author::with('tags')->get();
 
@@ -240,7 +236,7 @@ class PivotCacheTest extends TestCase
 
         $author->tags()->get();
 
-        $keyCountAfterWarm = count($this->redisKeys('test:pivot:*'));
+        $keyCountAfterWarm = count($this->redisKeys('pivot:*'));
 
         $author->update(['name' => 'Alice Updated']);
 
@@ -250,7 +246,7 @@ class PivotCacheTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertEmpty($queries);
-        $this->assertSame($keyCountAfterWarm, count($this->redisKeys('test:pivot:*')));
+        $this->assertSame($keyCountAfterWarm, count($this->redisKeys('pivot:*')));
         $this->assertSame(['Fiction'], $tags->pluck('name')->all());
     }
 
@@ -321,7 +317,7 @@ class PivotCacheTest extends TestCase
             ->get();
 
         $this->assertSame([$tag->id], $tags->modelKeys());
-        $this->assertEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertEmpty($this->redisKeys('pivot:*'));
     }
 
     public function test_pivot_cache_ordered_eager_loads_do_not_collide(): void
@@ -538,8 +534,38 @@ class PivotCacheTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame([$tag->id], $tags->modelKeys());
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'), 'pivot cache should be used for table.* projection');
+        $this->assertNotEmpty($this->redisKeys('pivot:*'), 'pivot cache should be used for table.* projection');
         $this->assertEmpty(array_filter($queries, fn($q) => str_contains($q['query'], 'author_tag')), 'pivot query should be cached');
+    }
+
+    public function test_empty_parent_has_relation_loaded_on_warm_hit(): void
+    {
+        $alice = Author::create(['name' => 'Alice']);
+        $bob = Author::create(['name' => 'Bob']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $alice->tags()->attach($tag->id);
+
+        // Warm: both authors loaded; Bob has no tags.
+        Author::with('tags')->get();
+
+        DB::enableQueryLog();
+        $authors = Author::with('tags')->get();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($queries, 'warm hit should issue no SQL');
+
+        $bobLoaded = $authors->firstWhere('name', 'Bob');
+        $this->assertTrue($bobLoaded->relationLoaded('tags'), 'empty-parent relation must be marked loaded');
+        $this->assertCount(0, $bobLoaded->tags);
+
+        // Accessing the relation must not trigger a lazy load.
+        DB::enableQueryLog();
+        $_ = $bobLoaded->tags->all();
+        $lazyQueries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertEmpty($lazyQueries, 'accessing loaded empty relation must not issue SQL');
     }
 
     public function test_belongs_to_many_remains_fast_path(): void
@@ -571,7 +597,7 @@ class PivotCacheTest extends TestCase
         $author->tags()->select('tags.*')->selectRaw('1 as polluted')->get();
 
         // The model cache should NOT contain 'polluted'
-        $cached = NormCache::getModels([$tag->id], Tag::class);
+        $cached = NormCache::hydrator()->getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
     }
 
@@ -583,7 +609,7 @@ class PivotCacheTest extends TestCase
 
         Author::with('tags')->get(); // warm pivot cache
 
-        $keys = $this->redisKeys('test:pivot:*');
+        $keys = $this->redisKeys('pivot:*');
         $this->assertNotEmpty($keys);
         $pivotKey = $keys[0];
 
@@ -617,6 +643,6 @@ class PivotCacheTest extends TestCase
 
         $author->tags()->dependsOn([Post::class])->get();
 
-        $this->assertEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertEmpty($this->redisKeys('pivot:*'));
     }
 }

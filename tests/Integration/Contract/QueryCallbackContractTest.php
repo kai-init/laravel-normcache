@@ -350,7 +350,7 @@ class QueryCallbackContractTest extends TestCase
 
         $this->assertSame(['laravel'], $filtered()->pluck('name')->all());
         $this->assertSame(['laravel'], $filtered()->pluck('name')->all());
-        $this->assertNotEmpty($this->redisKeys('test:pivot:*'));
+        $this->assertNotEmpty($this->redisKeys('pivot:*'));
         $this->assertSame(
             ['laravel', 'php'],
             $alice->tags()->orderBy('tags.name')->get()->pluck('name')->all()
@@ -368,7 +368,7 @@ class QueryCallbackContractTest extends TestCase
 
         $this->assertSame(['A1', 'A2'], $filtered()->pluck('title')->all());
         $this->assertSame(['A1', 'A2'], $filtered()->pluck('title')->all());
-        $this->assertNotEmpty($this->redisKeys('test:through:*'));
+        $this->assertNotEmpty($this->redisKeys('through:*'));
         $this->assertSame(
             ['A1', 'A2', 'B1'],
             $country->posts()->orderBy('posts.title')->get()->pluck('title')->all()

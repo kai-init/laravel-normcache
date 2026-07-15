@@ -72,19 +72,19 @@ class CacheEventsTest extends TestCase
         });
     }
 
-    public function test_partial_model_cache_miss_fires_both_events(): void
+    public function test_partial_model_cache_miss_fires_miss_for_both_when_version_bumped(): void
     {
         $alice = Author::create(['name' => 'Alice']);
-        Author::all(); // warm alice's model key
+        Author::all(); // warm alice's model key at version V
 
-        $bob = Author::create(['name' => 'Bob']); // bob's model key not cached yet
+        Author::create(['name' => 'Bob']); // version bumps to V+1; alice's V key is no longer current
 
         Event::fake([ModelCacheHit::class, ModelCacheMiss::class]);
 
-        // query cache is outdated (version bumped by Bob's insert), so both IDs are fetched via MGET
+        // query cache is stale; version bump makes alice's model key unreachable too, so both miss
         Author::all();
 
-        Event::assertDispatched(ModelCacheHit::class);
+        Event::assertNotDispatched(ModelCacheHit::class);
         Event::assertDispatched(ModelCacheMiss::class);
     }
 
@@ -98,7 +98,7 @@ class CacheEventsTest extends TestCase
         Author::all();
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
-            return str_starts_with($e->key, 'query:{' . app('normcache')->classKey(Author::class) . '}:v');
+            return str_starts_with($e->key, app('normcache')->keys()->prefixed('query:' . app('normcache')->keys()->classKey(Author::class) . ':v'));
         });
     }
 
@@ -124,7 +124,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, app('normcache')->keys()->prefixed('result:' . app('normcache')->keys()->classKey(Author::class) . ':'));
         });
     }
 
@@ -152,7 +152,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Post::class
-                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+                && str_starts_with($e->key, app('normcache')->keys()->prefixed('through:' . app('normcache')->keys()->classKey(Post::class) . ':'));
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -161,7 +161,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Post::class
-                && str_starts_with($e->key, 'through:{' . app('normcache')->classKey(Post::class) . '}:');
+                && str_starts_with($e->key, app('normcache')->keys()->prefixed('through:' . app('normcache')->keys()->classKey(Post::class) . ':'));
         });
     }
 
@@ -176,7 +176,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, app('normcache')->keys()->prefixed('result:' . app('normcache')->keys()->classKey(Author::class) . ':'));
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -185,7 +185,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $e) {
             return $e->modelClass === Author::class
-                && str_starts_with($e->key, 'result:{' . app('normcache')->classKey(Author::class) . '}:');
+                && str_starts_with($e->key, app('normcache')->keys()->prefixed('result:' . app('normcache')->keys()->classKey(Author::class) . ':'));
         });
     }
 }

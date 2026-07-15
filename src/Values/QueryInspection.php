@@ -30,10 +30,7 @@ final readonly class QueryInspection
 
     public const EXISTS_WHERE = 1 << 12;
 
-    private const DEPENDENCY_BYPASS = self::RAW_ORDER
-        | self::RAW_WHERE
-        | self::SUBQUERY_WHERE
-        | self::EXISTS_WHERE;
+    private const DEPENDENCY_BYPASS = self::RAW_ORDER | self::RAW_WHERE;
 
     private const NORMALIZATION_BYPASS = self::NON_CANONICAL_FROM
         | self::JOIN
@@ -44,11 +41,16 @@ final readonly class QueryInspection
         | self::DISTINCT
         | self::CALCULATED_COLUMNS;
 
+    public DependencySet $dependencies;
+
     public function __construct(
         public int $flags = 0,
         public ?array $primaryKeys = null,
-        public ?array $tables = null,
-    ) {}
+        ?DependencySet $dependencies = null,
+        public array $contextReasons = [],
+    ) {
+        $this->dependencies = $dependencies ?? DependencySet::empty();
+    }
 
     public function has(int $flags): bool
     {
@@ -60,17 +62,6 @@ final readonly class QueryInspection
         return $this->has(self::DEPENDENCY_BYPASS);
     }
 
-    // True only if EXISTS_WHERE is the sole reason hasDependencyBypass() is true.
-    public function hasOnlyExistsDependencyBypass(): bool
-    {
-        return ($this->flags & self::DEPENDENCY_BYPASS) === self::EXISTS_WHERE;
-    }
-
-    public function hasNormalizationBypass(): bool
-    {
-        return $this->has(self::NORMALIZATION_BYPASS);
-    }
-
     public function normalizationFlags(): int
     {
         return $this->flags & self::NORMALIZATION_BYPASS;
@@ -78,6 +69,6 @@ final readonly class QueryInspection
 
     public function hasSafetyBypass(): bool
     {
-        return $this->has(self::LOCK);
+        return $this->has(self::LOCK) || isset($this->contextReasons['safety']);
     }
 }

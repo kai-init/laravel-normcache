@@ -11,9 +11,6 @@ final readonly class QueryCacheResult
         public ?string $key,
         public ?array $ids,
         public ?array $models,
-        public ?string $buildingKey,
-        public ?string $buildingToken,
-        public array $versionKeys,
-        public array $expectedVersions,
+        public BuildHandle $build = new BuildHandle,
     ) {}
 }

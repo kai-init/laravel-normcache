@@ -9,7 +9,8 @@ use NormCache\Traits\Cacheable;
 class FlushCommand extends Command
 {
     protected $signature = 'normcache:flush
-        {--model= : Fully-qualified class name of the model to flush}';
+        {--model= : Fully-qualified class name of the model to flush}
+        {--space= : Cache space to flush}';
 
     protected $description = 'Flush the normcache. Flushes all entries unless --model is specified.';
 
@@ -22,9 +23,11 @@ class FlushCommand extends Command
 
     private function flushAll(): int
     {
-        $count = NormCache::flushAll();
+        $space = $this->option('space');
+        $count = NormCache::flushAll($space ?: null);
 
-        $this->info("Flushed {$count} NormCache key(s).");
+        $target = $space ? " in space [{$space}]" : '';
+        $this->info("Flushed {$count} NormCache key(s){$target}.");
 
         return Command::SUCCESS;
     }

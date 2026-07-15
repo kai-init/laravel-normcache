@@ -5,13 +5,12 @@ namespace NormCache\Traits;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Str;
-use NormCache\Cache\ModelHydrator;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
-use NormCache\Planning\QueryAnalyzer;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Support\ScalarTransformer;
 use NormCache\Values\CachePlanContext;
 
 /**
@@ -123,28 +122,24 @@ trait CachesScalarResults
         array $columns = [],
         ?\Closure $compute = null,
     ): mixed {
+        if ($this->isCacheSkipped() || !NormCache::isEnabled()) {
+            return $fallback();
+        }
+
         if (ProjectionClassifier::hasCalculatedColumns($columns)) {
             return $fallback();
         }
 
-        if (($kind === ResultKind::Pluck || $kind === ResultKind::Value) && $this->hasAfterQueryCallbacks()) {
+        if (($kind === ResultKind::Pluck || $kind === ResultKind::Value) && $this->afterQueryCallbacks !== []) {
             return $fallback();
         }
 
         $prepared = $this->prepareCacheExecution();
-        $executionBuilder = $prepared->builder;
         $base = $prepared->base;
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $inferredDependencies = $executionBuilder->inferAggregateDependencies()->merge(
-            (new QueryAnalyzer)->inferJoinDependencies($base, $executionBuilder->getModel()->getConnection()->getName())
-        );
-        $plan = $executionBuilder->cachePlan($base, CachePlanContext::scalar(
-            $kind->value,
-            $columns,
-            $inferredDependencies,
-        ));
+        $plan = $this->planPrepared($prepared, fn() => CachePlanContext::scalar($columns));
 
         if (!$plan->isCacheable()) {
             if (!$plan->hasBypassReason('opted_out')) {
@@ -154,13 +149,13 @@ trait CachesScalarResults
             return $computeValue();
         }
 
-        $result = NormCache::result()->execute(
+        $result = NormCache::withSpace($plan->space, fn() => NormCache::result()->execute(
             $prepared,
             $plan,
             $kind,
             $columns,
             $computeValue
-        );
+        ));
 
         return $result[0];
     }
@@ -177,7 +172,7 @@ trait CachesScalarResults
             return $results;
         }
 
-        return ModelHydrator::transformScalars($results, $this->model, $column);
+        return ScalarTransformer::transformScalars($results, $this->model, $column);
     }
 
     private function valueFromPreparedBase(QueryBuilder $base, mixed $column): mixed
@@ -199,6 +194,6 @@ trait CachesScalarResults
             return $value;
         }
 
-        return ModelHydrator::transformScalar($value, $this->model, $column);
+        return ScalarTransformer::transformScalar($value, $this->model, $column);
     }
 }

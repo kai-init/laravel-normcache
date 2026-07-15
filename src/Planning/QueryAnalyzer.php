@@ -4,13 +4,17 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use NormCache\Facades\NormCache;
+use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\DependencySet;
 use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
+    public function __construct(
+        private readonly CacheKeyBuilder $keys = new CacheKeyBuilder,
+    ) {}
+
     public const EXISTS_WHERE_TYPES = [
         'Exists' => true,
         'NotExists' => true,
@@ -27,14 +31,32 @@ final class QueryAnalyzer
         string $table,
         ?array $resolvedColumns,
         array $primaryKeyIdentifiers = [],
-        bool $includeTables = false,
+        ?string $softDeleteScopeColumn = null,
+        ?string $connection = null,
+        ?DependencySet $capturedDependencies = null,
+        array $contextReasons = [],
+        int $capturedOpaqueJoins = 0,
+        bool $capturedOpaqueFrom = false,
+        int $capturedOpaqueWhereSubqueries = 0,
     ): QueryInspection {
+        $dependencies = $connection === null
+            ? ($capturedDependencies ?? DependencySet::empty())
+            : $this->inferQueryDependencies(
+                $base,
+                $connection,
+                $table,
+                $capturedOpaqueJoins,
+                $capturedOpaqueFrom,
+                $capturedOpaqueWhereSubqueries,
+            )->merge($capturedDependencies ?? DependencySet::empty());
+
         return new QueryInspection(
             flags: $this->flags($base, $table, $resolvedColumns),
             primaryKeys: $primaryKeyIdentifiers === []
                 ? null
-                : self::extractPrimaryKeys($base, $primaryKeyIdentifiers),
-            tables: $includeTables ? $this->extractTables($base, $table) : null,
+                : self::extractPrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn),
+            dependencies: $dependencies,
+            contextReasons: $contextReasons,
         );
     }
 
@@ -103,7 +125,7 @@ final class QueryAnalyzer
 
         foreach ((array) $base->joins as $join) {
             if (is_string($join->table)) {
-                $tables[] = self::stripAlias($join->table);
+                $tables[] = CacheKeyBuilder::stripTableAlias($join->table);
             }
         }
 
@@ -111,31 +133,150 @@ final class QueryAnalyzer
     }
 
     /** @param string $connection  Eloquent connection name, e.g. $model->getConnection()->getName() */
+    public function inferQueryDependencies(
+        QueryBuilder $base,
+        string $connection,
+        ?string $primaryTable = null,
+        int $capturedOpaqueJoins = 0,
+        bool $capturedOpaqueFrom = false,
+        int $capturedOpaqueWhereSubqueries = 0,
+    ): DependencySet {
+        $connection = $this->connectionName($base, $connection);
+        $tables = [];
+        $unsafe = $this->collectQueryTables(
+            $base,
+            $connection,
+            $tables,
+            $capturedOpaqueJoins,
+            $capturedOpaqueFrom,
+        );
+
+        if ($unsafe !== null) {
+            return DependencySet::unsafe($unsafe);
+        }
+
+        if ($this->countOpaqueWhereSubqueries($base) > $capturedOpaqueWhereSubqueries) {
+            return DependencySet::unsafe('subquery predicate dependency could not be inferred');
+        }
+
+        if ($primaryTable !== null) {
+            unset($tables[$this->keys->tableKey($connection, $primaryTable)]);
+        }
+
+        return new DependencySet(tables: array_keys($tables));
+    }
+
+    /** @param array<string, true> $tables */
+    private function collectQueryTables(
+        QueryBuilder $base,
+        string $connection,
+        array &$tables,
+        int $capturedOpaqueJoins = 0,
+        bool $capturedOpaqueFrom = false,
+    ): ?string {
+        $connection = $this->connectionName($base, $connection);
+
+        if (is_string($base->from)) {
+            if ($this->joinTableHasImplicitAlias($base->from)) {
+                return 'query source dependency could not be inferred';
+            }
+
+            $tables[$this->keys->tableKey($connection, $base->from)] = true;
+        } elseif (!$capturedOpaqueFrom) {
+            return 'query source dependency could not be inferred';
+        }
+
+        $opaqueJoins = 0;
+        foreach ($base->joins ?? [] as $join) {
+            if ($this->joinClauseHasComplexWheres($join->wheres ?? [])) {
+                return 'join clause dependency could not be inferred';
+            }
+
+            if (is_string($join->table)) {
+                if ($this->joinTableHasImplicitAlias($join->table)) {
+                    return 'join table alias could not be inferred';
+                }
+
+                $tables[$this->keys->tableKey($connection, $join->table)] = true;
+            } else {
+                $opaqueJoins++;
+            }
+        }
+
+        if ($opaqueJoins > $capturedOpaqueJoins) {
+            return 'joined subquery dependency could not be inferred';
+        }
+
+        foreach ($base->wheres as $where) {
+            $query = $where['query'] ?? null;
+
+            if ($query instanceof QueryBuilder
+                && ($reason = $this->collectQueryTables($query, $connection, $tables))) {
+                return $reason;
+            }
+        }
+
+        foreach ($base->unions ?? [] as $union) {
+            $query = $union['query'] ?? null;
+
+            if (!$query instanceof QueryBuilder) {
+                return 'union dependency could not be inferred';
+            }
+
+            if ($reason = $this->collectQueryTables($query, $connection, $tables)) {
+                return $reason;
+            }
+        }
+
+        return null;
+    }
+
+    private function countOpaqueWhereSubqueries(QueryBuilder $base): int
+    {
+        $count = 0;
+
+        foreach ($base->wheres as $where) {
+            $type = $where['type'] ?? null;
+
+            if ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
+                $count++;
+            }
+
+            if (($type === 'In' || $type === 'NotIn') && isset($where['values'])) {
+                foreach ((array) $where['values'] as $value) {
+                    if ($value instanceof Expression) {
+                        $count++;
+                    }
+                }
+            }
+
+            if (($where['query'] ?? null) instanceof QueryBuilder) {
+                $count += $this->countOpaqueWhereSubqueries($where['query']);
+            }
+        }
+
+        return $count;
+    }
+
+    private function connectionName(QueryBuilder $base, string $fallback): string
+    {
+        $connection = $base->getConnection();
+
+        return method_exists($connection, 'getName')
+            ? ($connection->getName() ?? $fallback)
+            : $fallback;
+    }
+
+    /** @deprecated Use inferQueryDependencies(). */
     public function inferJoinDependencies(QueryBuilder $base, string $connection): DependencySet
     {
-        if (empty($base->joins)) {
-            return DependencySet::empty();
-        }
+        $dependencies = $this->inferQueryDependencies($base, $connection, is_string($base->from) ? $base->from : null);
 
-        $tables = [];
-
-        foreach ($base->joins as $join) {
-            if (!is_string($join->table)) {
-                return DependencySet::empty();
-            }
-
-            if ($this->joinClauseHasComplexWheres($join->wheres ?? [])) {
-                return DependencySet::unsafe('join clause dependency could not be inferred');
-            }
-
-            if ($this->joinTableHasImplicitAlias($join->table)) {
-                return DependencySet::unsafe('join table alias could not be inferred');
-            }
-
-            $tables[] = NormCache::tableKey($connection, self::stripAlias($join->table));
-        }
-
-        return new DependencySet(tables: array_values(array_unique($tables)));
+        return new DependencySet(
+            tables: $dependencies->tables,
+            safe: $dependencies->safe,
+            reasons: $dependencies->reasons,
+        );
     }
 
     private function joinTableHasImplicitAlias(string $table): bool
@@ -154,13 +295,11 @@ final class QueryAnalyzer
         return false;
     }
 
-    private static function stripAlias(string $table): string
-    {
-        return preg_replace('/\s+as\s+\S+$/i', '', $table);
-    }
-
-    public static function extractPrimaryKeys(QueryBuilder $base, array $primaryKeyIdentifiers): ?array
-    {
+    public static function extractPrimaryKeys(
+        QueryBuilder $base,
+        array $primaryKeyIdentifiers,
+        ?string $softDeleteScopeColumn = null,
+    ): ?array {
         if ($base->offset > 0) {
             return null;
         }
@@ -169,11 +308,16 @@ final class QueryAnalyzer
             return [];
         }
 
-        if (count($base->wheres) !== 1) {
+        $wheres = array_values(array_filter(
+            $base->wheres,
+            static fn(array $where): bool => !self::isSoftDeleteScopeConstraint($where, $softDeleteScopeColumn),
+        ));
+
+        if (count($wheres) !== 1) {
             return null;
         }
 
-        $where = $base->wheres[0];
+        $where = $wheres[0];
         $column = $where['column'] ?? null;
 
         if (!in_array($column, $primaryKeyIdentifiers, true)) {
@@ -205,6 +349,15 @@ final class QueryAnalyzer
         return null;
     }
 
+    private static function isSoftDeleteScopeConstraint(array $where, ?string $column): bool
+    {
+        return $column !== null
+            && ($where['type'] ?? null) === 'Null'
+            && ($where['boolean'] ?? 'and') === 'and'
+            && !($where['not'] ?? false)
+            && ($where['column'] ?? null) === $column;
+    }
+
     private function inspectWheres(array $wheres): int
     {
         $flags = 0;
@@ -212,7 +365,7 @@ final class QueryAnalyzer
         foreach ($wheres as $where) {
             $type = $where['type'] ?? '';
 
-            if ($type === 'Raw' || $type === 'raw') {
+            if ($type === 'raw') {
                 $flags |= QueryInspection::RAW_WHERE;
             }
 
@@ -224,7 +377,13 @@ final class QueryAnalyzer
                 $flags |= QueryInspection::SUBQUERY_WHERE;
             } elseif ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
                 $flags |= QueryInspection::SUBQUERY_WHERE;
-            } elseif ($type === 'Nested' && isset($where['query'])) {
+            }
+
+            if (($where['query'] ?? null) instanceof QueryBuilder) {
+                if ($where['query']->lock !== null) {
+                    $flags |= QueryInspection::LOCK;
+                }
+
                 $flags |= $this->inspectWheres((array) $where['query']->wheres);
             }
 

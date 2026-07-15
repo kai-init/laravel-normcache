@@ -19,16 +19,12 @@ class DependsOnTest extends TestCase
 {
     public function test_simple_depends_on_query_uses_normalized_query_cache(): void
     {
-        if ($this->cacheManager()->isSlotting()) {
-            $this->markTestSkipped('In slotting mode, multi-dependency queries route to result cache — see ClusterModeTest');
-        }
-
         Author::create(['name' => 'Alice']);
 
         Author::query()->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:query:*'));
-        $this->assertEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('query:*'));
+        $this->assertEmpty($this->redisKeys('result:*'));
     }
 
     public function test_depends_on_invalidates_on_primary_model_version_bump(): void
@@ -84,11 +80,11 @@ class DependsOnTest extends TestCase
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
         Author::whereHas('posts')->dependsOn([Post::class, Author::class])->get();
-        $keysAB = $this->redisKeys('test:query:*');
+        $keysAB = $this->redisKeys('query:*');
 
         // dep order is sorted before hashing, so reversed order must hit the same key
         Author::whereHas('posts')->dependsOn([Author::class, Post::class])->get();
-        $keysBA = $this->redisKeys('test:query:*');
+        $keysBA = $this->redisKeys('query:*');
 
         $this->assertSame(
             array_map(fn($k) => str_replace('test:', '', $k), $keysAB),
@@ -103,16 +99,16 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->paginate(10);
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
 
         // inserting bumps Post's version; the old count key becomes unreachable but is not deleted
         Post::create(['title' => 'World', 'author_id' => $author->id]);
 
-        $firstKeys = $this->redisKeys('test:count:*');
+        $firstKeys = $this->redisKeys('count:*');
 
         Author::whereHas('posts')->dependsOn([Post::class])->paginate(10);
 
-        $secondKeys = $this->redisKeys('test:count:*');
+        $secondKeys = $this->redisKeys('count:*');
 
         // two distinct versioned count keys: the orphaned (old) one and the new one
         $this->assertCount(2, $secondKeys);
@@ -135,7 +131,7 @@ class DependsOnTest extends TestCase
         $this->assertSame(2, $pageOne->total());
         $this->assertCount(1, $pageOne->items());
         $this->assertSame('Alice', $pageOne->first()->name);
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
 
         $pageTwo = Author::query()
             ->join('posts', 'posts.author_id', '=', 'authors.id')
@@ -176,7 +172,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->paginate(10);
 
-        $firstKeys = $this->redisKeys('test:count:*');
+        $firstKeys = $this->redisKeys('count:*');
 
         Post::create(['title' => 'World', 'author_id' => $author->id]);
 
@@ -186,7 +182,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->paginate(10);
 
-        $secondKeys = $this->redisKeys('test:count:*');
+        $secondKeys = $this->redisKeys('count:*');
 
         $this->assertCount(2, $secondKeys);
         $this->assertNotEmpty(array_diff($secondKeys, $firstKeys));
@@ -234,7 +230,7 @@ class DependsOnTest extends TestCase
 
         $this->assertSame(3, $second);
         $this->assertEmpty($queries);
-        $this->assertNotEmpty($this->redisKeys('test:count:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_distinct_count_with_depends_on_caches_as_scalar_result(): void
@@ -295,7 +291,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_raw_order_with_depends_on_can_cache(): void
@@ -307,7 +303,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Author::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_where_in_subquery_requires_depends_on(): void
@@ -319,7 +315,7 @@ class DependsOnTest extends TestCase
             ->whereIn('id', Post::query()->select('author_id'))
             ->get();
 
-        $this->assertEmpty($this->redisKeys('test:query:*'));
+        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_where_in_subquery_with_depends_on_can_cache(): void
@@ -332,7 +328,7 @@ class DependsOnTest extends TestCase
             ->dependsOn([Post::class])
             ->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_distinct_with_depends_on_preserves_distinct_semantics(): void
@@ -402,7 +398,7 @@ class DependsOnTest extends TestCase
             'posts' => fn($q) => $q->whereRaw('1=1'),
         ])->dependsOn([Post::class])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'Complex aggregate with dependsOn should use result cache');
+        $this->assertNotEmpty($this->redisKeys('result:*'), 'Complex aggregate with dependsOn should use result cache');
     }
 
     public function test_scalar_count_with_depends_on_caches_as_result(): void
@@ -411,7 +407,7 @@ class DependsOnTest extends TestCase
 
         Author::where('name', 'Alice')->dependsOn([Post::class])->count();
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*'), 'Scalar count with dependsOn should use count namespace');
+        $this->assertNotEmpty($this->redisKeys('count:*'), 'Scalar count with dependsOn should use count namespace');
     }
 
     // tag() — manual flush grouping
@@ -423,8 +419,8 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*:homepage:*'));
-        $this->assertEmpty($this->redisKeys('test:result:*[^:]homepage*'));
+        $this->assertNotEmpty($this->redisKeys('result:*:homepage:*'));
+        $this->assertEmpty($this->redisKeys('result:*[^:]homepage*'));
     }
 
     public function test_tagged_keys_are_isolated_from_untagged_keys(): void
@@ -435,8 +431,8 @@ class DependsOnTest extends TestCase
         Author::whereHas('posts')->dependsOn([Post::class])->get();
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->get();
 
-        $all = $this->redisKeys('test:result:*');
-        $tagged = $this->redisKeys('test:result:*:homepage:*');
+        $all = $this->redisKeys('result:*');
+        $tagged = $this->redisKeys('result:*:homepage:*');
 
         $this->assertCount(2, $all);
         $this->assertCount(1, $tagged);
@@ -453,8 +449,8 @@ class DependsOnTest extends TestCase
         $removed = NormCache::flushTag(Author::class, 'homepage');
 
         $this->assertSame(1, $removed);
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
-        $this->assertEmpty($this->redisKeys('test:result:*:homepage:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
+        $this->assertEmpty($this->redisKeys('result:*:homepage:*'));
     }
 
     public function test_flush_tag_across_models_removes_all_matching(): void
@@ -468,7 +464,7 @@ class DependsOnTest extends TestCase
         $removed = NormCache::flushTagAcrossModels('deploy');
 
         $this->assertSame(2, $removed);
-        $this->assertEmpty($this->redisKeys('test:result:*:deploy:*'));
+        $this->assertEmpty($this->redisKeys('result:*:deploy:*'));
     }
 
     public function test_flush_tag_removes_tagged_paginate_count_key(): void
@@ -478,12 +474,12 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('posts')->dependsOn([Post::class])->tag('homepage')->paginate(10);
 
-        $this->assertNotEmpty($this->redisKeys('test:count:*:homepage:*'));
+        $this->assertNotEmpty($this->redisKeys('count:*:homepage:*'));
 
         $removed = NormCache::flushTag(Author::class, 'homepage');
 
         $this->assertGreaterThan(0, $removed);
-        $this->assertEmpty($this->redisKeys('test:count:*:homepage:*'));
+        $this->assertEmpty($this->redisKeys('count:*:homepage:*'));
     }
 
     public function test_tagged_result_cache_invalidates_on_dep_version_bump(): void
@@ -608,7 +604,7 @@ class DependsOnTest extends TestCase
 
         Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_depends_on_tables_invalidates_when_pivot_table_version_bumps(): void
@@ -649,7 +645,7 @@ class DependsOnTest extends TestCase
         // No dependsOn() — just table dep. Should still use result cache.
         Author::whereHas('tags')->dependsOnTables(['author_tag'])->get();
 
-        $this->assertNotEmpty($this->redisKeys('test:result:*'), 'dependsOnTables() alone should trigger result cache');
+        $this->assertNotEmpty($this->redisKeys('result:*'), 'dependsOnTables() alone should trigger result cache');
     }
 
     public function test_depends_on_tables_rejects_empty_array(): void
