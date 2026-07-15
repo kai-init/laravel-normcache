@@ -5,38 +5,41 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use NormCache\Values\DependencySet;
-use NormCache\Values\RelationDependency;
 
 trait CachesRelationAggregates
 {
-    private ?bool $aggregateCaching = true;
+    private bool $aggregateCaching = true;
 
-    private ?DependencySet $aggregateDependencies = null;
+    private bool $aggregateRequested = false;
 
     private array $aggregateAliases = [];
 
     public function withoutAggregateCache(): static
     {
-        $this->clearAggregateTracking();
+        $this->aggregateCaching = false;
+        $this->aggregateAliases = [];
+
+        if ($this->aggregateRequested) {
+            $this->addCapturedContextReason('opted_out', 'withoutAggregateCache() was called explicitly');
+        }
 
         return $this;
     }
 
     public function withAggregate($relations, $column, $function = null): static
     {
-        if ($this->aggregateCaching !== true) {
+        $this->aggregateRequested = true;
+
+        if (!$this->aggregateCaching) {
+            $this->addCapturedContextReason('opted_out', 'withoutAggregateCache() was called explicitly');
+
             return parent::withAggregate($relations, $column, $function);
         }
 
-        $dependencies = [];
-        $tableDependencies = [];
         $names = [];
-
         foreach (Arr::wrap($relations) as $name => $constraint) {
             if (is_numeric($name)) {
                 $name = $constraint;
-                $constraint = null;
             }
 
             $segments = explode(' ', (string) $name);
@@ -46,22 +49,18 @@ trait CachesRelationAggregates
 
             $names[] = $name;
 
-            $dependency = $this->classifyAggregate($name, $constraint);
-
-            if ($dependency === null) {
-                $result = parent::withAggregate($relations, $column, $function);
-                $this->clearAggregateTracking(null);
-
-                return $result;
+            if (str_contains($name, '.')) {
+                $this->addCapturedContextReason('dependency', 'nested aggregate relation semantics could not be fully verified');
+            } else {
+                $this->captureRelationSemantics($name);
             }
+        }
 
-            array_push($dependencies, ...$dependency->modelDependencies());
-            array_push($tableDependencies, ...$dependency->tableDependencies());
+        if ($function === 'exists') {
+            $this->addCapturedContextReason('dependency', 'withExists() compiles its relation subquery to a raw select');
         }
 
         $result = parent::withAggregate($relations, $column, $function);
-        // Slice from the end: the first withAggregate() call on a bare query also injects a
-        // "table.*" wildcard column, which would shift a from-the-front slice by one.
         $newColumns = array_slice($result->getQuery()->columns ?? [], -count($names));
 
         $aliases = [];
@@ -69,18 +68,11 @@ trait CachesRelationAggregates
             $aliases[] = $this->resolveAlias($col, $names[$i] ?? null, $function, $column);
         }
 
-        $resolved = new DependencySet(
-            models: array_values(array_unique($dependencies)),
-            tables: array_values(array_unique($tableDependencies)),
-        );
-        $this->aggregateDependencies = ($this->aggregateDependencies ?? DependencySet::empty())->merge($resolved);
         $this->aggregateAliases = array_values(array_unique([...$this->aggregateAliases, ...$aliases]));
 
         return $result;
     }
 
-    // Eloquent assigns this alias internally but exposes no way to read it back; parse it out of
-    // the rendered SQL, falling back to predicting it the way Eloquent itself does if unmatched.
     private function resolveAlias(mixed $column, ?string $name, ?string $function, mixed $columnArg): string
     {
         $grammar = $this->getQuery()->getGrammar();
@@ -96,35 +88,6 @@ trait CachesRelationAggregates
         return Str::snake(preg_replace('/[^[:alnum:][:space:]_]/u', '', "{$name} {$lowerFunction} {$colValue}"));
     }
 
-    private function clearAggregateTracking(?bool $state = false): void
-    {
-        $this->aggregateCaching = $state;
-        $this->aggregateDependencies = null;
-        $this->aggregateAliases = [];
-    }
-
-    private function classifyAggregate(
-        string $name,
-        ?callable $constraint,
-    ): ?RelationDependency {
-        if (str_contains($name, '.')) {
-            return null;
-        }
-
-        return (new RelationDependencyClassifier)->classify($this->model->{$name}(), $constraint);
-    }
-
-    public function inferRelationDependencies(): DependencySet
-    {
-        $aggregate = match ($this->aggregateCaching) {
-            null => DependencySet::unsafe('Aggregate dependencies could not be inferred.'),
-            false => DependencySet::empty(),
-            true => $this->aggregateDependencies ?? DependencySet::empty(),
-        };
-
-        return $aggregate->merge($this->inferExistenceDependencies());
-    }
-
     public function hasAggregateColumns(): bool
     {
         return $this->aggregateAliases !== [];
@@ -132,12 +95,10 @@ trait CachesRelationAggregates
 
     public function resultPayloadFromEloquentModels(Collection $models): array
     {
-        $aliases = $this->aggregateAliases;
-
         $payload = [];
         foreach ($models as $model) {
             $attributes = $model->getRawOriginal();
-            foreach ($aliases as $alias) {
+            foreach ($this->aggregateAliases as $alias) {
                 $attributes[$alias] = $model->getAttribute($alias);
             }
             $payload[] = $attributes;

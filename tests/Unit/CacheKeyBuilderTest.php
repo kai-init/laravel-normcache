@@ -36,6 +36,14 @@ class CacheKeyBuilderTest extends UnitTestCase
         $this->assertSame('secondary_testing:authors', $keys->classKey(Author::class, 'secondary_testing'));
     }
 
+    public function test_table_key_strips_an_explicit_sql_alias(): void
+    {
+        $keys = new CacheKeyBuilder;
+
+        $this->assertSame('testing:authors', $keys->tableKey('testing', 'authors as a'));
+        $this->assertSame('authors', CacheKeyBuilder::stripTableAlias('authors as a'));
+    }
+
     public function test_class_key_rejects_connection_name_containing_colon(): void
     {
         $model = new class extends Model

@@ -303,6 +303,7 @@ class ThroughRelationTest extends TestCase
 
         // Remove the only comment: the whereExists no longer matches the post.
         DB::table('comments')->where('commentable_id', $post->id)->delete();
+        NormCache::invalidateTableVersion(DB::getDefaultConnection(), 'comments');
 
         $after = $country->posts()
             ->whereExists(function ($q) {

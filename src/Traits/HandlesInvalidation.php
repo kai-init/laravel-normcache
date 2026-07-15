@@ -20,13 +20,30 @@ trait HandlesInvalidation
     /** @var array<string, array<string, list<CacheSpace>>> conn => classKey => spaces */
     private array $versionQueue = [];
 
+    /** @var array<string, array<class-string<Model>, true>> */
+    private array $modelVersionQueue = [];
+
     /** @var array<string, array<string, true>> conn => table classKey => true */
     private array $tableVersionQueue = [];
 
-    /** @return list<CacheSpace> the spaces a model's version key lives in */
-    private function modelSpaces(string $modelClass): array
-    {
-        return $this->spaceRegistry->spacesForModel($modelClass);
+    /** @return list<CacheSpace> the spaces a model/table version key lives in */
+    private function modelSpaces(
+        string $modelClass,
+        ?string $connectionName = null,
+        bool $freshTableSpaces = false,
+    ): array {
+        $connectionName ??= $this->keys->declaredConnection($modelClass);
+        $tableKey = $this->keys->classKey($modelClass, $connectionName);
+        $spaces = [];
+        $tableSpaces = $freshTableSpaces
+            ? $this->spaceRegistry->freshSpacesForTable($tableKey)
+            : $this->spaceRegistry->spacesForTable($tableKey);
+
+        foreach ([...$this->spaceRegistry->spacesForModel($modelClass), ...$tableSpaces] as $space) {
+            $spaces[$space->name] = $space;
+        }
+
+        return array_values($spaces);
     }
 
     /** @return list<CacheSpace> the spaces a table's version key lives in */
@@ -53,7 +70,7 @@ trait HandlesInvalidation
 
         $this->queueOrRun(
             $conn,
-            fn() => $this->queueVersionFlush($conn, $this->keys->classKey($model::class, $conn), $this->modelSpaces($model::class)),
+            fn() => $this->modelVersionQueue[$conn][$model::class] = true,
             fn() => $this->doInvalidateVersion($model::class, $conn),
         );
     }
@@ -107,7 +124,7 @@ trait HandlesInvalidation
         $classKey = $this->keys->tableKey($connectionName, $table);
         $spaces = [];
         foreach ($modelClasses as $modelClass) {
-            foreach ($this->modelSpaces($modelClass) as $space) {
+            foreach ($this->modelSpaces($modelClass, freshTableSpaces: true) as $space) {
                 $spaces[$space->name] = $space;
             }
         }
@@ -128,7 +145,7 @@ trait HandlesInvalidation
     {
         $classKey = $this->keys->classKey($modelClass, $connectionName);
 
-        foreach ($this->modelSpaces($modelClass) as $space) {
+        foreach ($this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true) as $space) {
             $this->store->incrementAndExpire($this->keys->verKey($classKey, $space), $this->versionTtl()); // bypass cooldown
         }
     }
@@ -174,7 +191,7 @@ trait HandlesInvalidation
             CacheKeyBuilder::K_COUNT . ':' . $classKey . ':' . $tag . ':*',
             CacheKeyBuilder::K_SCALAR . ':' . $classKey . ':' . $tag . ':*',
             CacheKeyBuilder::K_THROUGH . ':' . $classKey . ':' . $tag . ':*',
-        ], $this->modelSpaces($modelClass)));
+        ], $this->modelSpaces($modelClass, freshTableSpaces: true)));
     }
 
     public function flushTagAcrossModels(string $tag): int
@@ -215,7 +232,7 @@ trait HandlesInvalidation
                 $conn,
                 function () use ($conn, $classes) {
                     foreach ($classes as $modelClass) {
-                        $this->queueVersionFlush($conn, $this->keys->classKey($modelClass, $conn), $this->modelSpaces($modelClass));
+                        $this->modelVersionQueue[$conn][$modelClass] = true;
                     }
                 },
                 function () use ($classes, $conn) {
@@ -230,39 +247,66 @@ trait HandlesInvalidation
     public function commitPending(string $connectionName): void
     {
         $flushes = array_keys($this->flushQueue[$connectionName] ?? []);
+        $models = array_keys($this->modelVersionQueue[$connectionName] ?? []);
         $versions = $this->versionQueue[$connectionName] ?? [];
         $tables = array_keys($this->tableVersionQueue[$connectionName] ?? []);
 
         unset(
             $this->flushQueue[$connectionName],
+            $this->modelVersionQueue[$connectionName],
             $this->versionQueue[$connectionName],
             $this->tableVersionQueue[$connectionName],
         );
 
-        if ((empty($flushes) && empty($versions) && empty($tables)) || !$this->isEnabled()) {
+        if ((empty($flushes) && empty($models) && empty($versions) && empty($tables)) || !$this->isEnabled()) {
             return;
         }
 
         CacheFallback::attempt(
             $this->config,
-            function () use ($connectionName, $flushes, $versions, $tables) {
-                foreach ($flushes as $modelClass) {
-                    $this->forceFlushModel($modelClass, $connectionName);
-                }
+            function () use ($connectionName, $flushes, $models, $versions, $tables) {
+                /** @var array<string, array<string, true>> $invalidated class key => space name => true */
+                $invalidated = [];
+                /** @var array<string, array<string, CacheSpace>> $pending class key => space name => space */
+                $pending = [];
 
-                $flushClassKeys = array_map(fn($class) => $this->keys->classKey($class, $connectionName), $flushes);
-                $tableClassKeys = array_fill_keys($tables, true);
-
-                foreach ($versions as $classKey => $spaces) {
-                    if (!in_array($classKey, $flushClassKeys, true) && !isset($tableClassKeys[$classKey])) {
-                        foreach ($spaces as $space) {
-                            $this->doInvalidateKey($classKey, $space);
+                $queue = function (string $classKey, array $spaces) use (&$pending, &$invalidated): void {
+                    foreach ($spaces as $space) {
+                        if (!isset($invalidated[$classKey][$space->name])) {
+                            $pending[$classKey][$space->name] = $space;
                         }
+                    }
+                };
+
+                foreach ($flushes as $modelClass) {
+                    $classKey = $this->keys->classKey($modelClass, $connectionName);
+                    $spaces = $this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true);
+                    $this->forceFlushModel($modelClass, $connectionName);
+
+                    foreach ($spaces as $space) {
+                        $invalidated[$classKey][$space->name] = true;
                     }
                 }
 
+                foreach ($models as $modelClass) {
+                    $queue(
+                        $this->keys->classKey($modelClass, $connectionName),
+                        $this->modelSpaces($modelClass, $connectionName, freshTableSpaces: true),
+                    );
+                }
+
+                foreach ($versions as $classKey => $spaces) {
+                    $queue($classKey, $spaces);
+                }
+
                 foreach ($tables as $classKey) {
-                    $this->doInvalidateTable($classKey);
+                    $queue($classKey, $this->tableInvalidationSpaces($classKey));
+                }
+
+                foreach ($pending as $classKey => $spaces) {
+                    foreach ($spaces as $space) {
+                        $this->doInvalidateKey($classKey, $space);
+                    }
                 }
             },
         );
@@ -272,6 +316,7 @@ trait HandlesInvalidation
     {
         unset(
             $this->flushQueue[$connectionName],
+            $this->modelVersionQueue[$connectionName],
             $this->versionQueue[$connectionName],
             $this->tableVersionQueue[$connectionName],
         );
@@ -280,6 +325,7 @@ trait HandlesInvalidation
     public function discardAllPending(): void
     {
         $this->flushQueue = [];
+        $this->modelVersionQueue = [];
         $this->versionQueue = [];
         $this->tableVersionQueue = [];
     }
@@ -300,7 +346,7 @@ trait HandlesInvalidation
     {
         $classKey = $this->keys->classKey($modelClass, $connectionName);
 
-        foreach ($this->modelSpaces($modelClass) as $space) {
+        foreach ($this->modelSpaces($modelClass, $connectionName) as $space) {
             $this->doInvalidateKey($classKey, $space);
         }
     }

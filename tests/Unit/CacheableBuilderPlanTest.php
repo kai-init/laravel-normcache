@@ -7,7 +7,6 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CachePlanContext;
-use NormCache\Values\DependencySet;
 
 class CacheableBuilderPlanTest extends UnitTestCase
 {
@@ -15,39 +14,32 @@ class CacheableBuilderPlanTest extends UnitTestCase
     {
         $builder = Author::query()->where('name', 'A');
         $prepared = $builder->prepareCacheExecution();
-
-        $viaSeam = $builder->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::models(
+        $context = fn() => CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, ['*']),
-            $inferred,
             selectAll: true,
-        ));
+        );
 
-        $direct = $builder->cachePlan($prepared->base, CachePlanContext::models(
-            ProjectionClassifier::resolve($prepared->base, ['*']),
-            $builder->inferRelationDependencies(),
-            selectAll: true,
-        ));
-
-        $this->assertEquals($direct, $viaSeam);
+        $this->assertEquals(
+            $builder->cachePlan($prepared->base, $context()),
+            $builder->planPrepared($prepared, $context),
+        );
     }
 
-    public function test_plan_prepared_merges_join_dependencies(): void
+    public function test_plan_prepared_infers_join_table_dependency(): void
     {
-        $builder = Post::query()->join('authors', 'authors.id', '=', 'posts.author_id');
+        $builder = Post::query()
+            ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->select('posts.*');
         $prepared = $builder->prepareCacheExecution();
 
-        $captured = null;
-        $builder->planPrepared($prepared, function (DependencySet $inferred) use ($prepared, &$captured) {
-            $captured = $inferred;
-
-            return CachePlanContext::models(
+        $plan = $builder->planPrepared(
+            $prepared,
+            fn() => CachePlanContext::models(
                 ProjectionClassifier::resolve($prepared->base, ['*']),
-                $inferred,
-                selectAll: true,
-            );
-        });
+                selectAll: false,
+            ),
+        );
 
-        $this->assertNotNull($captured);
-        $this->assertNotEquals(DependencySet::empty(), $captured);
+        $this->assertContains('testing:authors', $plan->dependencies->tables);
     }
 }

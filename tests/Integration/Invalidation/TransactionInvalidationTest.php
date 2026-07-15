@@ -291,4 +291,17 @@ class TransactionInvalidationTest extends TestCase
 
         $this->assertSame($before + 1, $after);
     }
+
+    public function test_model_and_table_invalidation_for_the_same_table_bump_once_on_commit(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $before = NormCache::currentVersion(Author::class);
+
+        DB::transaction(function () use ($author) {
+            $author->update(['name' => 'Alicia']);
+            NormCache::invalidateTableVersion(DB::getDefaultConnection(), 'authors');
+        });
+
+        $this->assertSame($before + 1, NormCache::currentVersion(Author::class));
+    }
 }

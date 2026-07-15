@@ -182,10 +182,7 @@ trait CachesPivotRelation
             return false;
         }
 
-        $plan = $builder->cachePlan($base, CachePlanContext::pivot(
-            $resolvedColumns ?? [],
-            $builder->inferRelationDependencies()
-        ));
+        $plan = $builder->cachePlan($base, CachePlanContext::pivot($resolvedColumns ?? []));
 
         if (!$plan->usesResultCache()) {
             return false;

@@ -100,7 +100,7 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
-    public function test_aggregate_constraint_with_join_disables_tracking_and_bypasses(): void
+    public function test_aggregate_constraint_with_join_uses_inferred_table_dependencies(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -109,7 +109,7 @@ class CrossTableDependencySafetyTest extends TestCase
             'posts' => fn($q) => $q->join('authors', 'authors.id', '=', 'posts.author_id'),
         ])->get();
 
-        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_simple_aggregate_constraint_still_infers_dependencies(): void
@@ -122,7 +122,7 @@ class CrossTableDependencySafetyTest extends TestCase
         $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
-    public function test_aggregate_constraint_with_wherehas_disables_tracking(): void
+    public function test_aggregate_constraint_with_wherehas_uses_recursive_dependencies(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -131,7 +131,7 @@ class CrossTableDependencySafetyTest extends TestCase
             'posts' => fn($q) => $q->whereHas('author'),
         ])->get();
 
-        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_aliased_from_query_bypasses_normalized_cache(): void

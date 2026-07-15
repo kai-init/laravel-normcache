@@ -167,7 +167,6 @@ trait CachesOneOrManyThrough
 
         $plan = $builder->cachePlan($base, CachePlanContext::through(
             $projection ?? [],
-            $builder->inferRelationDependencies(),
             DependencySet::singleModel($this->throughParent::class),
         ));
 

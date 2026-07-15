@@ -8,6 +8,7 @@ use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CachePlanContext;
 
 /**
  * "Simple" whereHas/has() caching — see
@@ -17,15 +18,13 @@ class WhereHasCachingTest extends TestCase
 {
     // Classification
 
-    public function test_simple_wherehas_infers_related_model_dependency(): void
+    public function test_simple_wherehas_infers_related_table_dependency(): void
     {
-        $builder = Author::whereHas('posts');
+        $prepared = Author::whereHas('posts')->prepareCacheExecution();
+        $plan = $prepared->builder->cachePlan($prepared->base, CachePlanContext::models());
 
-        $dependencies = $builder->inferExistenceDependencies();
-
-        $this->assertTrue($dependencies->safe);
-        $this->assertSame([Post::class], $dependencies->models);
-        $this->assertSame([], $dependencies->tables);
+        $this->assertTrue($plan->dependencies->safe);
+        $this->assertContains('testing:posts', $plan->dependencies->tables);
     }
 
     // HasMany — basic caching
@@ -104,9 +103,16 @@ class WhereHasCachingTest extends TestCase
         $this->assertStringStartsWith('not cached', $result);
     }
 
-    public function test_wherehas_relation_definition_with_without_cache_bypasses(): void
+    public function test_wherehas_relation_definition_with_without_cache_remains_cacheable(): void
     {
         $result = Author::whereHas('cacheSkippedPosts')->explain();
+
+        $this->assertStringStartsWith('cached', $result);
+    }
+
+    public function test_wherehas_relation_on_non_cacheable_model_bypasses(): void
+    {
+        $result = Author::whereHas('uncachedPosts')->explain();
 
         $this->assertStringStartsWith('not cached', $result);
     }

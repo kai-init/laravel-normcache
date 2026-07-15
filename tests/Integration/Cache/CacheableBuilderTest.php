@@ -179,6 +179,26 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame(2, Author::withCount('posts')->find($author->id)->posts_count);
     }
 
+    public function test_without_aggregate_cache_before_with_count_uses_live_queries(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertAggregateCacheOptOutRunsLive(
+            fn() => Author::withoutAggregateCache()->withCount('posts')->get(),
+        );
+    }
+
+    public function test_without_aggregate_cache_after_with_count_uses_live_queries(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertAggregateCacheOptOutRunsLive(
+            fn() => Author::withCount('posts')->withoutAggregateCache()->get(),
+        );
+    }
+
     public function test_flush_model_invalidates_aggregate_blob_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -517,13 +537,11 @@ class CacheableBuilderTest extends TestCase
         $this->assertStringContainsString('join_result_requires_explicit_select', $result);
     }
 
-    public function test_explain_groups_non_standard_from_as_normalization(): void
+    public function test_explain_uses_result_cache_for_inferable_from_subquery(): void
     {
-        $result = Author::fromSub(Author::query()->select('id', 'name'), 'authors')
-            ->explain();
+        $result = Author::fromSub(Author::query()->select('id', 'name'), 'authors')->explain();
 
-        $this->assertStringContainsString("can't be normalized", $result);
-        $this->assertStringContainsString('non-standard FROM', $result);
+        $this->assertSame('cached: result', $result);
     }
 
     public function test_explain_groups_group_by_as_normalization(): void
@@ -565,7 +583,7 @@ class CacheableBuilderTest extends TestCase
         Event::assertDispatched(QueryBypassed::class, function (QueryBypassed $e) {
             return $e->modelClass === Author::class
                 && isset($e->reasons['dependency'])
-                && collect($e->reasons['dependency'])->contains(fn($r) => str_contains($r, 'subquery WHERE'));
+                && collect($e->reasons['dependency'])->contains(fn($r) => str_contains($r, 'raw WHERE'));
         });
     }
 
@@ -828,6 +846,23 @@ class CacheableBuilderTest extends TestCase
         $queryCount = 0;
         $this->assertSame(10, Post::sum('views'));
         $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    private function assertAggregateCacheOptOutRunsLive(callable $query): void
+    {
+        $query();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $query();
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+
+        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertNotEmpty($queries, 'withoutAggregateCache() must not serve a result-cache hit.');
     }
 
     // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.

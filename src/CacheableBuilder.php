@@ -2,6 +2,8 @@
 
 namespace NormCache;
 
+use Closure;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
@@ -30,6 +32,7 @@ use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
+use NormCache\Values\QueryInspection;
 
 class CacheableBuilder extends Builder
 {
@@ -48,6 +51,16 @@ class CacheableBuilder extends Builder
     private ?string $cacheTag = null;
 
     private ?string $cacheSpace = null;
+
+    private ?DependencySet $capturedDependencies = null;
+
+    private array $capturedContextReasons = [];
+
+    private int $capturedOpaqueJoins = 0;
+
+    private bool $capturedOpaqueFrom = false;
+
+    private int $capturedOpaqueWhereSubqueries = 0;
 
     // -------------------------------------------------------------------------
     // Configuration
@@ -155,7 +168,7 @@ class CacheableBuilder extends Builder
         $conn = $this->model->getConnection()->getName();
         $this->dependsOnTables = array_values(array_unique(array_merge(
             $this->dependsOnTables,
-            array_map(fn($table) => "{$conn}:{$table}", $tables),
+            array_map(fn($table) => NormCache::keys()->tableKey($conn, $table), $tables),
         )));
 
         return $this;
@@ -176,6 +189,171 @@ class CacheableBuilder extends Builder
         return $this->dependsOn !== null || $this->dependsOnTables !== [];
     }
 
+    public function capturedDependencies(): DependencySet
+    {
+        return $this->capturedDependencies ?? DependencySet::empty();
+    }
+
+    public function capturedContextReasons(): array
+    {
+        return $this->capturedContextReasons;
+    }
+
+    public function capturedOpaqueJoins(): int
+    {
+        return $this->capturedOpaqueJoins;
+    }
+
+    public function hasCapturedOpaqueFrom(): bool
+    {
+        return $this->capturedOpaqueFrom;
+    }
+
+    public function capturedOpaqueWhereSubqueries(): int
+    {
+        return $this->capturedOpaqueWhereSubqueries;
+    }
+
+    public function addCapturedContextReason(string $category, string $reason): void
+    {
+        $this->capturedContextReasons[$category] = array_values(array_unique([
+            ...($this->capturedContextReasons[$category] ?? []),
+            $reason,
+        ]));
+    }
+
+    /**
+     * @param  Closure(CacheableBuilder): mixed|array|string|Expression  $column
+     */
+    public function where($column, $operator = null, $value = null, $boolean = 'and'): static
+    {
+        if (!$column instanceof Closure || $operator !== null) {
+            return parent::where($column, $operator, $value, $boolean);
+        }
+
+        $nested = $this->model->newQueryWithoutRelationships();
+
+        if (!$nested instanceof self) {
+            return parent::where($column, $operator, $value, $boolean);
+        }
+
+        $column($nested);
+
+        $this->mergeCapturedBuilderState($nested);
+        $this->eagerLoad = array_merge($this->eagerLoad, $nested->getEagerLoads());
+        $this->withoutGlobalScopes($nested->removedScopes());
+        $this->query->addNestedWhereQuery($nested->getQuery(), $boolean);
+
+        return $this;
+    }
+
+    public function selectSub($query, $as): static
+    {
+        $this->captureSubqueryDependencies($query);
+        $this->query->selectSub($query, $as);
+
+        return $this;
+    }
+
+    public function joinSub($query, $as, $first, $operator = null, $second = null, $type = 'inner', $where = false): static
+    {
+        $this->captureSubqueryDependencies($query);
+        $this->capturedOpaqueJoins++;
+        $this->query->joinSub($query, $as, $first, $operator, $second, $type, $where);
+
+        return $this;
+    }
+
+    public function fromSub($query, $as): static
+    {
+        $this->captureSubqueryDependencies($query);
+        $this->capturedOpaqueFrom = true;
+        $this->query->fromSub($query, $as);
+
+        return $this;
+    }
+
+    public function whereIn($column, $values, $boolean = 'and', $not = false): static
+    {
+        if ($values instanceof Closure) {
+            $callback = $values;
+            $callback($values = $this->query->newQuery());
+        }
+
+        if ($values instanceof Builder || $values instanceof QueryBuilder || $values instanceof EloquentRelation) {
+            $this->captureSubqueryDependencies($values);
+            $this->capturedOpaqueWhereSubqueries++;
+        }
+
+        $this->query->whereIn($column, $values, $boolean, $not);
+
+        return $this;
+    }
+
+    public function whereNotIn($column, $values, $boolean = 'and'): static
+    {
+        return $this->whereIn($column, $values, $boolean, true);
+    }
+
+    public function orWhereIn($column, $values): static
+    {
+        return $this->whereIn($column, $values, 'or');
+    }
+
+    public function orWhereNotIn($column, $values): static
+    {
+        return $this->whereIn($column, $values, 'or', true);
+    }
+
+    private function captureSubqueryDependencies(mixed $query): void
+    {
+        $base = match (true) {
+            $query instanceof self => $query->toBase(),
+            $query instanceof Builder => $query->toBase(),
+            $query instanceof QueryBuilder => $query,
+            $query instanceof EloquentRelation => $query->getQuery()->toBase(),
+            default => null,
+        };
+
+        if ($base === null) {
+            $this->addCapturedContextReason('dependency', 'subquery dependency could not be inferred');
+
+            return;
+        }
+
+        $connection = $this->model->getConnection()->getName();
+        $analyzer = $this->planner()->analyzer();
+        $dependencies = $analyzer->inferQueryDependencies($base, $connection);
+        $this->capturedDependencies = ($this->capturedDependencies ?? DependencySet::empty())->merge($dependencies);
+
+        $table = is_string($base->from) ? CacheKeyBuilder::stripTableAlias($base->from) : $this->model->getTable();
+        $reasons = BypassReasons::fromInspection(new QueryInspection(
+            flags: $analyzer->flags($base, $table, $base->columns),
+        ));
+
+        foreach ($reasons as $category => $items) {
+            foreach ($items as $reason) {
+                $this->addCapturedContextReason($category, $reason);
+            }
+        }
+    }
+
+    protected function mergeCapturedBuilderState(self $builder): void
+    {
+        $this->capturedDependencies = ($this->capturedDependencies ?? DependencySet::empty())
+            ->merge($builder->capturedDependencies());
+
+        foreach ($builder->capturedContextReasons() as $category => $reasons) {
+            foreach ($reasons as $reason) {
+                $this->addCapturedContextReason($category, $reason);
+            }
+        }
+
+        $this->capturedOpaqueJoins += $builder->capturedOpaqueJoins();
+        $this->capturedOpaqueFrom = $this->capturedOpaqueFrom || $builder->hasCapturedOpaqueFrom();
+        $this->capturedOpaqueWhereSubqueries += $builder->capturedOpaqueWhereSubqueries();
+    }
+
     public function getQueryTtl(): ?int
     {
         return $this->queryTtl;
@@ -193,9 +371,8 @@ class CacheableBuilder extends Builder
     public function explain(): string
     {
         $prepared = $this->prepareCacheExecution();
-        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::models(
+        $plan = $this->planPrepared($prepared, fn() => CachePlanContext::models(
             ProjectionClassifier::resolve($prepared->base, ['*']),
-            $inferred,
             selectAll: true,
         ), PlanningMode::Explain);
 
@@ -242,9 +419,8 @@ class CacheableBuilder extends Builder
         $model = $this->model::class;
         $base = $prepared->base;
 
-        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::models(
+        $plan = $this->planPrepared($prepared, fn() => CachePlanContext::models(
             ProjectionClassifier::resolve($base, $columns),
-            $inferred,
             selectAll: $columns === ['*'],
         ));
 
@@ -309,7 +485,7 @@ class CacheableBuilder extends Builder
         $debugbarStart = CacheReporter::beginMeasure();
 
         $prepared = $this->prepareCacheExecution();
-        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::paginationCount($inferred));
+        $plan = $this->planPrepared($prepared, fn() => CachePlanContext::paginationCount());
 
         if ($plan->strategy === CacheStrategy::LiveQuery) {
             CacheReporter::queryBypassed($this->model::class, $plan->bypassReasons, $debugbarStart);
@@ -413,16 +589,16 @@ class CacheableBuilder extends Builder
         return $this->planner()->plan($this, $base, $context, $planningMode);
     }
 
-    /** @param  \Closure(DependencySet): CachePlanContext  $context */
+    /** @param  Closure(): CachePlanContext  $context */
     public function planPrepared(
         PreparedQuery $prepared,
-        \Closure $context,
+        Closure $context,
         PlanningMode $mode = PlanningMode::Hot,
     ): CachePlan {
         $builder = $prepared->builder;
         $base = $prepared->base;
 
-        return $builder->cachePlan($base, $context($builder->planner()->inferPreparedDependencies($builder, $base)), $mode);
+        return $builder->cachePlan($base, $context(), $mode);
     }
 
     public function planner(): CachePlanner

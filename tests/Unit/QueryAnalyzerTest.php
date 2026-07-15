@@ -22,7 +22,7 @@ class QueryAnalyzerTest extends TestCase
 
         $this->assertSame(0, $inspection->flags);
         $this->assertSame(0, $analyzer->flags($query, 'authors', null));
-        $this->assertNull($inspection->tables);
+        $this->assertTrue($inspection->dependencies->hasNoDependencies());
     }
 
     public function test_nested_wheres_are_scanned_once_for_raw_and_exists_flags(): void
@@ -53,7 +53,7 @@ class QueryAnalyzerTest extends TestCase
 
         $this->assertTrue($inspection->has(QueryInspection::EXISTS_WHERE));
         $this->assertFalse($inspection->has(QueryInspection::SUBQUERY_WHERE));
-        $this->assertTrue($inspection->hasOnlyExistsDependencyBypass());
+        $this->assertFalse($inspection->hasDependencyBypass());
     }
 
     public function test_sub_where_type_sets_subquery_where_flag_not_exists_where(): void
@@ -65,7 +65,7 @@ class QueryAnalyzerTest extends TestCase
 
         $this->assertTrue($inspection->has(QueryInspection::SUBQUERY_WHERE));
         $this->assertFalse($inspection->has(QueryInspection::EXISTS_WHERE));
-        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
+        $this->assertFalse($inspection->hasDependencyBypass());
     }
 
     public function test_structural_flags_map_to_existing_reason_strings(): void
@@ -80,7 +80,7 @@ class QueryAnalyzerTest extends TestCase
         $query->lock = true;
         $query->orders = [['type' => 'Raw']];
 
-        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', $query->columns, includeTables: true);
+        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', $query->columns);
 
         $this->assertSame(
             [
@@ -99,7 +99,7 @@ class QueryAnalyzerTest extends TestCase
             ],
             BypassReasons::fromInspection($inspection),
         );
-        $this->assertSame(['authors', 'countries'], $inspection->tables);
+        $this->assertSame(['authors', 'countries'], (new QueryAnalyzer)->extractTables($query, 'authors'));
     }
 
     public function test_primary_keys_are_extracted_without_reason_generation(): void
@@ -175,46 +175,22 @@ class QueryAnalyzerTest extends TestCase
         $this->assertNull($inspection->primaryKeys);
     }
 
-    public function test_exists_where_flag_alone_satisfies_only_exists_dependency_bypass(): void
+    public function test_exists_and_subquery_flags_do_not_bypass_dependency_inference(): void
     {
-        $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE);
+        $exists = new QueryInspection(flags: QueryInspection::EXISTS_WHERE);
+        $subquery = new QueryInspection(flags: QueryInspection::SUBQUERY_WHERE);
 
-        $this->assertTrue($inspection->hasDependencyBypass());
-        $this->assertTrue($inspection->hasOnlyExistsDependencyBypass());
+        $this->assertFalse($exists->hasDependencyBypass());
+        $this->assertFalse($subquery->hasDependencyBypass());
+        $this->assertSame([], BypassReasons::fromInspection($exists));
     }
 
-    public function test_exists_where_combined_with_raw_where_is_not_only_exists_bypass(): void
+    public function test_raw_where_still_bypasses_when_combined_with_exists(): void
     {
         $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE | QueryInspection::RAW_WHERE);
 
         $this->assertTrue($inspection->hasDependencyBypass());
-        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
-    }
-
-    public function test_subquery_where_alone_is_not_only_exists_bypass(): void
-    {
-        $inspection = new QueryInspection(flags: QueryInspection::SUBQUERY_WHERE);
-
-        $this->assertTrue($inspection->hasDependencyBypass());
-        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
-    }
-
-    public function test_no_dependency_bypass_is_not_only_exists_bypass(): void
-    {
-        $inspection = new QueryInspection(flags: 0);
-
-        $this->assertFalse($inspection->hasDependencyBypass());
-        $this->assertFalse($inspection->hasOnlyExistsDependencyBypass());
-    }
-
-    public function test_exists_where_flag_maps_to_subquery_dependency_reason(): void
-    {
-        $inspection = new QueryInspection(flags: QueryInspection::EXISTS_WHERE);
-
-        $this->assertSame(
-            ['dependency' => ['subquery WHERE (whereHas/whereExists)']],
-            BypassReasons::fromInspection($inspection),
-        );
+        $this->assertContains('raw WHERE expression', BypassReasons::fromInspection($inspection)['dependency']);
     }
 
     public function test_direct_primary_key_inspection_allows_harmless_single_row_ordering(): void
@@ -249,6 +225,31 @@ class QueryAnalyzerTest extends TestCase
         $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id', 'authors.id']);
 
         $this->assertNotSame(0, $inspection->normalizationFlags());
+    }
+
+    public function test_query_dependencies_include_nested_where_and_union_tables(): void
+    {
+        $exists = $this->makeBaseQuery(from: 'posts as p');
+        $union = $this->makeBaseQuery(from: 'archived_authors');
+        $query = $this->makeBaseQuery();
+        $query->wheres = [['type' => 'Exists', 'query' => $exists]];
+        $query->unions = [['query' => $union]];
+
+        $dependencies = (new QueryAnalyzer)->inferQueryDependencies($query, 'testing', 'authors');
+
+        $this->assertTrue($dependencies->safe);
+        $this->assertSame(['testing:posts', 'testing:archived_authors'], $dependencies->tables);
+    }
+
+    public function test_query_dependencies_reject_opaque_join_sources(): void
+    {
+        $query = $this->makeBaseQuery();
+        $query->joins = [(object) ['table' => $this->createStub(Expression::class), 'wheres' => []]];
+
+        $dependencies = (new QueryAnalyzer)->inferQueryDependencies($query, 'testing', 'authors');
+
+        $this->assertFalse($dependencies->safe);
+        $this->assertSame(['joined subquery dependency could not be inferred'], $dependencies->reasons);
     }
 
     private function makeBaseQuery(?array $columns = null, string $from = 'authors'): Builder

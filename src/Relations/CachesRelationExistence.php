@@ -3,65 +3,70 @@
 namespace NormCache\Relations;
 
 use Closure;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
-use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
-use NormCache\Values\DependencySet;
-use NormCache\Values\RelationDependency;
+use NormCache\Traits\Cacheable;
 
-/**
- * @mixin CacheableBuilder
- */
+/** @mixin CacheableBuilder */
 trait CachesRelationExistence
 {
-    private ?DependencySet $existenceDependencies = null;
-
-    private bool $existenceInferenceFailed = false;
-
     public function has($relation, $operator = '>=', $count = 1, $boolean = 'and', ?Closure $callback = null): static
     {
-        $dependency = is_string($relation) && !str_contains($relation, '.')
-            ? $this->classifyExistenceRelation($relation, $callback)
-            : null;
-
-        if ($dependency === null) {
-            $this->existenceInferenceFailed = true;
+        if (!is_string($relation) || str_contains($relation, '.')) {
+            $this->addCapturedContextReason('dependency', 'whereHas/has relation semantics could not be fully verified');
         } else {
-            $resolved = new DependencySet(
-                models: $dependency->modelDependencies(),
-                tables: $dependency->tableDependencies(),
-            );
-            $this->existenceDependencies = ($this->existenceDependencies ?? DependencySet::empty())->merge($resolved);
+            $this->captureRelationSemantics($relation);
+        }
+
+        if (!($operator === '>=' && $count === 1)
+            && !($operator === '<' && $count === 1)) {
+            $this->addCapturedContextReason('dependency', 'has() count threshold requires explicit dependencies');
+        }
+
+        if ($callback !== null) {
+            $constraint = $callback;
+            $callback = function ($query) use ($constraint) {
+                $result = $constraint($query);
+                $this->captureConstrainedRelationQuery($query);
+
+                return $result;
+            };
         }
 
         return parent::has($relation, $operator, $count, $boolean, $callback);
     }
 
-    public function inferExistenceDependencies(): DependencySet
+    protected function captureRelationSemantics(string $name): void
     {
-        return $this->existenceInferenceFailed
-            ? DependencySet::unsafe('whereHas/has dependencies could not be fully inferred.')
-            : ($this->existenceDependencies ?? DependencySet::empty());
+        try {
+            $relation = $this->getRelationWithoutConstraints($name);
+            $related = $relation->getRelated();
+            $query = $relation->getQuery();
+
+            if ($relation instanceof MorphTo) {
+                $this->addCapturedContextReason('dependency', 'polymorphic relation dependency could not be fully inferred');
+            }
+
+            if (!in_array(Cacheable::class, class_uses_recursive($related::class), true)) {
+                $this->addCapturedContextReason('dependency', 'related model does not provide automatic table invalidation');
+            }
+
+            if ($query->toBase()->lock !== null) {
+                $this->addCapturedContextReason('safety', 'relation query uses a lock');
+            }
+        } catch (\Throwable) {
+            $this->addCapturedContextReason('dependency', 'relation semantics could not be inspected');
+        }
     }
 
-    private function classifyExistenceRelation(string $name, ?callable $constraint): ?RelationDependency
+    private function captureConstrainedRelationQuery(mixed $query): void
     {
-        $relation = $this->getRelationWithoutConstraints($name);
-
-        if ($relation instanceof MorphTo) {
-            return null;
+        if ($query instanceof CacheableBuilder) {
+            $this->mergeCapturedBuilderState($query);
         }
 
-        if (!($relation instanceof HasOneOrMany
-            || $relation instanceof BelongsTo
-            || $relation instanceof BelongsToMany
-            || $relation instanceof HasOneOrManyThrough)) {
-            return null;
+        if (method_exists($query, 'toBase') && $query->toBase()->lock !== null) {
+            $this->addCapturedContextReason('safety', 'relation query uses a lock');
         }
-
-        return (new RelationDependencyClassifier)->classify($relation, $constraint);
     }
 }

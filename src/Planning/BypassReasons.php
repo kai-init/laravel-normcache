@@ -41,10 +41,6 @@ final class BypassReasons
             $dependency[] = 'raw WHERE expression';
         }
 
-        if ($inspection->has(QueryInspection::SUBQUERY_WHERE | QueryInspection::EXISTS_WHERE)) {
-            $dependency[] = 'subquery WHERE (whereHas/whereExists)';
-        }
-
         if ($inspection->has(QueryInspection::NON_CANONICAL_FROM)) {
             $normalization[] = 'non-standard FROM (subquery or raw expression)';
         }
@@ -81,11 +77,11 @@ final class BypassReasons
             $normalization[] = 'calculated or raw SELECT expressions';
         }
 
-        return array_filter([
+        return self::merge([
             'dependency' => $dependency,
             'normalization' => $normalization,
             'safety' => $safety,
-        ]);
+        ], $inspection->contextReasons);
     }
 
     public static function labels(): array

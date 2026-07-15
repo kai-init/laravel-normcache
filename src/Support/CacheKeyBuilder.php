@@ -164,7 +164,12 @@ class CacheKeyBuilder
 
     public function tableKey(string $connectionName, string $table): string
     {
-        return "{$connectionName}:{$table}";
+        return "{$connectionName}:" . self::stripTableAlias($table);
+    }
+
+    public static function stripTableAlias(string $table): string
+    {
+        return preg_replace('/\s+as\s+\S+$/i', '', $table);
     }
 
     public function verKey(string $classKey, ?CacheSpace $space = null): string

@@ -12,7 +12,6 @@ use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Support\ScalarTransformer;
 use NormCache\Values\CachePlanContext;
-use NormCache\Values\DependencySet;
 
 /**
  * @mixin CacheableBuilder
@@ -140,10 +139,7 @@ trait CachesScalarResults
         $computeValue = $compute === null
             ? $fallback
             : fn() => $compute($base);
-        $plan = $this->planPrepared($prepared, fn(DependencySet $inferred) => CachePlanContext::scalar(
-            $columns,
-            $inferred,
-        ));
+        $plan = $this->planPrepared($prepared, fn() => CachePlanContext::scalar($columns));
 
         if (!$plan->isCacheable()) {
             if (!$plan->hasBypassReason('opted_out')) {

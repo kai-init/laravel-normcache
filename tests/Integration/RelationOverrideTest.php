@@ -172,7 +172,7 @@ class RelationOverrideTest extends TestCase
         $this->assertSame(2, $after->posts->first()->comments_count);
     }
 
-    public function test_has_many_subquery_constraint_bypasses_result_payload(): void
+    public function test_has_many_subquery_constraint_uses_result_payload(): void
     {
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Post 1', 'author_id' => $author->id]);
@@ -185,7 +185,7 @@ class RelationOverrideTest extends TestCase
             ->get();
 
         $this->assertSame(['Post 1'], $posts->pluck('title')->all());
-        $this->assertEmpty($this->redisKeys('result:*'));
+        $this->assertNotEmpty($this->redisKeys('result:*'));
     }
 
     public function test_eager_morph_many_relation_is_served_from_cache_and_invalidated(): void

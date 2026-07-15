@@ -5,18 +5,22 @@ namespace NormCache\Tests\Unit;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
+use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
 use NormCache\CacheManagerFactory;
 use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisStore;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\BuildHandle;
+use ReflectionProperty;
 
 class CacheManagerTest extends TestCase
 {
@@ -303,6 +307,85 @@ class CacheManagerTest extends TestCase
         );
     }
 
+    public function test_model_invalidation_bumps_registered_table_spaces(): void
+    {
+        $tableKey = 'testing:authors';
+        $registry = $this->app->make(CacheSpaceRegistry::class);
+        $content = $registry->space('content');
+
+        $this->assertTrue($registry->registerTableDependencies($content, [$tableKey]));
+
+        $this->manager->invalidateVersion(new Author);
+
+        $this->assertSame(
+            '1',
+            $this->manager->store()->getRaw($this->manager->keys()->verKey($tableKey, $content)),
+        );
+    }
+
+    public function test_immediate_model_invalidation_reuses_memoized_table_space_metadata(): void
+    {
+        $connection = new class extends PredisConnection
+        {
+            public int $lookups = 0;
+
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                if (strtolower($method) === 'smembers') {
+                    $this->lookups++;
+
+                    return [];
+                }
+
+                return null;
+            }
+        };
+        $metadataStore = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($metadataStore, $connection);
+        $registry = new CacheSpaceRegistry(metadataStore: $metadataStore, metadataKeyPrefix: 'test:');
+        $manager = (new CacheManagerFactory($registry, new CacheSpaceResolver($registry)))->make();
+
+        $manager->invalidateVersion(new Author);
+        $manager->invalidateVersion(new Author);
+
+        $this->assertSame(1, $connection->lookups);
+    }
+
+    public function test_force_model_flush_refreshes_table_space_metadata(): void
+    {
+        $connection = new class extends PredisConnection
+        {
+            public int $lookups = 0;
+
+            public function __construct() {}
+
+            public function command($method, array $parameters = [])
+            {
+                if (strtolower($method) === 'smembers') {
+                    return $this->lookups++ === 0 ? [] : ['content'];
+                }
+
+                return null;
+            }
+        };
+        $metadataStore = new RedisStore('normcache-test');
+        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($metadataStore, $connection);
+        $registry = new CacheSpaceRegistry(metadataStore: $metadataStore, metadataKeyPrefix: 'test:');
+        $manager = (new CacheManagerFactory($registry, new CacheSpaceResolver($registry)))->make();
+        $tableKey = 'testing:authors';
+
+        $registry->spacesForTable($tableKey);
+        $manager->forceFlushModel(Author::class);
+
+        $this->assertSame(2, $connection->lookups);
+        $this->assertSame(
+            '1',
+            $manager->store()->getRaw($manager->keys()->verKey($tableKey, $registry->space('content'))),
+        );
+    }
+
     public function test_lifecycle_listener_refreshes_table_space_mappings_registered_by_another_registry(): void
     {
         $tableKey = 'testing:authors';
@@ -359,6 +442,35 @@ class CacheManagerTest extends TestCase
         $versionKey = $this->manager->keys()->verKey($tableKey, $content);
 
         $this->assertSame('1', $this->manager->store()->getRaw($versionKey));
+    }
+
+    public function test_transaction_commit_resolves_model_table_spaces_registered_after_queueing(): void
+    {
+        $tableKey = 'testing:authors';
+        $registry = $this->app->make(CacheSpaceRegistry::class);
+        $content = $registry->space('content');
+
+        DB::beginTransaction();
+
+        try {
+            $this->manager->invalidateVersion(new Author);
+
+            $otherRegistry = new CacheSpaceRegistry(
+                metadataStore: $this->manager->store(),
+                metadataKeyPrefix: 'test:',
+            );
+            $this->assertTrue($otherRegistry->registerTableDependencies($content, [$tableKey]));
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        $this->assertSame(
+            '1',
+            $this->manager->store()->getRaw($this->manager->keys()->verKey($tableKey, $content)),
+        );
     }
 
     public function test_flush_all_can_target_one_space(): void

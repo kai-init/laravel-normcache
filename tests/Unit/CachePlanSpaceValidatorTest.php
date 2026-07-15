@@ -14,10 +14,8 @@ use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CachePlan;
 use NormCache\Values\DependencySet;
-use ReflectionProperty;
-use RuntimeException;
 
-class CachePlanSpaceValidatorTest extends UnitTestCase
+final class CachePlanSpaceValidatorTest extends UnitTestCase
 {
     public function test_cross_space_dependencies_bypass_with_the_resolved_space(): void
     {
@@ -53,7 +51,7 @@ class CachePlanSpaceValidatorTest extends UnitTestCase
             }
         };
         $store = new RedisStore('normcache-test');
-        (new ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
+        (new \ReflectionProperty(RedisStore::class, 'connection'))->setValue($store, $connection);
 
         $registry = new CacheSpaceRegistry(metadataStore: $store);
         $validator = new CachePlanSpaceValidator($registry, new CacheSpaceResolver($registry));
