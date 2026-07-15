@@ -48,6 +48,7 @@ Redis Cluster sharding is now fully atomic within each cache space. Normcache ke
 - **Cache spaces:** declare `$normCacheSpaces` on a model and select a declared space with `->space()` when needed.
 - **Space-targeted flushing:** use `NormCache::flushAll('space')` or `php artisan normcache:flush --space=...`.
 - **Named table dependencies:** `dependsOnTables()` works in named spaces and is invalidated with `invalidateTableVersion()`.
+- **Upgrade from 2.4:** run `php artisan normcache:flush` before deploying v3 to clear legacy cache keys.
 
 ## Usage
 

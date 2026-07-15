@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING:** model-declared cache spaces replace the `cluster` and `slotting` configuration.
+- **BREAKING:** model-declared cache spaces replace the `cluster` and `slotting` configuration. Run `php artisan normcache:flush` before deploying.
 - `dependsOnTables()` supports named cache spaces.
 
 ### Fixed
