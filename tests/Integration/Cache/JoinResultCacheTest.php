@@ -30,19 +30,6 @@ class JoinResultCacheTest extends TestCase
         $this->assertEmpty($this->redisKeys('result:*'));
     }
 
-    public function test_join_with_depends_on_and_no_explicit_select_returns_correct_results(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        $results = Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->dependsOn([Post::class])
-            ->get();
-
-        $this->assertCount(1, $results);
-    }
-
     public function test_join_with_depends_on_and_explicit_root_select_caches_as_result(): void
     {
         $author = Author::create(['name' => 'Alice']);

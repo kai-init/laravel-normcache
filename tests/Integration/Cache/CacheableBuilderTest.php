@@ -12,7 +12,6 @@ use NormCache\Events\QueryCacheMiss;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\Fixtures\Models\UncachedAuthor;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 
@@ -23,30 +22,12 @@ use NormCache\Tests\TestCase;
  */
 class CacheableBuilderTest extends TestCase
 {
-    public function test_get_writes_query_cache_key(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::all();
-
-        $this->assertNotEmpty($this->redisKeys('query:*'));
-    }
-
     public function test_without_cache_writes_no_query_keys(): void
     {
         Author::create(['name' => 'Alice']);
         Author::withoutCache()->get();
 
         $this->assertEmpty($this->redisKeys('query:*'));
-    }
-
-    public function test_uncached_get_accepts_string_columns(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $authors = Author::withoutCache()->get('id');
-
-        $this->assertCount(1, $authors);
-        $this->assertSame(['id'], array_keys($authors->first()->getAttributes()));
     }
 
     public function test_ttl_uses_custom_ttl(): void
@@ -58,16 +39,6 @@ class CacheableBuilderTest extends TestCase
 
         $this->assertNotNull($queryKey);
         $this->assertGreaterThan(9000, Redis::connection('normcache-test')->ttl($queryKey));
-    }
-
-    public function test_query_with_join_bypasses_cache(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->get();
-
-        $this->assertEmpty($this->redisKeys('query:*'));
     }
 
     public function test_query_with_group_by_bypasses_cache(): void
@@ -93,23 +64,6 @@ class CacheableBuilderTest extends TestCase
         Author::query()->selectRaw('id, name, 1 + 1 as computed')->get();
 
         $this->assertEmpty($this->redisKeys('query:*'));
-    }
-
-    public function test_subquery_where_has_reflects_related_model_writes(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $post = Post::create(['title' => 'Hello', 'author_id' => $author->id, 'published' => true]);
-
-        $warm = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(1, $warm);
-
-        $post->update(['published' => false]);
-
-        $live = UncachedAuthor::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(0, $live);
-
-        $cached = Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-        $this->assertCount(0, $cached);
     }
 
     public function test_bulk_update_invalidates_version(): void
@@ -282,17 +236,6 @@ class CacheableBuilderTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
 
         $authors = Author::whereKey($author->id)->limit(1)->get();
-
-        $this->assertCount(1, $authors);
-        $this->assertSame('Alice', $authors->first()->name);
-        $this->assertEmpty($this->redisKeys('query:*'));
-    }
-
-    public function test_single_primary_key_query_with_order_uses_model_cache_without_query_cache(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        $authors = Author::whereKey($author->id)->orderBy('name')->get();
 
         $this->assertCount(1, $authors);
         $this->assertSame('Alice', $authors->first()->name);

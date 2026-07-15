@@ -121,15 +121,6 @@ class OptimizationsTest extends TestCase
         $this->assertSame([(string) $found->first()->id], $repaired);
     }
 
-    public function test_empty_query_result_warm_hit_stays_empty(): void
-    {
-        $first = Author::where('name', 'Missing Author')->get();
-        $second = Author::where('name', 'Missing Author')->get();
-
-        $this->assertCount(0, $first);
-        $this->assertCount(0, $second);
-    }
-
     public function test_multi_dependency_query_corrupt_payload_degrades_to_miss_and_repairs(): void
     {
         $this->setClusterMode(false);

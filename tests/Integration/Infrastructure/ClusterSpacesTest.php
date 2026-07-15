@@ -248,21 +248,33 @@ class ClusterSpacesTest extends TestCase
         $this->assertNoKeysForHashTag('nc:reporting', 'test:*');
     }
 
-    public function test_scheduled_invalidation_keys_are_space_scoped(): void
+    public function test_scheduled_invalidation_keys_are_scoped_to_each_affected_space(): void
     {
-        $this->cacheManager()->config()->cooldown = 5;
-
         $author = SpacedAuthor::create(['name' => 'Ann']);
         $post = SpacedPost::create(['title' => 'First', 'author_id' => $author->id]);
 
         SpacedPost::query()->get();
 
+        $this->cacheManager()->config()->cooldown = 5;
+
         $this->assertNoCrossSlot(fn() => $post->update(['title' => 'Second']));
+
+        $classKey = $this->cacheManager()->keys()->classKey(SpacedPost::class);
+        $contentScheduledKey = $this->cacheManager()->keys()->scheduledKey(
+            $classKey,
+            $this->cacheManager()->spaceFor(SpacedPost::class),
+        );
+        $defaultScheduledKey = $this->cacheManager()->keys()->scheduledKey($classKey);
 
         $scheduledKeys = $this->keysForHashTag('nc:content', 'test:scheduled:*');
         $this->assertNotEmpty($scheduledKeys, 'Cooldown must write a scheduled key under {nc:content}.');
         $this->assertAllKeysShareHashTag($scheduledKeys, 'nc:content');
-        $this->assertNoKeysForHashTag('nc', 'test:scheduled:*');
+        $this->assertContains($contentScheduledKey, $scheduledKeys);
+
+        $defaultScheduledKeys = $this->keysForHashTag('nc', 'test:scheduled:*');
+        $this->assertNotEmpty($defaultScheduledKeys, 'A same-table default-space cache must also be invalidated.');
+        $this->assertAllKeysShareHashTag($defaultScheduledKeys, 'nc');
+        $this->assertContains($defaultScheduledKey, $defaultScheduledKeys);
 
         $contentSlot = $this->redisClusterSlot('nc:content');
         foreach ($scheduledKeys as $key) {
@@ -270,7 +282,7 @@ class ClusterSpacesTest extends TestCase
             $this->assertSame($contentSlot, $this->redisClusterSlot($m[1] ?? ''));
         }
 
-        // fetch_version_with_cooldown passes ver + scheduled as Lua KEYS[]; mismatched slots throw CROSSSLOT.
+        // The read Lua passes each version key with its scheduled key; mismatched slots throw CROSSSLOT.
         $this->assertNoCrossSlot(fn() => SpacedPost::query()->get());
     }
 

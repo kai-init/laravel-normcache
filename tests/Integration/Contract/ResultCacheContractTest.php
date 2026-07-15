@@ -18,10 +18,16 @@ class ResultCacheContractTest extends TestCase
         return Author::create(['name' => 'Alice']);
     }
 
-    public function test_boolean_cast_applied_on_result_cache_hit(): void
+    public function test_class_defined_casts_are_preserved_on_result_cache_hits(): void
     {
         $author = $this->author();
-        Post::create(['title' => 'T', 'published' => true, 'author_id' => $author->id]);
+        Post::create([
+            'title' => 'T',
+            'views' => 42,
+            'published' => true,
+            'metadata' => ['x' => 1],
+            'author_id' => $author->id,
+        ]);
 
         $this->contract(
             fn() => Post::dependsOn([Author::class])->get()->first(),
@@ -33,56 +39,9 @@ class ResultCacheContractTest extends TestCase
 
         $this->assertIsBool($warm->published);
         $this->assertTrue($warm->published);
-    }
-
-    public function test_array_cast_applied_on_result_cache_hit(): void
-    {
-        $author = $this->author();
-        Post::create(['title' => 'T', 'metadata' => ['x' => 1], 'author_id' => $author->id]);
-
-        $this->contract(
-            fn() => Post::dependsOn([Author::class])->get()->first(),
-            fn() => Post::withoutCache()->where('author_id', $author->id)->get()->first(),
-        );
-
-        Post::dependsOn([Author::class])->get();
-        $warm = Post::dependsOn([Author::class])->get()->first();
-
-        $this->assertIsArray($warm->metadata);
-        $this->assertSame(['x' => 1], $warm->metadata);
-    }
-
-    public function test_date_cast_returns_carbon_on_result_cache_hit(): void
-    {
-        $author = $this->author();
-        Post::create(['title' => 'T', 'author_id' => $author->id]);
-
-        $this->contract(
-            fn() => Post::dependsOn([Author::class])->get()->first(),
-            fn() => Post::withoutCache()->where('author_id', $author->id)->get()->first(),
-        );
-
-        Post::dependsOn([Author::class])->get();
-        $warm = Post::dependsOn([Author::class])->get()->first();
-
-        $this->assertInstanceOf(Carbon::class, $warm->created_at);
-    }
-
-    public function test_class_defined_casts_always_apply_on_warm_hit(): void
-    {
-        $author = $this->author();
-        Post::create(['title' => 'T', 'views' => 42, 'published' => true, 'author_id' => $author->id]);
-
-        $this->contract(
-            fn() => Post::dependsOn([Author::class])->get()->first(),
-            fn() => Post::withoutCache()->where('author_id', $author->id)->get()->first(),
-        );
-
-        Post::dependsOn([Author::class])->get();
-        $warm = Post::dependsOn([Author::class])->get()->first();
-
-        $this->assertIsBool($warm->published);
         $this->assertIsInt($warm->views);
+        $this->assertSame(['x' => 1], $warm->metadata);
+        $this->assertInstanceOf(Carbon::class, $warm->created_at);
     }
 
     public function test_with_casts_applied_on_result_cache_warm_hit(): void

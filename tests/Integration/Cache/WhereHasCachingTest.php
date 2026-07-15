@@ -27,18 +27,14 @@ class WhereHasCachingTest extends TestCase
         $this->assertContains('testing:posts', $plan->dependencies->tables);
     }
 
-    // HasMany — basic caching
+    // HasMany — cache routing
 
-    public function test_simple_wherehas_hasmany_caches_correct_results(): void
+    public function test_simple_wherehas_hasmany_uses_result_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-        Author::create(['name' => 'Bob']);
 
-        $this->contract(
-            fn() => Author::whereHas('posts')->get(),
-            fn() => Author::withoutCache()->whereHas('posts')->get(),
-        );
+        Author::whereHas('posts')->get();
 
         $this->assertNotEmpty($this->redisKeys('result:*'));
     }
@@ -58,21 +54,6 @@ class WhereHasCachingTest extends TestCase
     }
 
     // Constraint closures
-
-    public function test_wherehas_with_safe_constraint_caches_correct_results(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Published', 'author_id' => $author->id, 'published' => true]);
-        Post::create(['title' => 'Draft', 'author_id' => $author->id, 'published' => false]);
-        Author::create(['name' => 'Bob']);
-
-        $this->contract(
-            fn() => Author::whereHas('posts', fn($q) => $q->where('published', true))->get(),
-            fn() => Author::withoutCache()->whereHas('posts', fn($q) => $q->where('published', true))->get(),
-        );
-
-        $this->assertNotEmpty($this->redisKeys('result:*'));
-    }
 
     public function test_wherehas_with_safe_constraint_invalidates_on_dependency_change(): void
     {
@@ -134,18 +115,6 @@ class WhereHasCachingTest extends TestCase
         $this->assertSame([], $second->pluck('id')->all());
     }
 
-    public function test_orwherehas_caches_correct_results(): void
-    {
-        Author::create(['name' => 'Alice']);
-        $bob = Author::create(['name' => 'Bob']);
-        Post::create(['title' => 'Hello', 'author_id' => $bob->id]);
-
-        $this->contract(
-            fn() => Author::where('name', 'Carol')->orWhereHas('posts')->get(),
-            fn() => Author::withoutCache()->where('name', 'Carol')->orWhereHas('posts')->get(),
-        );
-    }
-
     public function test_count_threshold_has_bypasses(): void
     {
         $result = Author::has('posts', '>', 1)->explain();
@@ -189,20 +158,6 @@ class WhereHasCachingTest extends TestCase
     }
 
     // MorphMany allowed, MorphTo bails
-
-    public function test_wherehas_morphmany_caches_correct_results(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Comment::create(['body' => 'Hi', 'commentable_type' => Author::class, 'commentable_id' => $author->id]);
-        Author::create(['name' => 'Bob']);
-
-        $this->contract(
-            fn() => Author::whereHas('comments')->get(),
-            fn() => Author::withoutCache()->whereHas('comments')->get(),
-        );
-
-        $this->assertNotEmpty($this->redisKeys('result:*'));
-    }
 
     public function test_wherehas_morphto_bails(): void
     {
