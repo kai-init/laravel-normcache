@@ -9,7 +9,7 @@
 
 Normcache caches query results as ID lists and stores model attributes in versioned model keys. When a model changes, Normcache bumps a version key instead of scanning and deleting every query that may have returned that model.
 
-**Requirements:** PHP 8.2+, Laravel 12/13, Redis 4.0+
+**Requirements:** PHP 8.2+, Laravel 12/13, Redis 6.0+
 
 ## Table of Contents
 
@@ -43,13 +43,11 @@ class Post extends Model
 
 ## What's new in 3.0
 
-Normcache 3.0 is a Redis Cluster-oriented release.
+Redis Cluster sharding is now fully atomic within each cache space. Normcache keeps the keys for a cached operation and its valid dependencies in one hash slot, so cache reads, rebuilds, and invalidation coordination remain atomic.
 
-- Cache spaces replace the old slotting/sharding configuration.
-- Space-targeted flushes are available through `flushAll('space')` and `normcache:flush --space=...`.
-- Raw table dependencies from `dependsOnTables()` work in named spaces.
-- Model payload invalidation now relies on versioned keys instead of members-set scans.
-- `stale_version_depth` remains removed; rebuild coordination uses build locks and wake tokens.
+- **Cache spaces:** declare `$normCacheSpaces` on a model and select a declared space with `->space()` when needed.
+- **Space-targeted flushing:** use `NormCache::flushAll('space')` or `php artisan normcache:flush --space=...`.
+- **Named table dependencies:** `dependsOnTables()` works in named spaces and is invalidated with `invalidateTableVersion()`.
 
 ## Usage
 
@@ -98,7 +96,7 @@ Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
 
 ### Aggregates and relationships
 
-`count`, `exists`, `sum`, `avg`, `min`, `max`, pagination totals, and `withCount` / `withSum` / `withAvg` / `withMin` / `withMax` / `withExists` are cached when their dependencies are safe.
+`count`, `exists`, `value`, `pluck`, `sum`, `avg`, `min`, `max`, pagination totals, and `withCount` / `withSum` / `withAvg` / `withMin` / `withMax` / `withExists` are cached when their dependencies are safe.
 
 Eager-loaded `BelongsTo`, `BelongsToMany`, `MorphTo`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` relations are cached. `attach`, `detach`, `sync`, and `updateExistingPivot` invalidate the relevant pivot cache.
 
@@ -112,7 +110,9 @@ use NormCache\Facades\NormCache;
 NormCache::flushModel(Post::class);
 NormCache::flushAll();
 NormCache::flushAll('content');
+```
 
+```bash
 php artisan normcache:flush --model="App\Models\Post"
 php artisan normcache:flush
 php artisan normcache:flush --space=content
@@ -139,7 +139,7 @@ NormCache::flushTagAcrossModels('homepage');
 
 ## Cache spaces
 
-Cache spaces are Normcache's Redis Cluster sharding boundary. Each space maps to one Redis hash tag, and every cached plan runs its Lua operations inside the active space.
+Cache spaces are Normcache's Redis Cluster sharding boundary. Each space has a Redis hash tag, so a cached operation stays within one Cluster slot.
 
 Models without a declaration use the default space (`{nc}`). Declare named spaces with `$normCacheSpaces`:
 
@@ -179,7 +179,7 @@ Post::query()
     ->get();
 ```
 
-If a model dependency is not valid in the active space, Normcache bypasses the cache by default. Set `spaces.cross_space_behavior` to `throw` to fail loudly during development. Raw table dependencies from `dependsOnTables()` are registered in the active space and invalidated with that space's table version.
+If a model dependency is not valid in the active space, Normcache bypasses the cache by default. Set `spaces.cross_space_behavior` to `throw` to fail loudly during development. Raw table dependencies from `dependsOnTables()` can be used in any active space and are invalidated with `invalidateTableVersion()`.
 
 Configure placement when you need to control Redis Cluster hash tags:
 
@@ -192,8 +192,6 @@ Configure placement when you need to control Redis Cluster hash tags:
     ],
 ],
 ```
-
-In Redis Cluster mode, broad flushes use the recorded space registry to scan each known space. Standalone Redis uses wildcard hash-tag scans.
 
 ## Configuration
 
