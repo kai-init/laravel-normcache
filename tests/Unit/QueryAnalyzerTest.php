@@ -9,6 +9,7 @@ use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Values\DependencySet;
 use NormCache\Values\QueryInspection;
 use PHPUnit\Framework\TestCase;
 
@@ -204,9 +205,23 @@ class QueryAnalyzerTest extends TestCase
         ]];
         $query->orders = [['type' => 'Raw', 'sql' => 'CASE WHEN id = 1 THEN 0 END']];
 
-        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id', 'authors.id']);
+        $analyzer = new QueryAnalyzer;
+        $inspection = $analyzer->inspectModels(
+            $query,
+            'authors',
+            null,
+            ['id', 'authors.id'],
+            null,
+            static fn(): string => throw new \RuntimeException('direct path must not resolve connection'),
+            DependencySet::empty(),
+            [],
+            0,
+            false,
+            0,
+        );
 
         $this->assertSame([1], $inspection->primaryKeys);
+        $this->assertTrue($inspection->has(QueryInspection::RAW_ORDER));
         $this->assertSame(0, $inspection->normalizationFlags());
         $this->assertFalse($inspection->hasSafetyBypass());
     }
@@ -222,7 +237,19 @@ class QueryAnalyzerTest extends TestCase
         ]];
         $query->groups = ['id'];
 
-        $inspection = (new QueryAnalyzer)->inspect($query, 'authors', null, ['id', 'authors.id']);
+        $inspection = (new QueryAnalyzer)->inspectModels(
+            $query,
+            'authors',
+            null,
+            ['id', 'authors.id'],
+            null,
+            static fn(): string => 'testing',
+            DependencySet::empty(),
+            [],
+            0,
+            false,
+            0,
+        );
 
         $this->assertNotSame(0, $inspection->normalizationFlags());
     }

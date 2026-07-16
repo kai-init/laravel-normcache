@@ -103,6 +103,30 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->assertSame(1, $calls, 'Cold-miss closure hydration must fire retrieved exactly once, matching the previous Eloquent-hydration behavior');
     }
 
+    public function test_partial_hit_fires_retrieved_once_per_returned_model(): void
+    {
+        $author = Author::create(['name' => 'Half Warm']);
+        $cached = Post::create(['title' => 'Cached', 'author_id' => $author->id]);
+        $missing = Post::create(['title' => 'Missing', 'author_id' => $author->id]);
+
+        $manager = $this->buildManager(fireRetrieved: true);
+        $manager->hydrator()->getModels([$cached->id], Post::class);
+
+        $retrievedIds = [];
+        Post::retrieved(function (Post $post) use (&$retrievedIds): void {
+            $retrievedIds[] = $post->id;
+        });
+
+        $models = $manager->hydrator()->getModels([$cached->id, $missing->id], Post::class);
+
+        $this->assertSame([$cached->id, $missing->id], array_map(static fn(Post $post) => $post->id, $models));
+        $this->assertSame(
+            [$cached->id => 1, $missing->id => 1],
+            array_count_values($retrievedIds),
+            'The all-hit probe must not hydrate cached rows before falling back to partial-miss handling.',
+        );
+    }
+
     public function test_connection_name_matches_native_eloquent_after_cold_miss(): void
     {
         $author = Author::create(['name' => 'Hank']);

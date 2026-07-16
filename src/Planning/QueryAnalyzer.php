@@ -11,6 +11,16 @@ use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
+    private const DIRECT_PRIMARY_KEY_BLOCKERS = QueryInspection::NON_CANONICAL_FROM
+        | QueryInspection::JOIN
+        | QueryInspection::GROUP
+        | QueryInspection::HAVING
+        | QueryInspection::UNION
+        | QueryInspection::AGGREGATE
+        | QueryInspection::DISTINCT
+        | QueryInspection::LOCK
+        | QueryInspection::CALCULATED_COLUMNS;
+
     public function __construct(
         private readonly CacheKeyBuilder $keys = new CacheKeyBuilder,
     ) {}
@@ -39,8 +49,88 @@ final class QueryAnalyzer
         bool $capturedOpaqueFrom = false,
         int $capturedOpaqueWhereSubqueries = 0,
     ): QueryInspection {
+        $primaryKeys = $primaryKeyIdentifiers === []
+            ? null
+            : self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn);
+
+        return $this->completeInspection(
+            $base,
+            $table,
+            $resolvedColumns,
+            $primaryKeys,
+            $connection,
+            $capturedDependencies ?? DependencySet::empty(),
+            $contextReasons,
+            $capturedOpaqueJoins,
+            $capturedOpaqueFrom,
+            $capturedOpaqueWhereSubqueries,
+        );
+    }
+
+    public function inspectModels(
+        QueryBuilder $base,
+        string $table,
+        ?array $resolvedColumns,
+        array $primaryKeyIdentifiers,
+        ?string $softDeleteScopeColumn,
+        \Closure $connection,
+        DependencySet $capturedDependencies,
+        array $contextReasons,
+        int $capturedOpaqueJoins,
+        bool $capturedOpaqueFrom,
+        int $capturedOpaqueWhereSubqueries,
+    ): QueryInspection {
+        $primaryKeys = self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn);
+        $structuralFlags = $this->structuralFlags($base, $table, $resolvedColumns);
+        $rawOrderFlags = $this->rawOrderFlags($base);
+
+        if ($contextReasons === []
+            && $capturedDependencies->safe
+            && $capturedDependencies->hasNoDependencies()
+            && $capturedOpaqueJoins === 0
+            && !$capturedOpaqueFrom
+            && $capturedOpaqueWhereSubqueries === 0
+            && $primaryKeys !== null
+            && ($structuralFlags & self::DIRECT_PRIMARY_KEY_BLOCKERS) === 0) {
+            return new QueryInspection(
+                flags: $rawOrderFlags,
+                primaryKeys: $primaryKeys,
+                dependencies: $capturedDependencies,
+            );
+        }
+
+        $flags = $structuralFlags | $rawOrderFlags | $this->inspectWheres((array) $base->wheres);
+        $dependencies = $this->inferQueryDependencies(
+            $base,
+            $connection(),
+            $table,
+            $capturedOpaqueJoins,
+            $capturedOpaqueFrom,
+            $capturedOpaqueWhereSubqueries,
+        )->merge($capturedDependencies);
+
+        return new QueryInspection(
+            flags: $flags,
+            primaryKeys: $primaryKeys,
+            dependencies: $dependencies,
+            contextReasons: $contextReasons,
+        );
+    }
+
+    private function completeInspection(
+        QueryBuilder $base,
+        string $table,
+        ?array $resolvedColumns,
+        ?array $primaryKeys,
+        ?string $connection,
+        DependencySet $capturedDependencies,
+        array $contextReasons,
+        int $capturedOpaqueJoins,
+        bool $capturedOpaqueFrom,
+        int $capturedOpaqueWhereSubqueries,
+    ): QueryInspection {
         $dependencies = $connection === null
-            ? ($capturedDependencies ?? DependencySet::empty())
+            ? $capturedDependencies
             : $this->inferQueryDependencies(
                 $base,
                 $connection,
@@ -48,13 +138,11 @@ final class QueryAnalyzer
                 $capturedOpaqueJoins,
                 $capturedOpaqueFrom,
                 $capturedOpaqueWhereSubqueries,
-            )->merge($capturedDependencies ?? DependencySet::empty());
+            )->merge($capturedDependencies);
 
         return new QueryInspection(
             flags: $this->flags($base, $table, $resolvedColumns),
-            primaryKeys: $primaryKeyIdentifiers === []
-                ? null
-                : self::extractPrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn),
+            primaryKeys: $primaryKeys,
             dependencies: $dependencies,
             contextReasons: $contextReasons,
         );
@@ -65,6 +153,27 @@ final class QueryAnalyzer
         string $table,
         ?array $resolvedColumns,
     ): int {
+        $flags = $this->structuralFlags($base, $table, $resolvedColumns);
+
+        $flags |= $this->rawOrderFlags($base);
+        $flags |= $this->inspectWheres((array) $base->wheres);
+
+        return $flags;
+    }
+
+    private function rawOrderFlags(QueryBuilder $base): int
+    {
+        foreach ((array) $base->orders as $order) {
+            if (($order['type'] ?? null) === 'Raw') {
+                return QueryInspection::RAW_ORDER;
+            }
+        }
+
+        return 0;
+    }
+
+    private function structuralFlags(QueryBuilder $base, string $table, ?array $resolvedColumns): int
+    {
         $flags = 0;
 
         if ($base->from !== $table) {
@@ -102,15 +211,6 @@ final class QueryAnalyzer
         if (ProjectionClassifier::hasCalculatedColumns($resolvedColumns)) {
             $flags |= QueryInspection::CALCULATED_COLUMNS;
         }
-
-        foreach ((array) $base->orders as $order) {
-            if (($order['type'] ?? null) === 'Raw') {
-                $flags |= QueryInspection::RAW_ORDER;
-                break;
-            }
-        }
-
-        $flags |= $this->inspectWheres((array) $base->wheres);
 
         return $flags;
     }
@@ -295,7 +395,7 @@ final class QueryAnalyzer
         return false;
     }
 
-    public static function extractPrimaryKeys(
+    public static function resolvePrimaryKeys(
         QueryBuilder $base,
         array $primaryKeyIdentifiers,
         ?string $softDeleteScopeColumn = null,

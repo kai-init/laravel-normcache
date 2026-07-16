@@ -68,7 +68,7 @@ final class CachePlanner
             return $this->transactionBypass($builder, $model, $context);
         }
 
-        $inspection = $this->analyze($builder, $model, $base, $context);
+        $inspection = $this->analyze($builder, $model, $base, $context, $explain);
 
         $plan = isset($inspection->contextReasons['opted_out'])
             ? CachePlan::bypass(
@@ -312,25 +312,58 @@ final class CachePlanner
         Model $model,
         QueryBuilder $base,
         CachePlanContext $context,
+        bool $explain,
     ): QueryInspection {
         $primaryKeys = $context->operation === CacheOperation::Models
             ? [$model->getKeyName(), $model->getQualifiedKeyName()]
             : [];
 
+        $capturedContextReasons = $builder->capturedContextReasons();
+        $contextReasons = $context->contextReasons === [] && $capturedContextReasons === []
+            ? []
+            : BypassReasons::merge($context->contextReasons, $capturedContextReasons);
+
+        $table = $model->getTable();
+        $softDeleteScopeColumn = $context->operation === CacheOperation::Models
+            ? $this->activeSoftDeleteScopeColumn($builder, $model)
+            : null;
+        $capturedDependencies = $builder->capturedDependencies();
+        $capturedOpaqueJoins = $builder->capturedOpaqueJoins();
+        $capturedOpaqueFrom = $builder->hasCapturedOpaqueFrom();
+        $capturedOpaqueWhereSubqueries = $builder->capturedOpaqueWhereSubqueries();
+
+        if ($context->operation === CacheOperation::Models
+            && !$explain
+            && !$builder->hasExplicitDependencies()) {
+            return $this->analyzer->inspectModels(
+                $base,
+                $table,
+                $context->columns,
+                $primaryKeys,
+                $softDeleteScopeColumn,
+                fn(): string => $model->getConnection()->getName() ?? $model->getConnectionName() ?? '',
+                $capturedDependencies,
+                $contextReasons,
+                $capturedOpaqueJoins,
+                $capturedOpaqueFrom,
+                $capturedOpaqueWhereSubqueries,
+            );
+        }
+
+        $connection = $model->getConnection()->getName() ?? $model->getConnectionName() ?? '';
+
         return $this->analyzer->inspect(
             $base,
-            $model->getTable(),
+            $table,
             $context->columns,
             $primaryKeys,
-            $context->operation === CacheOperation::Models
-                ? $this->activeSoftDeleteScopeColumn($builder, $model)
-                : null,
-            $model->getConnection()->getName(),
-            $builder->capturedDependencies(),
-            BypassReasons::merge($context->contextReasons, $builder->capturedContextReasons()),
-            $builder->capturedOpaqueJoins(),
-            $builder->hasCapturedOpaqueFrom(),
-            $builder->capturedOpaqueWhereSubqueries(),
+            $softDeleteScopeColumn,
+            $connection,
+            $capturedDependencies,
+            $contextReasons,
+            $capturedOpaqueJoins,
+            $capturedOpaqueFrom,
+            $capturedOpaqueWhereSubqueries,
         );
     }
 

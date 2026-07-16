@@ -62,7 +62,23 @@ final class ModelHydrator
             $modelVersion = 0; // deferred
         }
 
-        ['hits' => $hits, 'missed' => $missed] = $this->hydrateModels($ids, $modelClass, $raw, $projection, $prototype);
+        ['hits' => $hits, 'missed' => $missed, 'ordered' => $orderedHits] = $this->hydrateModelPayload(
+            $ids,
+            $modelClass,
+            $raw,
+            $projection,
+            $prototype,
+        );
+
+        if ($missed === []) {
+            if ($reporting) {
+                CacheReporter::modelHitActive($modelClass, $ids, $debugbarStart, [
+                    'ids' => $ids,
+                ]);
+            }
+
+            return $orderedHits;
+        }
 
         $context = new ModelFetchContext(
             modelClass: $modelClass,
@@ -79,10 +95,6 @@ final class ModelHydrator
             CacheReporter::modelHitActive($modelClass, array_keys($context->hits), $debugbarStart, [
                 'ids' => $ids,
             ]);
-        }
-
-        if ($missed === []) {
-            return array_values($context->hits);
         }
 
         if ($versionDeferred) {
@@ -175,7 +187,13 @@ final class ModelHydrator
 
         $raw = $this->store->unserializeMany($result[3] ?? []);
 
-        ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModels($idsToFetch, $context->modelClass, $raw, $context->projection, $context->prototype);
+        ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModelPayload(
+            $idsToFetch,
+            $context->modelClass,
+            $raw,
+            $context->projection,
+            $context->prototype,
+        );
 
         foreach ($newHits as $id => $hit) {
             $context->hits[$id] = $hit;
@@ -229,16 +247,24 @@ final class ModelHydrator
         return $models;
     }
 
-    private function hydrateModels(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
+    /** @return array{hits: array<int|string, Model>, missed: list<int|string>, ordered: list<Model>} */
+    private function hydrateModelPayload(array $ids, string $modelClass, array $raw, ?array $projection, ?Model $prototype = null): array
     {
         $prototype = $prototype ?? CacheKeyBuilder::prototype($modelClass);
         $fire = $this->fireRetrieved;
         $hydrate = RawAttributes::hydrateClosure();
         $hits = [];
         $missed = [];
+        $ordered = [];
+        $seen = [];
 
         foreach ($ids as $i => $id) {
-            $attrs = $raw[$i];
+            if (isset($seen[$id])) {
+                continue;
+            }
+            $seen[$id] = true;
+
+            $attrs = $raw[$i] ?? null;
 
             if ($attrs === null || $attrs === false || !is_array($attrs)) {
                 $missed[] = $id;
@@ -253,9 +279,10 @@ final class ModelHydrator
             $instance = clone $prototype;
             $hydrate($instance, $attrs, $fire);
             $hits[$id] = $instance;
+            $ordered[] = $instance;
         }
 
-        return ['hits' => $hits, 'missed' => $missed];
+        return ['hits' => $hits, 'missed' => $missed, 'ordered' => $ordered];
     }
 
     private function fetchFromDatabaseAndCache(array $missed, ModelFetchContext $context, bool $writeCache): array

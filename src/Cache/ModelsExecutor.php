@@ -2,15 +2,19 @@
 
 namespace NormCache\Cache;
 
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use NormCache\CacheManager;
+use NormCache\Enums\CacheStatus;
 use NormCache\Facades\NormCache;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\QueryHasher;
 use NormCache\Values\BuildHandle;
 use NormCache\Values\CachePlan;
 use NormCache\Values\PreparedQuery;
+use NormCache\Values\QueryCacheResult;
 
 final class ModelsExecutor
 {
@@ -50,18 +54,36 @@ final class ModelsExecutor
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
         $connection = $prototype->getConnectionName();
+        /** @var CacheManager $manager */
+        $manager = NormCache::getFacadeRoot();
+        $queries = $manager->queries();
+        $hydrator = $manager->hydrator();
+        $result = $queries->fetch($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection);
 
-        return NormCache::engine()->runNormalized(
-            fetch: fn() => NormCache::queries()->fetch($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection),
-            waitForBuild: fn() => NormCache::queries()->waitForBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection),
-            onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $prototype) {
+        if ($result->status === CacheStatus::Hit) {
+            return $this->resolveCachedQueryHit(
+                $prepared,
+                $hydrator,
+                $result,
+                $model,
+                $selectedCols,
+                $debugbarStart,
+                $prototype,
+                $executionBuilder,
+            );
+        }
+
+        return $manager->engine()->runNormalized(
+            fetch: static fn() => $result,
+            waitForBuild: fn() => $queries->waitForBuild($model, $hash, $cacheTag, $depClasses, $depTableKeys, $connection),
+            onBuild: function () use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $prototype, $hydrator) {
                 CacheReporter::queryMiss($model, 'building:budget-exhausted', $debugbarStart, ['kind' => 'ids']);
 
                 return $prepared->finalizeModels(
-                    NormCache::hydrator()->getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype)
+                    $hydrator->getModels($this->buildIds($base, $prototype), $model, $selectedCols, null, $executionBuilder, true, $prototype)
                 );
             },
-            onMiss: function ($result) use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $queryTtl, $prototype) {
+            onMiss: function ($result) use ($prepared, $executionBuilder, $base, $model, $selectedCols, $debugbarStart, $queryTtl, $prototype, $queries, $hydrator) {
                 CacheReporter::queryMiss($model, $result->key, $debugbarStart, ['kind' => 'ids']);
 
                 $ids = $this->resolveIds(
@@ -70,23 +92,44 @@ final class ModelsExecutor
                     $queryTtl,
                     $prototype,
                     $result->build,
+                    $queries,
                 );
 
                 return $prepared->finalizeModels(
-                    NormCache::hydrator()->getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype)
+                    $hydrator->getModels($ids, $model, $selectedCols, null, $executionBuilder, true, $prototype)
                 );
             },
-            onHit: function ($result) use ($prepared, $executionBuilder, $model, $selectedCols, $debugbarStart, $prototype) {
-                CacheReporter::queryHit($model, $result->key, $debugbarStart, [
-                    'kind' => 'ids + models',
-                    'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result->ids) . ' ids)',
-                    'contains_model' => $result->ids,
-                ]);
+            onHit: fn($result) => $this->resolveCachedQueryHit(
+                $prepared,
+                $hydrator,
+                $result,
+                $model,
+                $selectedCols,
+                $debugbarStart,
+                $prototype,
+                $executionBuilder,
+            ),
+        );
+    }
 
-                return $prepared->finalizeModels(
-                    NormCache::hydrator()->getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype)
-                );
-            },
+    private function resolveCachedQueryHit(
+        PreparedQuery $prepared,
+        ModelHydrator $hydrator,
+        QueryCacheResult $result,
+        string $model,
+        ?array $selectedCols,
+        mixed $debugbarStart,
+        Model $prototype,
+        EloquentBuilder $executionBuilder,
+    ): Collection {
+        CacheReporter::queryHit($model, $result->key, $debugbarStart, [
+            'kind' => 'ids + models',
+            'contains' => 'model hit: ' . class_basename($model) . ' (' . count($result->ids) . ' ids)',
+            'contains_model' => $result->ids,
+        ]);
+
+        return $prepared->finalizeModels(
+            $hydrator->getModels($result->ids, $model, $selectedCols, $result->models, $executionBuilder, true, $prototype)
         );
     }
 
@@ -106,9 +149,10 @@ final class ModelsExecutor
         ?int $queryTtl,
         Model $prototype,
         BuildHandle $build,
+        NormalizedCacheRepository $queries,
     ): array {
         $ids = $this->buildIds($base, $prototype);
-        NormCache::queries()->store($key, $ids, $queryTtl, $build);
+        $queries->store($key, $ids, $queryTtl, $build);
 
         return $ids;
     }
