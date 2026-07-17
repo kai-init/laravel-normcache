@@ -80,40 +80,18 @@ final class QueryAnalyzer
         bool $capturedOpaqueFrom,
         int $capturedOpaqueWhereSubqueries,
     ): QueryInspection {
-        $primaryKeys = self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn);
-        $structuralFlags = $this->structuralFlags($base, $table, $resolvedColumns);
-        $rawOrderFlags = $this->rawOrderFlags($base);
-
-        if ($contextReasons === []
-            && $capturedDependencies->safe
-            && $capturedDependencies->hasNoDependencies()
-            && $capturedOpaqueJoins === 0
-            && !$capturedOpaqueFrom
-            && $capturedOpaqueWhereSubqueries === 0
-            && $primaryKeys !== null
-            && ($structuralFlags & self::DIRECT_PRIMARY_KEY_BLOCKERS) === 0) {
-            return new QueryInspection(
-                flags: $rawOrderFlags,
-                primaryKeys: $primaryKeys,
-                dependencies: $capturedDependencies,
-            );
-        }
-
-        $flags = $structuralFlags | $rawOrderFlags | $this->inspectWheres((array) $base->wheres);
-        $dependencies = $this->inferQueryDependencies(
+        return $this->completeInspection(
             $base,
-            $connection(),
             $table,
+            $resolvedColumns,
+            self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn),
+            $connection,
+            $capturedDependencies,
+            $contextReasons,
             $capturedOpaqueJoins,
             $capturedOpaqueFrom,
             $capturedOpaqueWhereSubqueries,
-        )->merge($capturedDependencies);
-
-        return new QueryInspection(
-            flags: $flags,
-            primaryKeys: $primaryKeys,
-            dependencies: $dependencies,
-            contextReasons: $contextReasons,
+            directPrimaryKeyFastPath: true,
         );
     }
 
@@ -122,18 +100,34 @@ final class QueryAnalyzer
         string $table,
         ?array $resolvedColumns,
         ?array $primaryKeys,
-        ?string $connection,
+        string|\Closure|null $connection,
         DependencySet $capturedDependencies,
         array $contextReasons,
         int $capturedOpaqueJoins,
         bool $capturedOpaqueFrom,
         int $capturedOpaqueWhereSubqueries,
+        bool $directPrimaryKeyFastPath = false,
     ): QueryInspection {
+        $structuralFlags = $this->structuralFlags($base, $table, $resolvedColumns);
+        $rawOrderFlags = $this->rawOrderFlags($base);
+
+        if ($directPrimaryKeyFastPath
+            && $contextReasons === []
+            && $capturedDependencies->safe
+            && $capturedDependencies->hasNoDependencies()
+            && $capturedOpaqueJoins === 0
+            && !$capturedOpaqueFrom
+            && $capturedOpaqueWhereSubqueries === 0
+            && $primaryKeys !== null
+            && ($structuralFlags & self::DIRECT_PRIMARY_KEY_BLOCKERS) === 0) {
+            return new QueryInspection($rawOrderFlags, $primaryKeys, $capturedDependencies);
+        }
+
         $dependencies = $connection === null
             ? $capturedDependencies
             : $this->inferQueryDependencies(
                 $base,
-                $connection,
+                $connection instanceof \Closure ? $connection() : $connection,
                 $table,
                 $capturedOpaqueJoins,
                 $capturedOpaqueFrom,
@@ -141,7 +135,7 @@ final class QueryAnalyzer
             )->merge($capturedDependencies);
 
         return new QueryInspection(
-            flags: $this->flags($base, $table, $resolvedColumns),
+            flags: $structuralFlags | $rawOrderFlags | $this->inspectWheres((array) $base->wheres),
             primaryKeys: $primaryKeys,
             dependencies: $dependencies,
             contextReasons: $contextReasons,

@@ -154,7 +154,6 @@ final class ModelHydrator
         return $ordered;
     }
 
-    // Builds the building-lock key/wake-key/token triple for a set of model ids.
     private function buildLockTriple(string $classKey, int $modelVersion, array $ids): array
     {
         $sorted = $ids;

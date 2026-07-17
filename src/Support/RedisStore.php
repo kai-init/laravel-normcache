@@ -40,7 +40,6 @@ final class RedisStore
         return ($value !== null && $value !== false) ? $this->unserialize($value) : null;
     }
 
-    // Returns the raw string value without deserialization (for JSON-encoded entries).
     public function getRaw(string $key): ?string
     {
         $value = $this->connection->get($key);
@@ -59,7 +58,6 @@ final class RedisStore
         $this->connection->setex($key, $ttl, $this->serialize($value));
     }
 
-    // Set a raw string value without serialization.
     public function setRaw(string $key, string $value, int $ttl): void
     {
         $this->connection->setex($key, $ttl, $value);
