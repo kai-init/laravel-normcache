@@ -436,7 +436,7 @@ class RedisStoreTest extends TestCase
         $this->assertEmpty($directClient->keys('model:*'));
     }
 
-    public function test_predis_cluster_scan_targets_owner_for_concrete_hash_tag_pattern(): void
+    public function test_predis_cluster_scan_checks_all_nodes_for_concrete_hash_tag_pattern(): void
     {
         $owner = new class
         {
@@ -509,7 +509,7 @@ class RedisStoreTest extends TestCase
             $store->scanPattern('{nc:content}:test:query:*')
         );
         $this->assertSame(['{nc:content}:test:query:*'], $owner->patterns);
-        $this->assertSame(0, $other->calls);
+        $this->assertSame(1, $other->calls);
     }
 
     public function test_predis_cluster_scan_deduplicates_keys_returned_by_multiple_nodes(): void

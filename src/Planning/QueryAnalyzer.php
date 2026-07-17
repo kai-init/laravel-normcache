@@ -42,76 +42,22 @@ final class QueryAnalyzer
         ?array $resolvedColumns,
         array $primaryKeyIdentifiers = [],
         ?string $softDeleteScopeColumn = null,
-        ?string $connection = null,
+        string|\Closure|null $connection = null,
         ?DependencySet $capturedDependencies = null,
         array $contextReasons = [],
         int $capturedOpaqueJoins = 0,
         bool $capturedOpaqueFrom = false,
         int $capturedOpaqueWhereSubqueries = 0,
+        bool $allowPrimaryKeyFastPath = false,
     ): QueryInspection {
         $primaryKeys = $primaryKeyIdentifiers === []
             ? null
             : self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn);
-
-        return $this->completeInspection(
-            $base,
-            $table,
-            $resolvedColumns,
-            $primaryKeys,
-            $connection,
-            $capturedDependencies ?? DependencySet::empty(),
-            $contextReasons,
-            $capturedOpaqueJoins,
-            $capturedOpaqueFrom,
-            $capturedOpaqueWhereSubqueries,
-        );
-    }
-
-    public function inspectModels(
-        QueryBuilder $base,
-        string $table,
-        ?array $resolvedColumns,
-        array $primaryKeyIdentifiers,
-        ?string $softDeleteScopeColumn,
-        \Closure $connection,
-        DependencySet $capturedDependencies,
-        array $contextReasons,
-        int $capturedOpaqueJoins,
-        bool $capturedOpaqueFrom,
-        int $capturedOpaqueWhereSubqueries,
-    ): QueryInspection {
-        return $this->completeInspection(
-            $base,
-            $table,
-            $resolvedColumns,
-            self::resolvePrimaryKeys($base, $primaryKeyIdentifiers, $softDeleteScopeColumn),
-            $connection,
-            $capturedDependencies,
-            $contextReasons,
-            $capturedOpaqueJoins,
-            $capturedOpaqueFrom,
-            $capturedOpaqueWhereSubqueries,
-            directPrimaryKeyFastPath: true,
-        );
-    }
-
-    private function completeInspection(
-        QueryBuilder $base,
-        string $table,
-        ?array $resolvedColumns,
-        ?array $primaryKeys,
-        string|\Closure|null $connection,
-        DependencySet $capturedDependencies,
-        array $contextReasons,
-        int $capturedOpaqueJoins,
-        bool $capturedOpaqueFrom,
-        int $capturedOpaqueWhereSubqueries,
-        bool $directPrimaryKeyFastPath = false,
-    ): QueryInspection {
+        $capturedDependencies ??= DependencySet::empty();
         $structuralFlags = $this->structuralFlags($base, $table, $resolvedColumns);
         $rawOrderFlags = $this->rawOrderFlags($base);
 
-        if ($directPrimaryKeyFastPath
+        if ($allowPrimaryKeyFastPath
             && $contextReasons === []
             && $capturedDependencies->safe
             && $capturedDependencies->hasNoDependencies()

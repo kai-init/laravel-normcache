@@ -7,58 +7,44 @@ use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
-use Predis\Cluster\RedisStrategy;
 
-/** Cold-path SCAN machinery (flushes, diagnostics), split out of RedisStore's hot read/write path. */
+/** Cold-path SCAN machinery for flushes and diagnostics. */
 final class RedisScanner
 {
     public function __construct(private readonly Connection $connection) {}
 
     public function scanPattern(string $pattern): array
     {
-        if ($this->connection instanceof PhpRedisClusterConnection) {
-            $keys = $this->scanPhpRedisClusterKeys($pattern);
-        } elseif ($this->connection instanceof PredisClusterConnection) {
-            $keys = $this->scanPredisClusterKeys($pattern);
-        } else {
-            $keys = $this->scanKeys($pattern);
-        }
+        $keys = match (true) {
+            $this->connection instanceof PhpRedisClusterConnection => $this->scanPhpRedisClusterKeys($pattern),
+            $this->connection instanceof PredisClusterConnection => $this->scanPredisClusterKeys($pattern),
+            default => $this->scanKeys($pattern),
+        };
 
-        $connectionPrefix = $this->connectionPrefix();
+        $prefix = $this->connectionPrefix();
 
-        if ($connectionPrefix === '') {
+        if ($prefix === '') {
             return $keys;
         }
 
         return array_map(
-            static fn($k) => str_starts_with($k, $connectionPrefix) ? substr($k, strlen($connectionPrefix)) : $k,
-            $keys
+            static fn(string $key) => str_starts_with($key, $prefix) ? substr($key, strlen($prefix)) : $key,
+            $keys,
         );
     }
 
     public function scanPatterns(array $patterns): array
     {
-        $patterns = array_values(array_unique(array_filter($patterns, 'is_string')));
-
-        if ($patterns === []) {
-            return [];
-        }
-
         $matched = [];
 
-        foreach ($this->groupPatternsByHashTag($patterns) as $group) {
-            $scanPatterns = count($group) === 1
-                ? $group
-                : [$this->commonScanPattern($group)];
+        foreach ($this->groupPatterns(array_unique(array_filter($patterns, 'is_string'))) as $group) {
+            $scanPattern = count($group) === 1 ? $group[0] : $this->commonPattern($group);
+            $scanPatterns = $scanPattern === '*' ? $group : [$scanPattern];
 
-            if ($scanPatterns === ['*']) {
-                $scanPatterns = $group;
-            }
-
-            foreach ($scanPatterns as $scanPattern) {
-                foreach ($this->scanPattern($scanPattern) as $key) {
-                    foreach ($group as $pattern) {
-                        if (fnmatch($pattern, $key)) {
+            foreach ($scanPatterns as $pattern) {
+                foreach ($this->scanPattern($pattern) as $key) {
+                    foreach ($group as $candidate) {
+                        if (fnmatch($candidate, $key)) {
                             $matched[$key] = true;
                             break;
                         }
@@ -73,19 +59,19 @@ final class RedisScanner
     private function scanKeys(string $pattern): array
     {
         $keys = [];
-        $connectionPrefix = $this->connectionPrefix();
+        $prefix = $this->connectionPrefix();
 
         $this->executeScan(
-            function (&$cursor) use ($pattern, $connectionPrefix) {
-                $p = $connectionPrefix . $pattern;
+            function (&$cursor) use ($pattern, $prefix) {
+                $pattern = $prefix . $pattern;
 
                 return $this->isPhpRedis()
-                    ? $this->connection->client()->scan($cursor, $p, 1000)
-                    : $this->connection->scan($cursor, ['match' => $p, 'count' => 1000]);
+                    ? $this->connection->client()->scan($cursor, $pattern, 1000)
+                    : $this->connection->scan($cursor, ['match' => $pattern, 'count' => 1000]);
             },
-            function ($chunk) use (&$keys) {
+            static function (array $chunk) use (&$keys): void {
                 array_push($keys, ...$chunk);
-            }
+            },
         );
 
         return $keys;
@@ -93,57 +79,17 @@ final class RedisScanner
 
     private function scanPredisClusterKeys(string $pattern): array
     {
-        $targeted = $this->scanPredisClusterSlotKeys($pattern);
-        if ($targeted !== null) {
-            return $targeted;
-        }
-
         $keys = [];
-        $connectionPrefix = $this->connectionPrefix();
+        $pattern = $this->connectionPrefix() . $pattern;
 
         foreach ($this->connection->client() as $node) {
             $this->executeScan(
-                fn($cursor) => $node->scan($cursor, ['match' => $connectionPrefix . $pattern, 'count' => 1000]),
-                function ($chunk) use (&$keys) {
+                fn($cursor) => $node->scan($cursor, ['match' => $pattern, 'count' => 1000]),
+                static function (array $chunk) use (&$keys): void {
                     array_push($keys, ...$chunk);
-                }
+                },
             );
         }
-
-        return array_values(array_unique($keys));
-    }
-
-    private function scanPredisClusterSlotKeys(string $pattern): ?array
-    {
-        $hashTag = $this->concreteHashTag($pattern);
-        if ($hashTag === null) {
-            return null;
-        }
-
-        try {
-            $cluster = $this->connection->client()->getConnection();
-            if (!method_exists($cluster, 'getConnectionBySlot')) {
-                return null;
-            }
-
-            $slot = (new RedisStrategy)->getSlotByKey('{' . $hashTag . '}');
-            $node = $cluster->getConnectionBySlot($slot);
-            if (!is_object($node) || !method_exists($node, 'scan')) {
-                return null;
-            }
-        } catch (\Throwable) {
-            return null;
-        }
-
-        $keys = [];
-        $connectionPrefix = $this->connectionPrefix();
-
-        $this->executeScan(
-            fn($cursor) => $node->scan($cursor, ['match' => $connectionPrefix . $pattern, 'count' => 1000]),
-            function ($chunk) use (&$keys) {
-                array_push($keys, ...$chunk);
-            }
-        );
 
         return array_values(array_unique($keys));
     }
@@ -152,38 +98,33 @@ final class RedisScanner
     {
         $keys = [];
         $client = $this->connection->client();
-        $connectionPrefix = $this->connectionPrefix();
+        $pattern = $this->connectionPrefix() . $pattern;
 
         foreach ($client->_masters() as $node) {
             $this->executeScan(
-                function (&$cursor) use ($client, $node, $pattern, $connectionPrefix) {
-                    return $client->scan($cursor, $node, $connectionPrefix . $pattern, 1000);
-                },
-                function ($chunk) use (&$keys) {
+                fn(&$cursor) => $client->scan($cursor, $node, $pattern, 1000),
+                static function (array $chunk) use (&$keys): void {
                     array_push($keys, ...$chunk);
-                }
+                },
             );
         }
 
         return $keys;
     }
 
-    /** @return list<list<string>> */
-    private function groupPatternsByHashTag(array $patterns): array
+    private function groupPatterns(array $patterns): array
     {
         $groups = [];
 
         foreach ($patterns as $pattern) {
-            $group = preg_match('/^\{[^{}]+\}:/', $pattern, $matches) === 1
-                ? $matches[0]
-                : '';
-            $groups[$group][] = $pattern;
+            preg_match('/^\{[^{}]+\}:/', $pattern, $match);
+            $groups[$match[0] ?? ''][] = $pattern;
         }
 
         return array_values($groups);
     }
 
-    private function commonScanPattern(array $patterns): string
+    private function commonPattern(array $patterns): string
     {
         $prefix = array_shift($patterns);
 
@@ -201,34 +142,20 @@ final class RedisScanner
         return $prefix . '*';
     }
 
-    private function concreteHashTag(string $pattern): ?string
-    {
-        if (!preg_match('/\{([^{}]+)\}/', $pattern, $matches)) {
-            return null;
-        }
-
-        $tag = $matches[1];
-
-        return str_contains($tag, '*') || str_contains($tag, '?')
-            ? null
-            : $tag;
-    }
-
     private function isPhpRedis(): bool
     {
-        // PhpRedisClusterConnection extends PhpRedisConnection, so this covers both.
         return $this->connection instanceof PhpRedisConnection;
     }
 
     private function connectionPrefix(): string
     {
-        // *ClusterConnection extends *Connection, so these cover both cluster and standalone.
         if ($this->connection instanceof PhpRedisConnection) {
             return (string) $this->connection->client()->getOption(\Redis::OPT_PREFIX);
         }
 
         if ($this->connection instanceof PredisConnection) {
             $prefix = $this->connection->client()->getOptions()->prefix ?? null;
+
             if (is_object($prefix) && method_exists($prefix, 'getPrefix')) {
                 return (string) $prefix->getPrefix();
             }
@@ -244,29 +171,30 @@ final class RedisScanner
     private function executeScan(\Closure $scanner, \Closure $processor): void
     {
         if ($this->isPhpRedis()) {
-            // phpredis 6.x SCAN/SSCAN require null to start; updates cursor by reference.
             $cursor = null;
-            while (true) {
+
+            do {
                 $chunk = $scanner($cursor);
+
                 if (!empty($chunk)) {
                     $processor($chunk);
                 }
-                if (!$cursor) {
-                    break;
-                }
-            }
+            } while ($cursor);
 
             return;
         }
 
-        // Predis returns [$cursor, $keys]; '0' signals completion.
         $cursor = '0';
+
         do {
             $result = $scanner($cursor);
+
             if (!is_array($result) || !isset($result[1])) {
-                break;
+                return;
             }
+
             [$cursor, $chunk] = $result;
+
             if (!empty($chunk)) {
                 $processor($chunk);
             }

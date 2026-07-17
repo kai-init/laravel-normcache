@@ -2,6 +2,7 @@
 
 namespace NormCache\Planning;
 
+use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -62,13 +63,14 @@ final class CachePlanner
             return $this->globalBypass($builder, $model, $context, $cacheSkipped, $cacheDisabled);
         }
 
-        $insideTransaction = $model->getConnection()->transactionLevel() > 0;
+        $connection = $model->getConnection();
+        $insideTransaction = $connection->transactionLevel() > 0;
 
         if ($insideTransaction && !$explain) {
             return $this->transactionBypass($builder, $model, $context);
         }
 
-        $inspection = $this->analyze($builder, $model, $base, $context, $explain);
+        $inspection = $this->analyze($builder, $model, $base, $context, $explain, $connection);
 
         $plan = isset($inspection->contextReasons['opted_out'])
             ? CachePlan::bypass(
@@ -313,6 +315,7 @@ final class CachePlanner
         QueryBuilder $base,
         CachePlanContext $context,
         bool $explain,
+        Connection $connection,
     ): QueryInspection {
         $primaryKeys = $context->operation === CacheOperation::Models
             ? [$model->getKeyName(), $model->getQualifiedKeyName()]
@@ -327,30 +330,10 @@ final class CachePlanner
         $softDeleteScopeColumn = $context->operation === CacheOperation::Models
             ? $this->activeSoftDeleteScopeColumn($builder, $model)
             : null;
-        $capturedDependencies = $builder->capturedDependencies();
-        $capturedOpaqueJoins = $builder->capturedOpaqueJoins();
-        $capturedOpaqueFrom = $builder->hasCapturedOpaqueFrom();
-        $capturedOpaqueWhereSubqueries = $builder->capturedOpaqueWhereSubqueries();
 
-        if ($context->operation === CacheOperation::Models
+        $allowPrimaryKeyFastPath = $context->operation === CacheOperation::Models
             && !$explain
-            && !$builder->hasExplicitDependencies()) {
-            return $this->analyzer->inspectModels(
-                $base,
-                $table,
-                $context->columns,
-                $primaryKeys,
-                $softDeleteScopeColumn,
-                fn(): string => $model->getConnection()->getName() ?? $model->getConnectionName() ?? '',
-                $capturedDependencies,
-                $contextReasons,
-                $capturedOpaqueJoins,
-                $capturedOpaqueFrom,
-                $capturedOpaqueWhereSubqueries,
-            );
-        }
-
-        $connection = $model->getConnection()->getName() ?? $model->getConnectionName() ?? '';
+            && !$builder->hasExplicitDependencies();
 
         return $this->analyzer->inspect(
             $base,
@@ -358,12 +341,13 @@ final class CachePlanner
             $context->columns,
             $primaryKeys,
             $softDeleteScopeColumn,
-            $connection,
-            $capturedDependencies,
+            fn(): string => $connection->getName() ?? $model->getConnectionName() ?? '',
+            $builder->capturedDependencies(),
             $contextReasons,
-            $capturedOpaqueJoins,
-            $capturedOpaqueFrom,
-            $capturedOpaqueWhereSubqueries,
+            $builder->capturedOpaqueJoins(),
+            $builder->hasCapturedOpaqueFrom(),
+            $builder->capturedOpaqueWhereSubqueries(),
+            $allowPrimaryKeyFastPath,
         );
     }
 

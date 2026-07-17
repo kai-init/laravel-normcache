@@ -9,7 +9,6 @@ use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\QueryAnalyzer;
-use NormCache\Values\DependencySet;
 use NormCache\Values\QueryInspection;
 use PHPUnit\Framework\TestCase;
 
@@ -205,19 +204,13 @@ class QueryAnalyzerTest extends TestCase
         ]];
         $query->orders = [['type' => 'Raw', 'sql' => 'CASE WHEN id = 1 THEN 0 END']];
 
-        $analyzer = new QueryAnalyzer;
-        $inspection = $analyzer->inspectModels(
+        $inspection = (new QueryAnalyzer)->inspect(
             $query,
             'authors',
             null,
             ['id', 'authors.id'],
-            null,
-            static fn(): string => throw new \RuntimeException('direct path must not resolve connection'),
-            DependencySet::empty(),
-            [],
-            0,
-            false,
-            0,
+            connection: static fn(): string => throw new \RuntimeException('direct path must not resolve connection'),
+            allowPrimaryKeyFastPath: true,
         );
 
         $this->assertSame([1], $inspection->primaryKeys);
@@ -236,22 +229,23 @@ class QueryAnalyzerTest extends TestCase
             'value' => 1,
         ]];
         $query->groups = ['id'];
+        $connectionResolutions = 0;
 
-        $inspection = (new QueryAnalyzer)->inspectModels(
+        $inspection = (new QueryAnalyzer)->inspect(
             $query,
             'authors',
             null,
             ['id', 'authors.id'],
-            null,
-            static fn(): string => 'testing',
-            DependencySet::empty(),
-            [],
-            0,
-            false,
-            0,
+            connection: static function () use (&$connectionResolutions): string {
+                $connectionResolutions++;
+
+                return 'testing';
+            },
+            allowPrimaryKeyFastPath: true,
         );
 
         $this->assertNotSame(0, $inspection->normalizationFlags());
+        $this->assertSame(1, $connectionResolutions);
     }
 
     public function test_query_dependencies_include_nested_where_and_union_tables(): void
