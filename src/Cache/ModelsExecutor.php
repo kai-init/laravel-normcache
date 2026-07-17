@@ -53,7 +53,9 @@ final class ModelsExecutor
         $hash = QueryHasher::forNormalizedQuery($executionBuilder, $base);
         $depClasses = $plan->dependencies->depClassesFor($model);
         $depTableKeys = $plan->dependencies->tables;
-        $connection = $prototype->getConnectionName();
+        $connection = $prototype->getConnection()->getName()
+            ?? $prototype->getConnectionName()
+            ?? '';
         /** @var CacheManager $manager */
         $manager = NormCache::getFacadeRoot();
         $queries = $manager->queries();

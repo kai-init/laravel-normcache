@@ -49,8 +49,10 @@ final class ModelHydrator
 
         // arrays may come with sparse numeric keys, for example after array_unique().
         $ids = array_values($ids);
-        $connection = ($prototype ?? $missedQuery?->getModel())?->getConnectionName()
-            ?? $this->keys->declaredConnection($modelClass);
+        $connectionModel = $prototype ?? $missedQuery?->getModel() ?? CacheKeyBuilder::prototype($modelClass);
+        $connection = $connectionModel->getConnection()->getName()
+            ?? $connectionModel->getConnectionName()
+            ?? '';
         $classKey = $this->keys->classKey($modelClass, $connection);
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
 

@@ -31,7 +31,9 @@ final class ResultExecutor
         $builder = $prepared->builder;
         $model = $builder->getModel();
         $modelClass = $model::class;
-        $connection = $model->getConnectionName();
+        $connection = $model->getConnection()->getName()
+            ?? $model->getConnectionName()
+            ?? '';
         $tag = $builder->getCacheTag();
         $ttl = $builder->getQueryTtl();
         $debugbarStart = CacheReporter::beginMeasure();
