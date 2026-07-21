@@ -61,6 +61,30 @@ class ThroughRelationTest extends TestCase
         $this->assertSame($keyCountAfterFirst, count($this->redisKeys('*')));
     }
 
+    public function test_use_write_pdo_bypasses_simple_through_relation_cache(): void
+    {
+        $country = Country::create(['name' => 'Australia']);
+        $author = Author::create(['name' => 'Alice', 'country_id' => $country->id]);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
+
+        $this->assertSame(
+            ['Hello'],
+            $country->posts()->useWritePdo()->get()->pluck('title')->all(),
+        );
+        $this->assertEmpty($this->redisKeys('through:*'));
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $this->assertSame(
+            ['Hello'],
+            $country->posts()->useWritePdo()->get()->pluck('title')->all(),
+        );
+        $this->assertGreaterThan(0, $queryCount);
+    }
+
     public function test_simple_has_many_through_warm_hit_refetches_only_evicted_child_model(): void
     {
         $country = Country::create(['name' => 'Australia']);

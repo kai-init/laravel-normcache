@@ -122,6 +122,47 @@ class ConnectionAwareCachingTest extends TestCase
         );
     }
 
+    public function test_use_write_pdo_direct_lookup_does_not_reuse_replica_model_payload(): void
+    {
+        $paths = $this->seedReplicatedAuthorConnection();
+
+        try {
+            $this->assertSame('Replica Alice', Author::on('replicated_testing')->find(1)?->name);
+            $this->assertSame(
+                'Primary Alice',
+                Author::on('replicated_testing')->withoutCache()->useWritePdo()->find(1)?->name,
+            );
+            $this->assertSame(
+                'Primary Alice',
+                Author::on('replicated_testing')->useWritePdo()->find(1)?->name,
+            );
+        } finally {
+            $this->cleanupReplicatedAuthorConnection($paths);
+        }
+    }
+
+    public function test_use_write_pdo_normalized_query_does_not_reuse_replica_model_payload(): void
+    {
+        $paths = $this->seedReplicatedAuthorConnection();
+
+        try {
+            $this->assertSame(
+                ['Replica Alice'],
+                Author::on('replicated_testing')->orderBy('id')->get()->pluck('name')->all(),
+            );
+            $this->assertSame(
+                ['Primary Alice'],
+                Author::on('replicated_testing')->withoutCache()->useWritePdo()->orderBy('id')->get()->pluck('name')->all(),
+            );
+            $this->assertSame(
+                ['Primary Alice'],
+                Author::on('replicated_testing')->useWritePdo()->orderBy('id')->get()->pluck('name')->all(),
+            );
+        } finally {
+            $this->cleanupReplicatedAuthorConnection($paths);
+        }
+    }
+
     private function seedDifferentAuthorsOnTwoConnections(): void
     {
         config()->set('database.connections.secondary_testing', [
@@ -148,5 +189,52 @@ class ConnectionAwareCachingTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    /** @return array{read: string, write: string} */
+    private function seedReplicatedAuthorConnection(): array
+    {
+        $readPath = tempnam(sys_get_temp_dir(), 'normcache-read-');
+        $writePath = tempnam(sys_get_temp_dir(), 'normcache-write-');
+
+        $this->assertNotFalse($readPath);
+        $this->assertNotFalse($writePath);
+
+        config()->set('database.connections.replicated_testing', [
+            'driver' => 'sqlite',
+            'database' => $writePath,
+            'prefix' => '',
+            'read' => ['database' => $readPath],
+            'write' => ['database' => $writePath],
+        ]);
+
+        DB::purge('replicated_testing');
+
+        $connection = DB::connection('replicated_testing');
+        $this->seedAuthorPdo($connection->getReadPdo(), 'Replica Alice');
+        $this->seedAuthorPdo($connection->getPdo(), 'Primary Alice');
+        $this->resetClassKeyCache();
+
+        return ['read' => $readPath, 'write' => $writePath];
+    }
+
+    private function seedAuthorPdo(\PDO $pdo, string $name): void
+    {
+        $pdo->exec('CREATE TABLE authors (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name VARCHAR NOT NULL, country_id INTEGER NULL, created_at DATETIME NULL, updated_at DATETIME NULL)');
+
+        $insert = $pdo->prepare('INSERT INTO authors (id, name, country_id, created_at, updated_at) VALUES (1, :name, NULL, NULL, NULL)');
+        $insert->execute(['name' => $name]);
+    }
+
+    /** @param array{read: string, write: string} $paths */
+    private function cleanupReplicatedAuthorConnection(array $paths): void
+    {
+        DB::purge('replicated_testing');
+
+        foreach ($paths as $path) {
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
     }
 }

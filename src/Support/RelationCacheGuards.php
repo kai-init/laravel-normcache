@@ -13,6 +13,7 @@ final class RelationCacheGuards
     {
         return $builder->isCacheSkipped()
             || !NormCache::isEnabled()
+            || $base->useWritePdo
             || $builder->getModel()->getConnection()->transactionLevel() > 0
             || !empty($base->groups)
             || !empty($base->havings)
