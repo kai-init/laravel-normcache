@@ -230,7 +230,6 @@ Always bypassed:
 - pessimistic locks (`lockForUpdate`, `sharedLock`)
 - reads inside a database transaction
 - `DB::table(...)`, `DB::select()`, and raw SQL
-- `chunk()`, `each()`, `lazy()`, and `sole()`
 
 Usually require `dependsOn()` or `dependsOnTables()`:
 

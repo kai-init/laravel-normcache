@@ -63,6 +63,14 @@ final class CachePlanner
             return $this->globalBypass($builder, $model, $context, $cacheSkipped, $cacheDisabled);
         }
 
+        if ($base->useWritePdo) {
+            return CachePlan::bypass(
+                operation: $context->operation,
+                dependencies: $this->dependencies->resolveBase($builder, $model, $context),
+                bypassReasons: ['safety' => ['explicit write PDO read']],
+            );
+        }
+
         $connection = $model->getConnection();
         $insideTransaction = $connection->transactionLevel() > 0;
 

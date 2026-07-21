@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
-use Illuminate\Support\LazyCollection;
 use NormCache\Cache\ModelsExecutor;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Enums\PlanningMode;
@@ -526,37 +525,6 @@ class CacheableBuilder extends Builder
             return parent::eagerLoadRelations($models);
         } finally {
             $this->eagerLoad = $original;
-        }
-    }
-
-    public function sole($columns = ['*']): Model
-    {
-        return $this->bypassingCache(fn() => parent::sole($columns));
-    }
-
-    public function chunk($count, callable $callback): bool
-    {
-        return $this->bypassingCache(fn() => parent::chunk($count, $callback));
-    }
-
-    public function each(callable $callback, $count = 1000): bool
-    {
-        return $this->bypassingCache(fn() => parent::each($callback, $count));
-    }
-
-    public function lazy($chunkSize = 1000): LazyCollection
-    {
-        return $this->bypassingCache(fn() => parent::lazy($chunkSize));
-    }
-
-    private function bypassingCache(callable $fn): mixed
-    {
-        $previous = $this->skipCache;
-        $this->skipCache = true;
-        try {
-            return $fn();
-        } finally {
-            $this->skipCache = $previous;
         }
     }
 
