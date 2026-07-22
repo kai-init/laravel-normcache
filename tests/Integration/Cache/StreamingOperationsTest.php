@@ -10,21 +10,35 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 /**
- * Behavioral tests: streaming operations (chunk) and
- * sole() must bypass the query cache entirely.
+ * Behavioral tests: streaming operations and sole() use their normal cached
+ * get() paths. Cached page windows remain independently versioned.
  */
 class StreamingOperationsTest extends TestCase
 {
-    // Streaming methods — must bypass the cache entirely
-
-    public function test_chunk_does_not_write_query_cache_keys(): void
+    public function test_chunk_caches_and_reuses_page_queries(): void
     {
         Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
 
-        Author::orderBy('id')->chunk(1, fn() => null);
+        $firstPass = [];
+        Author::orderBy('id')->chunk(1, function ($batch) use (&$firstPass): void {
+            $firstPass = array_merge($firstPass, $batch->pluck('name')->all());
+        });
 
-        $this->assertEmpty($this->redisKeys('query:*'));
+        $this->assertSame(['Alice', 'Bob'], $firstPass);
+        $this->assertNotEmpty($this->redisKeys('query:*'));
+
+        DB::enableQueryLog();
+
+        $warmPass = [];
+        Author::orderBy('id')->chunk(1, function ($batch) use (&$warmPass): void {
+            $warmPass = array_merge($warmPass, $batch->pluck('name')->all());
+        });
+
+        $this->assertSame(['Alice', 'Bob'], $warmPass);
+        $this->assertEmpty(DB::getQueryLog(), 'Warm chunk pages should hit cache');
+
+        DB::disableQueryLog();
     }
 
     public function test_chunk_sees_fresh_data_after_version_bump(): void
@@ -41,7 +55,7 @@ class StreamingOperationsTest extends TestCase
         $this->assertContains('Bob', $names);
     }
 
-    public function test_temporary_streaming_bypass_does_not_persist_wrapped_eager_load_constraints(): void
+    public function test_streaming_page_queries_do_not_persist_wrapped_eager_load_constraints(): void
     {
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'Hello', 'author_id' => $author->id]);
@@ -69,8 +83,6 @@ class StreamingOperationsTest extends TestCase
         $this->assertEmpty($queries, 'Cache should be hit, but these DB queries were executed: ' . implode(', ', $queries));
     }
 
-    // sole()
-
     public function test_sole_throws_when_row_is_deleted_after_warm_hit(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -91,11 +103,21 @@ class StreamingOperationsTest extends TestCase
         Author::where('name', 'Alice')->sole();
     }
 
-    public function test_sole_does_not_populate_the_query_cache(): void
+    public function test_sole_caches_and_reuses_the_query_result(): void
     {
         Author::create(['name' => 'Alice']);
-        Author::where('name', 'Alice')->sole();
+        $first = Author::where('name', 'Alice')->sole();
 
-        $this->assertEmpty($this->redisKeys('query:*'));
+        $this->assertSame('Alice', $first->name);
+        $this->assertNotEmpty($this->redisKeys('query:*'));
+
+        DB::enableQueryLog();
+
+        $warm = Author::where('name', 'Alice')->sole();
+
+        $this->assertSame('Alice', $warm->name);
+        $this->assertEmpty(DB::getQueryLog(), 'Warm sole query should hit cache');
+
+        DB::disableQueryLog();
     }
 }
