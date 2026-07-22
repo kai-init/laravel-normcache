@@ -82,13 +82,13 @@ final class ResultCache
                 $outcome = $resolve();
 
                 if (!$structuredPayload
-                    && $outcome->status === CacheStatus::Hit
+                    && ($outcome->status === CacheStatus::Hit || $outcome->status === CacheStatus::Empty)
                     && !array_key_exists(0, $outcome->payload)) {
                     $this->store->delete($outcome->key);
                     $outcome = $resolve();
                 }
 
-                $cached = $outcome->status === CacheStatus::Hit;
+                $cached = $outcome->status === CacheStatus::Hit || $outcome->status === CacheStatus::Empty;
 
                 if ($cached) {
                     CacheReporter::queryHit($modelClass, $outcome->key, $debugbarStart, [

@@ -48,7 +48,6 @@ final class VersionedPayloadStore
             $classKey,
             $depClasses,
             $depTableKeys,
-            connection: $connection,
         );
         $prefix = $this->keys->namespacedPrefix($namespace, $classKey, $tag);
         $wakeKey = $this->keys->wakeKey($classKey, $lockSuffix);
@@ -116,7 +115,7 @@ final class VersionedPayloadStore
                         'build_budget_exhausted' => true,
                         'built' => true,
                         'query_time_ms' => $this->elapsedMs($buildStarted),
-                        'index_cardinality' => $this->cardinality($payload),
+                        'index_cardinality' => $adapter->cardinality($payload),
                     ] : []),
                 );
             }
@@ -132,7 +131,7 @@ final class VersionedPayloadStore
                 'cache_event' => 'build',
                 'built' => true,
                 'query_time_ms' => $this->elapsedMs($buildStarted),
-                'index_cardinality' => $this->cardinality($payload),
+                'index_cardinality' => $adapter->cardinality($payload),
                 'serialized_payload_bytes' => strlen($encoded),
             ] : [];
             $storeStarted = $measure ? microtime(true) : null;
@@ -228,7 +227,7 @@ final class VersionedPayloadStore
                     $measure ? [
                         ...$redisMeta,
                         'cache_event' => $decodeStatus->value,
-                        'index_cardinality' => $this->cardinality($decoded->payload),
+                        'index_cardinality' => $adapter->cardinality($decoded->payload),
                         'serialized_payload_bytes' => is_string($raw) ? strlen($raw) : null,
                     ] : [],
                 );
@@ -270,11 +269,6 @@ final class VersionedPayloadStore
             new BuildHandle,
             $measure ? [...$redisMeta, 'cache_event' => 'building'] : [],
         );
-    }
-
-    private function cardinality(mixed $payload): ?int
-    {
-        return is_countable($payload) ? count($payload) : null;
     }
 
     private function elapsedMs(?float $startedAt): float

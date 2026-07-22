@@ -19,4 +19,9 @@ final class ModelIndexAdapter implements PayloadAdapter
 
         return PayloadDecodeResult::valid($ids, $ids === []);
     }
+
+    public function cardinality(mixed $payload): ?int
+    {
+        return is_countable($payload) ? count($payload) : null;
+    }
 }

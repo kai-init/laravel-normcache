@@ -29,4 +29,9 @@ final class ThroughIndexAdapter implements PayloadAdapter
             'throughKeys' => $decoded['t'],
         ], $decoded['i'] === []);
     }
+
+    public function cardinality(mixed $payload): ?int
+    {
+        return is_array($payload['ids'] ?? null) ? count($payload['ids']) : null;
+    }
 }

@@ -266,7 +266,6 @@ class CacheKeyBuilder
         array $depClasses,
         array $depTableKeys = [],
         ?CacheSpace $space = null,
-        ?string $connection = null,
     ): array {
         $space ??= $this->activeSpace;
 
@@ -285,8 +284,10 @@ class CacheKeyBuilder
         $seen[$classKey] = true;
         $all[] = $classKey;
 
-        foreach ($this->sortClassesByKey($depClasses, $connection) as $class) {
-            $key = $this->classKey($class, $connection);
+        // Each dependency class resolves its own declared connection — $classKey above is the
+        // only key that should key off the root query's connection.
+        foreach ($this->sortClassesByKey($depClasses) as $class) {
+            $key = $this->classKey($class);
 
             if (!isset($seen[$key])) {
                 $seen[$key] = true;
@@ -358,9 +359,9 @@ class CacheKeyBuilder
         return "{$connection}:{$model->getTable()}";
     }
 
-    private function sortClassesByKey(array $classes, ?string $connection = null): array
+    private function sortClassesByKey(array $classes): array
     {
-        usort($classes, fn($a, $b) => strcmp($this->classKey($a, $connection), $this->classKey($b, $connection)));
+        usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
 
         return $classes;
     }

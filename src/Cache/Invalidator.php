@@ -25,6 +25,9 @@ final class Invalidator
     /** @var array<string, array<class-string<Model>, true>> */
     private array $modelVersionQueue = [];
 
+    /** @var array<string, list<Model>> */
+    private array $modelEvictionQueue = [];
+
     /** @var array<string, array<string, true>> */
     private array $tableVersionQueue = [];
 
@@ -48,16 +51,17 @@ final class Invalidator
             $this->invalidateVersion($model);
         }
 
-        return new ModelWriteState($model->exists, $preInvalidated);
+        return new ModelWriteState($model->exists);
     }
 
+    // Always bump post-write too: a pre-write-only bump can race a concurrent read.
     public function completeModelSave(Model $model, ModelWriteState $state, bool $succeeded): void
     {
-        if (!$succeeded || !$this->modelWriteChanged($model, $state->existed) || $state->preInvalidated) {
+        if (!$succeeded || !$this->modelWriteChanged($model, $state->existed)) {
             return;
         }
 
-        $this->invalidateVersion($model);
+        $this->invalidateVersion($model, isInsert: !$state->existed);
     }
 
     public function recordBuilderWrite(Model $model, WriteOperation $operation, bool $changed): void
@@ -67,7 +71,7 @@ final class Invalidator
         }
 
         if ($operation->isInsert()) {
-            $this->invalidateVersion($model);
+            $this->invalidateVersion($model, isInsert: true);
 
             return;
         }
@@ -94,18 +98,51 @@ final class Invalidator
         $this->invalidatePivotTableVersion($connection, $table, $modelClasses);
     }
 
-    public function invalidateVersion(Model $model): void
+    // isInsert: a freshly-inserted row has no prior cache entry, so eviction is skipped.
+    public function invalidateVersion(Model $model, bool $isInsert = false): void
     {
         if (!$this->config->enabled) {
             return;
         }
 
         $connection = $model->getConnection()->getName();
+
         $this->queueOrRun(
             $connection,
-            fn() => $this->modelVersionQueue[$connection][$model::class] = true,
-            fn() => $this->invalidateModelNow($model::class, $connection),
+            function () use ($connection, $model, $isInsert): void {
+                $this->modelVersionQueue[$connection][$model::class] = true;
+                if (!$isInsert) {
+                    $this->modelEvictionQueue[$connection][] = $model;
+                }
+            },
+            function () use ($model, $connection, $isInsert): void {
+                if (!$isInsert) {
+                    $this->evictModelKey($model, $connection);
+                }
+                $this->invalidateModelNow($model::class, $connection);
+            },
         );
+    }
+
+    // $freshTableSpaces must match whatever the paired version bump uses — otherwise a space
+    // registered between the two reads can get its version bumped but not its key evicted.
+    private function evictModelKey(Model $model, string $connection, bool $freshTableSpaces = false): void
+    {
+        $id = $model->getKey();
+        if ($id === null) {
+            return;
+        }
+
+        $classKey = $this->keys->classKey($model::class, $connection);
+        $keys = [];
+        foreach ($this->modelSpaces($model::class, $connection, $freshTableSpaces) as $space) {
+            $version = $this->versions->currentVersion($model::class, $space, $connection);
+            $keys[] = $this->keys->modelPrefix($classKey, $version, $space) . $id;
+        }
+
+        if ($keys !== []) {
+            $this->store->delete($keys);
+        }
     }
 
     public function flushModel(Model|string $model): void
@@ -277,6 +314,7 @@ final class Invalidator
     {
         $flushes = array_keys($this->flushQueue[$connection] ?? []);
         $models = array_keys($this->modelVersionQueue[$connection] ?? []);
+        $evictions = $this->modelEvictionQueue[$connection] ?? [];
         $versions = $this->versionQueue[$connection] ?? [];
         $tables = array_keys($this->tableVersionQueue[$connection] ?? []);
         $this->discardPending($connection);
@@ -285,7 +323,11 @@ final class Invalidator
             return;
         }
 
-        CacheFallback::attempt($this->config, function () use ($connection, $flushes, $models, $versions, $tables): void {
+        CacheFallback::attempt($this->config, function () use ($connection, $flushes, $models, $evictions, $versions, $tables): void {
+            foreach ($evictions as $model) {
+                $this->evictModelKey($model, $connection, freshTableSpaces: true);
+            }
+
             /** @var array<string, array<string, true>> $invalidated */
             $invalidated = [];
             /** @var array<string, array<string, CacheSpace>> $pending */
@@ -341,12 +383,19 @@ final class Invalidator
 
     public function discardPending(string $connection): void
     {
-        unset($this->flushQueue[$connection], $this->modelVersionQueue[$connection], $this->versionQueue[$connection], $this->tableVersionQueue[$connection]);
+        unset(
+            $this->flushQueue[$connection],
+            $this->modelVersionQueue[$connection],
+            $this->modelEvictionQueue[$connection],
+            $this->versionQueue[$connection],
+            $this->tableVersionQueue[$connection],
+        );
     }
 
     public function discardAllPending(): void
     {
-        $this->flushQueue = $this->modelVersionQueue = $this->versionQueue = $this->tableVersionQueue = [];
+        $this->flushQueue = $this->modelVersionQueue = $this->modelEvictionQueue
+            = $this->versionQueue = $this->tableVersionQueue = [];
     }
 
     /** @return list<CacheSpace> */

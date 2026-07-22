@@ -63,6 +63,9 @@ trait CachesOneOrManyThrough
         $hash = QueryHasher::forResultQuery($builder, $base);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
+        $connection = $this->related->getConnection()->getName()
+            ?? $this->related->getConnectionName()
+            ?? '';
         $depClasses = array_values(array_unique([
             $throughClass,
             ...$plan->dependencies->depClassesFor($relatedClass),
@@ -81,6 +84,7 @@ trait CachesOneOrManyThrough
                 $depClasses,
                 $depTableKeys,
                 $ttl,
+                $connection,
                 $prepared,
                 $shouldCacheModels,
                 $selectedColumns,
@@ -110,6 +114,7 @@ trait CachesOneOrManyThrough
                     depClasses: $depClasses,
                     depTableKeys: $depTableKeys,
                     ttl: $ttl,
+                    connection: $connection,
                 );
 
                 if ($outcome->status !== CacheStatus::Hit && $outcome->status !== CacheStatus::Empty) {
@@ -125,6 +130,7 @@ trait CachesOneOrManyThrough
                             $modelAttrs,
                             $outcome->build,
                             NormCache::keys()->activeSpace(),
+                            $connection,
                         );
                     }
 
@@ -141,7 +147,7 @@ trait CachesOneOrManyThrough
                     ? (int) $outcome->build->expectedVersions[0]
                     : null;
                 $raw = $resolvedVersion !== null
-                    ? NormCache::modelCache()->rawForVersion($relatedClass, $ids, $resolvedVersion)
+                    ? NormCache::modelCache()->rawForVersion($relatedClass, $ids, $resolvedVersion, $connection)
                     : null;
 
                 $matchStarted = CacheReporter::active() ? microtime(true) : null;
@@ -173,6 +179,7 @@ trait CachesOneOrManyThrough
     {
         if (method_exists($this, 'isOneOfMany') && $this->isOneOfMany()) {
             $query->dependsOn([$this->throughParent::class]);
+            $query->acknowledgeOfManySelfJoin();
         }
     }
 

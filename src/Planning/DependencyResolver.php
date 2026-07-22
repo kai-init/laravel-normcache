@@ -33,8 +33,9 @@ final class DependencyResolver
                     ...$required->tables,
                     ...$explicitTables,
                 ])),
-                safe: $required->safe,
-                reasons: $required->reasons,
+                // An explicit dependsOn() adds deps, it doesn't vouch for ones QueryAnalyzer couldn't infer.
+                safe: $inferred->safe && $required->safe,
+                reasons: [...$inferred->reasons, ...$required->reasons],
             );
         }
 

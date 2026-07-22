@@ -191,6 +191,28 @@ class CacheEventsTest extends TestCase
         });
     }
 
+    public function test_empty_collection_result_reports_empty_status_not_hit_on_warm_read(): void
+    {
+        $query = fn() => Author::query()
+            ->join('posts', 'posts.author_id', '=', 'authors.id')
+            ->dependsOn([Post::class])
+            ->where('authors.name', 'nobody')
+            ->select('authors.*')
+            ->get();
+
+        $query();
+
+        Event::fake([QueryCacheHit::class]);
+
+        $warm = $query();
+
+        $this->assertCount(0, $warm);
+        Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $event): bool {
+            return ($event->meta['cache_kind'] ?? null) === CacheKind::Result->value
+                && ($event->meta['cache_status'] ?? null) === CacheStatus::Empty->value;
+        });
+    }
+
     public function test_result_depends_on_miss_fires_query_cache_miss(): void
     {
         $author = Author::create(['name' => 'Alice']);

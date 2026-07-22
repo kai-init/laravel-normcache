@@ -82,6 +82,24 @@ class CacheKeyBuilderTest extends UnitTestCase
         $this->assertNotSame($defaultVer[0], $contentVer[0], 'same classKey under two spaces must produce distinct version keys');
     }
 
+    public function test_dep_key_pairs_resolves_each_dependency_classes_own_connection(): void
+    {
+        $keys = new CacheKeyBuilder;
+        $secondaryDep = new class extends Model
+        {
+            protected $connection = 'secondary_testing';
+            protected $table = 'secondary_dep_models';
+        };
+
+        $expectedDepKey = $keys->classKey($secondaryDep::class);
+        $this->assertSame('secondary_testing:secondary_dep_models', $expectedDepKey);
+
+        [$versionKeys] = $keys->depKeyPairs('testing:authors', [$secondaryDep::class]);
+
+        $this->assertContains($keys->verKey($expectedDepKey), $versionKeys);
+        $this->assertContains($keys->verKey('testing:authors'), $versionKeys);
+    }
+
     public function test_active_space_is_exposed_and_restored(): void
     {
         $keys = new CacheKeyBuilder('{nc}:', 'test:');

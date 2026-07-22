@@ -65,6 +65,7 @@ final class RelationIndexCache
         callable $onMiss,
         callable $onStore,
         callable $onHit,
+        ?string $connection = null,
     ): Collection {
         $result = $this->fetchPivot(
             $parentClass,
@@ -73,6 +74,7 @@ final class RelationIndexCache
             $parentIds,
             $constraintHash,
             $pivotTableKey,
+            $connection,
         );
 
         if ($result->status === CacheStatus::Building) {
@@ -83,6 +85,7 @@ final class RelationIndexCache
                 $parentIds,
                 $constraintHash,
                 $pivotTableKey,
+                $connection,
             );
 
             if ($result === null) {
@@ -118,11 +121,12 @@ final class RelationIndexCache
         array $parentIds,
         string $constraintHash,
         string $pivotTableKey,
+        ?string $connection = null,
     ): PivotCacheResult {
         $measure = CacheReporter::detailed();
         $startedAt = $measure ? microtime(true) : null;
         $parentKey = $this->keys->classKey($parentClass);
-        $relatedKey = $this->keys->classKey($relatedClass);
+        $relatedKey = $this->keys->classKey($relatedClass, $connection);
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs(
             $relatedKey,
             [],
@@ -249,8 +253,9 @@ final class RelationIndexCache
         array $parentIds,
         string $constraintHash,
         string $pivotTableKey,
+        ?string $connection = null,
     ): ?PivotCacheResult {
-        $relatedKey = $this->keys->classKey($relatedClass);
+        $relatedKey = $this->keys->classKey($relatedClass, $connection);
         [, $wakeKey] = $this->pivotLockKeys(
             $relatedKey,
             $relation,
@@ -268,6 +273,7 @@ final class RelationIndexCache
             $parentIds,
             $constraintHash,
             $pivotTableKey,
+            $connection,
         );
 
         if ($result->status === CacheStatus::Building) {

@@ -21,4 +21,9 @@ final class PivotIndexAdapter implements PayloadAdapter
             ? PayloadDecodeResult::valid($decoded, $decoded === [])
             : PayloadDecodeResult::corrupt();
     }
+
+    public function cardinality(mixed $payload): ?int
+    {
+        return is_countable($payload) ? count($payload) : null;
+    }
 }

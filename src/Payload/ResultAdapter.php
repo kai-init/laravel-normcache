@@ -18,7 +18,12 @@ final class ResultAdapter implements PayloadAdapter
         $decoded = $this->store->unserialize($payload);
 
         return is_array($decoded)
-            ? PayloadDecodeResult::valid($decoded)
+            ? PayloadDecodeResult::valid($decoded, $decoded === [])
             : PayloadDecodeResult::corrupt();
+    }
+
+    public function cardinality(mixed $payload): ?int
+    {
+        return is_countable($payload) ? count($payload) : null;
     }
 }

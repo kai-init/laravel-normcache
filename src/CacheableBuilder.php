@@ -202,6 +202,19 @@ class CacheableBuilder extends Builder
         return $this->capturedOpaqueJoins;
     }
 
+    public function acknowledgeOpaqueJoins(int $count): void
+    {
+        $this->capturedOpaqueJoins = $count;
+    }
+
+    // toSql() forces ofMany()'s lazily-registered self-join to materialize before counting it.
+    public function acknowledgeOfManySelfJoin(): void
+    {
+        $base = $this->getQuery();
+        $base->toSql();
+        $this->acknowledgeOpaqueJoins(count($base->joins ?? []));
+    }
+
     public function hasCapturedOpaqueFrom(): bool
     {
         return $this->capturedOpaqueFrom;

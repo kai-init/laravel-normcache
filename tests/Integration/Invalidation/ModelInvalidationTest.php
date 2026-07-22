@@ -283,7 +283,7 @@ class ModelInvalidationTest extends TestCase
         );
     }
 
-    public function test_dirty_existing_model_save_invalidates_once_outside_transaction(): void
+    public function test_dirty_existing_model_save_invalidates_before_and_after_write(): void
     {
         $author = Author::create(['name' => 'Alice']);
 
@@ -304,9 +304,9 @@ class ModelInvalidationTest extends TestCase
         $after = NormCache::currentVersion(Post::class);
 
         $this->assertSame(
-            $before + 1,
+            $before + 2,
             $after,
-            'Dirty existing model save should invalidate the model version exactly once.'
+            'Dirty existing model save should invalidate both before and after the write.'
         );
     }
 
@@ -378,6 +378,32 @@ class ModelInvalidationTest extends TestCase
         $after = NormCache::currentVersion(Post::class);
 
         $this->assertSame($before + 1, $after);
+    }
+
+    public function test_updating_model_evicts_own_cache_key_even_when_version_bump_is_deferred(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+
+        $this->cacheManager()->config()->cooldown = 60;
+
+        $author->update(['name' => 'Alicia']);
+
+        $this->assertSame('Alicia', Author::find($author->id)->name);
+    }
+
+    public function test_deleting_model_evicts_own_cache_key_even_when_version_bump_is_deferred(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+
+        $this->cacheManager()->config()->cooldown = 60;
+
+        $author->delete();
+
+        $this->assertNull(Author::find($author->id));
     }
 
     public function test_save_invalidates_when_saving_listener_makes_a_clean_model_dirty(): void
