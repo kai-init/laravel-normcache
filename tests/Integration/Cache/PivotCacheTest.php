@@ -59,6 +59,35 @@ class PivotCacheTest extends TestCase
         );
     }
 
+    public function test_belongs_to_many_detach_without_changes_does_not_invalidate(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
+
+        $author->tags()->detach($tag->id);
+
+        $this->assertSame(
+            $versionBefore,
+            NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag'),
+        );
+    }
+
+    public function test_belongs_to_many_sync_without_changes_does_not_invalidate(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $tag = Tag::create(['name' => 'Fiction']);
+        $author->tags()->attach($tag->id);
+        $versionBefore = NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag');
+
+        $author->tags()->sync([$tag->id]);
+
+        $this->assertSame(
+            $versionBefore,
+            NormCache::currentTableVersion($author->getConnection()->getName(), 'author_tag'),
+        );
+    }
+
     public function test_belongs_to_many_update_existing_pivot_invalidates_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -122,7 +151,7 @@ class PivotCacheTest extends TestCase
         $pivotTableKey = NormCache::keys()->tableKey($author->getConnection()->getName(), 'author_tag');
 
         // Claim the same build lock another concurrent request would, before the eager load runs.
-        $claimed = NormCache::results()->fetchPivot(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
+        $claimed = NormCache::relationIndexes()->fetchPivot(Author::class, Tag::class, 'tags', [$author->id], $constraintHash, $pivotTableKey);
         $this->assertNotNull($claimed->build->buildingKey);
 
         DB::enableQueryLog();
@@ -597,7 +626,7 @@ class PivotCacheTest extends TestCase
         $author->tags()->select('tags.*')->selectRaw('1 as polluted')->get();
 
         // The model cache should NOT contain 'polluted'
-        $cached = NormCache::hydrator()->getModels([$tag->id], Tag::class);
+        $cached = NormCache::modelCache()->getModels([$tag->id], Tag::class);
         $this->assertArrayNotHasKey('polluted', collect($cached)->first()->getRawOriginal());
     }
 

@@ -48,6 +48,7 @@
     "scripts": {
         "test": "vendor/bin/phpunit",
         "test:cluster": "REDIS_CLUSTER=true REDIS_PORT=7010 vendor/bin/phpunit",
+        "bench": "vendor/bin/phpunit tests/Benchmark",
         "lint": "vendor/bin/pint --test",
         "format": "vendor/bin/pint",
         "analyse": "vendor/bin/phpstan analyse --memory-limit=512M"

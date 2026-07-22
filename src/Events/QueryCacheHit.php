@@ -7,5 +7,6 @@ final readonly class QueryCacheHit
     public function __construct(
         public string $modelClass,
         public string $key,
+        public array $meta = [],
     ) {}
 }

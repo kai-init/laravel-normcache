@@ -5,7 +5,6 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Enums\CacheStatus;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
@@ -80,14 +79,17 @@ class OptimizationsTest extends TestCase
         Author::where('name', 'Payload Author')->get();
 
         $query = Author::where('name', 'Payload Author');
-        $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
-        $result = app('normcache')->queries()->fetch(Author::class, $hash, null, [], []);
+        $hash = QueryHasher::forModelIndexQuery($query, $query->toBase());
+        $manager = app('normcache');
+        $classKey = $manager->keys()->classKey(Author::class);
+        $version = $manager->currentVersion(Author::class);
+        $queryKey = $manager->keys()->prefixed("query:{$classKey}:v{$version}:{$hash}");
+        $ids = json_decode($manager->store()->getRaw($queryKey), true, flags: JSON_THROW_ON_ERROR);
+        $models = $manager->modelCache()->rawForVersion(Author::class, $ids, $version);
 
-        $this->assertSame(CacheStatus::Hit, $result->status);
-        $this->assertSame([(string) $author->id], $result->ids);
-        $this->assertIsArray($result->models);
-        $this->assertIsArray($result->models[0]);
-        $this->assertSame('Payload Author', $result->models[0]['name']);
+        $this->assertSame([(string) $author->id], $ids);
+        $this->assertIsArray($models[0]);
+        $this->assertSame('Payload Author', $models[0]['name']);
     }
 
     public function test_corrupt_query_cache_payload_degrades_to_miss_and_repairs(): void
@@ -97,7 +99,7 @@ class OptimizationsTest extends TestCase
         $query = Author::where('name', 'Corruptible Author');
         $query->get();
 
-        $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
+        $hash = QueryHasher::forModelIndexQuery($query, $query->toBase());
         $classKey = app('normcache')->keys()->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 

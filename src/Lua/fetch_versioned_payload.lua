@@ -1,5 +1,5 @@
 -- Resolve versions with cooldown, fetch versioned payload, claim build lock on miss.
--- Used for: normalized query (single and multi-dep), through-relation, and result cache.
+-- Used for: model-index, through-relation, and result cache entries.
 --
 -- KEYS[1..n]    = version keys
 -- KEYS[n+1..2n] = scheduled keys when cooldown is enabled
@@ -7,7 +7,7 @@
 -- KEYS[p+1]     = building key prefix
 -- KEYS[p+2]     = wake prefix
 -- ARGV[1]       = payload hash
--- ARGV[2]       = lock suffix (= hash for normalized query/through; sha1(tag+hash) for result)
+-- ARGV[2]       = lock suffix (= hash for model index/through; identity hash for result)
 -- ARGV[3]       = current timestamp in ms
 -- ARGV[4]       = building lock TTL in seconds
 -- ARGV[5]       = building lock token

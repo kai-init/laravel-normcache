@@ -310,7 +310,7 @@ class ClusterSpacesTest extends TestCase
         $this->assertAnyKeysForHashTag('nc:content', 'test:through:*');
         $this->assertNoKeysForHashTag('nc', 'test:through:*');
 
-        // storeManyVersionedResults issues batched multi-key Lua writes; pivot is the highest CROSSSLOT risk.
+        // Pivot storage issues batched multi-key Lua writes and is the highest CROSSSLOT risk.
         $this->assertNoCrossSlot(fn() => SpacedPost::query()->with('catalogTags')->get());
         $this->assertAnyKeysForHashTag('nc:catalog', 'test:pivot:*');
         $this->assertNoKeysForHashTag('nc:content', 'test:pivot:*');

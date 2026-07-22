@@ -3,13 +3,14 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Contracts\Database\Query\Expression;
-use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Database\Query\Grammars\Grammar;
-use Illuminate\Database\Query\Processors\Processor;
+use Illuminate\Database\Query\Grammars\SQLiteGrammar;
+use Illuminate\Database\Query\Processors\SQLiteProcessor;
+use Illuminate\Database\SQLiteConnection;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\QueryAnalyzer;
-use NormCache\Values\QueryInspection;
+use NormCache\Planning\QueryInspection;
+use PDO;
 use PHPUnit\Framework\TestCase;
 
 class QueryAnalyzerTest extends TestCase
@@ -275,10 +276,11 @@ class QueryAnalyzerTest extends TestCase
 
     private function makeBaseQuery(?array $columns = null, string $from = 'authors'): Builder
     {
+        $connection = new SQLiteConnection(new PDO('sqlite::memory:'));
         $query = new Builder(
-            connection: $this->createStub(ConnectionInterface::class),
-            grammar: $this->createStub(Grammar::class),
-            processor: $this->createStub(Processor::class),
+            connection: $connection,
+            grammar: new SQLiteGrammar($connection),
+            processor: new SQLiteProcessor,
         );
 
         $query->columns = $columns;

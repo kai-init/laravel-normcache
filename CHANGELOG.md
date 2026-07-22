@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] — Unreleased
+
+### Changed
+
+- **BREAKING:** cache planning terminology is now `ModelIndex` and `Result` rather than `NormalizedQuery` and `VersionedResult`. `CachePlan::isNormalized()` is replaced by `usesModelCache()`.
+- Cache reads are owned by `ModelCache`, `ModelIndexCache`, `RelationIndexCache`, and `ResultCache`; the old executor and generic repository classes are removed.
+- Shared single-entry Redis lifecycle behavior now lives in `VersionedPayloadStore`, with payload validation delegated to family-specific adapters.
+- Write invalidation is owned by `Invalidator`; `HandlesInvalidation` remains a compatibility shim and `BuilderInvalidation` is the builder write seam.
+
+### Fixed
+
+- Index, through, and pivot cache hits pass the Lua-resolved model version into `ModelCache`, preserving the atomic version handoff before the model MGET.
+
+---
+
 ## [3.0.0] — 2026-07-09
 
 ### Added

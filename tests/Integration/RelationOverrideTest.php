@@ -75,7 +75,7 @@ class RelationOverrideTest extends TestCase
         $this->assertSame(
             1,
             $queryCount,
-            'Expected normalized cache to refetch only the evicted Post row, not the whole relation'
+            'Expected the model-index cache to refetch only the evicted Post row, not the whole relation'
         );
     }
 
@@ -147,7 +147,7 @@ class RelationOverrideTest extends TestCase
             ->find($author->id);
 
         $this->assertSame(['A Post'], $second->posts->pluck('title')->all());
-        $this->assertSame(0, $queryCount, 'Expected limited hasMany eager load to warm-hit the normalized cache');
+        $this->assertSame(0, $queryCount, 'Expected limited hasMany eager load to warm-hit the model-index cache');
     }
 
     public function test_has_many_result_payload_with_count_invalidates_when_counted_model_changes(): void

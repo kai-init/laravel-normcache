@@ -9,11 +9,10 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
 use NormCache\Enums\CacheOperation;
 use NormCache\Enums\PlanningMode;
-use NormCache\Facades\NormCache;
+use NormCache\Values\CacheConfig;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 final class CachePlanner
 {
@@ -38,9 +37,11 @@ final class CachePlanner
         | QueryInspection::HAVING;
 
     public function __construct(
+        private readonly CachePlanSpaceValidator $spaceValidator,
+        private readonly CacheConfig $config,
         private readonly QueryAnalyzer $analyzer = new QueryAnalyzer,
         private readonly DependencyResolver $dependencies = new DependencyResolver,
-        private readonly ?CachePlanSpaceValidator $spaceValidator = null,
+        private readonly QueryEligibility $eligibility = new QueryEligibility,
     ) {}
 
     public function analyzer(): QueryAnalyzer
@@ -56,14 +57,14 @@ final class CachePlanner
     ): CachePlan {
         $model = $builder->getModel();
         $cacheSkipped = $builder->isCacheSkipped();
-        $cacheDisabled = !NormCache::isEnabled();
+        $cacheDisabled = !$this->cacheEnabled();
         $explain = $planningMode === PlanningMode::Explain;
 
         if ($cacheSkipped || $cacheDisabled || isset($context->contextReasons['opted_out'])) {
             return $this->globalBypass($builder, $model, $context, $cacheSkipped, $cacheDisabled);
         }
 
-        if ($base->useWritePdo) {
+        if (QueryEligibility::usesWritePdo($base)) {
             return CachePlan::bypass(
                 operation: $context->operation,
                 dependencies: $this->dependencies->resolveBase($builder, $model, $context),
@@ -94,7 +95,7 @@ final class CachePlanner
                 CacheOperation::Models => $this->planModels($builder, $model, $base, $context, $inspection, $insideTransaction, $explain),
             };
 
-        return $this->spaceValidator()->validate($plan, $builder, $model, $explain);
+        return $this->spaceValidator->validate($plan, $builder, $model, $explain);
     }
 
     public function applySpaceValidation(
@@ -103,12 +104,12 @@ final class CachePlanner
         Model $model,
         bool $explain = false,
     ): CachePlan {
-        return $this->spaceValidator()->validate($plan, $builder, $model, $explain);
+        return $this->spaceValidator->validate($plan, $builder, $model, $explain);
     }
 
-    private function spaceValidator(): CachePlanSpaceValidator
+    private function cacheEnabled(): bool
     {
-        return $this->spaceValidator ?? CachePlanSpaceValidator::standalone();
+        return $this->config->enabled;
     }
 
     private function globalBypass(
@@ -162,7 +163,7 @@ final class CachePlanner
         $explicitTables = $builder->explicitTableDependencies();
         $hasExplicit = $builder->hasExplicitDependencies();
 
-        if ($this->qualifiesForDirectModels($explain, $insideTransaction, $hasExplicit, $context, $inferred, $inspection)) {
+        if ($this->eligibility->qualifiesForDirectModels($explain, $insideTransaction, $hasExplicit, $inspection)) {
             return CachePlan::direct(
                 operation: $context->operation,
                 dependencies: DependencySet::singleModel($modelClass),
@@ -171,10 +172,7 @@ final class CachePlanner
             );
         }
 
-        $hasDependencyBypass = $inspection->hasDependencyBypass();
-        $hasContextDependencyBypass = isset($inspection->contextReasons['dependency']);
-
-        $dependencies = $this->dependsOnPrimaryModelOnly($hasExplicit, $inferred, $hasDependencyBypass, $hasContextDependencyBypass)
+        $dependencies = $this->eligibility->dependsOnPrimaryModelOnly($hasExplicit, $inspection)
             ? DependencySet::singleModel($modelClass)
             : $this->dependencies->resolve(
                 $modelClass,
@@ -185,19 +183,12 @@ final class CachePlanner
                 $hasExplicit,
             );
 
-        if ($insideTransaction
-            || $inspection->hasSafetyBypass()) {
+        if ($this->eligibility->hasSafetyBypass($inspection, $insideTransaction)) {
             return $this->safetyBypass($context, $inspection, $dependencies, $insideTransaction);
         }
 
-        $normalizable = $inferred->hasNoDependencies()
-            && !$hasDependencyBypass
-            && !$hasContextDependencyBypass
-            && $inspection->normalizationFlags() === 0
-            && !isset($inspection->contextReasons['normalization']);
-
-        if ($normalizable && $dependencies->safe) {
-            return CachePlan::normalized(
+        if ($this->eligibility->canUseModelIndex($inspection, $dependencies)) {
+            return CachePlan::modelIndex(
                 operation: $context->operation,
                 dependencies: $dependencies,
                 columns: $context->columns,
@@ -205,8 +196,8 @@ final class CachePlanner
             );
         }
 
-        if ($dependencies->safe && $this->hasResultDependencies($inspection, $hasExplicit)) {
-            if ($this->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
+        if ($this->eligibility->canUseResult($inspection, $dependencies, $hasExplicit)) {
+            if ($this->eligibility->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
                 return CachePlan::bypass(
                     operation: $context->operation,
                     dependencies: $dependencies,
@@ -302,11 +293,7 @@ final class CachePlanner
         QueryInspection $inspection,
         int $bypassFlags,
     ): ?CachePlan {
-        if (!$inspection->dependencies->safe || !$inspection->dependencies->hasNoDependencies()) {
-            return null;
-        }
-
-        if (($inspection->flags & $bypassFlags) !== 0) {
+        if (!$this->eligibility->canUseSimpleResult($inspection, $bypassFlags)) {
             return null;
         }
 
@@ -362,44 +349,12 @@ final class CachePlanner
     private function activeSoftDeleteScopeColumn(CacheableBuilder $builder, Model $model): ?string
     {
         if (!$model::hasGlobalScope(SoftDeletingScope::class)
-            || in_array(SoftDeletingScope::class, $builder->removedScopes(), true)
-            || !method_exists($model, 'getQualifiedDeletedAtColumn')) {
+            || in_array(SoftDeletingScope::class, $builder->removedScopes(), true)) {
             return null;
         }
 
+        /** @phpstan-ignore-next-line SoftDeletingScope is provided by SoftDeletes. */
         return $model->getQualifiedDeletedAtColumn();
-    }
-
-    private function qualifiesForDirectModels(
-        bool $explain,
-        bool $insideTransaction,
-        bool $hasExplicit,
-        CachePlanContext $context,
-        DependencySet $inferred,
-        QueryInspection $inspection,
-    ): bool {
-        return !$explain
-            && !$insideTransaction
-            && !$hasExplicit
-            && $inspection->contextReasons === []
-            && $inferred->safe
-            && $inferred->hasNoDependencies()
-            && $inspection->primaryKeys !== null
-            && $inspection->normalizationFlags() === 0
-            && !$inspection->hasSafetyBypass();
-    }
-
-    private function dependsOnPrimaryModelOnly(
-        bool $hasExplicit,
-        DependencySet $inferred,
-        bool $hasDependencyBypass,
-        bool $hasContextDependencyBypass,
-    ): bool {
-        return !$hasExplicit
-            && $inferred->safe
-            && $inferred->hasNoDependencies()
-            && !$hasDependencyBypass
-            && !$hasContextDependencyBypass;
     }
 
     private function safetyBypass(
@@ -408,35 +363,15 @@ final class CachePlanner
         DependencySet $dependencies,
         bool $insideTransaction,
     ): ?CachePlan {
-        if (!$insideTransaction
-            && !$inspection->hasSafetyBypass()) {
+        if (!$this->eligibility->hasSafetyBypass($inspection, $insideTransaction)) {
             return null;
         }
-
-        $bypassReasons = $this->mergedBypassReasons($inspection, $insideTransaction);
 
         return CachePlan::bypass(
             operation: $context->operation,
             dependencies: $dependencies,
-            bypassReasons: ['safety' => $bypassReasons['safety'] ?? []],
+            bypassReasons: ['safety' => $this->eligibility->safetyReasons($inspection, $insideTransaction)],
         );
-    }
-
-    // SELECT * over a join pulls joined-table columns into hydration; require an explicit select.
-    private function requiresExplicitSelectForJoinResult(
-        CacheableBuilder $builder,
-        QueryBuilder $base,
-        CachePlanContext $context,
-    ): bool {
-        return $context->selectAll
-            && !empty($base->joins)
-            && empty($base->columns)
-            && !$builder->hasAggregateColumns();
-    }
-
-    private function hasResultDependencies(QueryInspection $inspection, bool $hasExplicit): bool
-    {
-        return $hasExplicit || !$inspection->dependencies->hasNoDependencies();
     }
 
     private function resultPlan(

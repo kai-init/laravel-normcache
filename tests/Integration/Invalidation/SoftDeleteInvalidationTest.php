@@ -100,8 +100,7 @@ class SoftDeleteInvalidationTest extends TestCase
         $post->delete();
         $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
 
-        // Trashed models must not be written to the model cache on a miss; normal queries would then surface them.
-        NormCache::hydrator()->getModels([$post->id], Post::class);
+        NormCache::modelCache()->getModels([$post->id], Post::class);
 
         $this->assertNull($this->modelCacheEntry(Post::class, $post->id));
     }
@@ -114,7 +113,7 @@ class SoftDeleteInvalidationTest extends TestCase
         Post::all();
         $post->delete();
 
-        $this->assertSame([], NormCache::hydrator()->getModels([$post->id], Post::class));
+        $this->assertSame([], NormCache::modelCache()->getModels([$post->id], Post::class));
     }
 
     public function test_with_trashed_query_can_return_soft_deleted_model_after_model_cache_miss(): void
@@ -139,8 +138,7 @@ class SoftDeleteInvalidationTest extends TestCase
         Post::all();
         $post->delete();
 
-        // Populate model cache for the deleted ID
-        NormCache::hydrator()->getModels([$post->id], Post::class);
+        NormCache::modelCache()->getModels([$post->id], Post::class);
 
         $ids = Post::all()->pluck('id');
         $this->assertNotContains($post->id, $ids);

@@ -4,7 +4,9 @@ namespace NormCache\Support;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
-use NormCache\Cache\ModelHydrator;
+use NormCache\Cache\ModelCache;
+use NormCache\Enums\CacheKind;
+use NormCache\Enums\ResultKind;
 use NormCache\Values\CacheSpace;
 
 class CacheKeyBuilder
@@ -62,6 +64,21 @@ class CacheKeyBuilder
     public function activeSpace(): ?CacheSpace
     {
         return $this->activeSpace;
+    }
+
+    public function namespaceFor(CacheKind $kind, ?ResultKind $resultKind = null): string
+    {
+        return match ($kind) {
+            CacheKind::Model => self::K_MODEL,
+            CacheKind::ModelIndex => self::K_QUERY,
+            CacheKind::RelationIndex => self::K_THROUGH,
+            CacheKind::Result => match ($resultKind) {
+                ResultKind::Count, ResultKind::PaginationCount => self::K_COUNT,
+                ResultKind::Collection => self::K_RESULT,
+                default => self::K_SCALAR,
+            },
+            CacheKind::Version => self::K_VER,
+        };
     }
 
     private function full(string $body, ?CacheSpace $space = null): string
@@ -147,7 +164,7 @@ class CacheKeyBuilder
         self::$deletedAtColumns = [];
         self::$singleDepPairs = [];
 
-        ModelHydrator::reset();
+        ModelCache::reset();
     }
 
     public static function prototype(string $class): Model

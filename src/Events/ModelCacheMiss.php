@@ -7,5 +7,6 @@ final readonly class ModelCacheMiss
     public function __construct(
         public string $modelClass,
         public array $ids,
+        public array $meta = [],
     ) {}
 }

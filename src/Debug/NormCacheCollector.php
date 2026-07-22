@@ -37,6 +37,24 @@ final class NormCacheCollector
         self::$instance?->addModelMeasure($type, $modelClass, $ids, $startTime, $meta);
     }
 
+    public static function recordMetric(
+        string $metric,
+        int|float $value,
+        string $modelClass,
+        array $meta,
+    ): void {
+        self::$instance?->addMetricMeasure($metric, $value, $modelClass, $meta);
+    }
+
+    public static function recordInvalidation(
+        string $dependencyType,
+        string $target,
+        int $count,
+        array $spaces,
+    ): void {
+        self::$instance?->addInvalidationMeasure($dependencyType, $target, $count, $spaces);
+    }
+
     public static function recordBypass(string $modelClass, array $groupedReasons, ?float $startTime): void
     {
         self::$instance?->addBypassMeasure($modelClass, $groupedReasons, $startTime);

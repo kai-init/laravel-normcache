@@ -10,7 +10,7 @@ use NormCache\CacheableBuilder;
 
 final class QueryHasher
 {
-    public static function forNormalizedQuery(CacheableBuilder $builder, QueryBuilder $query): string
+    public static function forModelIndexQuery(CacheableBuilder $builder, QueryBuilder $query): string
     {
         $selectBindings = $query->getRawBindings()['select'];
 
@@ -33,7 +33,7 @@ final class QueryHasher
                 ->cloneWithoutBindings(['order', 'unionOrder']);
         }
 
-        return self::hash(self::forNormalizedQuery($builder, $query) . ':pagination_count');
+        return self::hash(self::forModelIndexQuery($builder, $query) . ':pagination_count');
     }
 
     public static function forScalarQuery(CacheableBuilder $builder, QueryBuilder $query, string $kind, array $columns): string

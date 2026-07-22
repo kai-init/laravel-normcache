@@ -274,7 +274,7 @@ class CacheAccuracyTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'Hello', 'author_id' => $author->id]);
 
-        app('normcache')->hydrator()->getModels([$post->id], Post::class);
+        app('normcache')->modelCache()->getModels([$post->id], Post::class);
 
         $resolved = (new ReflectionProperty(CacheKeyBuilder::class, 'deletedAtColumns'))->getValue();
         $this->assertSame('deleted_at', $resolved[Post::class] ?? null);

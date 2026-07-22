@@ -3,31 +3,19 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\VersionTracker;
-use NormCache\Support\CacheKeyBuilder;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\InstrumentedPost;
 use NormCache\Tests\Fixtures\Models\NewFromBuilderOverridingPost;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
-class ModelHydratorColdHydrationTest extends TestCase
+class ModelCacheColdHydrationTest extends TestCase
 {
     protected function tearDown(): void
     {
         Post::flushEventListeners();
 
         parent::tearDown();
-    }
-
-    private function makeHydrator(): ModelHydrator
-    {
-        $store = $this->cacheManager()->store();
-        $keys = new CacheKeyBuilder;
-        $versions = new VersionTracker($store, $keys);
-
-        return new ModelHydrator($store, $keys, $versions, 3600, true, 5, 200);
     }
 
     public function test_simple_cold_miss_uses_closure_hydration_without_calling_set_raw_attributes(): void
@@ -38,7 +26,7 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->evictModelCache(InstrumentedPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class);
+        $models = $manager->modelCache()->getModels([$post->id], InstrumentedPost::class);
 
         $this->assertCount(1, $models);
         $this->assertSame('Hello', $models[0]->title);
@@ -54,7 +42,7 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->evictModelCache(NewFromBuilderOverridingPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->hydrator()->getModels([$post->id], NewFromBuilderOverridingPost::class);
+        $models = $manager->modelCache()->getModels([$post->id], NewFromBuilderOverridingPost::class);
 
         $this->assertCount(1, $models);
         $this->assertSame('Custom', $models[0]->title);
@@ -97,10 +85,10 @@ class ModelHydratorColdHydrationTest extends TestCase
         });
 
         $manager = $this->buildManager(fireRetrieved: false);
-        $models = $manager->hydrator()->getModels([$post->id], Post::class);
+        $models = $manager->modelCache()->getModels([$post->id], Post::class);
 
         $this->assertCount(1, $models);
-        $this->assertSame(1, $calls, 'Cold-miss closure hydration must fire retrieved exactly once, matching the previous Eloquent-hydration behavior');
+        $this->assertSame(1, $calls, 'Cold-miss hydration must fire retrieved exactly once');
     }
 
     public function test_partial_hit_fires_retrieved_once_per_returned_model(): void
@@ -110,14 +98,14 @@ class ModelHydratorColdHydrationTest extends TestCase
         $missing = Post::create(['title' => 'Missing', 'author_id' => $author->id]);
 
         $manager = $this->buildManager(fireRetrieved: true);
-        $manager->hydrator()->getModels([$cached->id], Post::class);
+        $manager->modelCache()->getModels([$cached->id], Post::class);
 
         $retrievedIds = [];
         Post::retrieved(function (Post $post) use (&$retrievedIds): void {
             $retrievedIds[] = $post->id;
         });
 
-        $models = $manager->hydrator()->getModels([$cached->id, $missing->id], Post::class);
+        $models = $manager->modelCache()->getModels([$cached->id, $missing->id], Post::class);
 
         $this->assertSame([$cached->id, $missing->id], array_map(static fn(Post $post) => $post->id, $models));
         $this->assertSame(
@@ -134,7 +122,7 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->evictModelCache(InstrumentedPost::class, $post->id);
 
         $manager = $this->buildManager();
-        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class);
+        $models = $manager->modelCache()->getModels([$post->id], InstrumentedPost::class);
 
         $native = InstrumentedPost::find($post->id);
 
@@ -195,7 +183,7 @@ class ModelHydratorColdHydrationTest extends TestCase
         $joinedQuery = InstrumentedPost::query()->withoutCache()
             ->join('authors', 'authors.id', '=', 'posts.author_id');
 
-        $models = $manager->hydrator()->getModels([$post->id], InstrumentedPost::class, null, null, $joinedQuery, true);
+        $models = $manager->modelCache()->getModels([$post->id], InstrumentedPost::class, null, null, $joinedQuery, true);
 
         $this->assertCount(1, $models);
         $this->assertSame('JoinAmbiguous', $models[0]->title);
@@ -212,27 +200,15 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->evictModelCache(InstrumentedPost::class, $post2->id);
 
         $manager = $this->buildManager();
-        // Groups by author_id: post1 and post2 share an author, so a naive
-        // whereIn(pk, [post1, post2]) on top of this GROUP BY would collapse to one row.
         $groupedQuery = InstrumentedPost::query()->withoutCache()->groupBy('author_id');
 
-        $models = $manager->hydrator()->getModels([$post1->id, $post2->id], InstrumentedPost::class, null, null, $groupedQuery, true);
+        $models = $manager->modelCache()->getModels([$post1->id, $post2->id], InstrumentedPost::class, null, null, $groupedQuery, true);
 
         $this->assertCount(2, $models, 'Both requested ids must be resolved, not collapsed by the original query\'s GROUP BY');
         $titles = array_map(fn($m) => $m->title, $models);
         $this->assertEqualsCanonicalizing(['GroupedOne', 'GroupedTwo'], $titles);
     }
 
-    /**
-     * Laravel applies whereIn()/where() only to the *first* arm of a union — the second arm is
-     * left unconstrained. If prepareMissedQuery() preserved a UNION untouched, a cold-miss
-     * refetch over a unioned missedQuery would fetch BOTH the requested row and the unrelated
-     * row from the union's second arm, queuing the unrelated row's attributes for caching under
-     * its own key as a side effect. The final return value gets filtered back down to the
-     * requested ids regardless (see the $ordered loop in getModels()), so the SQL actually
-     * executed for the refetch — not the returned models — is the only signal that distinguishes
-     * correct behavior from this bug.
-     */
     public function test_cold_miss_with_unioned_missed_query_does_not_run_the_union_for_the_refetch(): void
     {
         $author = Author::create(['name' => 'Quinn']);
@@ -247,7 +223,7 @@ class ModelHydratorColdHydrationTest extends TestCase
         );
 
         DB::enableQueryLog();
-        $models = $manager->hydrator()->getModels([$wanted->id], InstrumentedPost::class, null, null, $unionedQuery, true);
+        $models = $manager->modelCache()->getModels([$wanted->id], InstrumentedPost::class, null, null, $unionedQuery, true);
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
@@ -255,6 +231,6 @@ class ModelHydratorColdHydrationTest extends TestCase
         $this->assertSame('Wanted', $models[0]->title);
 
         $refetchRanAUnion = array_filter($queries, fn($q) => str_contains(strtolower($q['query']), 'union'));
-        $this->assertSame([], $refetchRanAUnion, 'The original union must not be reused for the by-id refetch — it leaves the second arm unconstrained by the requested ids');
+        $this->assertSame([], $refetchRanAUnion, 'The original union must not be reused for the by-id refetch');
     }
 }

@@ -4,31 +4,23 @@ namespace NormCache\Support;
 
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\CacheableBuilder;
-use NormCache\Facades\NormCache;
+use NormCache\Planning\QueryEligibility;
 
 final class RelationCacheGuards
 {
     // Conditions shared by every relation's "simple shape" bypass check, regardless of relation type.
     public static function blocksBypass(CacheableBuilder $builder, QueryBuilder $base): bool
     {
-        return $builder->isCacheSkipped()
-            || !NormCache::isEnabled()
-            || $base->useWritePdo
-            || $builder->getModel()->getConnection()->transactionLevel() > 0
-            || !empty($base->groups)
-            || !empty($base->havings)
-            || !empty($base->unions)
-            || ($base->lock !== null && $base->lock !== false)
-            || $builder->hasExplicitDependencies();
+        return QueryEligibility::blocksSimpleRelation(
+            $builder,
+            $base,
+            (bool) config('normcache.enabled', true),
+        );
     }
 
     // Shared by belongsTo/morphTo eager loads, which require an unmodified base query shape.
     public static function hasOrderingOrJoins(QueryBuilder $base): bool
     {
-        return !empty($base->joins)
-            || !empty($base->orders)
-            || $base->limit !== null
-            || $base->offset > 0
-            || $base->distinct;
+        return QueryEligibility::hasOrderingOrJoins($base);
     }
 }

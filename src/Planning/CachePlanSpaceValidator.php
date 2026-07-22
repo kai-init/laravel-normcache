@@ -11,19 +11,13 @@ use Psr\Log\LoggerInterface;
 
 final class CachePlanSpaceValidator
 {
-    public static function standalone(): self
-    {
-        $registry = new CacheSpaceRegistry;
-
-        return new self($registry, new CacheSpaceResolver($registry));
-    }
-
     public function __construct(
         private readonly CacheSpaceRegistry $registry,
         private readonly CacheSpaceResolver $resolver,
         private readonly string $crossSpaceBehavior = 'bypass',
         private readonly bool $debug = false,
         private readonly ?LoggerInterface $logger = null,
+        private readonly QueryEligibility $eligibility = new QueryEligibility,
     ) {}
 
     public function validate(
@@ -53,7 +47,7 @@ final class CachePlanSpaceValidator
             includeDependenciesBySpace: $explain,
         );
 
-        if ($validation->isValid) {
+        if ($this->eligibility->fitsCacheSpace($validation)) {
             if (!$explain && !$this->registry->registerTableDependencies($space, $plan->dependencies->tables)) {
                 return CachePlan::bypass(
                     operation: $plan->operation,

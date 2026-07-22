@@ -254,6 +254,28 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
+    public function getManyWithBytes(array $keys): array
+    {
+        if ($keys === []) {
+            return [[], 0];
+        }
+
+        $raw = $this->connection instanceof PredisClusterConnection
+            ? $this->connection->command('mget', $keys)
+            : $this->connection->mget($keys);
+        $values = [];
+        $bytes = 0;
+
+        foreach ($raw as $index => $value) {
+            if (is_string($value)) {
+                $bytes += strlen($value);
+            }
+            $values[$index] = $this->mgetValue($value, unserialize: true);
+        }
+
+        return [$values, $bytes];
+    }
+
     private function mgetValues(array $keys, bool $unserialize): array
     {
         if (empty($keys)) {

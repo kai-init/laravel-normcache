@@ -13,27 +13,27 @@ trait InvalidatesPivotCache
         parent::attach($ids, $attributes, $touch);
 
         if (!$this->syncing) {
-            $this->invalidatePivotCache();
+            $this->recordPivotWrite(true);
         }
     }
 
     public function detach($ids = null, $touch = true): int
     {
-        $result = parent::detach($ids, $touch);
+        $affected = parent::detach($ids, $touch);
 
         if (!$this->syncing) {
-            $this->invalidatePivotCache();
+            $this->recordPivotWrite($affected > 0);
         }
 
-        return $result;
+        return $affected;
     }
 
     public function updateExistingPivot($id, array $attributes, $touch = true): int
     {
-        $result = parent::updateExistingPivot($id, $attributes, $touch);
-        $this->invalidatePivotCache();
+        $affected = parent::updateExistingPivot($id, $attributes, $touch);
+        $this->recordPivotWrite($affected > 0);
 
-        return $result;
+        return $affected;
     }
 
     public function sync($ids, $detaching = true): array
@@ -41,19 +41,27 @@ trait InvalidatesPivotCache
         $this->syncing = true;
 
         try {
-            $result = parent::sync($ids, $detaching);
+            $changes = parent::sync($ids, $detaching);
         } finally {
             $this->syncing = false;
         }
 
-        $this->invalidatePivotCache();
+        $this->recordPivotWrite(
+            $changes['attached'] !== []
+            || $changes['detached'] !== []
+            || $changes['updated'] !== [],
+        );
 
-        return $result;
+        return $changes;
     }
 
-    private function invalidatePivotCache(): void
+    private function recordPivotWrite(bool $changed): void
     {
-        $conn = $this->parent->getConnection()->getName();
-        NormCache::invalidatePivotTableVersion($conn, $this->table, [$this->parent::class, $this->related::class]);
+        NormCache::invalidator()->recordPivotWrite(
+            $this->parent->getConnection()->getName(),
+            $this->table,
+            [$this->parent::class, $this->related::class],
+            $changed,
+        );
     }
 }

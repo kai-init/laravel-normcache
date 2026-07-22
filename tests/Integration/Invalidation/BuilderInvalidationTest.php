@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Invalidation;
 
+use Illuminate\Support\Collection;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
@@ -89,6 +90,34 @@ class BuilderInvalidationTest extends TestCase
 
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
         $this->assertSame(['Alice'], Author::all()->pluck('name')->all());
+    }
+
+    public function test_insert_or_ignore_returning_uses_the_query_result_and_skips_noop_conflicts(): void
+    {
+        Author::all();
+        $versionBeforeInsert = NormCache::currentVersion(Author::class);
+
+        $inserted = Author::query()->insertOrIgnoreReturning([
+            'id' => 1,
+            'name' => 'Alice',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], ['id', 'name'], ['id']);
+
+        $this->assertInstanceOf(Collection::class, $inserted);
+        $this->assertSame([['id' => 1, 'name' => 'Alice']], $inserted->map(fn($row) => (array) $row)->all());
+        $this->assertGreaterThan($versionBeforeInsert, NormCache::currentVersion(Author::class));
+
+        $versionBeforeConflict = NormCache::currentVersion(Author::class);
+        $ignored = Author::query()->insertOrIgnoreReturning([
+            'id' => 1,
+            'name' => 'Ignored',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], ['id', 'name'], ['id']);
+
+        $this->assertTrue($ignored->isEmpty());
+        $this->assertSame($versionBeforeConflict, NormCache::currentVersion(Author::class));
     }
 
     public function test_insert_using_invalidates_query_cache(): void

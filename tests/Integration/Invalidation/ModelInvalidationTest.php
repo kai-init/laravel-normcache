@@ -283,7 +283,7 @@ class ModelInvalidationTest extends TestCase
         );
     }
 
-    public function test_dirty_existing_model_save_only_invalidates_once_outside_transaction(): void
+    public function test_dirty_existing_model_save_invalidates_once_outside_transaction(): void
     {
         $author = Author::create(['name' => 'Alice']);
 
@@ -303,11 +303,10 @@ class ModelInvalidationTest extends TestCase
 
         $after = NormCache::currentVersion(Post::class);
 
-        // Pre-save flush (observer safety) + post-save flush = two version bumps outside a transaction.
         $this->assertSame(
-            $before + 2,
+            $before + 1,
             $after,
-            'Dirty existing model save outside a transaction bumps the version twice.'
+            'Dirty existing model save should invalidate the model version exactly once.'
         );
     }
 

@@ -65,7 +65,7 @@ class QueryHasherTest extends UnitTestCase
         $builder = $this->makeEloquentBuilder()->where('id', 1);
 
         $this->assertNotSame(
-            QueryHasher::forNormalizedQuery($builder, $builder->toBase()),
+            QueryHasher::forModelIndexQuery($builder, $builder->toBase()),
             QueryHasher::forPaginationCountQuery($builder, $builder->toBase())
         );
     }

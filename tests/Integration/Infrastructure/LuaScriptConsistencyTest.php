@@ -7,7 +7,6 @@ use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Support\QueryHasher;
 use NormCache\Tests\Fixtures\Models\Author;
-use NormCache\Tests\Fixtures\Models\Country;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
@@ -54,7 +53,7 @@ class LuaScriptConsistencyTest extends TestCase
     {
         $query = Author::query();
 
-        return QueryHasher::forNormalizedQuery($query, $query->toBase());
+        return QueryHasher::forModelIndexQuery($query, $query->toBase());
     }
 
     public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
@@ -143,123 +142,49 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertNull($this->getKey("scheduled:{$postClassKey}:"));
     }
 
-    public function test_result_cache_write_is_skipped_when_dependency_version_changes_during_build(): void
+    public function test_versioned_payload_write_is_skipped_when_dependency_version_changes_during_build(): void
     {
         $manager = $this->cacheManager();
+        $store = $manager->store();
+        $keys = $manager->keys();
+        $classKey = $keys->classKey(Author::class);
         $hash = 'manual-result-build';
+        [$versionKeys, $scheduledKeys] = $keys->depKeyPairs($classKey, [Post::class], []);
+        $prefix = $keys->namespacedPrefix($keys::K_RESULT, $classKey, null);
+        $token = $manager->versionStore()->buildLockToken();
+        $result = $store->fetchVersionedPayload(
+            $versionKeys,
+            $scheduledKeys,
+            $prefix,
+            $keys->buildingPrefix($classKey),
+            $keys->wakePrefix($classKey),
+            $hash,
+            $hash,
+            $token,
+            5,
+            false,
+        );
+        $segment = (string) $result[1];
+        $key = $prefix . $segment . ':' . $hash;
+        $buildingKey = $keys->resultBuildingKey($classKey, $segment, $hash);
+        $wakeKey = $keys->wakeKey($classKey, $hash);
 
-        $miss = $manager->results()->fetch(Author::class, [Post::class], $hash, null, []);
+        $this->assertSame('miss', $result[0]);
+        $this->bumpVersionInRedis($keys->classKey(Post::class));
 
-        $this->assertSame('miss', $miss->status->value);
-
-        $this->bumpVersionInRedis(NormCache::keys()->classKey(Post::class));
-
-        $manager->results()->store(
-            $miss->key,
-            [['id' => 1, 'name' => 'Old']],
+        $stored = $store->storeVersionedPayload(
+            [$key => $store->serialize([['id' => 1, 'name' => 'Old']])],
             60,
-            $miss->build,
+            $versionKeys,
+            $keys->versionsFromSegment($segment),
+            $buildingKey,
+            $wakeKey,
+            (string) ($result[2] ?? $token),
         );
 
-        $this->assertNull($manager->store()->get($miss->key));
-        $this->assertNull($manager->store()->getRaw($miss->build->buildingKey));
-    }
-
-    public function test_namespaced_result_write_is_skipped_when_dependency_version_changes_during_build(): void
-    {
-        $manager = $this->cacheManager();
-        $cache = $manager->results()->fetch(Author::class, [Post::class], 'manual-count-build', null, [], 'count');
-
-        $this->bumpVersionInRedis(NormCache::keys()->classKey(Post::class));
-
-        $manager->results()->storeEntry(
-            $cache->key,
-            [10],
-            60,
-            $cache->build,
-        );
-
-        $this->assertNull($manager->store()->get($cache->key));
-    }
-
-    public function test_through_result_write_is_skipped_when_dependency_version_changes_during_build(): void
-    {
-        $manager = $this->cacheManager();
-        $cache = $manager->results()->fetch(Post::class, [Country::class], 'manual-through-build', null, [], 'through');
-
-        $this->bumpVersionInRedis(NormCache::keys()->classKey(Country::class));
-
-        $manager->results()->storeEntry(
-            $cache->key,
-            ['ids' => [1], 'throughKeys' => [1 => 1]],
-            60,
-            $cache->build,
-        );
-
-        $this->assertNull($manager->store()->get($cache->key));
-    }
-
-    public function test_related_model_payload_is_not_cached_when_through_result_write_is_skipped(): void
-    {
-        $manager = $this->cacheManager();
-        $cache = $manager->results()->fetch(Post::class, [Country::class], 'manual-through-build', null, [], 'through');
-
-        $this->bumpVersionInRedis(NormCache::keys()->classKey(Country::class));
-
-        if ($manager->results()->storeEntry(
-            $cache->key,
-            ['ids' => [1], 'throughKeys' => [1 => 1]],
-            60,
-            $cache->build,
-        )) {
-            $manager->models()->store(Post::class, [1 => ['id' => 1, 'title' => 'Old']]);
-        }
-
-        $this->assertNull($this->modelCacheEntry(Post::class, 1));
-    }
-
-    public function test_pivot_result_write_is_skipped_when_dependency_version_changes_during_build(): void
-    {
-        $manager = $this->cacheManager();
-        $pivotTableKey = $manager->keys()->tableKey(DB::getDefaultConnection(), 'author_tag');
-        $cache = $manager->results()->fetchPivot(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
-        $authorKey = NormCache::keys()->classKey(Author::class);
-        $tagKey = NormCache::keys()->classKey(Tag::class);
-        $pivotKey = $manager->keys()->pivotKey($authorKey, $tagKey, 'tags', 'manual-pivot-build', $cache->seg, 1);
-
-        $this->bumpVersionInRedis($pivotTableKey);
-
-        $manager->results()->storeEntry(
-            $pivotKey,
-            [['id' => 1, 'pivot' => []]],
-            60,
-            $cache->build,
-        );
-
-        $this->assertNull($manager->store()->get($pivotKey));
-    }
-
-    public function test_related_model_payload_is_not_cached_when_pivot_result_write_is_skipped(): void
-    {
-        $manager = $this->cacheManager();
-        $pivotTableKey = $manager->keys()->tableKey(DB::getDefaultConnection(), 'author_tag');
-        $cache = $manager->results()->fetchPivot(Author::class, Tag::class, 'tags', [1], 'manual-pivot-build', $pivotTableKey);
-        $authorKey = NormCache::keys()->classKey(Author::class);
-        $tagKey = NormCache::keys()->classKey(Tag::class);
-        $pivotKey = $manager->keys()->pivotKey($authorKey, $tagKey, 'tags', 'manual-pivot-build', $cache->seg, 1);
-
-        $this->bumpVersionInRedis($tagKey);
-
-        if ($manager->results()->storeEntry(
-            $pivotKey,
-            [['id' => 1, 'pivot' => []]],
-            60,
-            $cache->build,
-        )) {
-            $manager->models()->store(Tag::class, [1 => ['id' => 1, 'name' => 'Old']]);
-        }
-
-        $this->assertNull($this->modelCacheEntry(Tag::class, 1));
+        $this->assertFalse($stored);
+        $this->assertNull($store->get($key));
+        $this->assertNull($store->getRaw($buildingKey));
     }
 
     public function test_cooldown_due_invalidation_applies_to_scalar_cache(): void
@@ -333,38 +258,5 @@ class LuaScriptConsistencyTest extends TestCase
         $this->assertSame(3, $query()->posts_count);
         $this->assertSame('1', (string) $this->getKey("ver:{$postClassKey}:"));
         $this->assertNull($this->getKey("scheduled:{$postClassKey}:"));
-    }
-
-    public function test_late_writer_does_not_commit_outdated_version_as_current(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-
-        $initialVersion = NormCache::currentVersion(Author::class);
-
-        $buildLock = NormCache::results()->fetch(Author::class, [], 'test-hash', null, []);
-        $this->assertSame('miss', $buildLock->status->value);
-
-        $author->update(['name' => 'Bob']);
-        $bumpedVersion = NormCache::currentVersion(Author::class);
-        $this->assertGreaterThan($initialVersion, $bumpedVersion);
-
-        $committed = NormCache::results()->store(
-            $buildLock->key,
-            ['data' => 'outdated'],
-            null,
-            $buildLock->build,
-        );
-
-        $this->assertFalse($committed, 'Late writer should have its commit rejected');
-
-        $freshRead = NormCache::results()->fetch(
-            Author::class,
-            [],
-            'test-hash',
-            null,
-            [],
-        );
-
-        $this->assertNotSame(['data' => 'outdated'], $freshRead->payload ?? null, 'Late writer must not poison the current fresh cache');
     }
 }

@@ -1,6 +1,8 @@
 <?php
 
-namespace NormCache\Values;
+namespace NormCache\Planning;
+
+use NormCache\Values\DependencySet;
 
 final readonly class QueryInspection
 {

@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use NormCache\CacheableBuilder;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 final class DependencyResolver
 {

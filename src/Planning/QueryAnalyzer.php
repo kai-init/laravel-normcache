@@ -3,11 +3,11 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
@@ -300,11 +300,10 @@ final class QueryAnalyzer
 
     private function connectionName(QueryBuilder $base, string $fallback): string
     {
+        /** @var Connection $connection */
         $connection = $base->getConnection();
 
-        return method_exists($connection, 'getName')
-            ? ($connection->getName() ?? $fallback)
-            : $fallback;
+        return $connection->getName() ?? $fallback;
     }
 
     /** @deprecated Use inferQueryDependencies(). */
