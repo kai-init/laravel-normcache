@@ -70,7 +70,7 @@ class QueryDependencyPlanningTest extends TestCase
             Author::where(fn($query) => $query->whereIn('id', Post::select('author_id'))),
         );
 
-        $this->assertSame(CacheStrategy::VersionedResult, $plan->strategy);
+        $this->assertSame(CacheStrategy::Result, $plan->strategy);
         $this->assertContains('testing:posts', $plan->dependencies->tables);
     }
 

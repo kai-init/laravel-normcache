@@ -4,7 +4,9 @@ namespace NormCache\Support;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
-use NormCache\Cache\ModelHydrator;
+use NormCache\Cache\ModelCache;
+use NormCache\Enums\CacheKind;
+use NormCache\Enums\ResultKind;
 use NormCache\Values\CacheSpace;
 
 class CacheKeyBuilder
@@ -64,6 +66,21 @@ class CacheKeyBuilder
         return $this->activeSpace;
     }
 
+    public function namespaceFor(CacheKind $kind, ?ResultKind $resultKind = null): string
+    {
+        return match ($kind) {
+            CacheKind::Model => self::K_MODEL,
+            CacheKind::ModelIndex => self::K_QUERY,
+            CacheKind::RelationIndex => self::K_THROUGH,
+            CacheKind::Result => match ($resultKind) {
+                ResultKind::Count, ResultKind::PaginationCount => self::K_COUNT,
+                ResultKind::Collection => self::K_RESULT,
+                default => self::K_SCALAR,
+            },
+            CacheKind::Version => self::K_VER,
+        };
+    }
+
     private function full(string $body, ?CacheSpace $space = null): string
     {
         return $this->tagPrefix($space) . $this->keyPrefix . $body;
@@ -88,7 +105,12 @@ class CacheKeyBuilder
 
     public function modelPrefix(string $classKey, int|string $version, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_MODEL . ':' . $classKey . ':v' . $version . ':', $space);
+        return $this->modelVersionPrefix($classKey, $space) . $version . ':';
+    }
+
+    public function modelVersionPrefix(string $classKey, ?CacheSpace $space = null): string
+    {
+        return $this->full(self::K_MODEL . ':' . $classKey . ':v', $space);
     }
 
     public function queryPrefix(string $classKey, ?string $tag = null, ?CacheSpace $space = null): string
@@ -147,7 +169,7 @@ class CacheKeyBuilder
         self::$deletedAtColumns = [];
         self::$singleDepPairs = [];
 
-        ModelHydrator::reset();
+        ModelCache::reset();
     }
 
     public static function prototype(string $class): Model
@@ -180,6 +202,12 @@ class CacheKeyBuilder
     public function scheduledKey(string $classKey, ?CacheSpace $space = null): string
     {
         return $this->full(self::K_SCHEDULED . ':' . $classKey . ':', $space);
+    }
+
+    /** @return array{0: string, 1: string} */
+    public function versionKeyPair(string $classKey, ?CacheSpace $space = null): array
+    {
+        return [$this->verKey($classKey, $space), $this->scheduledKey($classKey, $space)];
     }
 
     public function wakeKey(string $classKey, string $lockSuffix, ?CacheSpace $space = null): string
@@ -249,7 +277,6 @@ class CacheKeyBuilder
         array $depClasses,
         array $depTableKeys = [],
         ?CacheSpace $space = null,
-        ?string $connection = null,
     ): array {
         $space ??= $this->activeSpace;
 
@@ -268,8 +295,10 @@ class CacheKeyBuilder
         $seen[$classKey] = true;
         $all[] = $classKey;
 
-        foreach ($this->sortClassesByKey($depClasses, $connection) as $class) {
-            $key = $this->classKey($class, $connection);
+        // Each dependency class resolves its own declared connection — $classKey above is the
+        // only key that should key off the root query's connection.
+        foreach ($this->sortClassesByKey($depClasses) as $class) {
+            $key = $this->classKey($class);
 
             if (!isset($seen[$key])) {
                 $seen[$key] = true;
@@ -341,9 +370,9 @@ class CacheKeyBuilder
         return "{$connection}:{$model->getTable()}";
     }
 
-    private function sortClassesByKey(array $classes, ?string $connection = null): array
+    private function sortClassesByKey(array $classes): array
     {
-        usort($classes, fn($a, $b) => strcmp($this->classKey($a, $connection), $this->classKey($b, $connection)));
+        usort($classes, fn($a, $b) => strcmp($this->classKey($a), $this->classKey($b)));
 
         return $classes;
     }

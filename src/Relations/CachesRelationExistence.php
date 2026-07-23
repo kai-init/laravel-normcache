@@ -3,6 +3,7 @@
 namespace NormCache\Relations;
 
 use Closure;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use NormCache\CacheableBuilder;
 use NormCache\Traits\Cacheable;
@@ -25,7 +26,7 @@ trait CachesRelationExistence
 
         if ($callback !== null) {
             $constraint = $callback;
-            $callback = function ($query) use ($constraint) {
+            $callback = function (EloquentBuilder $query) use ($constraint) {
                 $result = $constraint($query);
                 $this->captureConstrainedRelationQuery($query);
 
@@ -59,13 +60,13 @@ trait CachesRelationExistence
         }
     }
 
-    private function captureConstrainedRelationQuery(mixed $query): void
+    private function captureConstrainedRelationQuery(EloquentBuilder $query): void
     {
         if ($query instanceof CacheableBuilder) {
             $this->mergeCapturedBuilderState($query);
         }
 
-        if (method_exists($query, 'toBase') && $query->toBase()->lock !== null) {
+        if ($query->toBase()->lock !== null) {
             $this->addCapturedContextReason('safety', 'relation query uses a lock');
         }
     }

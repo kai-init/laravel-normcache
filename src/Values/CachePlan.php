@@ -33,14 +33,14 @@ final readonly class CachePlan
         );
     }
 
-    public static function normalized(
+    public static function modelIndex(
         CacheOperation $operation,
         DependencySet $dependencies,
         ?array $columns = null,
         ?array $primaryKeys = null,
     ): self {
         return new self(
-            strategy: CacheStrategy::NormalizedQuery,
+            strategy: CacheStrategy::ModelIndex,
             operation: $operation,
             dependencies: $dependencies,
             columns: $columns,
@@ -55,7 +55,7 @@ final readonly class CachePlan
         ?array $primaryKeys = null,
     ): self {
         return new self(
-            strategy: CacheStrategy::VersionedResult,
+            strategy: CacheStrategy::Result,
             operation: $operation,
             dependencies: $dependencies,
             columns: $columns,
@@ -107,14 +107,14 @@ final readonly class CachePlan
         return $this->strategy !== CacheStrategy::LiveQuery;
     }
 
-    public function isNormalized(): bool
+    public function usesModelCache(): bool
     {
-        return $this->strategy === CacheStrategy::NormalizedQuery
+        return $this->strategy === CacheStrategy::ModelIndex
             || $this->strategy === CacheStrategy::DirectModels;
     }
 
     public function usesResultCache(): bool
     {
-        return $this->strategy === CacheStrategy::VersionedResult;
+        return $this->strategy === CacheStrategy::Result;
     }
 }

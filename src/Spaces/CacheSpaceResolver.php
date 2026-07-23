@@ -12,17 +12,17 @@ final class CacheSpaceResolver
 
     public function resolve(string $modelClass, ?string $explicitSpace): CacheSpace
     {
-        if ($explicitSpace !== null) {
-            if (!$this->registry->modelAllowedInSpace($modelClass, $explicitSpace)) {
-                throw new \InvalidArgumentException(
-                    "NormCache: model [{$modelClass}] is not a member of space [{$explicitSpace}]; declare it in \$normCacheSpaces or remove ->space()."
-                );
-            }
-
-            return $this->registry->space($explicitSpace);
+        if ($explicitSpace === null) {
+            // [0] is the home space: declared order, or [default] when undeclared.
+            return $this->registry->spacesForModel($modelClass)[0];
         }
 
-        // [0] is the home space: declared order, or [default] when undeclared.
-        return $this->registry->spacesForModel($modelClass)[0];
+        if (!$this->registry->modelAllowedInSpace($modelClass, $explicitSpace)) {
+            throw new \InvalidArgumentException(
+                "NormCache: model [{$modelClass}] is not a member of space [{$explicitSpace}]; declare it in \$normCacheSpaces or remove ->space()."
+            );
+        }
+
+        return $this->registry->space($explicitSpace);
     }
 }

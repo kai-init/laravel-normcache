@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1.0] — 2026-07-23
+
+### Added
+
+- `CacheInvalidated` and `CacheMetricRecorded` events when `normcache.events` is enabled. Cache hit and miss events now include cache metadata.
+
+### Changed
+
+- Debugbar records overall cache-operation duration only; component-specific timing breakdowns are no longer collected.
+- Internal cache execution and invalidation code has been consolidated behind dedicated services.
+
+### Fixed
+
+- `useWritePdo()` reads, including relation reads, now bypass the cache and preserve read-your-writes behavior.
+- Cache keys for root, through, and pivot reads now consistently use the active Eloquent connection, preventing cross-connection cache leakage.
+- Model updates now invalidate before and after the write, so a concurrent pre-write read cannot remain reachable after a successful update.
+- Index, through, and pivot cache hits preserve the Lua-resolved model version when fetching model payloads.
+
+---
+
 ## [3.0.0] — 2026-07-09
 
 ### Added

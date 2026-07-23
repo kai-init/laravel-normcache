@@ -19,19 +19,14 @@ trait Cacheable
 
     public function flush(): void
     {
-        NormCache::flushInstance($this);
+        NormCache::invalidator()->invalidateVersion($this);
     }
 
-    // Cache spaces this model belongs to (empty = default), via $normCacheSpaces.
     /** @return list<string> */
     public static function normCacheSpaces(): array
     {
         return property_exists(static::class, 'normCacheSpaces') ? (array) static::$normCacheSpaces : [];
     }
-
-    // -------------------------------------------------------------------------
-    // Public overrides
-    // -------------------------------------------------------------------------
 
     public function newEloquentBuilder($query)
     {
@@ -43,7 +38,6 @@ trait Cacheable
 
         if ($this->withoutCacheNext) {
             $this->withoutCacheNext = false;
-
             $builder->withoutCache();
         }
 
@@ -62,23 +56,23 @@ trait Cacheable
 
     public function save(array $options = []): bool
     {
-        if ($this->exists && $this->isDirty()
-            && $this->getConnection()->transactionLevel() === 0
-            && !$this->isPendingRestoreSave()
-        ) {
-            NormCache::flushInstance($this);
-        }
-
-        return $this->saveWithCacheInvalidation(fn() => parent::save($options));
+        return $this->saveWithCacheInvalidation(
+            fn() => parent::save($options),
+            observeBeforeWrite: true,
+        );
     }
 
     public function saveQuietly(array $options = []): bool
     {
-        return $this->saveWithCacheInvalidation(fn() => Model::withoutEvents(fn() => parent::save($options)));
+        return $this->saveWithCacheInvalidation(
+            fn() => Model::withoutEvents(fn() => parent::save($options)),
+            observeBeforeWrite: false,
+        );
     }
 
     protected function performInsert(Builder $query): bool
     {
+        // $query is a plain Eloquent Builder when normcache.enabled is false; see newEloquentBuilder().
         if (method_exists($query, 'withoutInvalidation')) {
             return $query->withoutInvalidation(fn() => parent::performInsert($query));
         }
@@ -95,65 +89,14 @@ trait Cacheable
         return parent::performUpdate($query);
     }
 
-    // -------------------------------------------------------------------------
-    // Private
-    // -------------------------------------------------------------------------
-
-    private function saveWithCacheInvalidation(callable $save): bool
+    private function saveWithCacheInvalidation(callable $save, bool $observeBeforeWrite): bool
     {
-        $existsBefore = $this->exists;
-        $originalKey = $existsBefore ? $this->getOriginal($this->getKeyName()) : null;
-
+        $invalidator = NormCache::invalidator();
+        $state = $invalidator->beginModelSave($this, $observeBeforeWrite);
         $result = $save();
-
-        if ($result) {
-            $this->invalidateAfterSave($existsBefore, $originalKey);
-        }
+        $invalidator->completeModelSave($this, $state, $result);
 
         return $result;
-    }
-
-    private function invalidateAfterSave(bool $existsBefore, mixed $originalKey = null): void
-    {
-        if (!$existsBefore && $this->wasRecentlyCreated) {
-            NormCache::invalidateVersion($this);
-
-            return;
-        }
-
-        if ($this->isRestoreSave($existsBefore)) {
-            NormCache::invalidateVersion($this);
-
-            return;
-        }
-
-        if (!$existsBefore || !$this->wasChanged()) {
-            return;
-        }
-
-        NormCache::flushInstance($this);
-    }
-
-    private function isPendingRestoreSave(): bool
-    {
-        if (!method_exists($this, 'getDeletedAtColumn')) {
-            return false;
-        }
-
-        $col = $this->getDeletedAtColumn();
-
-        return $this->isDirty($col) && $this->getAttribute($col) === null;
-    }
-
-    private function isRestoreSave(bool $existsBefore): bool
-    {
-        if (!$existsBefore || !method_exists($this, 'getDeletedAtColumn')) {
-            return false;
-        }
-
-        $deletedAtColumn = $this->getDeletedAtColumn();
-
-        return $this->wasChanged($deletedAtColumn) && $this->{$deletedAtColumn} === null;
     }
 
     private function runWithoutCache(callable $callback)

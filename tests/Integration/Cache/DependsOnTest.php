@@ -412,6 +412,20 @@ class DependsOnTest extends TestCase
 
     // tag() — manual flush grouping
 
+    public function test_tag_rejects_reserved_characters(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Author::query()->tag('homepage:{bad}:*')->get();
+    }
+
+    public function test_tag_rejects_empty_string(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Author::query()->tag('')->get();
+    }
+
     public function test_tag_is_embedded_in_computed_key(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -480,6 +494,18 @@ class DependsOnTest extends TestCase
 
         $this->assertGreaterThan(0, $removed);
         $this->assertEmpty($this->redisKeys('count:*:homepage:*'));
+    }
+
+    public function test_flush_tag_rejects_unsafe_characters(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->cacheManager()->flushTag(Author::class, 'tag:with:colons');
+    }
+
+    public function test_flush_tag_across_models_rejects_unsafe_characters(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->cacheManager()->flushTagAcrossModels('tag*with*stars');
     }
 
     public function test_tagged_result_cache_invalidates_on_dep_version_bump(): void
@@ -664,6 +690,30 @@ class DependsOnTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         Author::query()->dependsOnTables(['users:{bad}'])->get();
+    }
+
+    public function test_depends_on_merges_previous_model_dependencies(): void
+    {
+        $builder = Post::query()
+            ->dependsOn([Post::class])
+            ->dependsOn([Author::class]);
+
+        $this->assertContains(Post::class, $builder->explicitDependencies());
+        $this->assertContains(Author::class, $builder->explicitDependencies());
+        $this->assertCount(2, $builder->explicitDependencies());
+    }
+
+    public function test_depends_on_tables_merges_previous_table_dependencies(): void
+    {
+        $conn = (new Post)->getConnection()->getName();
+
+        $builder = Post::query()
+            ->dependsOnTables(['posts'])
+            ->dependsOnTables(['authors']);
+
+        $this->assertContains("{$conn}:posts", $builder->explicitTableDependencies());
+        $this->assertContains("{$conn}:authors", $builder->explicitTableDependencies());
+        $this->assertCount(2, $builder->explicitTableDependencies());
     }
 
     public function test_plain_join_table_is_auto_inferred_and_does_not_warn(): void

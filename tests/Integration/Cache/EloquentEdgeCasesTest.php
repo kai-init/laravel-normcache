@@ -11,7 +11,7 @@ use NormCache\Tests\TestCase;
 
 /**
  * Behavioral tests: specific Eloquent edge cases including runtime casts,
- * select aliases, and attribute appends.
+ * select aliases, and hidden-attribute state.
  */
 class EloquentEdgeCasesTest extends TestCase
 {

@@ -77,17 +77,8 @@ final class ProjectionClassifier
     public static function classifyForRelation(QueryBuilder $base, array $columns, string $relatedTable, string $relatedKey): array
     {
         $resolved = $base->columns ?? ($columns === ['*'] ? null : $columns);
-
-        $shouldCacheRelatedModels = false;
-        $selectedRelatedColumns = null;
-
-        if ($resolved === null) {
-            $shouldCacheRelatedModels = true;
-            $selectedRelatedColumns = null;
-        } else {
-            $shouldCacheRelatedModels = self::isExactFullModelProjection($resolved, $relatedTable);
-            $selectedRelatedColumns = $shouldCacheRelatedModels ? null : $resolved;
-        }
+        $shouldCacheRelatedModels = self::isExactFullModelProjection($resolved, $relatedTable);
+        $selectedRelatedColumns = $shouldCacheRelatedModels ? null : $resolved;
 
         return [
             'shouldCacheRelatedModels' => $shouldCacheRelatedModels,

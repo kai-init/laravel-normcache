@@ -41,6 +41,23 @@ class ModelInvalidationTest extends TestCase
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
+    public function test_mutating_primary_key_evicts_old_model_cache_key(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $oldId = $author->id;
+
+        // Warm the model cache for the old ID.
+        Author::find($oldId);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $oldId));
+
+        // Mutate the PK.
+        $author->id = 9999;
+        $author->save();
+
+        // Old model key must be evicted — not left as orphaned memory.
+        $this->assertNull($this->modelCacheEntry(Author::class, $oldId), 'old model cache key must be evicted after PK mutation');
+    }
+
     public function test_save_invalidates_again_after_job_processed_reenables_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -283,7 +300,7 @@ class ModelInvalidationTest extends TestCase
         );
     }
 
-    public function test_dirty_existing_model_save_only_invalidates_once_outside_transaction(): void
+    public function test_dirty_existing_model_save_invalidates_before_and_after_write(): void
     {
         $author = Author::create(['name' => 'Alice']);
 
@@ -303,11 +320,10 @@ class ModelInvalidationTest extends TestCase
 
         $after = NormCache::currentVersion(Post::class);
 
-        // Pre-save flush (observer safety) + post-save flush = two version bumps outside a transaction.
         $this->assertSame(
             $before + 2,
             $after,
-            'Dirty existing model save outside a transaction bumps the version twice.'
+            'Dirty existing model save should invalidate both before and after the write.'
         );
     }
 
@@ -379,6 +395,32 @@ class ModelInvalidationTest extends TestCase
         $after = NormCache::currentVersion(Post::class);
 
         $this->assertSame($before + 1, $after);
+    }
+
+    public function test_updating_model_evicts_own_cache_key_even_when_version_bump_is_deferred(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+
+        $this->cacheManager()->config()->cooldown = 60;
+
+        $author->update(['name' => 'Alicia']);
+
+        $this->assertSame('Alicia', Author::find($author->id)->name);
+    }
+
+    public function test_deleting_model_evicts_own_cache_key_even_when_version_bump_is_deferred(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Author::find($author->id);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $author->id));
+
+        $this->cacheManager()->config()->cooldown = 60;
+
+        $author->delete();
+
+        $this->assertNull(Author::find($author->id));
     }
 
     public function test_save_invalidates_when_saving_listener_makes_a_clean_model_dirty(): void

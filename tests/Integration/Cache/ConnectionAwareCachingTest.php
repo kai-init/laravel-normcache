@@ -6,6 +6,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Country;
+use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
 class ConnectionAwareCachingTest extends TestCase
@@ -161,6 +164,139 @@ class ConnectionAwareCachingTest extends TestCase
         } finally {
             $this->cleanupReplicatedAuthorConnection($paths);
         }
+    }
+
+    public function test_through_relation_on_secondary_connection_does_not_leak_default_connection_model_cache(): void
+    {
+        $this->seedThroughRelationOnTwoConnections();
+
+        $cold = Country::on('secondary_testing')->with('posts')->find(1);
+        $this->assertSame('SecondaryPost', $cold->posts->first()->title);
+
+        // Poisons the default connection's cache entry for the same Post id, at the same
+        // version — a connection-resolution bug would make the warm read below return this.
+        DB::table('posts')->where('id', 1)->update(['title' => 'DefaultPostOverwrite']);
+        Post::find(1);
+        $this->assertSame('DefaultPostOverwrite', $this->modelCacheEntry(Post::class, 1)['title'] ?? null);
+
+        $warm = Country::on('secondary_testing')->with('posts')->find(1);
+
+        $this->assertSame('SecondaryPost', $warm->posts->first()->title);
+    }
+
+    public function test_pivot_relation_on_secondary_connection_does_not_leak_default_connection_model_cache(): void
+    {
+        $this->seedPivotRelationOnTwoConnections();
+
+        $cold = Author::on('secondary_testing')->with('tags')->find(1);
+        $this->assertSame('SecondaryTag', $cold->tags->first()->name);
+
+        // Poisons the default connection's cache entry for the same Tag id — see above.
+        DB::table('tags')->where('id', 1)->update(['name' => 'DefaultTagOverwrite']);
+        Tag::find(1);
+        $this->assertSame('DefaultTagOverwrite', $this->modelCacheEntry(Tag::class, 1)['name'] ?? null);
+
+        DB::connection('secondary_testing')->flushQueryLog();
+        DB::connection('secondary_testing')->enableQueryLog();
+
+        try {
+            $warm = Author::on('secondary_testing')->with('tags')->find(1);
+            // A write/read key mismatch falls through to a live query but still returns
+            // correct data, masking the bug — so assert on cache hits, not just the result.
+            $this->assertSame([], DB::connection('secondary_testing')->getQueryLog());
+        } finally {
+            DB::connection('secondary_testing')->disableQueryLog();
+        }
+
+        $this->assertSame('SecondaryTag', $warm->tags->first()->name);
+    }
+
+    private function seedPivotRelationOnTwoConnections(): void
+    {
+        $author = Author::create(['id' => 1, 'name' => 'DefaultAuthor']);
+        $tag = Tag::create(['id' => 1, 'name' => 'DefaultTag']);
+        $author->tags()->attach($tag->id);
+
+        config()->set('database.connections.secondary_testing', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
+        DB::purge('secondary_testing');
+
+        Schema::connection('secondary_testing')->create('authors', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->foreignId('country_id')->nullable();
+            $table->timestamps();
+        });
+        Schema::connection('secondary_testing')->create('tags', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+        Schema::connection('secondary_testing')->create('author_tag', function (Blueprint $table) {
+            $table->foreignId('author_id');
+            $table->foreignId('tag_id');
+            $table->string('notes')->nullable();
+            $table->primary(['author_id', 'tag_id']);
+        });
+
+        DB::connection('secondary_testing')->table('authors')->insert([
+            'id' => 1, 'name' => 'SecondaryAuthor', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::connection('secondary_testing')->table('tags')->insert([
+            'id' => 1, 'name' => 'SecondaryTag', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::connection('secondary_testing')->table('author_tag')->insert([
+            'author_id' => 1, 'tag_id' => 1,
+        ]);
+    }
+
+    private function seedThroughRelationOnTwoConnections(): void
+    {
+        Country::create(['id' => 1, 'name' => 'DefaultCountry']);
+        $author = Author::create(['id' => 1, 'name' => 'DefaultAuthor', 'country_id' => 1]);
+        Post::create(['id' => 1, 'title' => 'DefaultPost', 'author_id' => $author->id]);
+
+        config()->set('database.connections.secondary_testing', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
+        DB::purge('secondary_testing');
+
+        Schema::connection('secondary_testing')->create('countries', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+        Schema::connection('secondary_testing')->create('authors', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->foreignId('country_id')->nullable();
+            $table->timestamps();
+        });
+        Schema::connection('secondary_testing')->create('posts', function (Blueprint $table) {
+            $table->id();
+            $table->string('title');
+            $table->unsignedInteger('views')->default(0);
+            $table->boolean('published')->default(false);
+            $table->json('metadata')->nullable();
+            $table->foreignId('author_id');
+            $table->timestamps();
+            $table->softDeletes();
+        });
+
+        DB::connection('secondary_testing')->table('countries')->insert([
+            'id' => 1, 'name' => 'SecondaryCountry', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::connection('secondary_testing')->table('authors')->insert([
+            'id' => 1, 'name' => 'SecondaryAuthor', 'country_id' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::connection('secondary_testing')->table('posts')->insert([
+            'id' => 1, 'title' => 'SecondaryPost', 'author_id' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
     }
 
     private function seedDifferentAuthorsOnTwoConnections(): void

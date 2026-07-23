@@ -47,19 +47,10 @@ class NormCacheDebugBarCollector extends TimeDataCollector
     public function addQueryMeasure(string $type, string $modelClass, string $key, ?float $startTime, array $meta): void
     {
         $details = ['key' => $key];
-
-        if (array_key_exists('kind', $meta)) {
-            $details['kind'] = $meta['kind'];
-        }
-
         $contains = $meta['contains'] ?? $this->queryContains($type);
 
         if ($contains !== null) {
             $details['contains'] = $contains;
-        }
-
-        if (array_key_exists('contains_model', $meta)) {
-            $details['contains_model'] = $meta['contains_model'];
         }
 
         foreach ($meta as $field => $value) {
@@ -89,6 +80,41 @@ class NormCacheDebugBarCollector extends TimeDataCollector
         );
     }
 
+    public function addMetricMeasure(
+        string $metric,
+        int|float $value,
+        string $modelClass,
+        array $meta,
+    ): void {
+        $now = microtime(true);
+        $this->addMeasure(
+            '[metric] ' . $metric . ': ' . class_basename($modelClass),
+            $now,
+            $now,
+            ['metric' => $metric, 'value' => $value, ...$meta],
+        );
+    }
+
+    public function addInvalidationMeasure(
+        string $dependencyType,
+        string $target,
+        int $count,
+        array $spaces,
+    ): void {
+        $now = microtime(true);
+        $this->addMeasure(
+            '[invalidation] ' . $dependencyType . ': ' . $target,
+            $now,
+            $now,
+            [
+                'cache_kind' => 'version',
+                'dependency_type' => $dependencyType,
+                'count' => $count,
+                'cache_spaces' => $spaces,
+            ],
+        );
+    }
+
     public function addBypassMeasure(string $modelClass, array $groupedReasons, ?float $startTime): void
     {
         $labels = BypassReasons::labels();
@@ -108,13 +134,14 @@ class NormCacheDebugBarCollector extends TimeDataCollector
 
     private function querySummary(string $type, array $meta): string
     {
+        $shape = $meta['payload_shape'] ?? $meta['result_kind'] ?? null;
+
         return match (true) {
-            ($meta['kind'] ?? null) === 'count' => 'count',
-            ($meta['kind'] ?? null) === 'ids + models' => 'ids + models',
-            ($meta['kind'] ?? null) === 'ids' => 'ids',
+            is_string($shape) => $shape,
             str_starts_with($type, 'pivot ') => 'pivot',
             str_starts_with($type, 'through ') => 'through',
-            default => $meta['kind'] ?? $type,
+            isset($meta['cache_kind']) && is_string($meta['cache_kind']) => $meta['cache_kind'],
+            default => $type,
         };
     }
 

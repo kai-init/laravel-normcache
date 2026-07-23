@@ -8,15 +8,16 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use NormCache\Cache\ModelsExecutor;
 use NormCache\Console\FlushCommand;
 use NormCache\Debug\NormCacheCollector;
 use NormCache\Debug\NormCacheDebugBarCollector;
 use NormCache\Planning\CachePlanner;
 use NormCache\Planning\CachePlanSpaceValidator;
+use NormCache\Planning\QueryEligibility;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\CacheReporter;
 use NormCache\Support\RedisStore;
 
 class CacheServiceProvider extends ServiceProvider
@@ -40,6 +41,8 @@ class CacheServiceProvider extends ServiceProvider
             return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
         });
 
+        $this->app->singleton(QueryEligibility::class);
+
         $this->app->singleton(CachePlanSpaceValidator::class, function ($app) {
             return new CachePlanSpaceValidator(
                 registry: $app->make(CacheSpaceRegistry::class),
@@ -47,14 +50,17 @@ class CacheServiceProvider extends ServiceProvider
                 crossSpaceBehavior: (string) config('normcache.spaces.cross_space_behavior', 'bypass'),
                 debug: (bool) config('app.debug', false),
                 logger: $app->make('log'),
+                eligibility: $app->make(QueryEligibility::class),
             );
         });
 
-        $this->app->singleton(CachePlanner::class, function ($app) {
-            return new CachePlanner(spaceValidator: $app->make(CachePlanSpaceValidator::class));
+        $this->app->scoped(CachePlanner::class, function ($app) {
+            return new CachePlanner(
+                eligibility: $app->make(QueryEligibility::class),
+                spaceValidator: $app->make(CachePlanSpaceValidator::class),
+                config: $app->make(CacheManager::class)->config(),
+            );
         });
-
-        $this->app->singleton(ModelsExecutor::class);
 
         $this->app->singleton(CacheManagerFactory::class, function ($app) {
             return new CacheManagerFactory(
@@ -66,6 +72,10 @@ class CacheServiceProvider extends ServiceProvider
         $this->app->scoped(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
 
         $this->app->alias(CacheManager::class, 'normcache');
+
+        CacheReporter::configureEvents(
+            fn(): bool => $this->app->make(CacheManager::class)->config()->dispatchEvents,
+        );
     }
 
     public function boot(): void

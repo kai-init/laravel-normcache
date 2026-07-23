@@ -39,7 +39,7 @@ class StampedeProtectionTest extends TestCase
     {
         $query = Author::query();
 
-        return QueryHasher::forNormalizedQuery($query, $query->toBase());
+        return QueryHasher::forModelIndexQuery($query, $query->toBase());
     }
 
     public function test_waiter_serves_from_cache_after_build_completes(): void
@@ -70,28 +70,6 @@ class StampedeProtectionTest extends TestCase
     }
 
     public function test_budget_exhausted_falls_through_to_db(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $ck = NormCache::keys()->classKey(Author::class);
-        $hash = $this->authorQueryHash();
-
-        $this->redis()->incr("{nc}:test:ver:{$ck}:");
-        $newVersion = NormCache::currentVersion(Author::class);
-        $this->redis()->set("{nc}:test:building:{$ck}:v{$newVersion}:{$hash}", '1');
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $results = Author::get();
-
-        $this->assertGreaterThan(0, $queryCount);
-        $this->assertCount(1, $results);
-    }
-
-    public function test_lock_holder_crash_falls_through_after_budget(): void
     {
         Author::create(['name' => 'Alice']);
 

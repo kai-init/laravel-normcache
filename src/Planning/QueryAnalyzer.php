@@ -3,11 +3,11 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\ProjectionClassifier;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 final class QueryAnalyzer
 {
@@ -300,11 +300,10 @@ final class QueryAnalyzer
 
     private function connectionName(QueryBuilder $base, string $fallback): string
     {
+        /** @var Connection $connection */
         $connection = $base->getConnection();
 
-        return method_exists($connection, 'getName')
-            ? ($connection->getName() ?? $fallback)
-            : $fallback;
+        return $connection->getName() ?? $fallback;
     }
 
     /** @deprecated Use inferQueryDependencies(). */
@@ -409,15 +408,13 @@ final class QueryAnalyzer
                 $flags |= QueryInspection::RAW_WHERE;
             }
 
-            if (isset(self::EXISTS_WHERE_TYPES[$type])) {
-                $flags |= QueryInspection::EXISTS_WHERE;
-            } elseif (isset(self::SUBQUERY_WHERE_TYPES[$type])) {
-                $flags |= QueryInspection::SUBQUERY_WHERE;
-            } elseif (($type === 'In' || $type === 'NotIn') && $this->containsExpression((array) ($where['values'] ?? []))) {
-                $flags |= QueryInspection::SUBQUERY_WHERE;
-            } elseif ($type === 'Basic' && ($where['column'] ?? null) instanceof Expression) {
-                $flags |= QueryInspection::SUBQUERY_WHERE;
-            }
+            $flags |= match (true) {
+                isset(self::EXISTS_WHERE_TYPES[$type]) => QueryInspection::EXISTS_WHERE,
+                isset(self::SUBQUERY_WHERE_TYPES[$type]) => QueryInspection::SUBQUERY_WHERE,
+                ($type === 'In' || $type === 'NotIn') && $this->containsExpression((array) ($where['values'] ?? [])) => QueryInspection::SUBQUERY_WHERE,
+                $type === 'Basic' && ($where['column'] ?? null) instanceof Expression => QueryInspection::SUBQUERY_WHERE,
+                default => 0,
+            };
 
             if (($where['query'] ?? null) instanceof QueryBuilder) {
                 if ($where['query']->lock !== null) {

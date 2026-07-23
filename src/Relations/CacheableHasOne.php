@@ -25,6 +25,7 @@ class CacheableHasOne extends HasOne
     {
         if ($this->isOneOfMany() && $this->query instanceof CacheableBuilder) {
             $this->query->dependsOn([$this->related::class]);
+            $this->query->acknowledgeOfManySelfJoin();
         }
     }
 }

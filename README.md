@@ -7,14 +7,14 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-Normcache caches query results as ID lists and stores model attributes in versioned model keys. When a model changes, Normcache bumps a version key instead of scanning and deleting every query that may have returned that model.
+Normcache caches model-query results as ID lists and stores model attributes in versioned model keys. When a model changes, Normcache bumps a version key instead of scanning and deleting every query that may have returned that model.
 
 **Requirements:** PHP 8.2+, Laravel 12/13, Redis 6.0+
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [What's new in 3.0](#whats-new-in-30)
+- [What's new in v3](#whats-new-in-v3)
 - [Usage](#usage)
 - [Invalidation](#invalidation)
 - [Cache spaces](#cache-spaces)
@@ -41,7 +41,7 @@ class Post extends Model
 }
 ```
 
-## What's new in 3.0
+## What's new in v3
 
 Redis Cluster sharding is now fully atomic within each cache space. Normcache keeps the keys for a cached operation and its valid dependencies in one hash slot, so cache reads, rebuilds, and invalidation coordination remain atomic.
 
@@ -55,7 +55,6 @@ Redis Cluster sharding is now fully atomic within each cache space. Normcache ke
 Normal Eloquent reads are cached automatically for cacheable models:
 
 ```php
-Post::all();
 Post::where('active', true)->get();
 Post::find(1);
 Post::paginate(20);
@@ -74,18 +73,12 @@ Simple `whereHas` / `whereDoesntHave` constraints on cacheable relations and pla
 
 ```php
 Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-
-Author::join('posts', 'posts.author_id', '=', 'authors.id')
-    ->select('authors.*')
-    ->get();
 ```
 
 For other cross-table reads, declare dependencies explicitly:
 
 ```php
-Author::query()
-    ->dependsOn([Post::class])
-    ->get();
+Author::query()->dependsOn([Post::class])->get();
 
 Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
     ->select('authors.*')
@@ -216,7 +209,7 @@ Common options:
 | `stampede_wait_ms`     | How long waiters block for a rebuild wake signal.               |
 | `stampede_wake_tokens` | Number of waiters to wake after a rebuild.                      |
 | `fallback`             | Fail open to the database on Redis errors when `true`.          |
-| `events`               | Dispatch cache hit/miss events when `true`.                     |
+| `events`               | Dispatch hit/miss/bypass, metric, and invalidation events.      |
 | `fire_retrieved`       | Fire Eloquent `retrieved` for cached models when `true`.        |
 | `debugbar`             | Enable Laravel Debugbar integration when installed.             |
 | `spaces.*`             | Cache-space limits, cross-space policy, and hash-tag placement. |
@@ -228,6 +221,7 @@ Normcache bypasses caching for unsafe reads rather than risking stale or incorre
 Always bypassed:
 
 - pessimistic locks (`lockForUpdate`, `sharedLock`)
+- reads forced to the write connection with `useWritePdo()`
 - reads inside a database transaction
 - `DB::table(...)`, `DB::select()`, and raw SQL
 
@@ -244,11 +238,11 @@ Other limitations:
 - Models should use standard single-column primary keys.
 - Writes outside Eloquent are invisible unless you manually flush or invalidate.
 - Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.
-- Normcache caches model connection/table metadata. Call `CacheKeyBuilder::reset()` after switching tenants dynamically.
+- Normcache caches model connection/table metadata. Call `NormCache\Support\CacheKeyBuilder::reset()` after switching tenants dynamically.
 
 ## Observability
 
-When events are enabled, Normcache dispatches query/model hit and miss events. When `fruitcake/laravel-debugbar` is installed and `normcache.debugbar` is enabled, cache hits, misses, bypasses, and model fetches appear in Debugbar.
+When events are enabled, Normcache dispatches cache hit, miss, bypass, metric, and invalidation events. When `fruitcake/laravel-debugbar` is installed and `normcache.debugbar` is enabled, cache hits, misses, bypasses, and model fetches appear in Debugbar.
 
 ## License
 

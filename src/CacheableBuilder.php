@@ -11,31 +11,30 @@ use Illuminate\Database\Eloquent\Relations\Relation as EloquentRelation;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Arr;
-use NormCache\Cache\ModelsExecutor;
 use NormCache\Enums\CacheStrategy;
 use NormCache\Enums\PlanningMode;
 use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\BypassReasons;
 use NormCache\Planning\CachePlanner;
+use NormCache\Planning\QueryInspection;
 use NormCache\Relations\CachesRelationAggregates;
 use NormCache\Relations\CachesRelationExistence;
 use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
+use NormCache\Traits\BuilderInvalidation;
 use NormCache\Traits\Cacheable;
 use NormCache\Traits\CachesScalarResults;
-use NormCache\Traits\HandlesBuilderInvalidation;
 use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
-use NormCache\Values\QueryInspection;
 
 class CacheableBuilder extends Builder
 {
-    use CachesRelationAggregates, CachesRelationExistence, CachesScalarResults, HandlesBuilderInvalidation;
+    use BuilderInvalidation, CachesRelationAggregates, CachesRelationExistence, CachesScalarResults;
 
     private static array $validatedModelClasses = [];
 
@@ -201,6 +200,19 @@ class CacheableBuilder extends Builder
     public function capturedOpaqueJoins(): int
     {
         return $this->capturedOpaqueJoins;
+    }
+
+    public function acknowledgeOpaqueJoins(int $count): void
+    {
+        $this->capturedOpaqueJoins = $count;
+    }
+
+    // toSql() forces ofMany()'s lazily-registered self-join to materialize before counting it.
+    public function acknowledgeOfManySelfJoin(): void
+    {
+        $base = $this->getQuery();
+        $base->toSql();
+        $this->acknowledgeOpaqueJoins(count($base->joins ?? []));
     }
 
     public function hasCapturedOpaqueFrom(): bool
@@ -381,8 +393,8 @@ class CacheableBuilder extends Builder
 
         return match ($plan->strategy) {
             CacheStrategy::DirectModels => 'cached: direct (primary key)' . $space,
-            CacheStrategy::NormalizedQuery => 'cached' . $space,
-            CacheStrategy::VersionedResult => $this->explainResultStrategy() . $space,
+            CacheStrategy::ModelIndex => 'cached' . $space,
+            CacheStrategy::Result => $this->explainResultStrategy() . $space,
             CacheStrategy::LiveQuery => $this->explainBypassStrategy($plan),
         };
     }
@@ -426,15 +438,15 @@ class CacheableBuilder extends Builder
         return NormCache::withSpace($plan->space, fn() => match ($plan->strategy) {
             CacheStrategy::DirectModels => CacheFallback::rescue(
                 NormCache::config(),
-                fn() => $this->modelsExecutor()->runDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
+                fn() => NormCache::modelIndexes()->getDirect($prepared, $plan->primaryKeys, $model, $plan->columns, $this->model),
                 fn() => $prepared->collect($columns),
             ),
-            CacheStrategy::NormalizedQuery => CacheFallback::rescue(
+            CacheStrategy::ModelIndex => CacheFallback::rescue(
                 NormCache::config(),
-                fn() => $this->modelsExecutor()->runNormalized($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
+                fn() => NormCache::modelIndexes()->get($prepared, $plan, $model, $plan->columns, $this->cacheTag, $this->queryTtl, $debugbarStart, $this->model),
                 fn() => $prepared->collect($columns)
             ),
-            CacheStrategy::VersionedResult => $this->executeResultQuery($prepared, $plan, $columns),
+            CacheStrategy::Result => $this->executeResultQuery($prepared, $plan, $columns),
             CacheStrategy::LiveQuery => $this->bypassAndReturn($model, $plan->bypassReasons, $debugbarStart, $prepared, $columns),
         });
     }
@@ -446,7 +458,7 @@ class CacheableBuilder extends Builder
     ): Collection {
         $model = $this->model::class;
 
-        [$payload, $cached] = NormCache::result()->execute(
+        [$payload, $cached] = NormCache::resultCache()->execute(
             $prepared,
             $plan,
             ResultKind::Collection,
@@ -460,13 +472,13 @@ class CacheableBuilder extends Builder
             }
         );
 
-        return $prepared->finalizeModels(NormCache::hydrator()->hydrateResult($payload, $this->model, $cached));
+        return $prepared->finalizeModels(NormCache::modelCache()->hydrateResult($payload, $this->model, $cached));
     }
 
     private function bypassAndReturn(
         string $model,
         array $bypassReasons,
-        mixed $debugbarStart,
+        ?float $debugbarStart,
         PreparedQuery $prepared,
         array $columns,
     ): Collection {
@@ -574,14 +586,9 @@ class CacheableBuilder extends Builder
         return app(CachePlanner::class);
     }
 
-    private function modelsExecutor(): ModelsExecutor
-    {
-        return app(ModelsExecutor::class);
-    }
-
     private function rememberPaginationTotal(PreparedQuery $prepared, CachePlan $plan): int
     {
-        [$value] = NormCache::result()->execute(
+        [$value] = NormCache::resultCache()->execute(
             $prepared,
             $plan,
             ResultKind::PaginationCount,

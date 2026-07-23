@@ -3,7 +3,6 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Query\Builder as QueryBuilder;
-use NormCache\Values\QueryInspection;
 
 final class BypassReasons
 {

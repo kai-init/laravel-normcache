@@ -148,9 +148,7 @@ final class CacheSpaceRegistry
     /** @return list<CacheSpace> */
     private function resolveModelSpaces(string $modelClass): array
     {
-        $names = array_values(array_unique(
-            method_exists($modelClass, 'normCacheSpaces') ? $modelClass::normCacheSpaces() : []
-        ));
+        $names = array_values(array_unique($modelClass::normCacheSpaces()));
 
         if ($names === []) {
             return [$this->defaultSpace()];

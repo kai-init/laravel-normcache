@@ -2,15 +2,12 @@
 
 namespace NormCache;
 
-use NormCache\Cache\ExecutionEngine;
-use NormCache\Cache\ModelCacheRepository;
-use NormCache\Cache\ModelHydrator;
-use NormCache\Cache\NormalizedCacheRepository;
-use NormCache\Cache\ResultCacheRepository;
-use NormCache\Cache\ResultExecutor;
-use NormCache\Cache\ThroughCacheRepository;
-use NormCache\Cache\VersionTracker;
-use NormCache\Spaces\CacheSpaceRegistry;
+use NormCache\Cache\Invalidator;
+use NormCache\Cache\ModelCache;
+use NormCache\Cache\ModelIndexCache;
+use NormCache\Cache\RelationIndexCache;
+use NormCache\Cache\ResultCache;
+use NormCache\Cache\VersionStore;
 use NormCache\Spaces\CacheSpaceResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
@@ -23,63 +20,51 @@ class CacheManager
     use HandlesInvalidation;
 
     public function __construct(
-        private readonly NormalizedCacheRepository $queries,
-        private readonly ResultCacheRepository $results,
-        private readonly ThroughCacheRepository $through,
-        private readonly ModelCacheRepository $models,
-        private readonly ResultExecutor $result,
-        private readonly ModelHydrator $hydrator,
-        private readonly VersionTracker $versions,
-        private readonly ExecutionEngine $engine,
+        private readonly ModelIndexCache $modelIndexes,
+        private readonly ResultCache $resultCache,
+        private readonly RelationIndexCache $relationIndexes,
+        private readonly ModelCache $modelCache,
+        private readonly VersionStore $versions,
+        private readonly Invalidator $invalidation,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
         private readonly CacheConfig $config,
         private readonly CacheSpaceResolver $spaceResolver,
-        private readonly CacheSpaceRegistry $spaceRegistry,
     ) {}
 
-    // -------------------------------------------------------------------------
-    // Configuration
-    // -------------------------------------------------------------------------
-
-    public function engine(): ExecutionEngine
+    public function modelIndexes(): ModelIndexCache
     {
-        return $this->engine;
+        return $this->modelIndexes;
     }
 
-    public function result(): ResultExecutor
+    public function resultCache(): ResultCache
     {
-        return $this->result;
+        return $this->resultCache;
     }
 
-    public function queries(): NormalizedCacheRepository
+    public function relationIndexes(): RelationIndexCache
     {
-        return $this->queries;
+        return $this->relationIndexes;
     }
 
-    public function results(): ResultCacheRepository
+    public function modelCache(): ModelCache
     {
-        return $this->results;
+        return $this->modelCache;
     }
 
-    public function through(): ThroughCacheRepository
+    public function versionStore(): VersionStore
     {
-        return $this->through;
+        return $this->versions;
     }
 
-    public function models(): ModelCacheRepository
+    public function invalidator(): Invalidator
     {
-        return $this->models;
+        return $this->invalidation;
     }
 
     public function config(): CacheConfig
     {
         return $this->config;
-    }
-
-    public function hydrator(): ModelHydrator
-    {
-        return $this->hydrator;
     }
 
     public function isEnabled(): bool
@@ -106,10 +91,6 @@ class CacheManager
     {
         $this->config->enabled = false;
     }
-
-    // -------------------------------------------------------------------------
-    // Accessors
-    // -------------------------------------------------------------------------
 
     public function store(): RedisStore
     {

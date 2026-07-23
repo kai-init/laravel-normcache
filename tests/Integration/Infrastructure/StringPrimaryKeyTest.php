@@ -2,14 +2,12 @@
 
 namespace NormCache\Tests\Integration\Infrastructure;
 
-use Illuminate\Support\Facades\Redis;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
 
 /**
  * Covers caching correctness for models with non-integer (string/UUID) primary keys.
- * Also covers version key TTL behaviour to protect against Redis LRU eviction.
  */
 class StringPrimaryKeyTest extends TestCase
 {
@@ -109,37 +107,5 @@ class StringPrimaryKeyTest extends TestCase
         $namesCached = UuidItem::whereIn('id', [$id1, $id3])->orderBy('name')->get()->pluck('name')->all();
 
         $this->assertSame($names, $namesCached);
-    }
-
-    // Version key TTL
-
-    public function test_version_key_has_ttl_after_invalidation(): void
-    {
-        UuidItem::create(['id' => 'aaaaaaaa-0000-0000-0000-000000000001', 'name' => 'Alpha']);
-
-        $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->keys()->classKey(UuidItem::class);
-        $verKey = '{nc}:test:ver:' . $classKey . ':';
-
-        $ttl = $redis->ttl($verKey);
-
-        // Version key must have an explicit TTL (not -1 = no TTL, not -2 = does not exist).
-        $this->assertGreaterThan(0, $ttl, 'version key must have a positive TTL to survive Redis LRU eviction');
-    }
-
-    public function test_version_key_ttl_exceeds_longest_payload_ttl(): void
-    {
-        UuidItem::create(['id' => 'aaaaaaaa-0000-0000-0000-000000000001', 'name' => 'Alpha']);
-
-        $redis = Redis::connection('normcache-test');
-        $classKey = $this->cacheManager()->keys()->classKey(UuidItem::class);
-        $verKey = '{nc}:test:ver:' . $classKey . ':';
-
-        $verTtl = $redis->ttl($verKey);
-        $modelTtl = (int) config('normcache.ttl');
-        $queryTtl = (int) config('normcache.query_ttl');
-
-        // Version TTL must exceed the longest payload TTL so version keys outlive their payloads.
-        $this->assertGreaterThanOrEqual(max($modelTtl, $queryTtl), $verTtl);
     }
 }

@@ -8,6 +8,7 @@ use Illuminate\Queue\Events\Looping;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\VersionStore;
 use NormCache\CacheManager;
 use NormCache\CacheManagerFactory;
 use NormCache\Spaces\CacheSpaceRegistry;
@@ -20,6 +21,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\BuildHandle;
+use NormCache\Values\CacheSpace;
 use ReflectionProperty;
 
 class CacheManagerTest extends TestCase
@@ -221,6 +223,21 @@ class CacheManagerTest extends TestCase
         );
 
         $this->assertSame('content', $seen);
+    }
+
+    public function test_version_store_current_version_reads_the_space_scoped_version_key(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+        $store = new RedisStore('normcache-test');
+        $versions = new VersionStore($store, $keys);
+
+        $content = new CacheSpace('content', 'nc:content');
+        $classKey = $keys->classKey(Post::class);
+
+        $store->setRaw($keys->verKey($classKey, $content), '7', 60);
+
+        $this->assertSame(7, $versions->currentVersion(Post::class, $content));
+        $this->assertSame(0, $versions->currentVersion(Post::class));
     }
 
     // -------------------------------------------------------------------------
@@ -562,7 +579,7 @@ class CacheManagerTest extends TestCase
             3600,
         );
 
-        $models = $manager->hydrator()->getModels([$author->id], Author::class, null, null, Author::query());
+        $models = $manager->modelCache()->getModels([$author->id], Author::class, null, null, Author::query());
 
         $this->assertSame('Fresh', $models[0]->name);
         $this->assertSame(1, $manager->currentVersion(Author::class));
@@ -583,12 +600,13 @@ class CacheManagerTest extends TestCase
         $store->setRaw($buildingKey, '1', 3600);
         $store->increment($versionKey);
 
-        $stored = $this->cacheManager()->through()->store(
-            $throughKey,
-            [1],
-            ['through-1'],
+        $stored = $store->storeVersionedPayload(
+            [$throughKey => json_encode(['i' => ['1'], 't' => ['through-1']], JSON_THROW_ON_ERROR)],
             3600,
-            new BuildHandle($buildingKey, null, $wakeKey, [$versionKey], ['5']),
+            [$versionKey],
+            ['5'],
+            $buildingKey,
+            $wakeKey,
         );
 
         $this->assertFalse($stored);
@@ -606,7 +624,7 @@ class CacheManagerTest extends TestCase
         $store->setRaw($manager->keys()->verKey($authorKey), '9', 3600);
         $store->setRaw($manager->keys()->verKey($postKey), '4', 3600);
 
-        $manager->models()->storeForBuild(
+        $manager->modelCache()->storeForBuild(
             Author::class,
             [1 => ['id' => 1, 'name' => 'Fresh']],
             new BuildHandle(
@@ -630,7 +648,7 @@ class CacheManagerTest extends TestCase
         $store->setRaw($manager->keys()->verKey($classKey), '5', 3600);
         $store->increment($manager->keys()->verKey($classKey));
 
-        $manager->models()->storeForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Stale']], 5);
+        $manager->modelCache()->storeForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Stale']], 5);
 
         $this->assertNull($store->get($manager->keys()->modelPrefix($classKey, 5) . '1'));
         $this->assertNull($store->get($manager->keys()->modelPrefix($classKey, 6) . '1'));
@@ -644,7 +662,7 @@ class CacheManagerTest extends TestCase
 
         $store->setRaw($manager->keys()->verKey($classKey), '5', 3600);
 
-        $manager->models()->storeForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Fresh']], 5);
+        $manager->modelCache()->storeForVersion(Author::class, [1 => ['id' => 1, 'name' => 'Fresh']], 5);
 
         $this->assertSame(
             ['id' => 1, 'name' => 'Fresh'],
@@ -666,11 +684,13 @@ class CacheManagerTest extends TestCase
         $store->setRaw($buildingKey, '1', 3600);
         $store->increment($versionKey); // now 6
 
-        $this->cacheManager()->queries()->store(
-            $queryKey,
-            [1, 2, 3],
+        $store->storeVersionedPayload(
+            [$queryKey => json_encode(['1', '2', '3'], JSON_THROW_ON_ERROR)],
             3600,
-            new BuildHandle($buildingKey, null, $wakeKey, [$versionKey], ['5']),
+            [$versionKey],
+            ['5'],
+            $buildingKey,
+            $wakeKey,
         );
 
         $this->assertNull($store->getRaw($queryKey), 'CAS skips write when version has been bumped');
@@ -690,39 +710,17 @@ class CacheManagerTest extends TestCase
         $store->setRaw($versionKey, '5', 3600);
         $store->setRaw($buildingKey, '1', 3600);
 
-        $this->cacheManager()->queries()->store(
-            $queryKey,
-            [4, 5, 6],
+        $store->storeVersionedPayload(
+            [$queryKey => json_encode(['4', '5', '6'], JSON_THROW_ON_ERROR)],
             3600,
-            new BuildHandle($buildingKey, null, $wakeKey, [$versionKey], ['5']),
+            [$versionKey],
+            ['5'],
+            $buildingKey,
+            $wakeKey,
         );
 
         $this->assertNotNull($store->getRaw($queryKey), 'CAS writes when version still matches');
         $this->assertNull($store->getRaw($buildingKey), 'Building lock released after successful write');
-    }
-
-    public function test_store_query_ids_does_not_write_or_release_when_building_token_mismatches(): void
-    {
-        $store = $this->cacheManager()->store();
-        $classKey = $this->cacheManager()->keys()->classKey(Author::class);
-
-        $versionKey = "ver:{{$classKey}}:";
-        $queryKey = "query:{{$classKey}}:v5:token-mismatch";
-        $buildingKey = "building:{{$classKey}}:token-mismatch";
-        $wakeKey = "wake:{{$classKey}}:token-mismatch";
-
-        $store->setRaw($versionKey, '5', 3600);
-        $store->setRaw($buildingKey, 'new-owner', 3600);
-
-        $this->cacheManager()->queries()->store(
-            $queryKey,
-            [7, 8, 9],
-            3600,
-            new BuildHandle($buildingKey, 'old-owner', $wakeKey, [$versionKey], ['5']),
-        );
-
-        $this->assertNull($store->getRaw($queryKey), 'Outdated builder must not write when lock token changed');
-        $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Outdated builder must not release a newer lock');
     }
 
     // -------------------------------------------------------------------------
@@ -739,11 +737,14 @@ class CacheManagerTest extends TestCase
 
         $store->setRaw($buildingKey, 'token', 3600);
 
-        $this->manager->queries()->store(
-            $key,
-            ['1', '2'],
+        $store->storeVersionedPayload(
+            [$key => json_encode(['1', '2'], JSON_THROW_ON_ERROR)],
             60,
-            new BuildHandle($buildingKey, 'token', $wakeKey),
+            [],
+            [],
+            $buildingKey,
+            $wakeKey,
+            'token',
         );
 
         $this->assertNotNull($store->getRaw($key), 'Non-CAS write should proceed when buildingKey is set');
@@ -803,21 +804,19 @@ class CacheManagerTest extends TestCase
         $store->setRaw($versionKey, '5', 3600);
         $store->setRaw($buildingKey, 'new-owner', 3600);
 
-        $written = $this->cacheManager()->results()->storeEntry(
-            $resultKey,
-            [['id' => 1, 'name' => 'Old']],
+        $written = $store->storeVersionedPayload(
+            [$resultKey => $store->serialize([['id' => 1, 'name' => 'Old']])],
             3600,
-            new BuildHandle($buildingKey, 'old-owner', $wakeKey, [$versionKey], ['5']),
+            [$versionKey],
+            ['5'],
+            $buildingKey,
+            $wakeKey,
+            'old-owner',
         );
 
         $this->assertFalse($written);
         $this->assertNull($store->getRaw($resultKey), 'Outdated builder must not write when lock token changed');
         $this->assertSame('new-owner', $store->getRaw($buildingKey), 'Outdated builder must not release a newer lock');
         $this->assertNull($store->getRaw($wakeKey), 'Outdated builder must not wake waiters for a lock it no longer owns');
-    }
-
-    public function test_is_enabled_true_by_default(): void
-    {
-        $this->assertTrue($this->manager->isEnabled());
     }
 }

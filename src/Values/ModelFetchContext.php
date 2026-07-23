@@ -2,10 +2,9 @@
 
 namespace NormCache\Values;
 
-use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use NormCache\CacheableBuilder;
 
-/** Per-call state for ModelHydrator::getModels(); mutable so the miss path can accumulate hits and hold the build lock. */
 final class ModelFetchContext
 {
     /** @var array<int|string, Model> id => hydrated model */
@@ -22,7 +21,7 @@ final class ModelFetchContext
         public readonly string $classKey,
         public readonly ?array $projection,
         public readonly ?Model $prototype,
-        public readonly ?EloquentBuilder $missedQuery,
+        public readonly ?CacheableBuilder $missedQuery,
         public readonly bool $preserveQueryShape,
         public int $modelVersion,
     ) {}

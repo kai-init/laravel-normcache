@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Contract;
 
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -360,15 +361,6 @@ class RelationContractTest extends TestCase
         );
     }
 
-    public function test_load_sum_multiple_relations_simultaneously(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => tap(Author::orderBy('name')->get(), fn($c) => $c->loadSum('posts', 'views')),
-            fn() => tap(Author::withoutCache()->orderBy('name')->get(), fn($c) => $c->loadSum('posts', 'views')),
-        );
-    }
-
     public function test_load_max_on_collection(): void
     {
         $this->fixtures();
@@ -385,5 +377,51 @@ class RelationContractTest extends TestCase
             fn() => tap(Author::orderBy('name')->get(), fn($c) => $c->loadMin('posts', 'views')),
             fn() => tap(Author::withoutCache()->orderBy('name')->get(), fn($c) => $c->loadMin('posts', 'views')),
         );
+    }
+
+    // Complex relation queries with raw expressions and custom selects
+
+    private function rawExpressionFixtures(): void
+    {
+        $country = Country::create(['name' => 'USA']);
+
+        $author = Author::create(['name' => 'John', 'country_id' => $country->id]);
+
+        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
+        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 20]);
+
+        $fiction = Tag::create(['name' => 'fiction']);
+        $science = Tag::create(['name' => 'science']);
+
+        $author->tags()->attach([$fiction->id, $science->id]);
+    }
+
+    public function test_belongs_to_many_with_where_raw(): void
+    {
+        $this->rawExpressionFixtures();
+
+        $query = fn() => Author::with(['tags' => fn($q) => $q->whereRaw('LOWER(name) = ?', ['fiction'])])->get();
+        $nativeQuery = fn() => Author::withoutCache()->with(['tags' => fn($q) => $q->whereRaw('LOWER(name) = ?', ['fiction'])])->get();
+
+        $this->contract($query, $nativeQuery);
+    }
+
+    public function test_has_many_through_with_custom_select_raw(): void
+    {
+        $this->rawExpressionFixtures();
+
+        $query = fn() => Country::with(['posts' => fn($q) => $q->select('posts.*', DB::raw('posts.id * 2 as doubled_id'))])->get();
+        $nativeQuery = fn() => Country::withoutCache()->with(['posts' => fn($q) => $q->select('posts.*', DB::raw('posts.id * 2 as doubled_id'))])->get();
+
+        $this->contract($query, $nativeQuery);
+
+        // Also verify the custom attribute is present and correct
+        $warm = $query();
+        $this->assertCount(1, $warm);
+        $posts = $warm->first()->posts;
+        $this->assertCount(2, $posts);
+        foreach ($posts as $post) {
+            $this->assertEquals($post->id * 2, $post->doubled_id);
+        }
     }
 }

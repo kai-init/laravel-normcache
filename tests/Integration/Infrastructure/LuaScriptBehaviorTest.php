@@ -11,7 +11,8 @@ use NormCache\Tests\TestCase;
 
 /**
  * Behavioral tests: Lua script edge cases — corrupt query entries are deleted and
- * re-queried, and cooldown-deferred version bumps fire on the next read.
+ * re-queried, and cooldown-deferred version bumps fire on the next read or on a
+ * direct currentVersion() call.
  */
 class LuaScriptBehaviorTest extends TestCase
 {
@@ -39,7 +40,7 @@ class LuaScriptBehaviorTest extends TestCase
     {
         $query = Author::query();
 
-        return QueryHasher::forNormalizedQuery($query, $query->toBase());
+        return QueryHasher::forModelIndexQuery($query, $query->toBase());
     }
 
     public function test_corrupt_query_entry_is_deleted_and_treated_as_miss(): void
@@ -106,6 +107,39 @@ class LuaScriptBehaviorTest extends TestCase
 
         // Non-numeric value cannot be a valid timestamp — Lua cleans it without bumping the version.
         $this->assertSame($version, (int) $this->getKey("ver:{$ck}:"));
+        $this->assertNull($this->getKey("scheduled:{$ck}:"));
+    }
+
+    // The two tests above enter through a query read; these two call currentVersion() directly.
+
+    public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
+    {
+        $ck = NormCache::keys()->classKey(Author::class);
+
+        $this->setKey("ver:{$ck}:", '3');
+        $pastMs = (int) (microtime(true) * 1000) - 5000;
+        $this->setKey("scheduled:{$ck}:", (string) $pastMs);
+
+        $this->cacheManager()->config()->cooldown = 1;
+
+        $version = NormCache::currentVersion(Author::class);
+
+        $this->assertSame(4, $version);
+        $this->assertNull($this->getKey("scheduled:{$ck}:"));
+    }
+
+    public function test_non_numeric_scheduled_key_cleaned_on_standalone_version_resolution(): void
+    {
+        $ck = NormCache::keys()->classKey(Author::class);
+
+        $this->setKey("ver:{$ck}:", '3');
+        $this->setKey("scheduled:{$ck}:", 'garbage');
+
+        $this->cacheManager()->config()->cooldown = 1;
+
+        $version = NormCache::currentVersion(Author::class);
+
+        $this->assertSame(3, $version);
         $this->assertNull($this->getKey("scheduled:{$ck}:"));
     }
 }

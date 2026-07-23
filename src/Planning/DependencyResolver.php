@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use NormCache\CacheableBuilder;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
-use NormCache\Values\QueryInspection;
 
 final class DependencyResolver
 {
@@ -34,8 +33,9 @@ final class DependencyResolver
                     ...$required->tables,
                     ...$explicitTables,
                 ])),
-                safe: $required->safe,
-                reasons: $required->reasons,
+                // An explicit dependsOn() adds deps, it doesn't vouch for ones QueryAnalyzer couldn't infer.
+                safe: $inferred->safe && $required->safe,
+                reasons: [...$inferred->reasons, ...$required->reasons],
             );
         }
 

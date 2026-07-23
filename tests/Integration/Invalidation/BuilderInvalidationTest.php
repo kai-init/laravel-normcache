@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Invalidation;
 
+use Illuminate\Support\Collection;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
@@ -91,6 +92,38 @@ class BuilderInvalidationTest extends TestCase
         $this->assertSame(['Alice'], Author::all()->pluck('name')->all());
     }
 
+    public function test_insert_or_ignore_returning_uses_the_query_result_and_skips_noop_conflicts(): void
+    {
+        if (!method_exists(Author::query()->toBase(), 'insertOrIgnoreReturning')) {
+            $this->markTestSkipped('insertOrIgnoreReturning is available in Laravel 13 and later.');
+        }
+
+        Author::all();
+        $versionBeforeInsert = NormCache::currentVersion(Author::class);
+
+        $inserted = Author::query()->insertOrIgnoreReturning([
+            'id' => 1,
+            'name' => 'Alice',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], ['id', 'name'], ['id']);
+
+        $this->assertInstanceOf(Collection::class, $inserted);
+        $this->assertSame([['id' => 1, 'name' => 'Alice']], $inserted->map(fn($row) => (array) $row)->all());
+        $this->assertGreaterThan($versionBeforeInsert, NormCache::currentVersion(Author::class));
+
+        $versionBeforeConflict = NormCache::currentVersion(Author::class);
+        $ignored = Author::query()->insertOrIgnoreReturning([
+            'id' => 1,
+            'name' => 'Ignored',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], ['id', 'name'], ['id']);
+
+        $this->assertTrue($ignored->isEmpty());
+        $this->assertSame($versionBeforeConflict, NormCache::currentVersion(Author::class));
+    }
+
     public function test_insert_using_invalidates_query_cache(): void
     {
         Author::create(['name' => 'Alice']);
@@ -116,8 +149,9 @@ class BuilderInvalidationTest extends TestCase
 
         $versionBeforeTouch = NormCache::currentVersion(Author::class);
 
-        Author::whereKey($author->id)->touch();
+        $touched = Author::whereKey($author->id)->touch();
 
+        $this->assertSame(1, $touched);
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeTouch, NormCache::currentVersion(Author::class));
 
@@ -126,8 +160,9 @@ class BuilderInvalidationTest extends TestCase
 
         $versionBeforeIncrement = NormCache::currentVersion(Author::class);
 
-        Author::whereKey($author->id)->incrementEach(['id' => 0]);
+        $affected = Author::whereKey($author->id)->incrementEach(['id' => 0]);
 
+        $this->assertSame(1, $affected);
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeIncrement, NormCache::currentVersion(Author::class));
     }

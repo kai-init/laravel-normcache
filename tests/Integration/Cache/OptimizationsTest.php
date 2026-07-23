@@ -5,7 +5,6 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Enums\CacheStatus;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
@@ -15,13 +14,12 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 /**
- * Behavioral tests: primary-key lookups use a fast path that skips query-ID resolution;
- * model payloads are fetched in a single Lua round trip; corrupt or empty cache entries
- * degrade gracefully to a miss.
+ * Behavioral tests: primary-key lookups take the direct model path; corrupt cache
+ * entries repair on read; and large model batches preserve their results.
  */
 class OptimizationsTest extends TestCase
 {
-    public function test_fast_path_is_used_for_primary_key_lookup()
+    public function test_fast_path_is_used_for_primary_key_lookup(): void
     {
         $author = Author::create(['name' => 'Fast Path Author']);
 
@@ -36,7 +34,7 @@ class OptimizationsTest extends TestCase
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
 
-    public function test_fast_path_is_used_for_where_in_primary_key()
+    public function test_fast_path_is_used_for_where_in_primary_key(): void
     {
         $a1 = Author::create(['name' => 'A1']);
         $a2 = Author::create(['name' => 'A2']);
@@ -50,46 +48,6 @@ class OptimizationsTest extends TestCase
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
 
-    public function test_lua_retrieval_stores_json_and_fetches_in_one_go()
-    {
-        Author::create(['name' => 'Lua Author']);
-
-        Author::where('name', 'Lua Author')->get();
-
-        $redis = Redis::connection(config('normcache.connection'));
-        $manager = app('normcache');
-
-        $keys = $redis->keys($manager->keys()->prefixed('query:*'));
-        $this->assertNotEmpty($keys);
-
-        $value = $redis->get($keys[0]);
-        $this->assertStringStartsWith('[', $value);
-        $this->assertStringEndsWith(']', $value);
-
-        Event::fake([QueryCacheHit::class]);
-        $found = Author::where('name', 'Lua Author')->get();
-
-        $this->assertCount(1, $found);
-        Event::assertDispatched(QueryCacheHit::class);
-    }
-
-    public function test_query_hit_fast_path_returns_model_payload_arrays(): void
-    {
-        $author = Author::create(['name' => 'Payload Author']);
-
-        Author::where('name', 'Payload Author')->get();
-
-        $query = Author::where('name', 'Payload Author');
-        $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
-        $result = app('normcache')->queries()->fetch(Author::class, $hash, null, [], []);
-
-        $this->assertSame(CacheStatus::Hit, $result->status);
-        $this->assertSame([(string) $author->id], $result->ids);
-        $this->assertIsArray($result->models);
-        $this->assertIsArray($result->models[0]);
-        $this->assertSame('Payload Author', $result->models[0]['name']);
-    }
-
     public function test_corrupt_query_cache_payload_degrades_to_miss_and_repairs(): void
     {
         Author::create(['name' => 'Corruptible Author']);
@@ -97,7 +55,7 @@ class OptimizationsTest extends TestCase
         $query = Author::where('name', 'Corruptible Author');
         $query->get();
 
-        $hash = QueryHasher::forNormalizedQuery($query, $query->toBase());
+        $hash = QueryHasher::forModelIndexQuery($query, $query->toBase());
         $classKey = app('normcache')->keys()->classKey(Author::class);
         $version = app('normcache')->currentVersion(Author::class);
 
@@ -147,6 +105,84 @@ class OptimizationsTest extends TestCase
         $this->assertSame([(string) $found->first()->id], $repaired);
     }
 
+    public function test_malformed_count_cache_payload_is_recomputed_and_repaired(): void
+    {
+        Author::create(['name' => 'Alice']);
+        Author::create(['name' => 'Bob']);
+
+        $this->assertSame(2, Author::count());
+
+        $countKey = collect($this->redisKeys('count:*'))->first();
+        $this->assertNotNull($countKey);
+        $this->corruptResultCacheEntry($countKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertSame(2, Author::count());
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertSame(2, Author::count());
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    public function test_malformed_exists_cache_payload_is_recomputed_and_repaired(): void
+    {
+        Author::create(['name' => 'Alice']);
+
+        $this->assertTrue(Author::exists());
+
+        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
+        $this->assertNotNull($scalarKey);
+        $this->corruptResultCacheEntry($scalarKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertTrue(Author::exists());
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertTrue(Author::exists());
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    public function test_malformed_scalar_cache_payload_is_recomputed_and_repaired(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        Post::create(['title' => 'Hello', 'author_id' => $author->id, 'views' => 10]);
+
+        $this->assertSame(10, Post::sum('views'));
+
+        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
+        $this->assertNotNull($scalarKey);
+        $this->corruptResultCacheEntry($scalarKey);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount) {
+            $queryCount++;
+        });
+
+        $this->assertSame(10, Post::sum('views'));
+        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
+
+        $queryCount = 0;
+        $this->assertSame(10, Post::sum('views'));
+        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
+    }
+
+    // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.
+    private function corruptResultCacheEntry(string $key): void
+    {
+        $serialized = $this->cacheManager()->store()->serialize([]);
+        Redis::connection('normcache-test')->set($key, $serialized);
+    }
+
     public function test_large_id_list_round_trips_correctly(): void
     {
         $names = [];
@@ -169,7 +205,7 @@ class OptimizationsTest extends TestCase
         );
     }
 
-    public function test_fast_path_is_used_for_single_primary_key_lookup_with_order_by()
+    public function test_fast_path_is_used_for_single_primary_key_lookup_with_order_by(): void
     {
         $author = Author::create(['name' => 'Order Author']);
 
@@ -198,7 +234,7 @@ class OptimizationsTest extends TestCase
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
 
-    public function test_fast_path_skips_where_in_with_order_by()
+    public function test_fast_path_skips_where_in_with_order_by(): void
     {
         Author::create(['name' => 'Order A']);
         Author::create(['name' => 'Order B']);

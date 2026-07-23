@@ -346,7 +346,7 @@ class ThroughRelationTest extends TestCase
 
         $country->posts()->select('posts.*')->selectRaw('2 as polluted')->get();
 
-        $cached = NormCache::hydrator()->getModels([$post->id], Post::class);
+        $cached = NormCache::modelCache()->getModels([$post->id], Post::class);
         $this->assertArrayNotHasKey('polluted', $cached[0]->getRawOriginal());
     }
 

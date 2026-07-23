@@ -218,7 +218,7 @@ final class RedisStore
         return $this->script(
             RedisScripts::get('fetch_version_with_cooldown'),
             [$verKey, $scheduledKey],
-            [(string) (int) floor(microtime(true) * 1000)]
+            [(string) (int) floor(microtime(true) * 1000), '0']
         );
     }
 
@@ -252,6 +252,22 @@ final class RedisStore
     public function getMany(array $keys): array
     {
         return $this->mgetValues($keys, unserialize: true);
+    }
+
+    public function getManyForCurrentVersion(
+        string $versionKey,
+        string $scheduledKey,
+        string $modelPrefix,
+        array $ids,
+    ): array {
+        $result = (array) $this->script(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$versionKey, $scheduledKey, $modelPrefix],
+            [(string) (int) floor(microtime(true) * 1000), '1', ...$ids],
+        );
+        $raw = is_array($result[1] ?? null) ? $result[1] : [];
+
+        return [(int) ($result[0] ?? 0), $this->unserializeMany($raw)];
     }
 
     private function mgetValues(array $keys, bool $unserialize): array
@@ -365,11 +381,10 @@ final class RedisStore
         $groups = [];
 
         foreach ($keys as $key) {
-            if (preg_match('/\{([^{}]+)\}/', $key, $matches) === 1) {
-                $groups['tag:' . $matches[1]][] = $key;
-            } else {
-                $groups['key:' . $key][] = $key;
-            }
+            $group = preg_match('/\{([^{}]+)\}/', $key, $matches) === 1
+                ? 'tag:' . $matches[1]
+                : 'key:' . $key;
+            $groups[$group][] = $key;
         }
 
         return array_values($groups);

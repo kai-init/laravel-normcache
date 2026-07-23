@@ -5,9 +5,13 @@ namespace NormCache\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
+use NormCache\Enums\CacheKind;
 use NormCache\Enums\CacheOperation;
+use NormCache\Enums\CacheStatus;
+use NormCache\Enums\ResultKind;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\QueryAnalyzer;
+use NormCache\Planning\QueryInspection;
 use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheReporter;
 use NormCache\Support\ProjectionClassifier;
@@ -18,7 +22,6 @@ use NormCache\Values\CachePlan;
 use NormCache\Values\CachePlanContext;
 use NormCache\Values\DependencySet;
 use NormCache\Values\PreparedQuery;
-use NormCache\Values\QueryInspection;
 
 trait CachesOneOrManyThrough
 {
@@ -60,6 +63,9 @@ trait CachesOneOrManyThrough
         $hash = QueryHasher::forResultQuery($builder, $base);
         $relatedClass = $this->related::class;
         $throughClass = $this->throughParent::class;
+        $connection = $this->related->getConnection()->getName()
+            ?? $this->related->getConnectionName()
+            ?? '';
         $depClasses = array_values(array_unique([
             $throughClass,
             ...$plan->dependencies->depClassesFor($relatedClass),
@@ -70,67 +76,92 @@ trait CachesOneOrManyThrough
 
         $runThrough = fn() => CacheFallback::rescue(
             NormCache::config(),
-            fn() => NormCache::engine()->runNormalized(
-                fetch: fn() => NormCache::through()->fetch($relatedClass, $hash, $tag, $depClasses, $depTableKeys),
-                waitForBuild: fn() => NormCache::through()->waitForBuild(
-                    $relatedClass, $hash, $tag, $depClasses, $depTableKeys
-                ),
-                onBuild: fn() => $this->getFromPreparedBuilder($prepared),
-                onMiss: function ($result) use ($relatedClass, $throughClass, $shouldCacheModels, $debugbarStart, $prepared, $ttl) {
-                    CacheReporter::queryMiss($relatedClass, $result->key, $debugbarStart,
-                        ['through' => $throughClass], 'through miss');
+            function () use (
+                $relatedClass,
+                $throughClass,
+                $hash,
+                $tag,
+                $depClasses,
+                $depTableKeys,
+                $ttl,
+                $connection,
+                $prepared,
+                $shouldCacheModels,
+                $selectedColumns,
+                $debugbarStart,
+                $plan,
+            ) {
+                $rawModels = null;
+                $modelAttrs = [];
 
-                    $rawModels = $this->getFromPreparedBuilder($prepared, false);
-                    $modelAttrs = [];
-                    if ($shouldCacheModels) {
-                        foreach ($rawModels as $model) {
-                            $attrs = $model->getRawOriginal();
-                            unset($attrs['laravel_through_key']);
-                            $modelAttrs[$model->getKey()] = $attrs;
-                        }
-                    }
+                $outcome = NormCache::relationIndexes()->getOrBuildThrough(
+                    build: function () use ($prepared, $shouldCacheModels, &$rawModels, &$modelAttrs) {
+                        $rawModels = $this->getFromPreparedBuilder($prepared, false);
 
-                    $cachePayload = $this->cachePayloadFromResult($rawModels);
-                    $space = NormCache::keys()->activeSpace();
-
-                    CacheFallback::attempt(
-                        NormCache::config(),
-                        function () use ($cachePayload, $result, $relatedClass, $ttl, $modelAttrs, $space) {
-                            $stored = NormCache::through()->store(
-                                $result->key,
-                                $cachePayload['ids'],
-                                $cachePayload['throughKeys'],
-                                $ttl,
-                                $result->build,
-                            );
-
-                            if ($stored) {
-                                NormCache::models()->storeForBuild(
-                                    $relatedClass,
-                                    $modelAttrs,
-                                    $result->build,
-                                    $space,
-                                );
+                        if ($shouldCacheModels) {
+                            foreach ($rawModels as $model) {
+                                $attrs = $model->getRawOriginal();
+                                unset($attrs['laravel_through_key']);
+                                $modelAttrs[$model->getKey()] = $attrs;
                             }
-                        },
-                    );
+                        }
 
-                    return $prepared->applyAfterCallbacks($rawModels);
-                },
-                onHit: function ($result) use ($relatedClass, $prepared, $selectedColumns, $throughClass, $debugbarStart) {
-                    CacheReporter::queryHit($relatedClass, $result->key ?? '', $debugbarStart,
-                        ['through' => $throughClass], 'through hit');
+                        return $this->cachePayloadFromResult($rawModels);
+                    },
+                    modelClass: $relatedClass,
+                    hash: $hash,
+                    tag: $tag,
+                    depClasses: $depClasses,
+                    depTableKeys: $depTableKeys,
+                    ttl: $ttl,
+                    connection: $connection,
+                );
 
-                    $throughKeys = [];
-                    foreach ($result->ids as $i => $id) {
-                        $throughKeys[$id] = $result->throughKeys[$i] ?? null;
+                if ($outcome->status !== CacheStatus::Hit && $outcome->status !== CacheStatus::Empty) {
+                    CacheReporter::queryMiss($relatedClass, $outcome->key, $debugbarStart, [
+                        ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $outcome->status, ResultKind::Collection, $plan->space),
+                        'through' => $throughClass,
+                    ], 'through miss');
+
+                    if ($outcome->status === CacheStatus::Miss && $modelAttrs !== []) {
+                        NormCache::modelCache()->storeForBuild(
+                            $relatedClass,
+                            $modelAttrs,
+                            $outcome->build,
+                            NormCache::keys()->activeSpace(),
+                            $connection,
+                        );
                     }
 
-                    return $this->hydrateFromIds(
-                        $result->ids, $relatedClass, $prepared, $selectedColumns, $throughKeys, $result->models
-                    );
-                },
-            ),
+                    return $prepared->applyAfterCallbacks($rawModels ?? $this->related->newCollection());
+                }
+
+                $ids = $outcome->payload['ids'];
+                $throughKeys = array_combine($ids, $outcome->payload['throughKeys']);
+
+                $resolvedVersion = isset($outcome->build->expectedVersions[0])
+                    ? (int) $outcome->build->expectedVersions[0]
+                    : null;
+                $raw = $resolvedVersion !== null
+                    ? NormCache::modelCache()->rawForVersion($relatedClass, $ids, $resolvedVersion, $connection)
+                    : null;
+
+                $models = $this->hydrateFromIds(
+                    $ids,
+                    $relatedClass,
+                    $prepared,
+                    $selectedColumns,
+                    $throughKeys,
+                    $raw,
+                    $resolvedVersion,
+                );
+                CacheReporter::queryHit($relatedClass, $outcome->key, $debugbarStart, [
+                    ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $outcome->status, ResultKind::Collection, $plan->space),
+                    'through' => $throughClass,
+                ], 'through hit');
+
+                return $models;
+            },
             fn() => $this->getFromPreparedBuilder($prepared)
         );
 
@@ -141,6 +172,7 @@ trait CachesOneOrManyThrough
     {
         if (method_exists($this, 'isOneOfMany') && $this->isOneOfMany()) {
             $query->dependsOn([$this->throughParent::class]);
+            $query->acknowledgeOfManySelfJoin();
         }
     }
 
@@ -210,9 +242,19 @@ trait CachesOneOrManyThrough
         ?array $selectedColumns,
         array $throughKeys = [],
         ?array $raw = null,
+        ?int $resolvedVersion = null,
     ): Collection {
         $builder = $prepared->builder;
-        $models = NormCache::hydrator()->getModels($ids, $relatedClass, $selectedColumns, $raw, $builder, false, $this->related);
+        $models = NormCache::modelCache()->getModels(
+            $ids,
+            $relatedClass,
+            $selectedColumns,
+            $raw,
+            $builder,
+            false,
+            $this->related,
+            $resolvedVersion,
+        );
 
         if ($throughKeys !== []) {
             $getAttribute = RawAttributes::getAttributeClosure();

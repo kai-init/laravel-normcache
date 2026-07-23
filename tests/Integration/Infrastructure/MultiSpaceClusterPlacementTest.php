@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Infrastructure;
 use NormCache\Tests\Fixtures\Models\CatalogTag;
 use NormCache\Tests\Fixtures\Models\ReportingCountry;
 use NormCache\Tests\Fixtures\Models\SpacedPost;
+use NormCache\Tests\Integration\Infrastructure\Concerns\InteractsWithClusterRedis;
 use NormCache\Tests\TestCase;
 use Redis;
 
@@ -12,18 +13,13 @@ use Redis;
 // run their full lifecycle and physically land on three distinct master nodes.
 class MultiSpaceClusterPlacementTest extends TestCase
 {
+    use InteractsWithClusterRedis;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        if (!(env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true)) {
-            $this->markTestSkipped('Requires a Redis Cluster (composer test:cluster).');
-        }
-
-        if (!class_exists(Redis::class)) {
-            $this->markTestSkipped('Physical cluster placement check requires the phpredis extension.');
-        }
-
+        $this->requiresRedisCluster();
         $this->setClusterMode(true);
     }
 
@@ -59,7 +55,7 @@ class MultiSpaceClusterPlacementTest extends TestCase
     // Master node whose keyspace holds this space tag's keys, or null.
     private function masterHolding(string $hashTag): ?string
     {
-        foreach ($this->masterNodes() as [$host, $port]) {
+        foreach ($this->clusterMasterNodes() as [$host, $port]) {
             $node = new Redis;
             $node->connect($host, $port);
 
@@ -74,31 +70,5 @@ class MultiSpaceClusterPlacementTest extends TestCase
         }
 
         return null;
-    }
-
-    /** @return list<array{0: string, 1: int}> master nodes, from CLUSTER SLOTS */
-    private function masterNodes(): array
-    {
-        [$host, $port] = $this->clusterProbeNode();
-        $probe = new Redis;
-        $probe->connect($host, $port);
-        $slots = $probe->rawCommand('CLUSTER', 'SLOTS');
-        $probe->close();
-
-        $nodes = [];
-        foreach ($slots as $range) {
-            $masterPort = (int) $range[2][1]; // [start, end, [masterIp, masterPort, id], ...]
-            $nodes["{$host}:{$masterPort}"] = [$host, $masterPort];
-        }
-
-        return array_values($nodes);
-    }
-
-    /** @return array{0: string, 1: int} */
-    private function clusterProbeNode(): array
-    {
-        $node = config('database.redis.clusters.normcache-test.0');
-
-        return [$node['host'], (int) $node['port']];
     }
 }

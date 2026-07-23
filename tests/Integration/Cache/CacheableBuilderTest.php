@@ -297,7 +297,9 @@ class CacheableBuilderTest extends TestCase
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
-        $this->assertNotEmpty($queries);
+        $this->assertCount(1, $queries, 'refresh() must issue exactly one DB query, not read from cache');
+        $this->assertStringContainsString('authors', $queries[0]['query']);
+        $this->assertSame('Alice', $author->name);
     }
 
     public function test_truncate_flushes_model_cache_and_increments_version(): void
@@ -363,6 +365,49 @@ class CacheableBuilderTest extends TestCase
         Author::query()->select('name')->paginate(10);
 
         $this->assertCount(1, $this->redisKeys('count:*'));
+    }
+
+    public function test_simple_paginate_invalidates_on_change(): void
+    {
+        $this->createAuthors(3);
+
+        Author::orderBy('id')->simplePaginate(2); // Warm cache
+
+        Event::fake([QueryCacheHit::class]);
+        Author::orderBy('id')->simplePaginate(2);
+        Event::assertDispatched(QueryCacheHit::class);
+
+        // Change data
+        Author::first()->update(['name' => 'Updated Name']);
+
+        Event::fake([QueryCacheMiss::class]);
+        Author::orderBy('id')->simplePaginate(2);
+        Event::assertDispatched(QueryCacheMiss::class);
+    }
+
+    public function test_cursor_paginate_invalidates_on_change(): void
+    {
+        $this->createAuthors(3);
+
+        Author::orderBy('id')->cursorPaginate(2); // Warm cache
+
+        Event::fake([QueryCacheHit::class]);
+        Author::orderBy('id')->cursorPaginate(2);
+        Event::assertDispatched(QueryCacheHit::class);
+
+        // Change data
+        Author::first()->update(['name' => 'Updated Name']);
+
+        Event::fake([QueryCacheMiss::class]);
+        Author::orderBy('id')->cursorPaginate(2);
+        Event::assertDispatched(QueryCacheMiss::class);
+    }
+
+    private function createAuthors(int $count): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            Author::create(['name' => "Author {$i}"]);
+        }
     }
 
     public function test_raw_builder_insert_invalidates_version(): void
@@ -655,20 +700,6 @@ class CacheableBuilderTest extends TestCase
         $this->assertFalse(Author::where('name', 'Alice')->doesntExist());
     }
 
-    public function test_tag_rejects_reserved_characters(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-
-        Author::query()->tag('homepage:{bad}:*')->get();
-    }
-
-    public function test_tag_rejects_empty_string(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-
-        Author::query()->tag('')->get();
-    }
-
     private function clearGlobalScope(string $modelClass, string $name): void
     {
         $prop = new \ReflectionProperty(Model::class, 'globalScopes');
@@ -720,77 +751,6 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame('Alice', $results->first()->name);
     }
 
-    public function test_malformed_count_cache_payload_is_recomputed_and_repaired(): void
-    {
-        Author::create(['name' => 'Alice']);
-        Author::create(['name' => 'Bob']);
-
-        $this->assertSame(2, Author::count());
-
-        $countKey = collect($this->redisKeys('count:*'))->first();
-        $this->assertNotNull($countKey);
-        $this->corruptResultCacheEntry($countKey);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $this->assertSame(2, Author::count());
-        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
-
-        $queryCount = 0;
-        $this->assertSame(2, Author::count());
-        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
-    }
-
-    public function test_malformed_exists_cache_payload_is_recomputed_and_repaired(): void
-    {
-        Author::create(['name' => 'Alice']);
-
-        $this->assertTrue(Author::exists());
-
-        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
-        $this->assertNotNull($scalarKey);
-        $this->corruptResultCacheEntry($scalarKey);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $this->assertTrue(Author::exists());
-        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
-
-        $queryCount = 0;
-        $this->assertTrue(Author::exists());
-        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
-    }
-
-    public function test_malformed_scalar_cache_payload_is_recomputed_and_repaired(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id, 'views' => 10]);
-
-        $this->assertSame(10, Post::sum('views'));
-
-        $scalarKey = collect($this->redisKeys('scalar:*'))->first();
-        $this->assertNotNull($scalarKey);
-        $this->corruptResultCacheEntry($scalarKey);
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount) {
-            $queryCount++;
-        });
-
-        $this->assertSame(10, Post::sum('views'));
-        $this->assertGreaterThan(0, $queryCount, 'Malformed payload must trigger a DB recompute');
-
-        $queryCount = 0;
-        $this->assertSame(10, Post::sum('views'));
-        $this->assertSame(0, $queryCount, 'Malformed entry must be repaired so the next read is a clean hit');
-    }
-
     private function assertAggregateCacheOptOutRunsLive(callable $query): void
     {
         $query();
@@ -808,13 +768,6 @@ class CacheableBuilderTest extends TestCase
         $this->assertNotEmpty($queries, 'withoutAggregateCache() must not serve a result-cache hit.');
     }
 
-    // Overwrites a result-cache entry with a serialized [] — the wrong shape for any scalar/count cache.
-    private function corruptResultCacheEntry(string $key): void
-    {
-        $serialized = $this->cacheManager()->store()->serialize([]);
-        Redis::connection('normcache-test')->set($key, $serialized);
-    }
-
     public function test_normalized_cache_preserves_wildcard_plus_alias_projection(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -825,29 +778,5 @@ class CacheableBuilderTest extends TestCase
         $this->assertSame($author->id, $second->first()->id);
         $this->assertSame('Alice', $second->first()->name);
         $this->assertSame('Alice', $second->first()->display_name);
-    }
-
-    public function test_depends_on_merges_previous_model_dependencies(): void
-    {
-        $builder = Post::query()
-            ->dependsOn([Post::class])
-            ->dependsOn([Author::class]);
-
-        $this->assertContains(Post::class, $builder->explicitDependencies());
-        $this->assertContains(Author::class, $builder->explicitDependencies());
-        $this->assertCount(2, $builder->explicitDependencies());
-    }
-
-    public function test_depends_on_tables_merges_previous_table_dependencies(): void
-    {
-        $conn = (new Post)->getConnection()->getName();
-
-        $builder = Post::query()
-            ->dependsOnTables(['posts'])
-            ->dependsOnTables(['authors']);
-
-        $this->assertContains("{$conn}:posts", $builder->explicitTableDependencies());
-        $this->assertContains("{$conn}:authors", $builder->explicitTableDependencies());
-        $this->assertCount(2, $builder->explicitTableDependencies());
     }
 }
