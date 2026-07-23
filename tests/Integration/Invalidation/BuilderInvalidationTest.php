@@ -94,6 +94,10 @@ class BuilderInvalidationTest extends TestCase
 
     public function test_insert_or_ignore_returning_uses_the_query_result_and_skips_noop_conflicts(): void
     {
+        if (!method_exists(Author::query()->toBase(), 'insertOrIgnoreReturning')) {
+            $this->markTestSkipped('insertOrIgnoreReturning is available in Laravel 13 and later.');
+        }
+
         Author::all();
         $versionBeforeInsert = NormCache::currentVersion(Author::class);
 
@@ -145,8 +149,9 @@ class BuilderInvalidationTest extends TestCase
 
         $versionBeforeTouch = NormCache::currentVersion(Author::class);
 
-        Author::whereKey($author->id)->touch();
+        $touched = Author::whereKey($author->id)->touch();
 
+        $this->assertSame(1, $touched);
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeTouch, NormCache::currentVersion(Author::class));
 
@@ -155,8 +160,9 @@ class BuilderInvalidationTest extends TestCase
 
         $versionBeforeIncrement = NormCache::currentVersion(Author::class);
 
-        Author::whereKey($author->id)->incrementEach(['id' => 0]);
+        $affected = Author::whereKey($author->id)->incrementEach(['id' => 0]);
 
+        $this->assertSame(1, $affected);
         $this->assertNull($this->modelCacheEntry(Author::class, $author->id));
         $this->assertGreaterThan($versionBeforeIncrement, NormCache::currentVersion(Author::class));
     }

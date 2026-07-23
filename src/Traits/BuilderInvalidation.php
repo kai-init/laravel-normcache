@@ -157,20 +157,20 @@ trait BuilderInvalidation
         );
     }
 
-    public function incrementEach(array $columns, array $extra = [])
+    public function incrementEach(array $columns, array $extra = []): int
     {
         return $this->writeWithInvalidation(
             WriteOperation::Increment,
-            fn() => parent::incrementEach($columns, $extra),
+            fn(): int => $this->toBase()->incrementEach($columns, $this->addUpdatedAtColumn($extra)),
             fn(int $affected): bool => $affected > 0,
         );
     }
 
-    public function decrementEach(array $columns, array $extra = [])
+    public function decrementEach(array $columns, array $extra = []): int
     {
         return $this->writeWithInvalidation(
             WriteOperation::Increment,
-            fn() => parent::decrementEach($columns, $extra),
+            fn(): int => $this->toBase()->decrementEach($columns, $this->addUpdatedAtColumn($extra)),
             fn(int $affected): bool => $affected > 0,
         );
     }
