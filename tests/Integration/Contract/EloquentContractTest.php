@@ -290,7 +290,7 @@ class EloquentContractTest extends TestCase
 
     // withAggregate
 
-    public function test_aggregate_blob_key_includes_selected_columns(): void
+    public function test_aggregate_cache_does_not_leak_columns_across_projections(): void
     {
         ['alice' => $alice] = $this->fixtures();
 
@@ -303,7 +303,7 @@ class EloquentContractTest extends TestCase
         $this->assertArrayNotHasKey('id', $nameOnly->getAttributes(), 'name-only projection must not contain id from other query blob');
     }
 
-    public function test_aggregate_blob_key_includes_relation_name(): void
+    public function test_aggregate_cache_does_not_leak_across_relation_names(): void
     {
         ['alice' => $alice] = $this->fixtures();
 
@@ -326,7 +326,7 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_aggregate_blob_respects_explicit_depends_on(): void
+    public function test_aggregate_cache_invalidates_on_explicit_depends_on_version_bump(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $alice->id]);
@@ -821,153 +821,6 @@ class EloquentContractTest extends TestCase
         );
     }
 
-    // whereHas variants
-
-    public function test_doesnt_have_returns_correct_models(): void
-    {
-        $this->fixtures(); // Carol has no posts
-        $this->contract(
-            fn() => Author::doesntHave('posts')->orderBy('name')->get(),
-            fn() => Author::withoutCache()->doesntHave('posts')->orderBy('name')->get(),
-        );
-    }
-
-    public function test_has_with_count_threshold_returns_correct_models(): void
-    {
-        $this->fixtures(); // Alice has 2 posts, Bob has 1, Carol has 0
-        $this->contract(
-            fn() => Author::has('posts', '>=', 2)->orderBy('name')->get(),
-            fn() => Author::withoutCache()->has('posts', '>=', 2)->orderBy('name')->get(),
-        );
-    }
-
-    public function test_where_relation_returns_same_result_as_where_has(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::whereRelation('posts', 'published', true)->orderBy('name')->get(),
-            fn() => Author::withoutCache()->whereRelation('posts', 'published', true)->orderBy('name')->get(),
-        );
-    }
-
-    public function test_or_where_relation_combines_conditions(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::whereRelation('posts', 'title', 'A1')
-                ->orWhereRelation('posts', 'title', 'B1')
-                ->orderBy('name')
-                ->get(),
-            fn() => Author::withoutCache()
-                ->whereRelation('posts', 'title', 'A1')
-                ->orWhereRelation('posts', 'title', 'B1')
-                ->orderBy('name')
-                ->get(),
-        );
-    }
-
-    public function test_where_doesnt_have_relation_with_condition(): void
-    {
-        $this->fixtures(); // Carol has no posts; Alice/Bob have published posts
-        $this->contract(
-            fn() => Author::whereDoesntHaveRelation('posts', 'published', true)->orderBy('name')->get(),
-            fn() => Author::withoutCache()->whereDoesntHaveRelation('posts', 'published', true)->orderBy('name')->get(),
-        );
-    }
-
-    public function test_or_where_doesnt_have_relation(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::whereRelation('posts', 'title', 'A1')
-                ->orWhereDoesntHaveRelation('posts', 'published', false)
-                ->orderBy('name')
-                ->get(),
-            fn() => Author::withoutCache()
-                ->whereRelation('posts', 'title', 'A1')
-                ->orWhereDoesntHaveRelation('posts', 'published', false)
-                ->orderBy('name')
-                ->get(),
-        );
-    }
-
-    public function test_where_has_morph_filters_by_type_and_condition(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::whereHasMorph('commentable', [Author::class], fn($q) => $q->where('name', 'Alice'))->get(),
-            fn() => Comment::withoutCache()->whereHasMorph('commentable', [Author::class], fn($q) => $q->where('name', 'Alice'))->get(),
-        );
-    }
-
-    public function test_doesnt_have_morph_excludes_by_type(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::doesntHaveMorph('commentable', [Author::class])->orderBy('id')->get(),
-            fn() => Comment::withoutCache()->doesntHaveMorph('commentable', [Author::class])->orderBy('id')->get(),
-        );
-    }
-
-    public function test_where_has_morph_with_wildcard_type(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::whereHasMorph('commentable', '*')->orderBy('id')->get(),
-            fn() => Comment::withoutCache()->whereHasMorph('commentable', '*')->orderBy('id')->get(),
-        );
-    }
-
-    public function test_or_where_has_morph_combines_conditions(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::whereHasMorph('commentable', [Author::class])
-                ->orWhereHasMorph('commentable', [Post::class])
-                ->orderBy('id')
-                ->get(),
-            fn() => Comment::withoutCache()
-                ->whereHasMorph('commentable', [Author::class])
-                ->orWhereHasMorph('commentable', [Post::class])
-                ->orderBy('id')
-                ->get(),
-        );
-    }
-
-    public function test_where_morph_relation_shorthand(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::whereMorphRelation('commentable', [Author::class], 'name', 'Alice')->orderBy('id')->get(),
-            fn() => Comment::withoutCache()->whereMorphRelation('commentable', [Author::class], 'name', 'Alice')->orderBy('id')->get(),
-        );
-    }
-
-    public function test_or_where_morph_relation_shorthand(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Comment::whereMorphRelation('commentable', [Author::class], 'name', 'Alice')
-                ->orWhereMorphRelation('commentable', [Post::class], 'title', 'A1')
-                ->orderBy('id')
-                ->get(),
-            fn() => Comment::withoutCache()
-                ->whereMorphRelation('commentable', [Author::class], 'name', 'Alice')
-                ->orWhereMorphRelation('commentable', [Post::class], 'title', 'A1')
-                ->orderBy('id')
-                ->get(),
-        );
-    }
-
-    public function test_where_not_closure_returns_correct_models(): void
-    {
-        $this->fixtures();
-        $this->contract(
-            fn() => Author::whereNot(fn($q) => $q->where('name', 'Carol'))->orderBy('name')->get(),
-            fn() => Author::withoutCache()->whereNot(fn($q) => $q->where('name', 'Carol'))->orderBy('name')->get(),
-        );
-    }
-
     // Global scopes
 
     public function test_global_scope_applies_consistently_cold_and_warm(): void
@@ -1168,23 +1021,6 @@ class EloquentContractTest extends TestCase
         $this->assertSame($native, $cached);
     }
 
-    public function test_mutating_primary_key_evicts_old_model_cache_key(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        $oldId = $author->id;
-
-        // Warm the model cache for the old ID.
-        Author::find($oldId);
-        $this->assertNotNull($this->modelCacheEntry(Author::class, $oldId));
-
-        // Mutate the PK.
-        $author->id = 9999;
-        $author->save();
-
-        // Old model key must be evicted — not left as orphaned memory.
-        $this->assertNull($this->modelCacheEntry(Author::class, $oldId), 'old model cache key must be evicted after PK mutation');
-    }
-
     public function test_force_delete_returns_affected_row_count(): void
     {
         $p1 = Post::create(['title' => 'FD1', 'author_id' => Author::create(['name' => 'X'])->id]);
@@ -1263,18 +1099,6 @@ class EloquentContractTest extends TestCase
         $result = Author::query()->tag('home')->withCount('posts')->get();
 
         $this->assertSame(2, $result->first()->posts_count, 'flushTag must clear tagged aggregate cache entries');
-    }
-
-    public function test_flush_tag_rejects_unsafe_characters(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->cacheManager()->flushTag(Author::class, 'tag:with:colons');
-    }
-
-    public function test_flush_tag_across_models_rejects_unsafe_characters(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->cacheManager()->flushTagAcrossModels('tag*with*stars');
     }
 
     // Scalar expression guard

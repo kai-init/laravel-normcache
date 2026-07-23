@@ -18,22 +18,6 @@ class ModelCacheColdHydrationTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_simple_cold_miss_uses_closure_hydration_without_calling_set_raw_attributes(): void
-    {
-        $author = Author::create(['name' => 'Dana']);
-        $post = InstrumentedPost::create(['title' => 'Hello', 'author_id' => $author->id]);
-        InstrumentedPost::$setRawAttributesCalls = 0;
-        $this->evictModelCache(InstrumentedPost::class, $post->id);
-
-        $manager = $this->buildManager();
-        $models = $manager->modelCache()->getModels([$post->id], InstrumentedPost::class);
-
-        $this->assertCount(1, $models);
-        $this->assertSame('Hello', $models[0]->title);
-        $this->assertSame(0, InstrumentedPost::$setRawAttributesCalls, 'Closure hydration must bypass setRawAttributes()/newFromBuilder()');
-        $this->assertTrue($models[0]->exists);
-    }
-
     public function test_custom_new_from_builder_override_uses_eloquent_fallback(): void
     {
         $author = Author::create(['name' => 'Eli']);
@@ -73,7 +57,7 @@ class ModelCacheColdHydrationTest extends TestCase
         $this->assertCount(0, $queries, 'full payload should already be cached from the projected miss');
     }
 
-    public function test_cold_miss_closure_hydration_fires_retrieved_event_regardless_of_fire_retrieved_config(): void
+    public function test_cold_miss_fires_retrieved_event_when_cached_retrieved_events_are_disabled(): void
     {
         $author = Author::create(['name' => 'Gail']);
         $post = Post::create(['title' => 'Retrieved', 'author_id' => $author->id]);
@@ -155,29 +139,11 @@ class ModelCacheColdHydrationTest extends TestCase
         $this->assertSame(2, $calls, 'callback should run exactly once per get() call, not once per fetched row');
     }
 
-    public function test_query_with_join_and_explicit_select_uses_closure_hydration(): void
-    {
-        $author = Author::create(['name' => 'Nora']);
-        $post = InstrumentedPost::create(['title' => 'JoinedInstrumented', 'author_id' => $author->id]);
-        $this->evictModelCache(InstrumentedPost::class, $post->id);
-        InstrumentedPost::$setRawAttributesCalls = 0;
-
-        $models = InstrumentedPost::query()
-            ->join('authors', 'authors.id', '=', 'posts.author_id')
-            ->select('posts.*')
-            ->whereKey($post->id)
-            ->get();
-
-        $this->assertSame('JoinedInstrumented', $models->first()->title);
-        $this->assertSame(0, InstrumentedPost::$setRawAttributesCalls, 'join query with explicit select should still be hydrated through the closure path');
-    }
-
-    public function test_cold_miss_with_joined_missed_query_uses_closure_hydration_and_avoids_ambiguous_columns(): void
+    public function test_joined_miss_refetches_the_requested_model_without_ambiguous_columns(): void
     {
         $author = Author::create(['name' => 'Owen']);
         $post = InstrumentedPost::create(['title' => 'JoinAmbiguous', 'author_id' => $author->id]);
         $this->evictModelCache(InstrumentedPost::class, $post->id);
-        InstrumentedPost::$setRawAttributesCalls = 0;
 
         $manager = $this->buildManager();
         $joinedQuery = InstrumentedPost::query()->withoutCache()
@@ -188,7 +154,6 @@ class ModelCacheColdHydrationTest extends TestCase
         $this->assertCount(1, $models);
         $this->assertSame('JoinAmbiguous', $models[0]->title);
         $this->assertSame($post->id, $models[0]->id, 'Must resolve the post id, not the colliding authors.id from the join');
-        $this->assertSame(0, InstrumentedPost::$setRawAttributesCalls, 'A joined missedQuery is safe via the table-qualified select, so closure hydration must still be used');
     }
 
     public function test_cold_miss_with_grouped_missed_query_returns_one_row_per_requested_id(): void

@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Unit;
+namespace NormCache\Tests\Unit\Support;
 
 use Illuminate\Database\Query\Builder;
 use NormCache\CacheableBuilder;
@@ -52,7 +52,7 @@ class QueryHasherTest extends UnitTestCase
         $this->assertNotSame(QueryHasher::fromQuery($read), QueryHasher::fromQuery($write));
     }
 
-    public function test_it_hashes_raw_string(): void
+    public function test_hashes_raw_strings(): void
     {
         $hash = QueryHasher::hash('some data');
         $this->assertIsString($hash);

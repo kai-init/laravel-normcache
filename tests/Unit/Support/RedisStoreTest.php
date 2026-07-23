@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Unit;
+namespace NormCache\Tests\Unit\Support;
 
 use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
@@ -21,13 +21,13 @@ class RedisStoreTest extends TestCase
         $this->store = new RedisStore('normcache-test');
     }
 
-    public function test_it_can_set_and_get_values(): void
+    public function test_sets_and_gets_values(): void
     {
         $this->store->set('foo', 'bar', 60);
         $this->assertSame('bar', $this->store->get('foo'));
     }
 
-    public function test_it_can_set_nx_ex(): void
+    public function test_sets_nx_ex_values(): void
     {
         $this->store->delete('foo');
         $this->assertTrue($this->store->setNxEx('foo', 'bar', 60));
@@ -37,21 +37,21 @@ class RedisStoreTest extends TestCase
         $this->assertSame('bar', $this->store->get('foo'));
     }
 
-    public function test_it_can_delete_keys(): void
+    public function test_deletes_keys(): void
     {
         $this->store->set('foo', 'bar', 60);
         $this->store->delete('foo');
         $this->assertNull($this->store->get('foo'));
     }
 
-    public function test_it_can_increment_values(): void
+    public function test_increments_values(): void
     {
         $this->store->delete('foo');
         $this->assertSame(1, $this->store->increment('foo'));
         $this->assertSame(2, $this->store->increment('foo'));
     }
 
-    public function test_it_can_release_building_locks(): void
+    public function test_releases_building_locks(): void
     {
         $this->store->set('{t}:build:foo', '1', 60);
         $this->store->releaseBuilding('{t}:build:foo', '{t}:wake:foo');
@@ -70,7 +70,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame(3, (int) $store->script("return redis.call('LLEN', KEYS[1])", ['{t}:wake:tokens']));
     }
 
-    public function test_it_can_get_many_values(): void
+    public function test_gets_many_values(): void
     {
         $this->store->set('{nc}:foo', 'bar', 60);
         $this->store->set('{nc}:baz', 'qux', 60);
@@ -97,7 +97,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame('4', $result);
     }
 
-    public function test_it_gets_models_for_the_current_version_in_one_script_response(): void
+    public function test_gets_models_for_the_current_version_in_one_script_response(): void
     {
         $versionKey = '{nc}:ver:authors:';
         $scheduledKey = '{nc}:scheduled:authors:';
@@ -123,7 +123,7 @@ class RedisStoreTest extends TestCase
         ], $values);
     }
 
-    public function test_it_applies_a_due_cooldown_before_getting_versioned_models(): void
+    public function test_applies_a_due_cooldown_before_getting_versioned_models(): void
     {
         $versionKey = '{nc}:ver:cooldown-authors:';
         $scheduledKey = '{nc}:scheduled:cooldown-authors:';
@@ -176,7 +176,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame([['mget', $keys]], $connection->commands);
     }
 
-    public function test_it_can_run_lua_scripts(): void
+    public function test_runs_lua_scripts(): void
     {
         $script = "return redis.call('GET', KEYS[1])";
         $this->store->set('foo', 'bar', 60);
@@ -186,7 +186,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame('bar', $this->store->unserialize($result));
     }
 
-    public function test_it_can_set_many_if_version(): void
+    public function test_sets_many_values_if_the_version_matches(): void
     {
         $this->store->delete(['{t}:ver:1', '{t}:key:1', '{t}:key:2']);
         $this->store->setRaw('{t}:ver:1', '1', 60);
@@ -208,7 +208,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['id' => 1, 'name' => 'Alice'], $this->store->get('{t}:key:1'));
     }
 
-    public function test_it_can_set_many_if_version_with_lock_release(): void
+    public function test_sets_many_values_if_the_version_matches_and_releases_the_lock(): void
     {
         $this->store->delete(['{t}:ver:2', '{t}:key:3', '{t}:key:4', '{t}:lock:2', '{t}:wake:2']);
         $this->store->setRaw('{t}:ver:2', '1', 60);
@@ -262,7 +262,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame($count, (int) $result);
     }
 
-    public function test_it_skips_write_but_still_releases_on_version_mismatch(): void
+    public function test_skips_writes_but_releases_the_lock_on_version_mismatch(): void
     {
         $this->store->delete(['{t}:ver:3', '{t}:key:5', '{t}:lock:3', '{t}:wake:3']);
         $this->store->setRaw('{t}:ver:3', '2', 60);
@@ -276,7 +276,7 @@ class RedisStoreTest extends TestCase
         $this->assertNull($this->store->getRaw('{t}:lock:3'), 'build lock should still be released even when the write is skipped');
     }
 
-    public function test_it_releases_lock_unconditionally_when_there_is_nothing_to_write(): void
+    public function test_releases_the_lock_when_there_is_nothing_to_write(): void
     {
         $this->store->delete(['{t}:lock:4', '{t}:wake:4']);
         $this->store->setNxEx('{t}:lock:4', 'tok', 60);
@@ -286,7 +286,7 @@ class RedisStoreTest extends TestCase
         $this->assertNull($this->store->getRaw('{t}:lock:4'));
     }
 
-    public function test_it_can_flush_by_patterns(): void
+    public function test_flushes_by_patterns(): void
     {
         $this->store->set('foo:1', 'a', 60);
         $this->store->set('foo:2', 'b', 60);
@@ -640,7 +640,7 @@ class RedisStoreTest extends TestCase
         $this->assertSame($data, $store->unserialize(serialize($data)));
     }
 
-    public function test_it_uses_evalsha_with_fallback(): void
+    public function test_uses_evalsha_with_fallback(): void
     {
         $script = 'return ARGV[1]';
 

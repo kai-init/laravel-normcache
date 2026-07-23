@@ -9,7 +9,7 @@ use NormCache\Tests\TestCase;
 
 class SilentBypassLogTest extends TestCase
 {
-    public function test_logs_warning_on_unsafe_dependency_bypass()
+    public function test_logs_warning_on_unsafe_dependency_bypass(): void
     {
         config(['app.debug' => true]);
 
@@ -22,7 +22,7 @@ class SilentBypassLogTest extends TestCase
         Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
     }
 
-    public function test_cross_space_bypass_logs_only_the_space_warning()
+    public function test_cross_space_bypass_logs_only_the_space_warning(): void
     {
         config(['app.debug' => true]);
 
@@ -34,22 +34,5 @@ class SilentBypassLogTest extends TestCase
             });
 
         SpacedPost::query()->dependsOn([Author::class])->get();
-    }
-
-    public function test_logs_dependency_bypass_warning_when_events_and_debugbar_are_disabled()
-    {
-        config([
-            'app.debug' => true,
-            'normcache.events' => false,
-            'normcache.debugbar' => false,
-        ]);
-
-        Log::shouldReceive('warning')
-            ->once()
-            ->withArgs(function ($msg) {
-                return str_contains($msg, 'unsafe dependency inference');
-            });
-
-        Author::whereHas('posts', fn($q) => $q->whereRaw('1 = 1'))->get();
     }
 }

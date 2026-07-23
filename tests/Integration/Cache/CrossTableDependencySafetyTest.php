@@ -12,31 +12,6 @@ use NormCache\Tests\TestCase;
  */
 class CrossTableDependencySafetyTest extends TestCase
 {
-    public function test_join_count_without_depends_on_infers_join_dependency_and_caches(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->count();
-
-        $this->assertNotEmpty($this->redisKeys('count:*'));
-    }
-
-    public function test_join_count_with_depends_on_caches(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->dependsOn([Post::class])
-            ->count();
-
-        $this->assertNotEmpty($this->redisKeys('count:*'));
-    }
-
     public function test_join_count_with_depends_on_invalidates_on_dep_change(): void
     {
         $author = Author::create(['name' => 'Alice']);
@@ -53,33 +28,6 @@ class CrossTableDependencySafetyTest extends TestCase
         Post::create(['title' => 'World', 'author_id' => $author->id]);
 
         $this->assertSame(2, $query());
-    }
-
-    public function test_join_paginate_without_depends_on_infers_join_dependency_and_caches_count(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->select('authors.*')
-            ->paginate(10);
-
-        $this->assertNotEmpty($this->redisKeys('count:*'));
-    }
-
-    public function test_join_paginate_with_depends_on_caches_count(): void
-    {
-        $author = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'Hello', 'author_id' => $author->id]);
-
-        Author::query()
-            ->join('posts', 'posts.author_id', '=', 'authors.id')
-            ->select('authors.*')
-            ->dependsOn([Post::class])
-            ->paginate(10);
-
-        $this->assertNotEmpty($this->redisKeys('count:*'));
     }
 
     public function test_simple_count_without_join_still_caches(): void

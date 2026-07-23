@@ -41,6 +41,23 @@ class ModelInvalidationTest extends TestCase
         $this->assertGreaterThan($versionBefore, NormCache::currentVersion(Author::class));
     }
 
+    public function test_mutating_primary_key_evicts_old_model_cache_key(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $oldId = $author->id;
+
+        // Warm the model cache for the old ID.
+        Author::find($oldId);
+        $this->assertNotNull($this->modelCacheEntry(Author::class, $oldId));
+
+        // Mutate the PK.
+        $author->id = 9999;
+        $author->save();
+
+        // Old model key must be evicted — not left as orphaned memory.
+        $this->assertNull($this->modelCacheEntry(Author::class, $oldId), 'old model cache key must be evicted after PK mutation');
+    }
+
     public function test_save_invalidates_again_after_job_processed_reenables_cache(): void
     {
         $author = Author::create(['name' => 'Alice']);

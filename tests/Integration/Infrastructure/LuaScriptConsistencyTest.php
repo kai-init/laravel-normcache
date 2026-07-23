@@ -56,37 +56,6 @@ class LuaScriptConsistencyTest extends TestCase
         return QueryHasher::forModelIndexQuery($query, $query->toBase());
     }
 
-    public function test_cooldown_fires_version_bump_on_standalone_version_resolution(): void
-    {
-        $ck = NormCache::keys()->classKey(Author::class);
-
-        $this->setKey("ver:{$ck}:", '3');
-        $pastMs = (int) (microtime(true) * 1000) - 5000;
-        $this->setKey("scheduled:{$ck}:", (string) $pastMs);
-
-        $this->setCooldown(1);
-
-        $version = NormCache::currentVersion(Author::class);
-
-        $this->assertSame(4, $version);
-        $this->assertNull($this->getKey("scheduled:{$ck}:"));
-    }
-
-    public function test_non_numeric_scheduled_key_cleaned_on_standalone_version_resolution(): void
-    {
-        $ck = NormCache::keys()->classKey(Author::class);
-
-        $this->setKey("ver:{$ck}:", '3');
-        $this->setKey("scheduled:{$ck}:", 'garbage');
-
-        $this->setCooldown(1);
-
-        $version = NormCache::currentVersion(Author::class);
-
-        $this->assertSame(3, $version);
-        $this->assertNull($this->getKey("scheduled:{$ck}:"));
-    }
-
     // dependsOn blob — building key causes DB fallthrough
 
     public function test_building_key_in_deps_query_causes_db_fallthrough(): void

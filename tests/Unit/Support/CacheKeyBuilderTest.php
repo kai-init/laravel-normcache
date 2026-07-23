@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Unit;
+namespace NormCache\Tests\Unit\Support;
 
 use Illuminate\Database\Eloquent\Model;
 use NormCache\Support\CacheKeyBuilder;
@@ -19,6 +19,17 @@ class CacheKeyBuilderTest extends UnitTestCase
         $this->assertSame('{nc:content}:test:model:mysql:posts:v3:', $keys->modelPrefix('mysql:posts', 3, $content));
         $this->assertSame('{nc:content}:test:query:mysql:posts:', $keys->queryPrefix('mysql:posts', null, $content));
         $this->assertSame('{nc:content}:test:query:*', $keys->prefixed('query:*', $content));
+    }
+
+    public function test_version_key_pair_uses_the_active_space(): void
+    {
+        $keys = new CacheKeyBuilder('{nc}:', 'test:');
+        $content = new CacheSpace('content', 'nc:content');
+
+        $this->assertSame([
+            '{nc:content}:test:ver:mysql:posts:',
+            '{nc:content}:test:scheduled:mysql:posts:',
+        ], $keys->versionKeyPair('mysql:posts', $content));
     }
 
     public function test_null_space_keeps_the_default_tag(): void

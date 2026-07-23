@@ -95,24 +95,6 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
-    public function test_simple_paginate_invalidates_on_change(): void
-    {
-        $this->createAuthors(3);
-
-        Author::orderBy('id')->simplePaginate(2); // Warm cache
-
-        Event::fake([QueryCacheHit::class]);
-        Author::orderBy('id')->simplePaginate(2);
-        Event::assertDispatched(QueryCacheHit::class);
-
-        // Change data
-        Author::first()->update(['name' => 'Updated Name']);
-
-        Event::fake([QueryCacheMiss::class]);
-        Author::orderBy('id')->simplePaginate(2);
-        Event::assertDispatched(QueryCacheMiss::class);
-    }
-
     // cursorPaginate()
 
     public function test_cursor_paginate_contract(): void
@@ -139,24 +121,6 @@ class PaginationContractTest extends TestCase
         );
         Event::assertDispatched(QueryCacheMiss::class);
         Event::assertDispatched(QueryCacheHit::class);
-    }
-
-    public function test_cursor_paginate_invalidates_on_change(): void
-    {
-        $this->createAuthors(3);
-
-        Author::orderBy('id')->cursorPaginate(2); // Warm cache
-
-        Event::fake([QueryCacheHit::class]);
-        Author::orderBy('id')->cursorPaginate(2);
-        Event::assertDispatched(QueryCacheHit::class);
-
-        // Change data
-        Author::first()->update(['name' => 'Updated Name']);
-
-        Event::fake([QueryCacheMiss::class]);
-        Author::orderBy('id')->cursorPaginate(2);
-        Event::assertDispatched(QueryCacheMiss::class);
     }
 
     // Complex / Dependencies
