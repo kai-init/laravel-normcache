@@ -80,6 +80,71 @@ class RedisStoreTest extends TestCase
         $this->assertSame(['bar', 'qux', null], $results);
     }
 
+    public function test_version_fetch_mode_is_not_inferred_from_the_number_of_keys(): void
+    {
+        $versionKey = '{nc}:ver:mode-authors:';
+        $scheduledKey = '{nc}:scheduled:mode-authors:';
+        $auxiliaryKey = '{nc}:aux:mode-authors:';
+        $this->store->delete([$versionKey, $scheduledKey, $auxiliaryKey]);
+        $this->store->setRaw($versionKey, '4', 60);
+
+        $result = $this->store->script(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$versionKey, $scheduledKey, $auxiliaryKey],
+            [(string) (int) floor(microtime(true) * 1000), '0'],
+        );
+
+        $this->assertSame('4', $result);
+    }
+
+    public function test_it_gets_models_for_the_current_version_in_one_script_response(): void
+    {
+        $versionKey = '{nc}:ver:authors:';
+        $scheduledKey = '{nc}:scheduled:authors:';
+        $modelPrefix = '{nc}:model:authors:v';
+        $this->store->delete([$versionKey, $scheduledKey, $modelPrefix . '4:1', $modelPrefix . '4:2']);
+        $this->store->setRaw($versionKey, '4', 60);
+        $this->store->set($modelPrefix . '4:1', ['id' => 1, 'name' => 'Alice'], 60);
+        $this->store->set($modelPrefix . '4:2', ['id' => 2, 'name' => 'Bob'], 60);
+
+        [$version, $values] = $this->store->getManyForCurrentVersion(
+            $versionKey,
+            $scheduledKey,
+            $modelPrefix,
+            [3, 1, 2, 4],
+        );
+
+        $this->assertSame(4, $version);
+        $this->assertSame([
+            null,
+            ['id' => 1, 'name' => 'Alice'],
+            ['id' => 2, 'name' => 'Bob'],
+            null,
+        ], $values);
+    }
+
+    public function test_it_applies_a_due_cooldown_before_getting_versioned_models(): void
+    {
+        $versionKey = '{nc}:ver:cooldown-authors:';
+        $scheduledKey = '{nc}:scheduled:cooldown-authors:';
+        $modelPrefix = '{nc}:model:cooldown-authors:v';
+        $this->store->delete([$versionKey, $scheduledKey, $modelPrefix . '1:1']);
+        $this->store->setRaw($versionKey, '0', 60);
+        $this->store->setRaw($scheduledKey, '0', 60);
+        $this->store->set($modelPrefix . '1:1', ['id' => 1, 'name' => 'Current'], 60);
+
+        [$version, $values] = $this->store->getManyForCurrentVersion(
+            $versionKey,
+            $scheduledKey,
+            $modelPrefix,
+            [1],
+        );
+
+        $this->assertSame(1, $version);
+        $this->assertSame([['id' => 1, 'name' => 'Current']], $values);
+        $this->assertNull($this->store->getRaw($scheduledKey));
+    }
+
     public function test_predis_cluster_get_many_uses_one_same_slot_mget_command(): void
     {
         $connection = new class extends PredisClusterConnection
@@ -597,7 +662,7 @@ class RedisStoreTest extends TestCase
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '7');
 
-        $result = $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+        $result = $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000), '0']);
 
         $this->assertSame('7', $result);
     }
@@ -612,7 +677,7 @@ class RedisStoreTest extends TestCase
         $this->assertArrayNotHasKey($script, (new ReflectionProperty(RedisStore::class, 'shas'))->getValue());
 
         Redis::connection('normcache-test')->setex('ver:{authors}:', 60, '2');
-        $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000)]);
+        $store->script($script, ['ver:{authors}:', 'scheduled:{authors}:'], [(string) (time() * 1000), '0']);
 
         $shas = (new ReflectionProperty(RedisStore::class, 'shas'))->getValue();
         $this->assertArrayHasKey($script, $shas);

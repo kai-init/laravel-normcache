@@ -7,7 +7,7 @@ use NormCache\Enums\CacheKind;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\LuaStatus;
 use NormCache\Enums\ResultKind;
-use NormCache\Payload\PivotIndexAdapter;
+use NormCache\Payload\SerializedArrayAdapter;
 use NormCache\Payload\ThroughIndexAdapter;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -21,7 +21,7 @@ final class RelationIndexCache
     public function __construct(
         private readonly VersionedPayloadStore $payloads,
         private readonly ThroughIndexAdapter $throughAdapter,
-        private readonly PivotIndexAdapter $pivotAdapter,
+        private readonly SerializedArrayAdapter $pivotAdapter,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
         private readonly VersionStore $versions,
@@ -123,8 +123,6 @@ final class RelationIndexCache
         string $pivotTableKey,
         ?string $connection = null,
     ): PivotCacheResult {
-        $measure = CacheReporter::detailed();
-        $startedAt = $measure ? microtime(true) : null;
         $parentKey = $this->keys->classKey($parentClass);
         $relatedKey = $this->keys->classKey($relatedClass, $connection);
         [$versionKeys, $scheduledKeys] = $this->keys->depKeyPairs(
@@ -145,19 +143,13 @@ final class RelationIndexCache
             );
         }
 
-        [$payloads, $corruptCount, $payloadBytes] = $this->decodePivotPayloads(
+        [$payloads, $corruptCount] = $this->decodePivotPayloads(
             $pivotKeys,
             $this->store->getRawMany($pivotKeys),
         );
         $data = array_combine($parentIds, $payloads);
         $expectedVersions = $this->keys->versionsFromSegment($segment);
-        $meta = $measure ? [
-            'redis_time_ms' => $this->elapsedMs($startedAt),
-            'serialized_payload_bytes' => $payloadBytes,
-            'index_cardinality' => $this->pivotCardinality($data),
-            'corrupt_payload_count' => $corruptCount,
-        ] : [];
-        $this->reportPivotCorruption($relatedClass, $relation, $corruptCount, $payloadBytes);
+        $this->reportPivotCorruption($relatedClass, $relation, $corruptCount);
         $missed = array_keys(array_filter($data, fn($payload) => !is_array($payload)));
 
         if ($missed === []) {
@@ -166,7 +158,6 @@ final class RelationIndexCache
                 $data,
                 new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
                 CacheStatus::Hit,
-                [...$meta, 'cache_event' => 'hit'],
             );
         }
 
@@ -190,7 +181,6 @@ final class RelationIndexCache
             );
         }
 
-        $retryStarted = $measure ? microtime(true) : null;
         $result = $this->store->fetchBatchBuildStatus(
             $missedKeys,
             $lockKey,
@@ -198,32 +188,22 @@ final class RelationIndexCache
             $token,
             $this->buildingLockTtl,
         );
-        [$retryPayloads, $retryCorrupt, $retryBytes] = $this->decodePivotPayloads(
+        [$retryPayloads, $retryCorrupt] = $this->decodePivotPayloads(
             $missedKeys,
             $result[3] ?? [],
         );
-        if ($measure) {
-            $meta['redis_time_ms'] += $this->elapsedMs($retryStarted);
-            $meta['serialized_payload_bytes'] += $retryBytes;
-            $meta['corrupt_payload_count'] += $retryCorrupt;
-        }
-        $this->reportPivotCorruption($relatedClass, $relation, $retryCorrupt, $retryBytes);
+        $this->reportPivotCorruption($relatedClass, $relation, $retryCorrupt);
         foreach ($missed as $index => $id) {
             if (isset($retryPayloads[$index]) && is_array($retryPayloads[$index])) {
                 $data[$id] = $retryPayloads[$index];
             }
         }
-        if ($measure) {
-            $meta['index_cardinality'] = $this->pivotCardinality($data);
-        }
-
         if (array_filter($data, fn($payload) => !is_array($payload)) === []) {
             return new PivotCacheResult(
                 $segment,
                 $data,
                 new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
                 CacheStatus::Hit,
-                [...$meta, 'cache_event' => 'hit'],
             );
         }
 
@@ -233,7 +213,6 @@ final class RelationIndexCache
                 $data,
                 new BuildHandle($lockKey, $token, $wakeKey, $versionKeys, $expectedVersions),
                 CacheStatus::Miss,
-                [...$meta, 'cache_event' => 'miss'],
             );
         }
 
@@ -242,7 +221,6 @@ final class RelationIndexCache
             $data,
             new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
             CacheStatus::Building,
-            [...$meta, 'cache_event' => 'building'],
         );
     }
 
@@ -263,9 +241,7 @@ final class RelationIndexCache
             $parentIds,
             null,
         );
-        $startedAt = CacheReporter::detailed() ? microtime(true) : null;
         $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
-        $waitTimeMs = $this->elapsedMs($startedAt);
         $result = $this->fetchPivot(
             $parentClass,
             $relatedClass,
@@ -280,17 +256,7 @@ final class RelationIndexCache
             return null;
         }
 
-        return new PivotCacheResult(
-            $result->seg,
-            $result->data,
-            $result->build,
-            $result->status,
-            [
-                ...$result->meta,
-                'waited' => true,
-                'redis_time_ms' => ($result->meta['redis_time_ms'] ?? 0) + $waitTimeMs,
-            ],
-        );
+        return $result;
     }
 
     public function storePivotEntries(
@@ -300,7 +266,6 @@ final class RelationIndexCache
         string $modelClass,
     ): bool {
         $encoded = array_map(fn($payload) => $this->pivotAdapter->encode($payload), $entries);
-        $startedAt = CacheReporter::detailed() ? microtime(true) : null;
         $stored = $this->store->storeVersionedPayload(
             $encoded,
             $ttl ?? $this->queryTtl,
@@ -319,14 +284,6 @@ final class RelationIndexCache
             $modelClass,
             ResultKind::Collection,
             $this->keys->activeSpace(),
-            [
-                'index_cardinality' => array_sum(array_map('count', $entries)),
-                'write_committed' => $stored,
-                ...($startedAt !== null ? [
-                    'redis_time_ms' => $this->elapsedMs($startedAt),
-                    'serialized_payload_bytes' => array_sum(array_map('strlen', $encoded)),
-                ] : []),
-            ],
         );
 
         return $stored;
@@ -336,7 +293,6 @@ final class RelationIndexCache
     {
         $payloads = [];
         $corruptCount = 0;
-        $payloadBytes = 0;
 
         foreach ($keys as $index => $key) {
             $raw = $rawPayloads[$index] ?? null;
@@ -346,7 +302,6 @@ final class RelationIndexCache
                 continue;
             }
 
-            $payloadBytes += strlen($raw);
             $decoded = $this->pivotAdapter->decode($raw);
             if ($decoded->valid) {
                 $payloads[] = $decoded->payload;
@@ -359,14 +314,13 @@ final class RelationIndexCache
             $this->store->delete($key);
         }
 
-        return [$payloads, $corruptCount, $payloadBytes];
+        return [$payloads, $corruptCount];
     }
 
     private function reportPivotCorruption(
         string $relatedClass,
         string $relation,
         int $corruptCount,
-        int $payloadBytes,
     ): void {
         if ($corruptCount === 0) {
             return;
@@ -380,25 +334,8 @@ final class RelationIndexCache
             $relatedClass,
             ResultKind::Collection,
             $this->keys->activeSpace(),
-            ['relation' => $relation, 'serialized_payload_bytes' => $payloadBytes],
+            ['relation' => $relation],
         );
-    }
-
-    private function pivotCardinality(array $data): int
-    {
-        $count = 0;
-        foreach ($data as $entries) {
-            if (is_array($entries)) {
-                $count += count($entries);
-            }
-        }
-
-        return $count;
-    }
-
-    private function elapsedMs(?float $startedAt): float
-    {
-        return $startedAt === null ? 0.0 : (microtime(true) - $startedAt) * 1000;
     }
 
     private function pivotLockKeys(

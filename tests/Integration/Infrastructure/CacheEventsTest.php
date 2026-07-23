@@ -43,11 +43,8 @@ class CacheEventsTest extends TestCase
         Author::where('name', 'Alice')->get();
 
         Event::assertDispatched(QueryCacheMiss::class, function (QueryCacheMiss $event): bool {
-            // Timings and payload sizes are Debugbar-collector detail; plain events stay lean.
             return ($event->meta['cache_kind'] ?? null) === CacheKind::ModelIndex->value
-                && ($event->meta['cache_status'] ?? null) === CacheStatus::Miss->value
-                && !array_key_exists('redis_time_ms', $event->meta)
-                && !array_key_exists('serialized_payload_bytes', $event->meta);
+                && ($event->meta['cache_status'] ?? null) === CacheStatus::Miss->value;
         });
 
         Event::fake([QueryCacheHit::class]);
@@ -55,9 +52,7 @@ class CacheEventsTest extends TestCase
 
         Event::assertDispatched(QueryCacheHit::class, function (QueryCacheHit $event): bool {
             return ($event->meta['cache_kind'] ?? null) === CacheKind::ModelIndex->value
-                && ($event->meta['cache_status'] ?? null) === CacheStatus::Hit->value
-                && !array_key_exists('redis_time_ms', $event->meta)
-                && !array_key_exists('serialized_payload_bytes', $event->meta);
+                && ($event->meta['cache_status'] ?? null) === CacheStatus::Hit->value;
         });
     }
 
@@ -100,8 +95,7 @@ class CacheEventsTest extends TestCase
             return $event->metric === 'model_entry_repairs'
                 && $event->value === 1
                 && $event->cacheKind === CacheKind::Model
-                && $event->status === CacheStatus::Miss
-                && ($event->meta['repaired_count'] ?? null) === 1;
+                && $event->status === CacheStatus::Miss;
         });
     }
 

@@ -6,7 +6,7 @@ use Closure;
 use NormCache\Enums\CacheKind;
 use NormCache\Enums\CacheStatus;
 use NormCache\Enums\ResultKind;
-use NormCache\Payload\ResultAdapter;
+use NormCache\Payload\SerializedArrayAdapter;
 use NormCache\Support\CacheFallback;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheReporter;
@@ -19,7 +19,7 @@ final class ResultCache
 {
     public function __construct(
         private readonly VersionedPayloadStore $store,
-        private readonly ResultAdapter $adapter,
+        private readonly SerializedArrayAdapter $adapter,
         private readonly CacheConfig $config,
         private readonly CacheKeyBuilder $keys,
     ) {}
@@ -93,13 +93,11 @@ final class ResultCache
                 if ($cached) {
                     CacheReporter::queryHit($modelClass, $outcome->key, $debugbarStart, [
                         ...CacheReporter::cacheMeta(CacheKind::Result, $outcome->status, $kind, $plan->space),
-                        ...$outcome->meta,
                         'payload_shape' => $kind->value,
                     ]);
                 } else {
                     CacheReporter::queryMiss($modelClass, $outcome->key, $debugbarStart, [
                         ...CacheReporter::cacheMeta(CacheKind::Result, $outcome->status, $kind, $plan->space),
-                        ...$outcome->meta,
                         'payload_shape' => $kind->value,
                     ]);
                 }

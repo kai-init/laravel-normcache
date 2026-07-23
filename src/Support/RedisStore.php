@@ -218,7 +218,7 @@ final class RedisStore
         return $this->script(
             RedisScripts::get('fetch_version_with_cooldown'),
             [$verKey, $scheduledKey],
-            [(string) (int) floor(microtime(true) * 1000)]
+            [(string) (int) floor(microtime(true) * 1000), '0']
         );
     }
 
@@ -254,26 +254,20 @@ final class RedisStore
         return $this->mgetValues($keys, unserialize: true);
     }
 
-    public function getManyWithBytes(array $keys): array
-    {
-        if ($keys === []) {
-            return [[], 0];
-        }
+    public function getManyForCurrentVersion(
+        string $versionKey,
+        string $scheduledKey,
+        string $modelPrefix,
+        array $ids,
+    ): array {
+        $result = (array) $this->script(
+            RedisScripts::get('fetch_version_with_cooldown'),
+            [$versionKey, $scheduledKey, $modelPrefix],
+            [(string) (int) floor(microtime(true) * 1000), '1', ...$ids],
+        );
+        $raw = is_array($result[1] ?? null) ? $result[1] : [];
 
-        $raw = $this->connection instanceof PredisClusterConnection
-            ? $this->connection->command('mget', $keys)
-            : $this->connection->mget($keys);
-        $values = [];
-        $bytes = 0;
-
-        foreach ($raw as $index => $value) {
-            if (is_string($value)) {
-                $bytes += strlen($value);
-            }
-            $values[$index] = $this->mgetValue($value, unserialize: true);
-        }
-
-        return [$values, $bytes];
+        return [(int) ($result[0] ?? 0), $this->unserializeMany($raw)];
     }
 
     private function mgetValues(array $keys, bool $unserialize): array

@@ -120,7 +120,6 @@ trait CachesOneOrManyThrough
                 if ($outcome->status !== CacheStatus::Hit && $outcome->status !== CacheStatus::Empty) {
                     CacheReporter::queryMiss($relatedClass, $outcome->key, $debugbarStart, [
                         ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $outcome->status, ResultKind::Collection, $plan->space),
-                        ...$outcome->meta,
                         'through' => $throughClass,
                     ], 'through miss');
 
@@ -138,10 +137,7 @@ trait CachesOneOrManyThrough
                 }
 
                 $ids = $outcome->payload['ids'];
-                $throughKeys = [];
-                foreach ($ids as $i => $id) {
-                    $throughKeys[$id] = $outcome->payload['throughKeys'][$i] ?? null;
-                }
+                $throughKeys = array_combine($ids, $outcome->payload['throughKeys']);
 
                 $resolvedVersion = isset($outcome->build->expectedVersions[0])
                     ? (int) $outcome->build->expectedVersions[0]
@@ -150,7 +146,6 @@ trait CachesOneOrManyThrough
                     ? NormCache::modelCache()->rawForVersion($relatedClass, $ids, $resolvedVersion, $connection)
                     : null;
 
-                $matchStarted = CacheReporter::active() ? microtime(true) : null;
                 $models = $this->hydrateFromIds(
                     $ids,
                     $relatedClass,
@@ -162,9 +157,7 @@ trait CachesOneOrManyThrough
                 );
                 CacheReporter::queryHit($relatedClass, $outcome->key, $debugbarStart, [
                     ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $outcome->status, ResultKind::Collection, $plan->space),
-                    ...$outcome->meta,
                     'through' => $throughClass,
-                    'relation_match_time_ms' => $matchStarted === null ? null : (microtime(true) - $matchStarted) * 1000,
                 ], 'through hit');
 
                 return $models;

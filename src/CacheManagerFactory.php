@@ -10,8 +10,7 @@ use NormCache\Cache\ResultCache;
 use NormCache\Cache\VersionedPayloadStore;
 use NormCache\Cache\VersionStore;
 use NormCache\Payload\ModelIndexAdapter;
-use NormCache\Payload\PivotIndexAdapter;
-use NormCache\Payload\ResultAdapter;
+use NormCache\Payload\SerializedArrayAdapter;
 use NormCache\Payload\ThroughIndexAdapter;
 use NormCache\Spaces\CacheSpaceRegistry;
 use NormCache\Spaces\CacheSpaceResolver;
@@ -72,6 +71,7 @@ final class CacheManagerFactory
             $buildingLockTtl,
             $stampedeWaitMs,
         );
+        $serializedArrays = new SerializedArrayAdapter($store);
         $invalidator = new Invalidator($store, $keys, $config, $this->spaceRegistry, $versions);
         $modelIndexes = new ModelIndexCache(
             $payloads,
@@ -80,14 +80,14 @@ final class CacheManagerFactory
         );
         $resultCache = new ResultCache(
             $payloads,
-            new ResultAdapter($store),
+            $serializedArrays,
             $config,
             $keys,
         );
         $relationIndexes = new RelationIndexCache(
             $payloads,
             new ThroughIndexAdapter,
-            new PivotIndexAdapter($store),
+            $serializedArrays,
             $store,
             $keys,
             $versions,

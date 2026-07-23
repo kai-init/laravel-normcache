@@ -11,6 +11,5 @@ final readonly class VersionedPayloadOutcome
         public CacheStatus $status,
         public string $key,
         public BuildHandle $build,
-        public array $meta = [],
     ) {}
 }

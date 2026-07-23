@@ -74,17 +74,11 @@ final class ModelIndexCache
         if ($cached) {
             CacheReporter::queryHit($model, $outcome->key, $debugbarStart, [
                 ...CacheReporter::cacheMeta(CacheKind::ModelIndex, $outcome->status, space: $plan->space),
-                ...$outcome->meta,
                 'payload_shape' => 'ids + models',
-                ...(CacheReporter::detailed() ? [
-                    'contains' => 'model hit: ' . class_basename($model) . ' (' . count($ids) . ' ids)',
-                    'contains_model' => $ids,
-                ] : []),
             ]);
         } else {
             CacheReporter::queryMiss($model, $outcome->key, $debugbarStart, [
                 ...CacheReporter::cacheMeta(CacheKind::ModelIndex, $outcome->status, space: $plan->space),
-                ...$outcome->meta,
                 'payload_shape' => 'ids',
             ]);
         }

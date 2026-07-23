@@ -88,6 +88,7 @@ class CacheKeyBuilderTest extends UnitTestCase
         $secondaryDep = new class extends Model
         {
             protected $connection = 'secondary_testing';
+
             protected $table = 'secondary_dep_models';
         };
 

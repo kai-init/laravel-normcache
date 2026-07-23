@@ -16,12 +16,6 @@ final class ModelFetchContext
 
     public ?string $token = null;
 
-    public float $databaseTimeMs = 0.0;
-
-    public float $redisTimeMs = 0.0;
-
-    public float $hydrationTimeMs = 0.0;
-
     public function __construct(
         public readonly string $modelClass,
         public readonly string $classKey,

@@ -14,7 +14,6 @@ final readonly class PivotCacheResult
         public array $data,
         public BuildHandle $build = new BuildHandle,
         public CacheStatus $status = CacheStatus::Hit,
-        public array $meta = [],
     ) {}
 
     public function missedIds(): array

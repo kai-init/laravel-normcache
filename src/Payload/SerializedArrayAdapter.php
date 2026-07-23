@@ -4,7 +4,7 @@ namespace NormCache\Payload;
 
 use NormCache\Support\RedisStore;
 
-final class PivotIndexAdapter implements PayloadAdapter
+final class SerializedArrayAdapter implements PayloadAdapter
 {
     public function __construct(private readonly RedisStore $store) {}
 
@@ -20,10 +20,5 @@ final class PivotIndexAdapter implements PayloadAdapter
         return is_array($decoded)
             ? PayloadDecodeResult::valid($decoded, $decoded === [])
             : PayloadDecodeResult::corrupt();
-    }
-
-    public function cardinality(mixed $payload): ?int
-    {
-        return is_countable($payload) ? count($payload) : null;
     }
 }

@@ -113,7 +113,6 @@ trait CachesPivotRelation
                 onMiss: function ($pivotResult) use ($parentClass, $parentClassKey, $relatedClass, $cacheParentIds, $debugbarStart, $prepared) {
                     CacheReporter::queryMiss($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
                         ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $pivotResult->status, ResultKind::Collection, NormCache::keys()->activeSpace()),
-                        ...$pivotResult->meta,
                         'parents' => $cacheParentIds,
                         'related' => $relatedClass,
                     ], 'pivot miss');
@@ -153,7 +152,6 @@ trait CachesPivotRelation
                     );
                 },
                 onHit: function ($pivotResult) use ($relatedClass, $relatedConnection, $selectedRelatedColumns, $parentClass, $parentClassKey, $cacheParentIds, $debugbarStart, $prepared) {
-                    $matchStarted = CacheReporter::active() ? microtime(true) : null;
                     $resolvedVersion = isset($pivotResult->build->expectedVersions[0])
                         ? (int) $pivotResult->build->expectedVersions[0]
                         : null;
@@ -167,10 +165,8 @@ trait CachesPivotRelation
                     );
                     CacheReporter::queryHit($parentClass, "pivot:{$parentClassKey}:{$this->relationName}", $debugbarStart, [
                         ...CacheReporter::cacheMeta(CacheKind::RelationIndex, $pivotResult->status, ResultKind::Collection, NormCache::keys()->activeSpace()),
-                        ...$pivotResult->meta,
                         'parents' => $cacheParentIds,
                         'related' => $relatedClass,
-                        'relation_match_time_ms' => $matchStarted === null ? null : (microtime(true) - $matchStarted) * 1000,
                     ], 'pivot hit');
 
                     return $models;

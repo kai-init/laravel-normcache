@@ -20,7 +20,8 @@ final class ThroughIndexAdapter implements PayloadAdapter
             || !is_array($decoded['i'] ?? null)
             || !array_is_list($decoded['i'])
             || !is_array($decoded['t'] ?? null)
-            || !array_is_list($decoded['t'])) {
+            || !array_is_list($decoded['t'])
+            || count($decoded['i']) !== count($decoded['t'])) {
             return PayloadDecodeResult::corrupt();
         }
 
@@ -28,10 +29,5 @@ final class ThroughIndexAdapter implements PayloadAdapter
             'ids' => $decoded['i'],
             'throughKeys' => $decoded['t'],
         ], $decoded['i'] === []);
-    }
-
-    public function cardinality(mixed $payload): ?int
-    {
-        return is_array($payload['ids'] ?? null) ? count($payload['ids']) : null;
     }
 }

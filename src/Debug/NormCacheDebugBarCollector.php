@@ -53,10 +53,6 @@ class NormCacheDebugBarCollector extends TimeDataCollector
             $details['contains'] = $contains;
         }
 
-        if (array_key_exists('contains_model', $meta)) {
-            $details['contains_model'] = $meta['contains_model'];
-        }
-
         foreach ($meta as $field => $value) {
             if (!array_key_exists($field, $details)) {
                 $details[$field] = $value;

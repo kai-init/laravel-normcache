@@ -42,11 +42,12 @@ final class VersionStore
             return;
         }
 
-        $this->fetchVersionWithCooldown($classKey, $space);
+        [$versionKey, $scheduledKey] = $this->keys->versionKeyPair($classKey, $space);
+        $this->store->fetchVersionWithCooldown($versionKey, $scheduledKey);
 
         $dueAtMs = (int) floor(microtime(true) * 1000) + ($config->cooldown * 1000);
         $this->store->setNxEx(
-            $this->keys->scheduledKey($classKey, $space),
+            $scheduledKey,
             (string) $dueAtMs,
             $config->cooldown + $this->versionTtl($config),
         );
@@ -80,9 +81,11 @@ final class VersionStore
 
     private function fetchVersionWithCooldown(string $classKey, ?CacheSpace $space = null): mixed
     {
+        [$versionKey, $scheduledKey] = $this->keys->versionKeyPair($classKey, $space);
+
         return $this->store->fetchVersionWithCooldown(
-            $this->keys->verKey($classKey, $space),
-            $this->keys->scheduledKey($classKey, $space)
+            $versionKey,
+            $scheduledKey,
         );
     }
 }

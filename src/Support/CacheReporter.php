@@ -26,13 +26,6 @@ final class CacheReporter
         self::$eventsEnabledResolver = $resolver;
     }
 
-    // Gates timing capture, payload-size counting, and expanded metadata.
-    // Only the Debugbar collector gets detail; events always stay lean.
-    public static function detailed(): bool
-    {
-        return NormCacheCollector::active();
-    }
-
     public static function beginMeasure(): ?float
     {
         return NormCacheCollector::beginMeasure();

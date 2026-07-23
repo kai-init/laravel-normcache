@@ -48,7 +48,6 @@ final class ModelCache
         }
 
         $reporting = CacheReporter::active();
-        $detailed = $reporting && CacheReporter::detailed();
         $startedAt = $reporting ? CacheReporter::beginMeasure() : null;
         $versionDeferred = $raw !== null && $resolvedVersion === null;
         $ids = array_values($ids);
@@ -58,25 +57,19 @@ final class ModelCache
             ?? '';
         $classKey = $this->keys->classKey($modelClass, $connection);
         $projection = $columns !== null ? AttributeProjector::normalizeProjection($columns) : null;
-        $redisTimeMs = 0.0;
-        $payloadBytes = null;
 
         if ($raw === null) {
-            $redisStarted = $detailed ? microtime(true) : null;
-            $modelVersion = $resolvedVersion
-                ?? $this->versions->currentVersion($modelClass, $this->keys->activeSpace(), $connection);
-            $modelKeys = $this->modelKeysFor($classKey, $modelVersion, $ids);
-            if ($detailed) {
-                [$raw, $payloadBytes] = $this->store->getManyWithBytes($modelKeys);
-            } else {
-                $raw = $this->store->getMany($modelKeys);
-            }
-            $redisTimeMs = $redisStarted === null ? 0.0 : (microtime(true) - $redisStarted) * 1000;
+            [$versionKey, $scheduledKey] = $this->keys->versionKeyPair($classKey);
+            [$modelVersion, $raw] = $this->store->getManyForCurrentVersion(
+                $versionKey,
+                $scheduledKey,
+                $this->keys->modelVersionPrefix($classKey),
+                $ids,
+            );
         } else {
             $modelVersion = $resolvedVersion ?? 0;
         }
 
-        $hydrateStarted = $detailed ? microtime(true) : null;
         ['hits' => $hits, 'missed' => $missed, 'ordered' => $orderedHits] = $this->hydrateModelPayload(
             $ids,
             $modelClass,
@@ -84,19 +77,11 @@ final class ModelCache
             $projection,
             $prototype,
         );
-        $hydrationTimeMs = $hydrateStarted === null ? 0.0 : (microtime(true) - $hydrateStarted) * 1000;
         $repairCount = count($missed);
 
         if ($missed === []) {
             if ($reporting) {
                 CacheReporter::modelHitActive($modelClass, $ids, $startedAt, [
-                    'ids' => $ids,
-                    'index_cardinality' => count($ids),
-                    ...($detailed ? [
-                        'redis_time_ms' => $redisTimeMs,
-                        'model_hydration_time_ms' => $hydrationTimeMs,
-                        ...($payloadBytes === null ? [] : ['serialized_payload_bytes' => $payloadBytes]),
-                    ] : []),
                     ...CacheReporter::cacheMeta(CacheKind::Model, CacheStatus::Hit, space: $this->keys->activeSpace()),
                 ]);
             }
@@ -117,13 +102,6 @@ final class ModelCache
 
         if ($context->hits !== [] && $reporting) {
             CacheReporter::modelHitActive($modelClass, array_keys($context->hits), $startedAt, [
-                'ids' => $ids,
-                'index_cardinality' => count($context->hits),
-                ...($detailed ? [
-                    'redis_time_ms' => $redisTimeMs,
-                    'model_hydration_time_ms' => $hydrationTimeMs,
-                    ...($payloadBytes === null ? [] : ['serialized_payload_bytes' => $payloadBytes]),
-                ] : []),
                 ...CacheReporter::cacheMeta(CacheKind::Model, CacheStatus::Hit, space: $this->keys->activeSpace()),
             ]);
         }
@@ -137,11 +115,6 @@ final class ModelCache
                 'hits' => array_keys($context->hits),
                 'partial' => $context->hits !== [],
                 'repair_count' => $repairCount,
-                ...($detailed ? [
-                    'redis_time_ms' => $redisTimeMs,
-                    'model_hydration_time_ms' => $hydrationTimeMs,
-                    ...($payloadBytes === null ? [] : ['serialized_payload_bytes' => $payloadBytes]),
-                ] : []),
                 ...CacheReporter::cacheMeta(CacheKind::Model, CacheStatus::Miss, space: $this->keys->activeSpace()),
             ]);
         }
@@ -193,14 +166,6 @@ final class ModelCache
                 CacheStatus::Miss,
                 $modelClass,
                 space: $this->keys->activeSpace(),
-                meta: [
-                    'repaired_count' => count($ordered) - count($hits),
-                    ...($detailed ? [
-                        'query_time_ms' => $context->databaseTimeMs,
-                        'redis_time_ms' => $context->redisTimeMs,
-                        'model_hydration_time_ms' => $context->hydrationTimeMs,
-                    ] : []),
-                ],
             );
         }
 
@@ -273,6 +238,7 @@ final class ModelCache
 
         $classKey = $this->keys->classKey($modelClass, $connection);
         $attrsByKey = [];
+
         foreach ($modelAttrs as $id => $attrs) {
             $attrsByKey[$this->keys->modelPrefix($classKey, $expectedVersion, $space) . $id] = $attrs;
         }
@@ -341,7 +307,6 @@ final class ModelCache
 
     private function fetchMissedStatus(array $idsToFetch, ModelFetchContext $context): array
     {
-        $redisStarted = CacheReporter::detailed() ? microtime(true) : null;
         $result = $this->store->fetchBatchBuildStatus(
             $this->modelKeysFor($context->classKey, $context->modelVersion, $idsToFetch),
             $context->lockKey,
@@ -350,10 +315,6 @@ final class ModelCache
             $this->buildingLockTtl,
         );
         $raw = $this->store->unserializeMany($result[3] ?? []);
-        if ($redisStarted !== null) {
-            $context->redisTimeMs += (microtime(true) - $redisStarted) * 1000;
-        }
-        $hydrateStarted = CacheReporter::detailed() ? microtime(true) : null;
         ['hits' => $newHits, 'missed' => $stillMissed] = $this->hydrateModelPayload(
             $idsToFetch,
             $context->modelClass,
@@ -361,9 +322,6 @@ final class ModelCache
             $context->projection,
             $context->prototype,
         );
-        if ($hydrateStarted !== null) {
-            $context->hydrationTimeMs += (microtime(true) - $hydrateStarted) * 1000;
-        }
 
         foreach ($newHits as $id => $hit) {
             $context->hits[$id] = $hit;
@@ -448,14 +406,9 @@ final class ModelCache
     ): array {
         $prototype = CacheKeyBuilder::prototype($context->modelClass);
         $primaryKey = $prototype->getKeyName();
-        $queryStarted = CacheReporter::detailed() ? microtime(true) : null;
         $loaded = $query->whereIn($prototype->getQualifiedKeyName(), $missed)
             ->get([$prototype->getTable() . '.*']);
-        if ($queryStarted !== null) {
-            $context->databaseTimeMs += (microtime(true) - $queryStarted) * 1000;
-        }
         $hydrate = $context->projection !== null ? RawAttributes::hydrateClosure() : null;
-        $hydrateStarted = CacheReporter::detailed() ? microtime(true) : null;
         $models = $this->cacheAndCollect($loaded, $context, $writeCache, function ($model) use ($primaryKey, $hydrate, $context) {
             $attrs = $model->getRawOriginal();
 
@@ -465,9 +418,6 @@ final class ModelCache
 
             return array_key_exists($primaryKey, $attrs) ? [$attrs[$primaryKey], $attrs, $model] : null;
         });
-        if ($hydrateStarted !== null) {
-            $context->hydrationTimeMs += (microtime(true) - $hydrateStarted) * 1000;
-        }
 
         return $models;
     }
@@ -482,14 +432,9 @@ final class ModelCache
         $primaryKey = $prototype->getKeyName();
         $hydrate = RawAttributes::hydrateClosure();
         $connectionName = $prototype->getConnectionName();
-        $queryStarted = CacheReporter::detailed() ? microtime(true) : null;
         $rows = $query->whereIn($prototype->getQualifiedKeyName(), $missed)
             ->toBase()
             ->get([$prototype->getTable() . '.*']);
-        if ($queryStarted !== null) {
-            $context->databaseTimeMs += (microtime(true) - $queryStarted) * 1000;
-        }
-        $hydrateStarted = CacheReporter::detailed() ? microtime(true) : null;
         $models = $this->cacheAndCollect($rows, $context, $writeCache, function ($row) use ($primaryKey, $prototype, $hydrate, $connectionName, $context) {
             $attrs = (array) $row;
 
@@ -506,9 +451,6 @@ final class ModelCache
 
             return [$attrs[$primaryKey], $attrs, $instance];
         });
-        if ($hydrateStarted !== null) {
-            $context->hydrationTimeMs += (microtime(true) - $hydrateStarted) * 1000;
-        }
 
         return $models;
     }
@@ -547,7 +489,6 @@ final class ModelCache
 
     private function storeModelAttrs(array $attrsByKey, ModelFetchContext $context, bool $writeCache): void
     {
-        $redisStarted = CacheReporter::detailed() ? microtime(true) : null;
         $this->store->setManyIfVersion(
             $attrsByKey,
             $this->config->ttl,
@@ -557,9 +498,6 @@ final class ModelCache
             $writeCache ? $context->wakeKey : null,
             $writeCache ? $context->token : null,
         );
-        if ($redisStarted !== null) {
-            $context->redisTimeMs += (microtime(true) - $redisStarted) * 1000;
-        }
     }
 
     private function overridesNewFromBuilder(Model $model): bool

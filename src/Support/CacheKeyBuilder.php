@@ -105,7 +105,12 @@ class CacheKeyBuilder
 
     public function modelPrefix(string $classKey, int|string $version, ?CacheSpace $space = null): string
     {
-        return $this->full(self::K_MODEL . ':' . $classKey . ':v' . $version . ':', $space);
+        return $this->modelVersionPrefix($classKey, $space) . $version . ':';
+    }
+
+    public function modelVersionPrefix(string $classKey, ?CacheSpace $space = null): string
+    {
+        return $this->full(self::K_MODEL . ':' . $classKey . ':v', $space);
     }
 
     public function queryPrefix(string $classKey, ?string $tag = null, ?CacheSpace $space = null): string
@@ -197,6 +202,12 @@ class CacheKeyBuilder
     public function scheduledKey(string $classKey, ?CacheSpace $space = null): string
     {
         return $this->full(self::K_SCHEDULED . ':' . $classKey . ':', $space);
+    }
+
+    /** @return array{0: string, 1: string} */
+    public function versionKeyPair(string $classKey, ?CacheSpace $space = null): array
+    {
+        return [$this->verKey($classKey, $space), $this->scheduledKey($classKey, $space)];
     }
 
     public function wakeKey(string $classKey, string $lockSuffix, ?CacheSpace $space = null): string

@@ -10,7 +10,7 @@ use NormCache\Cache\ResultCache;
 use NormCache\Enums\CacheKind;
 use NormCache\Enums\ResultKind;
 use NormCache\Payload\ModelIndexAdapter;
-use NormCache\Payload\PivotIndexAdapter;
+use NormCache\Payload\SerializedArrayAdapter;
 use NormCache\Planning\QueryEligibility;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
@@ -61,7 +61,7 @@ final class ArchitectureContractTest extends TestCase
         $this->assertFalse($modelIndexes->decode('{"id":1}')->valid);
 
         $store = new RedisStore('normcache-test');
-        $pivots = new PivotIndexAdapter($store);
+        $pivots = new SerializedArrayAdapter($store);
         $this->assertTrue($pivots->decode($store->serialize([]))->empty);
         $this->assertFalse($pivots->decode('not-serialized')->valid);
     }

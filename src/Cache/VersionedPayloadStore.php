@@ -8,7 +8,6 @@ use NormCache\Enums\LuaStatus;
 use NormCache\Enums\ResultKind;
 use NormCache\Payload\PayloadAdapter;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\CacheReporter;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildHandle;
 use NormCache\Values\CacheConfig;
@@ -40,7 +39,6 @@ final class VersionedPayloadStore
         ?string $connection = null,
         ?string $lockSuffix = null,
     ): VersionedPayloadOutcome {
-        $measure = CacheReporter::detailed();
         $classKey = $this->keys->classKey($modelClass, $connection);
         $namespace = $this->keys->namespaceFor($kind, $resultKind);
         $lockSuffix ??= $hash;
@@ -63,7 +61,6 @@ final class VersionedPayloadStore
             $lockSuffix,
             $wakeKey,
             $token,
-            $measure,
         );
 
         if ($fetched->status === CacheStatus::Hit || $fetched->status === CacheStatus::Empty) {
@@ -71,12 +68,7 @@ final class VersionedPayloadStore
         }
 
         if ($fetched->status === CacheStatus::Building) {
-            $waitStarted = $measure ? microtime(true) : null;
             $this->store->brpop($wakeKey, $this->stampedeWaitMs / 1000.0);
-            $waitMeta = $measure ? [
-                'waited' => true,
-                'redis_time_ms' => $this->elapsedMs($waitStarted),
-            ] : [];
             $retried = $this->fetch(
                 $adapter,
                 $versionKeys,
@@ -87,14 +79,6 @@ final class VersionedPayloadStore
                 $lockSuffix,
                 $wakeKey,
                 $token,
-                $measure,
-            );
-            $retried = new VersionedPayloadOutcome(
-                $retried->payload,
-                $retried->status,
-                $retried->key,
-                $retried->build,
-                $this->mergeMeta($fetched->meta, $waitMeta, $retried->meta),
             );
 
             if ($retried->status === CacheStatus::Hit || $retried->status === CacheStatus::Empty) {
@@ -102,7 +86,6 @@ final class VersionedPayloadStore
             }
 
             if ($retried->status === CacheStatus::Building) {
-                $buildStarted = $measure ? microtime(true) : null;
                 $payload = $build();
 
                 return new VersionedPayloadOutcome(
@@ -110,13 +93,6 @@ final class VersionedPayloadStore
                     status: CacheStatus::Building,
                     key: $retried->key,
                     build: new BuildHandle,
-                    meta: $this->mergeMeta($retried->meta, $measure ? [
-                        'cache_event' => 'build_budget_exhausted',
-                        'build_budget_exhausted' => true,
-                        'built' => true,
-                        'query_time_ms' => $this->elapsedMs($buildStarted),
-                        'index_cardinality' => $adapter->cardinality($payload),
-                    ] : []),
                 );
             }
 
@@ -124,18 +100,9 @@ final class VersionedPayloadStore
         }
 
         try {
-            $buildStarted = $measure ? microtime(true) : null;
             $payload = $build();
             $encoded = $adapter->encode($payload);
-            $buildMeta = $measure ? [
-                'cache_event' => 'build',
-                'built' => true,
-                'query_time_ms' => $this->elapsedMs($buildStarted),
-                'index_cardinality' => $adapter->cardinality($payload),
-                'serialized_payload_bytes' => strlen($encoded),
-            ] : [];
-            $storeStarted = $measure ? microtime(true) : null;
-            $committed = $this->store->storeVersionedPayload(
+            $this->store->storeVersionedPayload(
                 [$fetched->key => $encoded],
                 $ttl ?? $this->queryTtl,
                 $fetched->build->versionKeys,
@@ -144,10 +111,6 @@ final class VersionedPayloadStore
                 $fetched->build->wakeKey,
                 $fetched->build->buildingToken,
             );
-            if ($measure) {
-                $buildMeta['redis_time_ms'] = $this->elapsedMs($storeStarted);
-                $buildMeta['write_committed'] = $committed;
-            }
         } catch (\Throwable $e) {
             $this->store->releaseBuilding(
                 $fetched->build->buildingKey ?? '',
@@ -163,7 +126,6 @@ final class VersionedPayloadStore
             status: CacheStatus::Miss,
             key: $fetched->key,
             build: $fetched->build,
-            meta: $this->mergeMeta($fetched->meta, $buildMeta),
         );
     }
 
@@ -182,9 +144,7 @@ final class VersionedPayloadStore
         string $lockSuffix,
         string $wakeKey,
         string $token,
-        bool $measure,
     ): VersionedPayloadOutcome {
-        $startedAt = $measure ? microtime(true) : null;
         $result = $this->store->fetchVersionedPayload(
             $versionKeys,
             $scheduledKeys,
@@ -197,7 +157,6 @@ final class VersionedPayloadStore
             $this->buildingLockTtl,
             $this->config->cooldownEnabled(),
         );
-        $redisMeta = $measure ? ['redis_time_ms' => $this->elapsedMs($startedAt)] : [];
         $status = LuaStatus::fromLua($result[0] ?? null);
         $segment = (string) ($result[1] ?? '');
         $key = $prefix . $segment . ':' . $hash;
@@ -224,32 +183,18 @@ final class VersionedPayloadStore
                     $decodeStatus === LuaStatus::Empty ? CacheStatus::Empty : CacheStatus::Hit,
                     $key,
                     new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
-                    $measure ? [
-                        ...$redisMeta,
-                        'cache_event' => $decodeStatus->value,
-                        'index_cardinality' => $adapter->cardinality($decoded->payload),
-                        'serialized_payload_bytes' => is_string($raw) ? strlen($raw) : null,
-                    ] : [],
                 );
             }
 
-            $deleteStarted = $measure ? microtime(true) : null;
             $this->store->delete($key);
             $claimed = $this->store->setNxEx($buildingKey, $token, $this->buildingLockTtl);
             if ($claimed) {
                 $this->store->delete($wakeKey);
             }
-            $corruptMeta = $measure ? [
-                ...$redisMeta,
-                'redis_time_ms' => ($redisMeta['redis_time_ms'] ?? 0) + $this->elapsedMs($deleteStarted),
-                'cache_event' => 'corrupt',
-                'corrupt_payload' => true,
-                'serialized_payload_bytes' => is_string($raw) ? strlen($raw) : null,
-            ] : [];
 
             return $claimed
-                ? new VersionedPayloadOutcome(null, CacheStatus::Miss, $key, $build, $corruptMeta)
-                : new VersionedPayloadOutcome(null, CacheStatus::Building, $key, new BuildHandle, $corruptMeta);
+                ? new VersionedPayloadOutcome(null, CacheStatus::Miss, $key, $build)
+                : new VersionedPayloadOutcome(null, CacheStatus::Building, $key, new BuildHandle);
         }
 
         if ($status === LuaStatus::Miss) {
@@ -258,7 +203,6 @@ final class VersionedPayloadStore
                 CacheStatus::Miss,
                 $key,
                 $build,
-                $measure ? [...$redisMeta, 'cache_event' => 'miss'] : [],
             );
         }
 
@@ -267,28 +211,6 @@ final class VersionedPayloadStore
             CacheStatus::Building,
             $key,
             new BuildHandle,
-            $measure ? [...$redisMeta, 'cache_event' => 'building'] : [],
         );
-    }
-
-    private function elapsedMs(?float $startedAt): float
-    {
-        return $startedAt === null ? 0.0 : (microtime(true) - $startedAt) * 1000;
-    }
-
-    private function mergeMeta(array ...$groups): array
-    {
-        $merged = [];
-        foreach ($groups as $group) {
-            foreach ($group as $key => $value) {
-                if (in_array($key, ['redis_time_ms', 'query_time_ms'], true)) {
-                    $merged[$key] = ($merged[$key] ?? 0) + $value;
-                } elseif ($value !== null) {
-                    $merged[$key] = $value;
-                }
-            }
-        }
-
-        return $merged;
     }
 }
