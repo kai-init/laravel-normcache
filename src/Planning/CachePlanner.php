@@ -196,19 +196,19 @@ final class CachePlanner
             );
         }
 
-        if ($this->eligibility->canUseResult($inspection, $dependencies, $hasExplicit)) {
-            if ($this->eligibility->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
-                return CachePlan::bypass(
-                    operation: $context->operation,
-                    dependencies: $dependencies,
-                    bypassReasons: ['normalization' => ['join_result_requires_explicit_select']],
-                );
-            }
-
-            return $this->resultPlan($context, $inspection, $dependencies);
+        if (!$this->eligibility->canUseResult($inspection, $dependencies, $hasExplicit)) {
+            return $this->bypassPlan($context, $inspection, $dependencies);
         }
 
-        return $this->bypassPlan($context, $inspection, $dependencies);
+        if ($this->eligibility->requiresExplicitSelectForJoinResult($builder, $base, $context)) {
+            return CachePlan::bypass(
+                operation: $context->operation,
+                dependencies: $dependencies,
+                bypassReasons: ['normalization' => ['join_result_requires_explicit_select']],
+            );
+        }
+
+        return $this->resultPlan($context, $inspection, $dependencies);
     }
 
     private function planInspectedResult(

@@ -78,23 +78,19 @@ final class ScalarTransformer
 
         $cast = $model->getCasts()[$column] ?? null;
 
-        if ($cast === null) {
-            if (!in_array($column, $model->getDates(), true)) {
-                return null;
-            }
-
-            $isCast = false;
-        } elseif (!is_string($cast)) {
+        if ($cast === null && !in_array($column, $model->getDates(), true)) {
             return null;
-        } else {
-            $cast = strtolower(explode(':', $cast, 2)[0]);
-
-            if (!isset(self::STATELESS_CASTS[$cast])) {
-                return null;
-            }
-
-            $isCast = true;
         }
+
+        if ($cast !== null && !is_string($cast)) {
+            return null;
+        }
+
+        if (is_string($cast) && !isset(self::STATELESS_CASTS[strtolower(explode(':', $cast, 2)[0])])) {
+            return null;
+        }
+
+        $isCast = $cast !== null;
 
         $dispatcher = $model::getEventDispatcher();
 

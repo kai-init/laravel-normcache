@@ -7,18 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [4.0.0] — Unreleased
+## [3.1.0] — 2026-07-23
+
+### Added
+
+- `CacheInvalidated` and `CacheMetricRecorded` events when `normcache.events` is enabled. Cache hit and miss events now include cache metadata.
 
 ### Changed
 
-- **BREAKING:** cache planning terminology is now `ModelIndex` and `Result` rather than `NormalizedQuery` and `VersionedResult`. `CachePlan::isNormalized()` is replaced by `usesModelCache()`.
-- Cache reads are owned by `ModelCache`, `ModelIndexCache`, `RelationIndexCache`, and `ResultCache`; the old executor and generic repository classes are removed.
-- Shared single-entry Redis lifecycle behavior now lives in `VersionedPayloadStore`, with payload validation delegated to family-specific adapters.
-- Write invalidation is owned by `Invalidator`; `HandlesInvalidation` remains a compatibility shim and `BuilderInvalidation` is the builder write seam.
+- Debugbar records overall cache-operation duration only; component-specific timing breakdowns are no longer collected.
+- Internal cache execution and invalidation code has been consolidated behind dedicated services.
 
 ### Fixed
 
-- Index, through, and pivot cache hits pass the Lua-resolved model version into `ModelCache`, preserving the atomic version handoff before the model MGET.
+- `useWritePdo()` reads, including relation reads, now bypass the cache and preserve read-your-writes behavior.
+- Cache keys for root, through, and pivot reads now consistently use the active Eloquent connection, preventing cross-connection cache leakage.
+- Model updates now invalidate before and after the write, so a concurrent pre-write read cannot remain reachable after a successful update.
+- Index, through, and pivot cache hits preserve the Lua-resolved model version when fetching model payloads.
 
 ---
 

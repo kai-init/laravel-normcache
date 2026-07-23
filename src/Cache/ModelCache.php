@@ -128,22 +128,10 @@ final class ModelCache
         }
 
         if ($status === LuaStatus::Miss) {
-            try {
-                $this->fetchAndMerge($missed, $context, true);
-            } catch (\Throwable $e) {
-                $this->store->releaseBuilding($context->lockKey, $context->wakeKey, $context->token);
-
-                throw $e;
-            }
+            $this->fetchAndMergeWithLockRelease($missed, $context);
         } elseif ($status === LuaStatus::Hit && $missed !== []) {
             if ($this->store->setNxEx($context->lockKey, $context->token, $this->buildingLockTtl)) {
-                try {
-                    $this->fetchAndMerge($missed, $context, true);
-                } catch (\Throwable $e) {
-                    $this->store->releaseBuilding($context->lockKey, $context->wakeKey, $context->token);
-
-                    throw $e;
-                }
+                $this->fetchAndMergeWithLockRelease($missed, $context);
             } else {
                 $this->fetchAndMerge($missed, $context, false);
             }
@@ -332,6 +320,17 @@ final class ModelCache
         }
 
         return [LuaStatus::fromLua($result[0] ?? null), $stillMissed];
+    }
+
+    private function fetchAndMergeWithLockRelease(array $missed, ModelFetchContext $context): void
+    {
+        try {
+            $this->fetchAndMerge($missed, $context, true);
+        } catch (\Throwable $e) {
+            $this->store->releaseBuilding($context->lockKey, $context->wakeKey, $context->token);
+
+            throw $e;
+        }
     }
 
     private function fetchAndMerge(array $missed, ModelFetchContext $context, bool $writeCache): void

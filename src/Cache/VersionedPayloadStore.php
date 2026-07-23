@@ -63,7 +63,7 @@ final class VersionedPayloadStore
             $token,
         );
 
-        if ($fetched->status === CacheStatus::Hit || $fetched->status === CacheStatus::Empty) {
+        if ($this->isResolved($fetched)) {
             return $fetched;
         }
 
@@ -81,7 +81,7 @@ final class VersionedPayloadStore
                 $token,
             );
 
-            if ($retried->status === CacheStatus::Hit || $retried->status === CacheStatus::Empty) {
+            if ($this->isResolved($retried)) {
                 return $retried;
             }
 
@@ -134,6 +134,11 @@ final class VersionedPayloadStore
         $this->store->delete($key);
     }
 
+    private function isResolved(VersionedPayloadOutcome $outcome): bool
+    {
+        return $outcome->status === CacheStatus::Hit || $outcome->status === CacheStatus::Empty;
+    }
+
     private function fetch(
         PayloadAdapter $adapter,
         array $versionKeys,
@@ -170,47 +175,32 @@ final class VersionedPayloadStore
             $expectedVersions,
         );
 
-        if ($status === LuaStatus::Hit) {
-            $raw = $result[2] ?? null;
-            $decoded = $adapter->decode($raw);
-            $decodeStatus = $decoded->valid
-                ? ($decoded->empty ? LuaStatus::Empty : LuaStatus::Hit)
-                : LuaStatus::Corrupt;
-
-            if ($decodeStatus !== LuaStatus::Corrupt) {
-                return new VersionedPayloadOutcome(
-                    $decoded->payload,
-                    $decodeStatus === LuaStatus::Empty ? CacheStatus::Empty : CacheStatus::Hit,
-                    $key,
-                    new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
-                );
-            }
-
-            $this->store->delete($key);
-            $claimed = $this->store->setNxEx($buildingKey, $token, $this->buildingLockTtl);
-            if ($claimed) {
-                $this->store->delete($wakeKey);
-            }
-
-            return $claimed
-                ? new VersionedPayloadOutcome(null, CacheStatus::Miss, $key, $build)
-                : new VersionedPayloadOutcome(null, CacheStatus::Building, $key, new BuildHandle);
+        if ($status !== LuaStatus::Hit) {
+            return match ($status) {
+                LuaStatus::Miss => new VersionedPayloadOutcome(null, CacheStatus::Miss, $key, $build),
+                default => new VersionedPayloadOutcome(null, CacheStatus::Building, $key, new BuildHandle),
+            };
         }
 
-        if ($status === LuaStatus::Miss) {
+        $decoded = $adapter->decode($result[2] ?? null);
+
+        if ($decoded->valid) {
             return new VersionedPayloadOutcome(
-                null,
-                CacheStatus::Miss,
+                $decoded->payload,
+                $decoded->empty ? CacheStatus::Empty : CacheStatus::Hit,
                 $key,
-                $build,
+                new BuildHandle(versionKeys: $versionKeys, expectedVersions: $expectedVersions),
             );
         }
 
-        return new VersionedPayloadOutcome(
-            null,
-            CacheStatus::Building,
-            $key,
-            new BuildHandle,
-        );
+        $this->store->delete($key);
+        $claimed = $this->store->setNxEx($buildingKey, $token, $this->buildingLockTtl);
+        if ($claimed) {
+            $this->store->delete($wakeKey);
+        }
+
+        return $claimed
+            ? new VersionedPayloadOutcome(null, CacheStatus::Miss, $key, $build)
+            : new VersionedPayloadOutcome(null, CacheStatus::Building, $key, new BuildHandle);
     }
 }

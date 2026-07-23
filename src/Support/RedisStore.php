@@ -381,11 +381,10 @@ final class RedisStore
         $groups = [];
 
         foreach ($keys as $key) {
-            if (preg_match('/\{([^{}]+)\}/', $key, $matches) === 1) {
-                $groups['tag:' . $matches[1]][] = $key;
-            } else {
-                $groups['key:' . $key][] = $key;
-            }
+            $group = preg_match('/\{([^{}]+)\}/', $key, $matches) === 1
+                ? 'tag:' . $matches[1]
+                : 'key:' . $key;
+            $groups[$group][] = $key;
         }
 
         return array_values($groups);
