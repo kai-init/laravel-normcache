@@ -1,0 +1,89 @@
+<?php
+
+namespace NormCache\Tests\Integration\Contract;
+
+use Illuminate\Support\Carbon;
+use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\TestCase;
+
+/** Model projection contracts preserve Eloquent casts and raw aliases across cache paths. */
+class ModelProjectionContractTest extends TestCase
+{
+    private function author(): Author
+    {
+        return Author::create(['name' => 'Alice']);
+    }
+
+    public function test_class_defined_casts_are_preserved_on_cached_model_reads(): void
+    {
+        $author = $this->author();
+        Post::create([
+            'title' => 'T',
+            'views' => 42,
+            'published' => true,
+            'metadata' => ['x' => 1],
+            'author_id' => $author->id,
+        ]);
+
+        $this->contract(
+            fn() => Post::dependsOn([Author::class])->get()->first(),
+            fn() => Post::withoutCache()->where('author_id', $author->id)->get()->first(),
+        );
+
+        Post::dependsOn([Author::class])->get();
+        $warm = Post::dependsOn([Author::class])->get()->first();
+
+        $this->assertIsBool($warm->published);
+        $this->assertTrue($warm->published);
+        $this->assertIsInt($warm->views);
+        $this->assertSame(['x' => 1], $warm->metadata);
+        $this->assertInstanceOf(Carbon::class, $warm->created_at);
+    }
+
+    public function test_runtime_casts_are_applied_on_cached_model_reads(): void
+    {
+        $author = $this->author();
+        Post::create(['title' => 'T', 'views' => 42, 'author_id' => $author->id]);
+
+        $this->contract(
+            fn() => Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get()->first(),
+            fn() => Post::withoutCache()->withCasts(['views' => 'string'])->where('author_id', $author->id)->get()->first(),
+        );
+
+        Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get();
+        $warm = Post::withCasts(['views' => 'string'])->dependsOn([Author::class])->get()->first();
+
+        $this->assertIsString($warm->views);
+        $this->assertSame('42', $warm->views);
+    }
+
+    public function test_add_select_column_is_accessible_on_cached_model_reads(): void
+    {
+        $author = $this->author();
+        Post::create(['title' => 'Hello', 'views' => 7, 'author_id' => $author->id]);
+
+        $this->contract(
+            fn() => Post::select('id')->addSelect('title')->dependsOn([Author::class])->get()->first(),
+            fn() => Post::withoutCache()->select('id')->addSelect('title')->where('author_id', $author->id)->get()->first(),
+        );
+
+        Post::select('id')->addSelect('title')->dependsOn([Author::class])->get();
+        $warm = Post::select('id')->addSelect('title')->dependsOn([Author::class])->get()->first();
+
+        $this->assertSame('Hello', $warm->title);
+        $this->assertNull($warm->getRawOriginal('views'));
+    }
+
+    public function test_select_raw_alias_is_accessible_on_cached_model_reads(): void
+    {
+        $author = $this->author();
+        Post::create(['title' => 'T', 'views' => 10, 'author_id' => $author->id]);
+        Post::create(['title' => 'T', 'views' => 20, 'author_id' => $author->id]);
+
+        Post::selectRaw('MAX(views) as max_views')->dependsOn([Author::class])->get();
+        $warm = Post::selectRaw('MAX(views) as max_views')->dependsOn([Author::class])->get()->first();
+
+        $this->assertSame(20, (int) $warm->max_views);
+    }
+}

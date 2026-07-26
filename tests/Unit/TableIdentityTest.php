@@ -1,0 +1,39 @@
+<?php
+
+namespace NormCache\Tests\Unit;
+
+use NormCache\Tests\UnitTestCase;
+use NormCache\Values\TableIdentity;
+
+final class TableIdentityTest extends UnitTestCase
+{
+    public function test_it_hashes_the_exact_length_prefixed_identity(): void
+    {
+        $identity = TableIdentity::fromParts(
+            driver: 'pgsql',
+            deployment: 'production',
+            connection: 'tenant',
+            database: 'app',
+            schema: 'public',
+            prefix: 'acme_',
+            table: 'posts',
+        );
+
+        $encoded = implode('', array_map(
+            static fn(string $value): string => strlen($value) . ':' . $value,
+            ['nc4-table-v1', 'pgsql', 'production', 'tenant', 'app', 'public', 'acme_', 'posts'],
+        ));
+
+        $this->assertSame($encoded, $identity->encoded);
+        $this->assertSame(hash('xxh128', $encoded), $identity->hash);
+        $this->assertSame(32, strlen($identity->hash));
+    }
+
+    public function test_aliases_are_not_part_of_physical_identity(): void
+    {
+        $one = TableIdentity::fromParts('mysql', 'prod', 'main', 'app', 'app', '', 'posts');
+        $two = TableIdentity::fromParts('mysql', 'prod', 'main', 'app', 'app', '', 'posts');
+
+        $this->assertSame($one->hash, $two->hash);
+    }
+}

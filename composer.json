@@ -1,6 +1,6 @@
 {
     "name": "kai-init/laravel-normcache",
-    "description": "Normalized caching for Laravel Eloquent. Self-invalidating, Redis-backed. Caches query IDs and model entities separately with versioned invalidation.",
+    "description": "Redis-backed normalized query caching for Laravel Eloquent and Query Builder.",
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -16,8 +16,9 @@
         "redis",
         "normcache",
         "normalized-cache",
-        "model-cache",
-        "query-cache"
+        "query-cache",
+        "redis-cluster",
+        "normalized-cache"
     ],
     "require": {
         "php": "^8.2",
@@ -31,7 +32,6 @@
         "predis/predis": "^3.4.0 <3.5"
     },
     "suggest": {
-        "laravel/octane": "Install to enable the NormCache Octane reset logic (^2.0)",
         "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)",
         "ext-igbinary": "Faster, smaller serialization for cached model payloads — detected automatically when available"
     },
@@ -48,10 +48,10 @@
     "scripts": {
         "test": "vendor/bin/phpunit",
         "test:cluster": "REDIS_CLUSTER=true REDIS_PORT=7010 vendor/bin/phpunit",
-        "bench": "vendor/bin/phpunit tests/Benchmark",
         "lint": "vendor/bin/pint --test",
         "format": "vendor/bin/pint",
-        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M"
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M",
+        "bench": "vendor/bin/phpunit tests/Benchmark"
     },
     "extra": {
         "laravel": {

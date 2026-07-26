@@ -2,112 +2,80 @@
 
 namespace NormCache\Traits;
 
-use Illuminate\Database\Eloquent\Builder;
+use Closure;
 use Illuminate\Database\Eloquent\Model;
-use NormCache\CacheableBuilder;
-use NormCache\Facades\NormCache;
-use NormCache\Relations\CachesRelationships;
+use NormCache\Database\CachingQueryBuilder;
 
 /**
  * @mixin Model
  */
 trait Cacheable
 {
-    use CachesRelationships;
+    private ?Model $normCachePrototype = null;
 
-    private bool $withoutCacheNext = false;
+    private static ?Closure $normCacheHydrate = null;
 
-    public function flush(): void
+    public function newFromBuilder($attributes = [], $connection = null)
     {
-        NormCache::invalidator()->invalidateVersion($this);
-    }
-
-    /** @return list<string> */
-    public static function normCacheSpaces(): array
-    {
-        return property_exists(static::class, 'normCacheSpaces') ? (array) static::$normCacheSpaces : [];
-    }
-
-    public function newEloquentBuilder($query)
-    {
-        if (!config('normcache.enabled', true)) {
-            return parent::newEloquentBuilder($query);
-        }
-
-        $builder = new CacheableBuilder($query);
-
-        if ($this->withoutCacheNext) {
-            $this->withoutCacheNext = false;
-            $builder->withoutCache();
-        }
-
-        return $builder;
-    }
-
-    public function refresh(): static
-    {
-        return $this->runWithoutCache(fn() => parent::refresh());
-    }
-
-    public function fresh($with = []): ?static
-    {
-        return $this->runWithoutCache(fn() => parent::fresh($with));
-    }
-
-    public function save(array $options = []): bool
-    {
-        return $this->saveWithCacheInvalidation(
-            fn() => parent::save($options),
-            observeBeforeWrite: true,
+        self::$normCacheHydrate ??= Closure::bind(
+            static function (Model $model, array $attributes): void {
+                $model->attributes = $attributes;
+                $model->original = $attributes;
+                $model->classCastCache = [];
+                $model->attributeCastCache = [];
+            },
+            null,
+            Model::class,
         );
+
+        $connectionName = $connection ?: $this->getConnectionName();
+
+        if (
+            $this->normCachePrototype === null
+            || $this->normCachePrototype->getConnectionName() !== $connectionName
+            || $this->normCachePrototype->getTable() !== $this->getTable()
+        ) {
+            $this->normCachePrototype = $this->newInstance([], true);
+            $this->normCachePrototype->setConnection($connectionName);
+        }
+
+        $model = clone $this->normCachePrototype;
+        (self::$normCacheHydrate)($model, (array) $attributes);
+
+        if ($this->normCacheHasRetrievedListener()) {
+            $model->fireModelEvent('retrieved', false);
+        }
+
+        return $model;
     }
 
-    public function saveQuietly(array $options = []): bool
+    /** Not memoised: observers and listeners can register at any point in a request. */
+    private function normCacheHasRetrievedListener(): bool
     {
-        return $this->saveWithCacheInvalidation(
-            fn() => Model::withoutEvents(fn() => parent::save($options)),
-            observeBeforeWrite: false,
+        $dispatcher = static::getEventDispatcher();
+
+        return $dispatcher !== null
+            && (isset($this->dispatchesEvents['retrieved'])
+                || $dispatcher->hasListeners('eloquent.retrieved: ' . static::class));
+    }
+
+    protected function newBaseQueryBuilder()
+    {
+        $builder = $this->getConnection()->query();
+
+        if (!$builder instanceof CachingQueryBuilder) {
+            return $builder;
+        }
+
+        $deletedAtColumn = method_exists($this, 'getDeletedAtColumn')
+            ? $this->getDeletedAtColumn()
+            : null;
+
+        return $builder->markCacheableModel(
+            $this::class,
+            $this->getKeyName(),
+            $this->getKeyType(),
+            $deletedAtColumn,
         );
-    }
-
-    protected function performInsert(Builder $query): bool
-    {
-        // $query is a plain Eloquent Builder when normcache.enabled is false; see newEloquentBuilder().
-        if (method_exists($query, 'withoutInvalidation')) {
-            return $query->withoutInvalidation(fn() => parent::performInsert($query));
-        }
-
-        return parent::performInsert($query);
-    }
-
-    protected function performUpdate(Builder $query): bool
-    {
-        if (method_exists($query, 'withoutInvalidation')) {
-            return $query->withoutInvalidation(fn() => parent::performUpdate($query));
-        }
-
-        return parent::performUpdate($query);
-    }
-
-    private function saveWithCacheInvalidation(callable $save, bool $observeBeforeWrite): bool
-    {
-        $invalidator = NormCache::invalidator();
-        $state = $invalidator->beginModelSave($this, $observeBeforeWrite);
-        $result = $save();
-        $invalidator->completeModelSave($this, $state, $result);
-
-        return $result;
-    }
-
-    private function runWithoutCache(callable $callback)
-    {
-        $previous = $this->withoutCacheNext;
-        $this->withoutCacheNext = true;
-
-        try {
-            return $callback();
-        } finally {
-            $this->withoutCacheNext = $previous;
-        }
     }
 }

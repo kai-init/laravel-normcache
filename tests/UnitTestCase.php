@@ -3,18 +3,10 @@
 namespace NormCache\Tests;
 
 use NormCache\CacheServiceProvider;
-use NormCache\Support\CacheKeyBuilder;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 
 abstract class UnitTestCase extends OrchestraTestCase
 {
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        CacheKeyBuilder::reset();
-    }
-
     protected function getPackageProviders($app): array
     {
         return [CacheServiceProvider::class];
@@ -44,6 +36,5 @@ abstract class UnitTestCase extends OrchestraTestCase
         $app['config']->set('normcache.key_prefix', 'test:');
         $app['config']->set('normcache.ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
-        $app['config']->set('normcache.cooldown', 0);
     }
 }

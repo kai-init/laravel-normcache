@@ -4,52 +4,23 @@ namespace NormCache\Console;
 
 use Illuminate\Console\Command;
 use NormCache\Facades\NormCache;
-use NormCache\Traits\Cacheable;
 
-class FlushCommand extends Command
+final class FlushCommand extends Command
 {
-    protected $signature = 'normcache:flush
-        {--model= : Fully-qualified class name of the model to flush}
-        {--space= : Cache space to flush}';
+    protected $signature = 'normcache:flush';
 
-    protected $description = 'Flush the normcache. Flushes all entries unless --model is specified.';
+    protected $description = 'Invalidate every NormCache payload by advancing the global epoch.';
 
     public function handle(): int
     {
-        $model = $this->option('model');
+        if (!NormCache::flushAll()) {
+            $this->error('NormCache global invalidation failed.');
 
-        return $model ? $this->flushModel($model) : $this->flushAll();
-    }
-
-    private function flushAll(): int
-    {
-        $space = $this->option('space');
-        $count = NormCache::flushAll($space ?: null);
-
-        $target = $space ? " in space [{$space}]" : '';
-        $this->info("Flushed {$count} NormCache key(s){$target}.");
-
-        return Command::SUCCESS;
-    }
-
-    private function flushModel(string $model): int
-    {
-        if (!class_exists($model)) {
-            $this->error("Class [{$model}] does not exist.");
-
-            return Command::FAILURE;
+            return self::FAILURE;
         }
 
-        if (!in_array(Cacheable::class, class_uses_recursive($model), true)) {
-            $this->error("Class [{$model}] does not use the Cacheable trait.");
+        $this->info('NormCache global epoch advanced.');
 
-            return Command::FAILURE;
-        }
-
-        NormCache::forceFlushModel($model);
-
-        $this->info("Cache flushed for [{$model}].");
-
-        return Command::SUCCESS;
+        return self::SUCCESS;
     }
 }

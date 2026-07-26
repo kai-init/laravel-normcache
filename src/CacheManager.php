@@ -2,136 +2,85 @@
 
 namespace NormCache;
 
-use NormCache\Cache\Invalidator;
-use NormCache\Cache\ModelCache;
-use NormCache\Cache\ModelIndexCache;
-use NormCache\Cache\RelationIndexCache;
-use NormCache\Cache\ResultCache;
-use NormCache\Cache\VersionStore;
-use NormCache\Spaces\CacheSpaceResolver;
+use Illuminate\Support\Facades\DB;
+use NormCache\Planning\DependencyAnalyzer;
+use NormCache\Planning\PrimaryKeyResolver;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
-use NormCache\Traits\HandlesInvalidation;
 use NormCache\Values\CacheConfig;
-use NormCache\Values\CacheSpace;
+use NormCache\Values\RuntimeState;
+use Throwable;
 
-class CacheManager
+final readonly class CacheManager
 {
-    use HandlesInvalidation;
-
     public function __construct(
-        private readonly ModelIndexCache $modelIndexes,
-        private readonly ResultCache $resultCache,
-        private readonly RelationIndexCache $relationIndexes,
-        private readonly ModelCache $modelCache,
-        private readonly VersionStore $versions,
-        private readonly Invalidator $invalidation,
-        private readonly RedisStore $store,
-        private readonly CacheKeyBuilder $keys,
-        private readonly CacheConfig $config,
-        private readonly CacheSpaceResolver $spaceResolver,
+        private CacheConfig $config,
+        private RuntimeState $runtime,
+        private RedisStore $store,
+        private CacheKeyBuilder $keys,
+        private Invalidator $invalidator,
+        private TableIdentityResolver $tables,
+        private PrimaryKeyResolver $primaryKeys,
+        private DependencyAnalyzer $dependencies,
+        private QueryIdentity $identity,
     ) {}
 
-    public function modelIndexes(): ModelIndexCache
+    public function invalidateTable(string $connection, string $table): bool
     {
-        return $this->modelIndexes;
+        $identity = $this->tables->resolve(DB::connection($connection), $table);
+
+        return $identity !== null && $this->invalidator->invalidateTable($identity);
     }
 
-    public function resultCache(): ResultCache
+    /** @param list<string> $tables */
+    public function invalidateTables(string $connection, array $tables): bool
     {
-        return $this->resultCache;
-    }
+        $success = true;
 
-    public function relationIndexes(): RelationIndexCache
-    {
-        return $this->relationIndexes;
-    }
-
-    public function modelCache(): ModelCache
-    {
-        return $this->modelCache;
-    }
-
-    public function versionStore(): VersionStore
-    {
-        return $this->versions;
-    }
-
-    public function invalidator(): Invalidator
-    {
-        return $this->invalidation;
-    }
-
-    public function config(): CacheConfig
-    {
-        return $this->config;
-    }
-
-    public function isEnabled(): bool
-    {
-        return $this->config->enabled;
-    }
-
-    public function isFallbackEnabled(): bool
-    {
-        return $this->config->fallbackEnabled;
-    }
-
-    public function isEventsEnabled(): bool
-    {
-        return $this->config->dispatchEvents;
-    }
-
-    public function enable(): void
-    {
-        $this->config->enabled = true;
-    }
-
-    public function disable(): void
-    {
-        $this->config->enabled = false;
-    }
-
-    public function store(): RedisStore
-    {
-        return $this->store;
-    }
-
-    public function keys(): CacheKeyBuilder
-    {
-        return $this->keys;
-    }
-
-    public function spaceFor(string $modelClass, ?string $explicitSpace = null): CacheSpace
-    {
-        return $this->spaceResolver->resolve($modelClass, $explicitSpace);
-    }
-
-    public function withSpace(?CacheSpace $space, callable $callback): mixed
-    {
-        if ($space === null) {
-            return $this->keys->withSpace(null, $callback);
+        foreach (array_values(array_unique($tables)) as $table) {
+            $success = $this->invalidateTable($connection, $table) && $success;
         }
 
-        $active = $this->keys->activeSpace();
-
-        return $active !== null && $active->name === $space->name
-            ? $callback()
-            : $this->keys->withSpace($space, $callback);
+        return $success;
     }
 
-    public function withSpaceForModel(string $modelClass, ?string $explicitSpace, callable $callback): mixed
+    public function flushTag(string $tag): bool
     {
-        return $this->withSpace($this->spaceFor($modelClass, $explicitSpace), $callback);
+        $hash = $this->identity->tagHash($tag);
+
+        return $this->increment($this->keys->tagVersion($hash));
     }
 
-    public function currentVersion(string $modelClass, ?string $connection = null): int
+    public function flushAll(): bool
     {
-        return $this->versions->currentVersion($modelClass, $this->modelSpaces($modelClass)[0], $connection);
+        $this->runtime->forgetEpoch();
+
+        return $this->increment($this->keys->epoch());
     }
 
-    public function currentTableVersion(string $connectionName, string $table): int
+    public function clearSchemaMetadata(?string $connection = null): void
     {
-        return $this->versions->currentTableVersion($connectionName, $table);
+        $this->tables->clear($connection);
+        $this->primaryKeys->clear($connection);
+        $this->dependencies->clear($connection);
+    }
+
+    private function increment(string $key): bool
+    {
+        if (!$this->config->enabled || !$this->runtime->available()) {
+            return false;
+        }
+
+        try {
+            $this->store->increment($key);
+
+            return true;
+        } catch (Throwable $exception) {
+            $this->runtime->fail($exception);
+
+            return false;
+        }
     }
 }

@@ -13,12 +13,14 @@
 -- ARGV[n+4..n+m+3] = serialized payloads
 -- ARGV[n+m+4]      = building lock token (optional; empty means release unconditionally)
 -- ARGV[n+m+5]      = wake token count (optional; defaults to 1)
+-- ARGV[n+m+6]      = wake TTL (optional; defaults to 10)
 
 local n = tonumber(ARGV[1])
 local m = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 local token = ARGV[n + m + 4] or ''
 local wake_count = tonumber(ARGV[n + m + 5] or '1') or 1
+local wake_ttl = tonumber(ARGV[n + m + 6] or '10') or 10
 local has_lock = #KEYS > n + m
 local has_wake = #KEYS > n + m + 1
 
@@ -30,7 +32,7 @@ local function release_building()
         for i = 1, wake_count do
             redis.call('LPUSH', KEYS[n + m + 2], '1')
         end
-        redis.call('EXPIRE', KEYS[n + m + 2], 10)
+        redis.call('EXPIRE', KEYS[n + m + 2], wake_ttl)
     end
 end
 

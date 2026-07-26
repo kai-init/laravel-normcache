@@ -19,6 +19,5 @@
         <env name="NORMCACHE_PREFIX" value="test:"/>
         <env name="NORMCACHE_TTL" value="3600"/>
         <env name="NORMCACHE_QUERY_TTL" value="60"/>
-        <env name="NORMCACHE_COOLDOWN" value="0"/>
     </php>
 </phpunit>

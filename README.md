@@ -1,20 +1,20 @@
 # Laravel Normcache
 
-**Normalized, self-invalidating Redis caching for Laravel Eloquent.**
+**Graph-backed, self-invalidating Redis caching for Laravel Eloquent.**
 
 [![Tests](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml/badge.svg)](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%205-brightgreen.svg)](phpstan.neon)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-Normcache caches model-query results as ID lists and stores model attributes in versioned model keys. When a model changes, Normcache bumps a version key instead of scanning and deleting every query that may have returned that model.
+Normcache stores canonical model attributes in versioned model keys and caches model reads as compact graph manifests: ordered root IDs plus relationship edges. When a model changes, Normcache bumps a version key instead of scanning and deleting every graph that may contain it.
 
 **Requirements:** PHP 8.2+, Laravel 12/13, Redis 6.0+
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [What's new in v3](#whats-new-in-v3)
+- [What's new in 3.0](#whats-new-in-30)
 - [Usage](#usage)
 - [Invalidation](#invalidation)
 - [Cache spaces](#cache-spaces)
@@ -41,7 +41,7 @@ class Post extends Model
 }
 ```
 
-## What's new in v3
+## What's new in 3.0
 
 Redis Cluster sharding is now fully atomic within each cache space. Normcache keeps the keys for a cached operation and its valid dependencies in one hash slot, so cache reads, rebuilds, and invalidation coordination remain atomic.
 
@@ -55,6 +55,7 @@ Redis Cluster sharding is now fully atomic within each cache space. Normcache ke
 Normal Eloquent reads are cached automatically for cacheable models:
 
 ```php
+Post::all();
 Post::where('active', true)->get();
 Post::find(1);
 Post::paginate(20);
@@ -69,30 +70,28 @@ Post::where('active', true)->ttl(600)->get();
 
 ### Cross-table queries
 
-Simple `whereHas` / `whereDoesntHave` constraints on cacheable relations and plain string joins with an explicit root-table projection are inferred automatically:
+Simple `whereHas` / `whereDoesntHave` constraints on cacheable relations are inferred automatically:
 
 ```php
 Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
+
 ```
 
-For other cross-table reads, declare dependencies explicitly:
+Joined, grouped, distinct, calculated, and raw model reads remain live even when dependencies are declared. Use a scalar/aggregate operation when a versioned value payload is appropriate:
 
 ```php
-Author::query()->dependsOn([Post::class])->get();
-
 Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
-    ->select('authors.*')
     ->dependsOnTables(['legacy_stats'])
-    ->get();
+    ->count();
 ```
 
 `dependsOnTables()` declares a read dependency only. If that table is changed outside Eloquent, call `NormCache::invalidateTableVersion($connection, $table)` after the write.
 
 ### Aggregates and relationships
 
-`count`, `exists`, `value`, `pluck`, `sum`, `avg`, `min`, `max`, pagination totals, and `withCount` / `withSum` / `withAvg` / `withMin` / `withMax` / `withExists` are cached when their dependencies are safe.
+`count`, `exists`, `value`, `pluck`, `sum`, `avg`, `min`, `max`, and pagination totals use versioned value payloads when their dependencies are safe. Model-returning aggregate projections such as `withCount` stay live.
 
-Eager-loaded `BelongsTo`, `BelongsToMany`, `MorphTo`, `MorphToMany`, `MorphedByMany`, `HasManyThrough`, and `HasOneThrough` relations are cached. `attach`, `detach`, `sync`, and `updateExistingPivot` invalidate the relevant pivot cache.
+An eligible model read uses either exact model caching for a primary-key lookup or a graph manifest. Graphs support roots, `belongsTo`, `hasOne`, `hasMany`, morph-one/many, pivot edges, through edges, nested trees, ordering, empty relations, and deterministic relation constraints. Dynamic `morphTo`, one-of-many, calculated/projection relation loads, relation query callbacks, and cross-space graphs stay live. Pivot mutations (`attach`, `detach`, `sync`, and `updateExistingPivot`) invalidate the pivot-table version used by eligible graph manifests.
 
 ## Invalidation
 
@@ -202,14 +201,14 @@ Common options:
 | `connection`           | Redis connection name. Default: `cache`.                        |
 | `enabled`              | Master on/off switch.                                           |
 | `ttl`                  | Model attribute key lifetime.                                   |
-| `query_ttl`            | Query/result/pivot/through key lifetime.                        |
+| `query_ttl`            | Graph-manifest and versioned-value-payload key lifetime.         |
 | `key_prefix`           | Prefix for all Normcache Redis keys.                            |
 | `cooldown`             | Debounce version bumps for write-heavy models.                  |
 | `building_lock_ttl`    | Cache rebuild lock lifetime.                                    |
 | `stampede_wait_ms`     | How long waiters block for a rebuild wake signal.               |
 | `stampede_wake_tokens` | Number of waiters to wake after a rebuild.                      |
 | `fallback`             | Fail open to the database on Redis errors when `true`.          |
-| `events`               | Dispatch hit/miss/bypass, metric, and invalidation events.      |
+| `events`               | Dispatch cache hit/miss events when `true`.                     |
 | `fire_retrieved`       | Fire Eloquent `retrieved` for cached models when `true`.        |
 | `debugbar`             | Enable Laravel Debugbar integration when installed.             |
 | `spaces.*`             | Cache-space limits, cross-space policy, and hash-tag placement. |
@@ -221,28 +220,26 @@ Normcache bypasses caching for unsafe reads rather than risking stale or incorre
 Always bypassed:
 
 - pessimistic locks (`lockForUpdate`, `sharedLock`)
-- reads forced to the write connection with `useWritePdo()`
 - reads inside a database transaction
 - `DB::table(...)`, `DB::select()`, and raw SQL
 
-Usually require `dependsOn()` or `dependsOnTables()`:
+Always live for model-returning reads:
 
-- manual `whereExists`
-- raw predicates
-- nested relation constraints
-- expression joins
-- `GROUP BY`, `DISTINCT`, and calculated columns
+- raw predicates and opaque subqueries
+- joins, `GROUP BY`, `DISTINCT`, and calculated columns
+- dynamic `morphTo`, one-of-many, relation projections, and relation callbacks
+- cross-space model graphs
 
 Other limitations:
 
 - Models should use standard single-column primary keys.
 - Writes outside Eloquent are invisible unless you manually flush or invalidate.
 - Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.
-- Normcache caches model connection/table metadata. Call `NormCache\Support\CacheKeyBuilder::reset()` after switching tenants dynamically.
+- Normcache caches model connection/table metadata. Call `CacheKeyBuilder::reset()` after switching tenants dynamically.
 
 ## Observability
 
-When events are enabled, Normcache dispatches cache hit, miss, bypass, metric, and invalidation events. When `fruitcake/laravel-debugbar` is installed and `normcache.debugbar` is enabled, cache hits, misses, bypasses, and model fetches appear in Debugbar.
+When events are enabled, Normcache dispatches query/model hit and miss events. When `fruitcake/laravel-debugbar` is installed and `normcache.debugbar` is enabled, cache hits, misses, bypasses, and model fetches appear in Debugbar.
 
 ## License
 
