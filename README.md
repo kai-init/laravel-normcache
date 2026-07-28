@@ -7,7 +7,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-NormCache stores complete model rows once and lets many cached queries share them. Writes advance Redis counters instead of scanning and deleting every query that might contain a changed row.
+NormCache stores complete model rows once and lets many cached queries share them. Writes bumps Redis counters instead of scanning and deleting every query that might contain a changed row.
 
 Requirements: PHP 8.2+, Laravel 12/13, Redis 6.0+.
 
@@ -21,7 +21,6 @@ php artisan vendor:publish --tag=normcache-config
 Add `Cacheable` to Eloquent models whose writes and reads NormCache should observe:
 
 ```php
-use Illuminate\Database\Eloquent\Model;
 use NormCache\Traits\Cacheable;
 
 class Post extends Model
@@ -67,19 +66,6 @@ Author::query()
 ```
 
 `dependsOn()` accepts Eloquent model classes and table names. It authorizes an otherwise opaque query only when NormCache can resolve all declared dependencies. Volatile expressions such as random, UUID, clock, connection-state, or sleep functions are never cached.
-
-## Read routes
-
-The planner selects one storage route per read:
-
-| Route         | Used for                                                         | Storage                                                 |
-| ------------- | ---------------------------------------------------------------- | ------------------------------------------------------- |
-| `direct-pk`   | Complete single-row primary-key lookup                           | Canonical row key                                       |
-| `canonical`   | Complete root-table rows                                         | Ordered primary-key membership plus shared row keys     |
-| `result`      | Projections, aggregates, `exists`, and other table-local results | Versioned result payload                                |
-| `query-group` | Joins, cross-table unions, and authorized opaque queries         | Query-hash-slot result with a dependency version vector |
-
-Dependency-backed views use `result` storage so view rows cannot overwrite the base table's shared canonical rows.
 
 ## Invalidation
 
