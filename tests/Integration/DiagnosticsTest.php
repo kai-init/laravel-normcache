@@ -30,7 +30,7 @@ final class DiagnosticsTest extends TestCase
         ]);
     }
 
-    public function test_cold_warm_bypass_and_invalidation_emit_v4_events(): void
+    public function test_cold_warm_bypass_and_invalidation_emit_events(): void
     {
         Event::fake([
             QueryCacheHit::class,
@@ -129,7 +129,7 @@ final class DiagnosticsTest extends TestCase
         );
     }
 
-    public function test_corrupt_result_payload_is_deleted_and_self_heals_as_a_miss(): void
+    public function test_corrupt_result_payload_self_heals_as_a_miss(): void
     {
         $query = fn() => DB::table('posts')
             ->where('id', $this->postId)

@@ -6,6 +6,8 @@ use Closure;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
+use NormCache\Payload\RawResultCodec;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UuidItem;
@@ -42,6 +44,64 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertSame('Canonical', $row->title);
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_canonical_row_payload_must_match_the_primary_key_in_its_key(): void
+    {
+        $secondId = DB::table('posts')->insertGetId([
+            'title' => 'Second',
+            'views' => 20,
+            'published' => true,
+            'author_id' => DB::table('authors')->value('id'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('posts')->where('id', $this->postId)->first();
+
+        $query = DB::table('posts');
+        $table = $this->app->make(TableIdentityResolver::class)
+            ->resolve($query->getConnection(), $query->from);
+        $this->assertNotNull($table);
+        $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
+        $epoch = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
+        $rowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->postId);
+        $second = DB::table('posts')->withoutCache()->where('id', $secondId)->first();
+        $this->assertNotNull($second);
+        $this->cacheStore()->setRaw(
+            $rowKey,
+            $this->app->make(RawResultCodec::class)->encodeRow($second, $epoch),
+            60,
+        );
+
+        $row = DB::table('posts')->where('id', $this->postId)->first();
+
+        $this->assertSame($this->postId, $row?->id);
+        $this->assertSame('Canonical', $row?->title);
+    }
+
+    public function test_large_canonical_query_is_published_without_an_admission_limit(): void
+    {
+        $timestamp = now();
+
+        foreach (array_chunk(range(1, 1_000), 200) as $indexes) {
+            DB::table('posts')->insert(array_map(
+                static fn(int $index): array => [
+                    'title' => "Post {$index}",
+                    'views' => $index,
+                    'published' => true,
+                    'author_id' => DB::table('authors')->value('id'),
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ],
+                $indexes,
+            ));
+        }
+
+        $rows = DB::table('posts')->orderBy('id')->get();
+
+        $this->assertCount(1_001, $rows);
+        $this->assertCount(1, $this->cacheKeysMatching(':m:v'));
+        $this->assertCount(1_001, $this->cacheKeysMatching(':r:g'));
     }
 
     public function test_narrow_projection_uses_a_result_payload_without_widening_sql(): void

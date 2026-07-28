@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CacheConfigTest extends UnitTestCase
 {
-    public function test_it_builds_the_v4_configuration_contract(): void
+    public function test_builds_configuration_contract(): void
     {
         $config = CacheConfig::fromArray([
             'connection' => 'normcache-test',
@@ -25,6 +25,10 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertSame(600, $config->rowTtl);
         $this->assertSame(60, $config->queryTtl);
         $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
+        $this->assertFalse(property_exists($config, 'maxMembershipRows'));
+        $this->assertFalse(property_exists($config, 'maxMembershipBytes'));
+        $this->assertFalse(property_exists($config, 'maxCanonicalBytes'));
+        $this->assertFalse(property_exists($config, 'maxResultBytes'));
         $this->assertTrue($config->dispatchEvents);
         $this->assertFalse(property_exists($config, 'cooldown'));
         $this->assertFalse(property_exists($config, 'deploymentIds'));
@@ -32,7 +36,7 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertFalse(property_exists($config, 'fallbackEnabled'));
     }
 
-    public function test_it_rejects_hash_tag_characters_in_the_key_prefix(): void
+    public function test_rejects_hash_tag_characters_in_key_prefix(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('key_prefix');
@@ -41,7 +45,7 @@ final class CacheConfigTest extends UnitTestCase
     }
 
     #[DataProvider('invalidSafetyValues')]
-    public function test_it_rejects_invalid_safety_values(string $key, int $value): void
+    public function test_rejects_invalid_safety_values(string $key, int $value): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage($key);
@@ -59,7 +63,7 @@ final class CacheConfigTest extends UnitTestCase
         ];
     }
 
-    public function test_it_expands_grouped_primary_key_overrides(): void
+    public function test_expands_grouped_primary_key_overrides(): void
     {
         $config = CacheConfig::fromArray([
             'primary_keys' => [[
@@ -93,7 +97,7 @@ final class CacheConfigTest extends UnitTestCase
         ], $config->primaryKeys);
     }
 
-    public function test_it_validates_grouped_primary_key_overrides(): void
+    public function test_validates_grouped_primary_key_overrides(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('type must be integer or string');
@@ -109,7 +113,7 @@ final class CacheConfigTest extends UnitTestCase
         ]);
     }
 
-    public function test_it_rejects_ungrouped_primary_key_overrides(): void
+    public function test_rejects_ungrouped_primary_key_overrides(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('groups require a non-empty tables array');

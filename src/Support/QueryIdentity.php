@@ -11,12 +11,6 @@ use UnitEnum;
 
 final class QueryIdentity
 {
-    /** @var array<string, string> */
-    private array $tagHashes = [];
-
-    /** @var array<string, string> */
-    private array $namespaces = [];
-
     /**
      * @param  list<string>  $dependencyHashes
      * @param  list<mixed>  $bindings
@@ -40,7 +34,7 @@ final class QueryIdentity
         }
 
         return hash('xxh128', TableIdentity::encodeFields([
-            'nc4-query-v1',
+            'nc-query',
             $route,
             $rootHash,
             TableIdentity::encodeFields($dependencyHashes),
@@ -57,22 +51,18 @@ final class QueryIdentity
             return 'u';
         }
 
-        return $this->namespaces[$tag] ??= 'g' . $this->tagHash($tag);
+        return 'g' . $this->tagHash($tag);
     }
 
     public function tagHash(string $tag): string
     {
-        if (isset($this->tagHashes[$tag])) {
-            return $this->tagHashes[$tag];
-        }
-
         if ($tag === '' || strlen($tag) > 128 || !mb_check_encoding($tag, 'UTF-8')) {
             throw new InvalidArgumentException(
                 'NormCache tag must be non-empty valid UTF-8 and at most 128 bytes.'
             );
         }
 
-        return $this->tagHashes[$tag] = hash('xxh128', TableIdentity::encodeFields(['nc4-tag-v1', $tag]));
+        return hash('xxh128', TableIdentity::encodeFields(['nc-tag', $tag]));
     }
 
     /** @param list<string> $tokens */
@@ -82,7 +72,7 @@ final class QueryIdentity
         sort($tokens, SORT_STRING);
 
         return hash('xxh128', TableIdentity::encodeFields([
-            'nc4-repair-v1',
+            'nc-repair',
             $tableHash,
             $generation,
             TableIdentity::encodeFields($tokens),

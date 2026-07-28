@@ -7,7 +7,7 @@ use NormCache\Values\TableIdentity;
 
 final class TableIdentityTest extends UnitTestCase
 {
-    public function test_it_hashes_the_exact_length_prefixed_identity(): void
+    public function test_hashes_exact_length_prefixed_identity(): void
     {
         $identity = TableIdentity::fromParts(
             driver: 'pgsql',
@@ -20,7 +20,7 @@ final class TableIdentityTest extends UnitTestCase
 
         $encoded = implode('', array_map(
             static fn(string $value): string => strlen($value) . ':' . $value,
-            ['nc4-table', 'pgsql', 'tenant', 'app', 'public', 'acme_', 'posts'],
+            ['nc-table', 'pgsql', 'tenant', 'app', 'public', 'acme_', 'posts'],
         ));
 
         $this->assertSame($encoded, $identity->encoded);
@@ -34,5 +34,19 @@ final class TableIdentityTest extends UnitTestCase
         $two = TableIdentity::fromParts('mysql', 'main', 'app', 'app', '', 'posts');
 
         $this->assertSame($one->hash, $two->hash);
+    }
+
+    public function test_sql_server_repair_source_keeps_database_and_schema(): void
+    {
+        $identity = TableIdentity::fromParts(
+            'sqlsrv',
+            'tenant',
+            'catalog',
+            'dbo',
+            '',
+            'posts',
+        );
+
+        $this->assertSame('catalog.dbo.posts', $identity->qualifiedTable());
     }
 }

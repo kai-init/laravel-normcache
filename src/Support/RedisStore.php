@@ -328,10 +328,16 @@ final class RedisStore
 
         return $this->withRawValues(function (Connection $connection) use ($keys): array {
             if ($connection instanceof PredisClusterConnection) {
+                $groups = $this->groupByHashTag($keys);
+                $replies = $connection->pipeline(static function ($pipeline) use ($groups): void {
+                    foreach ($groups as $group) {
+                        $pipeline->mget(...$group);
+                    }
+                });
                 $values = [];
 
-                foreach ($this->groupByHashTag($keys) as $group) {
-                    $raw = $connection->command('mget', $group);
+                foreach ($groups as $groupIndex => $group) {
+                    $raw = $replies[$groupIndex] ?? [];
 
                     foreach ($group as $i => $key) {
                         $value = $raw[$i] ?? null;

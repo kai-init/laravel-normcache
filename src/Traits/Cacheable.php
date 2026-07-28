@@ -13,6 +13,8 @@ trait Cacheable
 {
     private ?Model $normCachePrototype = null;
 
+    private ?bool $normCacheFastHydration = null;
+
     private static ?Closure $normCacheHydrate = null;
 
     public function newFromBuilder($attributes = [], $connection = null)
@@ -29,6 +31,15 @@ trait Cacheable
         );
 
         $connectionName = $connection ?: $this->getConnectionName();
+
+        if (!$this->normCacheUsesFastHydration()) {
+            $model = $this->newInstance([], true);
+            $model->setRawAttributes((array) $attributes, true);
+            $model->setConnection($connectionName);
+            $model->fireModelEvent('retrieved', false);
+
+            return $model;
+        }
 
         if (
             $this->normCachePrototype === null
@@ -47,6 +58,28 @@ trait Cacheable
         }
 
         return $model;
+    }
+
+    private function normCacheUsesFastHydration(): bool
+    {
+        if ($this->normCacheFastHydration !== null) {
+            return $this->normCacheFastHydration;
+        }
+
+        if (
+            (new \ReflectionMethod($this, '__construct'))->getDeclaringClass()->getName() !== Model::class
+            || (new \ReflectionMethod($this, 'newInstance'))->getDeclaringClass()->getName() !== Model::class
+        ) {
+            return $this->normCacheFastHydration = false;
+        }
+
+        foreach (get_object_vars($this) as $property => $value) {
+            if ($property !== 'normCachePrototype' && is_object($value)) {
+                return $this->normCacheFastHydration = false;
+            }
+        }
+
+        return $this->normCacheFastHydration = true;
     }
 
     /** Not memoised: observers and listeners can register at any point in a request. */

@@ -3,6 +3,7 @@
 namespace NormCache\Payload;
 
 use NormCache\Support\CacheSerializer;
+use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\RawResultPayload;
 use stdClass;
 
@@ -10,7 +11,6 @@ final readonly class RawResultCodec
 {
     public function __construct(
         private CacheSerializer $serializer,
-        private NativeRowAdapter $rows,
     ) {}
 
     /**
@@ -25,11 +25,17 @@ final readonly class RawResultCodec
     ): string {
         ksort($versions, SORT_STRING);
 
+        $nativeRows = [];
+
+        foreach ($rows as $row) {
+            $nativeRows[] = (array) $row;
+        }
+
         $envelope = [
             'f' => 4,
             'ep' => $epoch,
             'vec' => $versions,
-            'rows' => array_map($this->rows->toArray(...), $rows),
+            'rows' => $nativeRows,
         ];
 
         if ($tagVersion !== null) {
@@ -75,12 +81,15 @@ final readonly class RawResultCodec
         return $this->serializer->encode([
             'f' => 4,
             'ep' => $epoch,
-            'row' => $this->rows->toArray($row),
+            'row' => (array) $row,
         ]);
     }
 
-    public function decodeRow(string $payload): RawResultPayload
-    {
+    public function decodeRow(
+        string $payload,
+        ?PrimaryKeyMetadata $primaryKey = null,
+        ?string $expectedToken = null,
+    ): RawResultPayload {
         $envelope = $this->serializer->decode($payload);
 
         if (
@@ -88,19 +97,24 @@ final readonly class RawResultCodec
             || ($envelope['f'] ?? null) !== 4
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['row'] ?? null)
+            || !$this->matchesToken($envelope['row'], $primaryKey, $expectedToken)
         ) {
             return RawResultPayload::corrupt();
         }
 
         return new RawResultPayload(
             valid: true,
-            rows: [$this->rows->toObject($envelope['row'])],
+            rows: [(object) $envelope['row']],
             epoch: $envelope['ep'],
         );
     }
 
-    public function decodeRowObject(string $payload, string $expectedEpoch): ?stdClass
-    {
+    public function decodeRowObject(
+        string $payload,
+        string $expectedEpoch,
+        ?PrimaryKeyMetadata $primaryKey = null,
+        ?string $expectedToken = null,
+    ): ?stdClass {
         $envelope = $this->serializer->decode($payload);
 
         if (
@@ -112,7 +126,46 @@ final readonly class RawResultCodec
             return null;
         }
 
+        if ($primaryKey !== null && $expectedToken !== null) {
+            $value = $envelope['row'][$primaryKey->column] ?? null;
+
+            if (
+                $primaryKey->family === PrimaryKeyMetadata::INTEGER
+                    ? (!is_int($value) && !is_string($value)
+                        || substr($expectedToken, 2) !== (string) $value)
+                    : (!is_string($value)
+                        || $expectedToken !== 's:' . rtrim(strtr(base64_encode($value), '+/', '-_'), '='))
+            ) {
+                return null;
+            }
+        }
+
         return (object) $envelope['row'];
+    }
+
+    private function matchesToken(
+        array $row,
+        ?PrimaryKeyMetadata $primaryKey,
+        ?string $expectedToken,
+    ): bool {
+        if ($primaryKey === null || $expectedToken === null) {
+            return true;
+        }
+
+        if (!array_key_exists($primaryKey->column, $row)) {
+            return false;
+        }
+
+        $value = $row[$primaryKey->column];
+
+        if ($primaryKey->family === PrimaryKeyMetadata::INTEGER) {
+            return (is_int($value) || is_string($value))
+                && str_starts_with($expectedToken, 'i:')
+                && substr($expectedToken, 2) === (string) $value;
+        }
+
+        return is_string($value)
+            && $expectedToken === 's:' . rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
     }
 
     /** @return array<string, string>|null */
@@ -143,7 +196,7 @@ final readonly class RawResultCodec
                 return null;
             }
 
-            $result[] = $this->rows->toObject($row);
+            $result[] = (object) $row;
         }
 
         return $result;

@@ -8,7 +8,10 @@ use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use NormCache\Cache\CacheStateResolver;
+use NormCache\Cache\CanonicalRepository;
 use NormCache\Cache\Engine;
+use NormCache\Cache\ResultRepository;
 use NormCache\Console\FlushCommand;
 use NormCache\Database\Connections\MariaDbConnection;
 use NormCache\Database\Connections\MySqlConnection;
@@ -17,7 +20,6 @@ use NormCache\Database\Connections\SQLiteConnection;
 use NormCache\Database\Connections\SqlServerConnection;
 use NormCache\Debug\DebugBarCollector;
 use NormCache\Payload\MembershipCodec;
-use NormCache\Payload\NativeRowAdapter;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\MutationKeyExtractor;
@@ -51,7 +53,6 @@ final class CacheServiceProvider extends ServiceProvider
             $app->make(CacheConfig::class)->stampedeWakeTokens,
         ));
         $this->app->singleton(CacheSerializer::class, fn() => CacheSerializer::native());
-        $this->app->singleton(NativeRowAdapter::class);
         $this->app->singleton(RawResultCodec::class);
         $this->app->singleton(MembershipCodec::class);
         $this->app->singleton(QueryIdentity::class);
@@ -77,6 +78,9 @@ final class CacheServiceProvider extends ServiceProvider
         });
 
         $this->app->scoped(RuntimeState::class);
+        $this->app->scoped(CacheStateResolver::class);
+        $this->app->scoped(CanonicalRepository::class);
+        $this->app->scoped(ResultRepository::class);
         $this->app->scoped(Invalidator::class);
         $this->app->scoped(Engine::class);
         $this->app->scoped(CacheManager::class);

@@ -6,7 +6,6 @@ use Illuminate\Database\Connection;
 use InvalidArgumentException;
 use NormCache\Database\CachingQueryBuilder;
 use NormCache\Enums\CacheReadOutcome;
-use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
@@ -37,9 +36,11 @@ final readonly class Engine
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private RawResultCodec $codec,
-        private MembershipCodec $memberships,
         private DependencyAnalyzer $dependencies,
         private Reporter $reporter,
+        private CacheStateResolver $states,
+        private CanonicalRepository $canonical,
+        private ResultRepository $results,
     ) {}
 
     /** @param list<mixed> $bindings
@@ -126,19 +127,29 @@ final readonly class Engine
                 static fn(TableIdentity $dependency): string => $dependency->hash,
                 $dependencies,
             );
-            $queryHash = $this->identity->hash(
-                route: $plan->route,
-                rootHash: $table->hash,
-                dependencyHashes: $dependencyHashes,
-                sql: $sql,
-                bindings: $connection->prepareBindings($bindings),
-                namespace: $namespace,
-                operation: $operation,
-            );
+
+            if ($plan->route === QueryPlan::CANONICAL) {
+                $queryHash = $canonicalQueryHash = $this->canonicalQueryHash(
+                    $query,
+                    $plan,
+                    $connection,
+                    $dependencyHashes,
+                    $namespace,
+                );
+            } else {
+                $queryHash = $this->identity->hash(
+                    route: $plan->route,
+                    rootHash: $table->hash,
+                    dependencyHashes: $dependencyHashes,
+                    sql: $sql,
+                    bindings: $connection->prepareBindings($bindings),
+                    namespace: $namespace,
+                    operation: $operation,
+                );
+            }
 
             if (
-                $plan->route === QueryPlan::CANONICAL
-                || $plan->route === QueryPlan::RESULT
+                $plan->route === QueryPlan::RESULT
                     && $plan->projectedColumns !== null
                     && $plan->primaryKeyToken === null
             ) {
@@ -149,10 +160,6 @@ final readonly class Engine
                     $dependencyHashes,
                     $namespace,
                 );
-            }
-
-            if ($plan->route === QueryPlan::CANONICAL) {
-                $queryHash = $canonicalQueryHash;
             }
         } catch (InvalidArgumentException) {
             $this->reporter->bypass(
@@ -316,14 +323,14 @@ final readonly class Engine
 
         if ($plan->route === QueryPlan::QUERY_GROUP) {
             $entryKey = $this->keys->queryGroupResult($queryHash, $namespace);
-            [$state, $values] = $this->resolveState(
+            [$state, $values] = $this->states->resolve(
                 $plan,
                 $namespace,
                 $queryHash,
                 alsoFetch: [$entryKey],
             );
 
-            return [$state, $this->decodeResult($plan, $state, $values[$entryKey] ?? null)];
+            return [$state, $this->results->read($state, $values[$entryKey] ?? null)];
         }
 
         if (
@@ -361,9 +368,9 @@ final readonly class Engine
             }
         }
 
-        [$state] = $this->resolveState($plan, $namespace, $queryHash, $version);
+        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
-        return [$state, $this->decodeResult($plan, $state, $raw)];
+        return [$state, $this->results->read($state, $raw)];
     }
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
@@ -386,8 +393,8 @@ final readonly class Engine
 
         if ($status === 'result') {
             $resultPlan = $this->resultOverlayPlan($plan);
-            [$state] = $this->resolveState($resultPlan, $namespace, $queryHash, $version);
-            $result = $this->decodeResult($resultPlan, $state, $head[2] ?? null);
+            [$state] = $this->states->resolve($resultPlan, $namespace, $queryHash, $version);
+            $result = $this->results->read($state, $head[2] ?? null);
 
             if ($this->readOutcome($result)->served()) {
                 return [$state, $result];
@@ -472,8 +479,8 @@ final readonly class Engine
         $fallbackReason = $status === 'corrupt' ? 'corrupt_payload' : null;
 
         if ($status === 'result') {
-            [$state] = $this->resolveState($plan, $namespace, $queryHash, $version);
-            $result = $this->decodeResult($plan, $state, $head[2] ?? null);
+            [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
+            $result = $this->results->read($state, $head[2] ?? null);
 
             if ($this->readOutcome($result)->served()) {
                 return [$state, $result];
@@ -538,7 +545,7 @@ final readonly class Engine
             $fallbackReason = $result['reason'] ?? $fallbackReason;
         }
 
-        [$state] = $this->resolveState($plan, $namespace, $queryHash, $version);
+        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
         return [$state, ['hit' => false, 'rows' => [], 'reason' => $fallbackReason]];
     }
@@ -584,28 +591,6 @@ final readonly class Engine
         return $projectedRows;
     }
 
-    /** @return array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome} */
-    private function decodeResult(QueryPlan $plan, CacheState $state, mixed $raw): array
-    {
-        if (!is_string($raw)) {
-            return ['hit' => false, 'rows' => [], 'reason' => null];
-        }
-
-        $payload = $this->codec->decode($raw);
-
-        if (!$payload->valid) {
-            $this->store->delete($state->key);
-
-            return ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload'];
-        }
-
-        $hit = $payload->epoch === $state->epoch
-            && $payload->versions === $state->versions
-            && $payload->tagVersion === $state->tag;
-
-        return ['hit' => $hit, 'rows' => $hit ? $payload->rows : [], 'reason' => null];
-    }
-
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): array
     {
@@ -617,7 +602,7 @@ final readonly class Engine
         $generation = is_string($result[0] ?? null) ? $result[0] : '0';
         $raw = $result[1] ?? null;
 
-        $resolve = fn(): CacheState => $this->resolveState(
+        $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,
             $queryHash,
@@ -628,13 +613,13 @@ final readonly class Engine
             return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => null]];
         }
 
-        $payload = $this->codec->decodeRow($raw);
+        $payload = $this->codec->decodeRow(
+            $raw,
+            $plan->primaryKey,
+            $plan->primaryKeyToken,
+        );
 
         if (!$payload->valid) {
-            $this->store->delete(
-                $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-            );
-
             return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
         }
 
@@ -646,10 +631,6 @@ final readonly class Engine
             $visible = $this->applySoftDeleteVisibility($plan, $rows[0]);
 
             if ($visible === null) {
-                $this->store->delete(
-                    $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                );
-
                 return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
             }
 
@@ -720,13 +701,13 @@ final readonly class Engine
         }
 
         $epoch = $this->epoch();
-        $payload = $this->codec->decodeRow($raw);
+        $payload = $this->codec->decodeRow(
+            $raw,
+            $plan->primaryKey,
+            $plan->primaryKeyToken,
+        );
 
         if (!$payload->valid) {
-            $this->store->delete(
-                $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-            );
-
             return null;
         }
 
@@ -747,10 +728,6 @@ final readonly class Engine
 
             foreach ((array) $plan->projectedColumns as $column) {
                 if (!property_exists($row, $column)) {
-                    $this->store->delete(
-                        $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                    );
-
                     return null;
                 }
 
@@ -808,132 +785,19 @@ final readonly class Engine
         array $head,
         bool $repairMissing,
     ): array {
-        $status = $head[0] ?? null;
-        $version = is_string($head[1] ?? null) ? $head[1] : '0';
-        $generation = is_string($head[2] ?? null) ? $head[2] : '0';
-        $rawMembership = $status === 'hit' ? ($head[3] ?? null) : null;
-
-        $miss = fn(?string $reason): array => [
-            $this->resolveState($plan, $namespace, $queryHash, $version, $generation)[0],
-            ['hit' => false, 'rows' => [], 'reason' => $reason],
-        ];
-
-        if (!is_string($rawMembership)) {
-            return $miss($status === 'corrupt' ? 'corrupt_payload' : null);
-        }
-
-        $membership = $this->memberships->decode($rawMembership);
-
-        if (!$membership->valid) {
-            $this->store->delete(
-                $this->keys->membership($plan->root, $version, $namespace, $queryHash),
-            );
-
-            return $miss('corrupt_payload');
-        }
-
-        $rowPrefix = $this->keys->tablePrefix($plan->root) . ':r:g' . $generation . ':';
-        $unique = [];
-
-        // Memberships may repeat a token, so index the reply by key, not position.
-        foreach ($membership->ids as $token) {
-            $unique[$rowPrefix . $token] = true;
-        }
-
-        $stateKeys = $this->canonicalStateKeys($plan, $namespace);
-        $fetched = $this->fetchKeys(
-            array_keys($unique),
-            $stateKeys['final'],
-        );
-
-        $state = $this->canonicalStateFromFetched(
+        return $this->canonical->read(
             $plan,
             $namespace,
             $queryHash,
-            $stateKeys,
-            $fetched,
+            $head,
+            $repairMissing,
+            fn(CacheState $state, array $tokens): array => $this->repairRows(
+                $query,
+                $plan,
+                $state,
+                $tokens,
+            ),
         );
-
-        if (
-            $state->version !== $version
-            || $state->generation !== $generation
-            || $membership->epoch !== $state->epoch
-            || $membership->generation !== $state->generation
-            || $membership->versions !== $state->versions
-            || $membership->tagVersion !== $state->tag
-        ) {
-            return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-        }
-
-        if ($membership->ids === []) {
-            return [$state, ['hit' => true, 'rows' => [], 'reason' => null]];
-        }
-
-        $rows = [];
-        $missingAt = [];
-        $corrupt = [];
-
-        foreach ($membership->ids as $index => $token) {
-            $rowKey = $rowPrefix . $token;
-            $rawRow = $fetched[$rowKey] ?? null;
-
-            if ($rawRow === null) {
-                $missingAt[$index] = $token;
-
-                continue;
-            }
-
-            $rowObj = $this->codec->decodeRowObject($rawRow, $state->epoch);
-
-            if ($rowObj === null) {
-                $corrupt[] = $rowKey;
-                $missingAt[$index] = $token;
-
-                continue;
-            }
-
-            $rows[$index] = $rowObj;
-        }
-
-        if ($corrupt !== []) {
-            $this->store->delete($corrupt);
-        }
-
-        $outcome = CacheReadOutcome::HIT;
-
-        if ($missingAt !== []) {
-            if (!$repairMissing) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-            }
-
-            $repair = $this->repairRows($query, $plan, $state, array_values($missingAt));
-            $repaired = $repair['rows'];
-            $outcome = $repair['outcome'];
-
-            if ($repaired === null) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-            }
-
-            foreach ($missingAt as $index => $token) {
-                if (!isset($repaired[$token])) {
-                    return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-                }
-
-                $rows[$index] = $repaired[$token];
-            }
-
-            ksort($rows);
-            $rows = array_values($rows);
-        }
-
-        return [$state, [
-            'hit' => true,
-            'rows' => $rows,
-            'reason' => $corrupt !== []
-                ? 'corrupt_payload'
-                : ($outcome === CacheReadOutcome::REPAIRED ? 'row_repair' : null),
-            'outcome' => $outcome,
-        ]];
     }
 
     /**
@@ -1126,14 +990,19 @@ final readonly class Engine
             $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
         }
 
-        $raw = $this->fetchKeys(array_values($rowKeys));
+        $raw = $this->states->fetch(array_values($rowKeys));
         $rows = [];
 
         foreach ($rowKeys as $token => $rowKey) {
             $payload = $raw[$rowKey] ?? null;
             $row = $payload === null
                 ? null
-                : $this->codec->decodeRowObject($payload, $state->epoch);
+                : $this->codec->decodeRowObject(
+                    $payload,
+                    $state->epoch,
+                    $plan->primaryKey,
+                    $token,
+                );
 
             if ($row === null) {
                 return null;
@@ -1218,28 +1087,13 @@ final readonly class Engine
         array $rows,
         BuildLease $lease,
     ): void {
-        $encoded = $this->codec->encode(
+        $this->results->publish(
+            $query,
+            $plan,
+            $state,
             $rows,
-            $state->epoch,
-            $state->versions,
-            $state->tag,
-        );
-
-        $versionKeys = $plan->route === QueryPlan::RESULT
-            ? [$this->keys->version($plan->root)]
-            : [];
-        $expected = $plan->route === QueryPlan::RESULT
-            ? [$state->version]
-            : [];
-        $this->store->publishVersionedEntries(
-            entries: [$state->key => $encoded],
-            ttl: $query->normCacheTtl() ?? $this->config->queryTtl,
-            versionKeys: $versionKeys,
-            expectedVersions: $expected,
-            buildingKey: $lease->buildingKey,
-            wakeKey: $lease->wakeKey,
-            token: $lease->token,
-            wakeTtl: $this->wakeTtl(),
+            $lease,
+            $this->wakeTtl(),
         );
     }
 
@@ -1290,57 +1144,14 @@ final readonly class Engine
         string $namespace,
         string $queryHash,
     ): void {
-        $ids = [];
-        $encodedRows = [];
-
-        foreach ($rows as $row) {
-            if (!$row instanceof stdClass || !property_exists($row, $plan->primaryKey->column)) {
-                $this->release($lease);
-
-                return;
-            }
-
-            $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
-
-            if ($token === null) {
-                $this->release($lease);
-
-                return;
-            }
-
-            $encoded = $this->codec->encodeRow($row, $state->epoch);
-            $ids[] = $token;
-            $encodedRows[$this->keys->row(
-                $plan->root,
-                $state->generation,
-                $token,
-            )] = $encoded;
-        }
-
-        $membership = $this->memberships->encode(
-            epoch: $state->epoch,
-            generation: $state->generation,
-            ids: $ids,
-            versions: $state->versions,
-            tagVersion: $state->tag,
-        );
-        $published = $this->store->publishCanonical(
-            versionKey: $this->keys->version($plan->root),
-            generationKey: $this->keys->generation($plan->root),
-            membershipKey: $state->key,
-            rows: $encodedRows,
-            expectedVersion: $state->version,
-            expectedGeneration: $state->generation,
-            membershipPayload: $membership,
-            membershipTtl: $query->normCacheTtl() ?? $this->config->queryTtl,
-            rowTtl: $this->config->rowTtl,
-            buildingKey: $lease->buildingKey,
-            wakeKey: (string) $lease->wakeKey,
-            token: (string) $lease->token,
-            wakeTtl: $this->wakeTtl(),
-        );
-
-        if (!$published) {
+        if (!$this->canonical->publish(
+            $query,
+            $plan,
+            $state,
+            $rows,
+            $lease,
+            $this->wakeTtl(),
+        )) {
             $this->release($lease);
 
             return;
@@ -1357,113 +1168,6 @@ final readonly class Engine
                 wakeWaiters: false,
             );
         }
-    }
-
-    /**
-     * @return array{
-     *     epoch: ?string,
-     *     version: string,
-     *     generation: string,
-     *     dependencies: array<string, string>,
-     *     tag: ?string,
-     *     final: list<string>
-     * }
-     */
-    private function canonicalStateKeys(QueryPlan $plan, string $namespace): array
-    {
-        $dependencyKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash) {
-                $dependencyKeys[$dependency->hash] = $this->keys->version($dependency);
-            }
-        }
-
-        $epochKey = $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
-        $versionKey = $this->keys->version($plan->root);
-        $generationKey = $this->keys->generation($plan->root);
-        $tagKey = str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
-            : null;
-
-        $externalKeys = array_values(array_filter([
-            $epochKey,
-            ...array_values($dependencyKeys),
-            $tagKey,
-        ]));
-
-        return [
-            'epoch' => $epochKey,
-            'version' => $versionKey,
-            'generation' => $generationKey,
-            'dependencies' => $dependencyKeys,
-            'tag' => $tagKey,
-            'final' => [$versionKey, $generationKey, ...$externalKeys],
-        ];
-    }
-
-    /**
-     * @param  array{
-     *     epoch: ?string,
-     *     version: string,
-     *     generation: string,
-     *     dependencies: array<string, string>,
-     *     tag: ?string,
-     *     final: list<string>
-     * }  $keys
-     * @param  array<string, ?string>  $values
-     */
-    private function canonicalStateFromFetched(
-        QueryPlan $plan,
-        string $namespace,
-        string $queryHash,
-        array $keys,
-        array $values,
-    ): CacheState {
-        if ($keys['epoch'] !== null) {
-            $this->runtime->rememberEpoch($values[$keys['epoch']] ?? '0');
-        }
-
-        $versions = [];
-
-        foreach ($keys['dependencies'] as $hash => $key) {
-            $versions[$hash] = $values[$key] ?? '0';
-        }
-
-        ksort($versions, SORT_STRING);
-        $version = $values[$keys['version']] ?? '0';
-        $generation = $values[$keys['generation']] ?? '0';
-        $tag = $keys['tag'] !== null ? ($values[$keys['tag']] ?? '0') : null;
-
-        return new CacheState(
-            key: $this->keys->membership(
-                $plan->root,
-                $version,
-                $namespace,
-                $queryHash,
-            ),
-            epoch: $this->epoch(),
-            version: $version,
-            generation: $generation,
-            versions: $versions,
-            tag: $tag,
-            tagKey: $keys['tag'],
-        );
-    }
-
-    /**
-     * @param  list<string>  $keys
-     * @param  list<string>  $alsoFetch
-     * @return array<string, ?string>
-     */
-    private function fetchKeys(
-        array $keys,
-        array $alsoFetch = [],
-    ): array {
-        return $this->store->mget(array_values(array_unique([
-            ...$keys,
-            ...$alsoFetch,
-        ])));
     }
 
     private function resultOverlayPlan(QueryPlan $plan): QueryPlan
@@ -1548,116 +1252,7 @@ final readonly class Engine
 
     private function state(QueryPlan $plan, string $namespace, string $queryHash): CacheState
     {
-        return $this->resolveState($plan, $namespace, $queryHash)[0];
-    }
-
-    /**
-     * @param  list<string>  $alsoFetch
-     * @return array{0: CacheState, 1: array<string, ?string>}
-     */
-    private function resolveState(
-        QueryPlan $plan,
-        string $namespace,
-        string $queryHash,
-        ?string $knownVersion = null,
-        ?string $knownGeneration = null,
-        array $alsoFetch = [],
-    ): array {
-        $versionKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            $versionKeys[$dependency->hash] = $this->keys->version($dependency);
-        }
-
-        $rootVersionKey = $versionKeys[$plan->root->hash] ?? null;
-
-        if ($knownVersion !== null && $rootVersionKey !== null) {
-            unset($versionKeys[$plan->root->hash]);
-        }
-
-        $generationKey = $knownGeneration === null ? match ($plan->route) {
-            QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
-            default => null,
-        } : null;
-        $tagKey = str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
-            : null;
-        // Batched, not fetched on its own: a standalone GET made a scope's first
-        // canonical read 3 round trips instead of 2.
-        $epochKey = $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
-
-        $values = $this->store->mget(array_values(array_unique(array_filter([
-            $epochKey,
-            ...array_values($versionKeys),
-            $generationKey,
-            $tagKey,
-            ...$alsoFetch,
-        ]))));
-
-        if ($epochKey !== null) {
-            $this->runtime->rememberEpoch($values[$epochKey] ?? '0');
-        }
-
-        if (
-            $knownVersion !== null
-            && $rootVersionKey !== null
-            && !array_key_exists($rootVersionKey, $values)
-        ) {
-            $versionKeys[$plan->root->hash] = $rootVersionKey;
-            $values[$rootVersionKey] = $knownVersion;
-        }
-
-        $epoch = $this->epoch();
-        $allVersions = [];
-
-        foreach ($versionKeys as $hash => $key) {
-            $allVersions[$hash] = $values[$key] ?? '0';
-        }
-
-        ksort($allVersions, SORT_STRING);
-        $rootVersion = $knownVersion ?? $allVersions[$plan->root->hash] ?? '0';
-        $generation = $knownGeneration
-            ?? ($generationKey !== null ? ($values[$generationKey] ?? '0') : '0');
-        $tag = $tagKey !== null ? ($values[$tagKey] ?? '0') : null;
-        $versions = $allVersions;
-
-        if ($plan->route !== QueryPlan::QUERY_GROUP) {
-            unset($versions[$plan->root->hash]);
-        }
-
-        $key = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membership(
-                $plan->root,
-                $rootVersion,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->row(
-                $plan->root,
-                $generation,
-                (string) $plan->primaryKeyToken,
-            ),
-            QueryPlan::QUERY_GROUP => $this->keys->queryGroupResult($queryHash, $namespace),
-            default => $this->keys->result(
-                $plan->root,
-                $rootVersion,
-                $namespace,
-                $queryHash,
-            ),
-        };
-
-        return [
-            new CacheState(
-                key: $key,
-                epoch: $epoch,
-                version: $rootVersion,
-                generation: $generation,
-                versions: $versions,
-                tag: $tag,
-                tagKey: $tagKey,
-            ),
-            $values,
-        ];
+        return $this->states->resolve($plan, $namespace, $queryHash)[0];
     }
 
     private function claim(

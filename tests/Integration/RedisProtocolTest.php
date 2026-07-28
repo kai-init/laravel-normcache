@@ -3,14 +3,89 @@
 namespace NormCache\Tests\Integration;
 
 use Illuminate\Redis\Connections\PhpRedisConnection;
+use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\ResultRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CacheState;
+use Predis\Client;
+use ReflectionProperty;
+
+final class RecordingPredisClusterConnection extends PredisClusterConnection
+{
+    public int $pipelineCalls = 0;
+
+    public int $directMgetCalls = 0;
+
+    public function command($method, array $parameters = [])
+    {
+        if (strtolower((string) $method) === 'mget') {
+            $this->directMgetCalls++;
+
+            return array_map(
+                static fn(string $key): string => "value:{$key}",
+                $parameters,
+            );
+        }
+
+        return null;
+    }
+
+    public function pipeline(...$arguments)
+    {
+        $this->pipelineCalls++;
+
+        return [];
+    }
+}
 
 final class RedisProtocolTest extends TestCase
 {
+    public function test_predis_cluster_cross_slot_reads_use_one_pipeline(): void
+    {
+        $connection = new RecordingPredisClusterConnection(new Client);
+        $store = new RedisStore('unused');
+        $property = new ReflectionProperty($store, 'connection');
+        $property->setValue($store, $connection);
+
+        $store->mget([
+            '{slot-a}:version',
+            '{slot-b}:version',
+        ]);
+
+        $this->assertSame([
+            'pipeline_calls' => 1,
+            'direct_mget_calls' => 0,
+        ], [
+            'pipeline_calls' => $connection->pipelineCalls,
+            'direct_mget_calls' => $connection->directMgetCalls,
+        ]);
+    }
+
+    public function test_corrupt_result_read_does_not_delete_the_observed_payload(): void
+    {
+        $store = app(RedisStore::class);
+        $key = 'test:{nc:x:corrupt-read}:payload';
+        $store->setRaw($key, 'corrupt', 60);
+        $state = new CacheState(
+            key: $key,
+            epoch: '0',
+            version: '0',
+            generation: '0',
+            versions: [],
+            tag: null,
+            tagKey: null,
+        );
+
+        $result = app(ResultRepository::class)->read($state, 'corrupt');
+
+        $this->assertSame('corrupt_payload', $result['reason']);
+        $this->assertSame('corrupt', $store->getRaw($key));
+    }
+
     public function test_phpredis_raw_operations_preserve_the_shared_serializer(): void
     {
         $connection = Redis::connection('normcache-test');
@@ -54,8 +129,8 @@ final class RedisProtocolTest extends TestCase
 
         $client = $connection->client();
         $originalSerializer = $client->getOption(\Redis::OPT_SERIALIZER);
-        $buildingKey = 'test:{nc4:x:serializer}:build';
-        $wakeKey = 'test:{nc4:x:serializer}:wake';
+        $buildingKey = 'test:{nc:x:serializer}:build';
+        $wakeKey = 'test:{nc:x:serializer}:wake';
         $token = str_repeat('a', 32);
 
         try {
@@ -87,7 +162,7 @@ final class RedisProtocolTest extends TestCase
         $store = app(RedisStore::class);
         $store->getRaw('test:warm-store-connection');
 
-        $property = new \ReflectionProperty($connection, 'client');
+        $property = new ReflectionProperty($connection, 'client');
         $originalClient = $connection->client();
         $replacement = new \Redis;
         $replacement->connect(
@@ -262,9 +337,9 @@ final class RedisProtocolTest extends TestCase
     public function test_expired_owner_cannot_publish_or_release_a_replacement_lease(): void
     {
         $store = app(RedisStore::class);
-        $key = 'test:{nc4:x:lease}:result:u';
-        $build = 'test:{nc4:x:lease}:build';
-        $wake = 'test:{nc4:x:lease}:wake:' . str_repeat('a', 32);
+        $key = 'test:{nc:x:lease}:result:u';
+        $build = 'test:{nc:x:lease}:build';
+        $wake = 'test:{nc:x:lease}:wake:' . str_repeat('a', 32);
 
         $store->setRaw($build, str_repeat('b', 32), 10);
 

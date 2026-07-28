@@ -2,16 +2,54 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
+use Illuminate\Database\Eloquent\Model;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
+use stdClass;
+
+final class CustomHydrationModel extends Model
+{
+    use Cacheable;
+
+    public static int $newInstanceCalls = 0;
+
+    public stdClass $marker;
+
+    public function __construct(array $attributes = [])
+    {
+        $this->marker = new stdClass;
+
+        parent::__construct($attributes);
+    }
+
+    public function newInstance($attributes = [], $exists = false)
+    {
+        self::$newInstanceCalls++;
+
+        return parent::newInstance($attributes, $exists);
+    }
+}
 
 /**
  * Contract tests for model hydration after a cached query has been resolved.
  */
 class ModelHydrationContractTest extends TestCase
 {
+    public function test_custom_model_lifecycle_uses_fresh_laravel_instances(): void
+    {
+        $source = new CustomHydrationModel;
+        CustomHydrationModel::$newInstanceCalls = 0;
+
+        $first = $source->newFromBuilder(['id' => 1]);
+        $second = $source->newFromBuilder(['id' => 2]);
+
+        $this->assertSame(2, CustomHydrationModel::$newInstanceCalls);
+        $this->assertNotSame($first->marker, $second->marker);
+    }
+
     public function test_eager_loaded_models_match_native_eloquent(): void
     {
         $author = Author::create(['name' => 'Ivy']);

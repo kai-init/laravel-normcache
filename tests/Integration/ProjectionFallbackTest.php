@@ -157,7 +157,8 @@ final class ProjectionFallbackTest extends TestCase
         $this->assertIsString($rowKey);
 
         $incomplete = (object) ['id' => $this->postId];
-        $this->cacheStore()->setRaw($rowKey, $codec->encodeRow($incomplete, $epoch), 3600);
+        $observed = $codec->encodeRow($incomplete, $epoch);
+        $this->cacheStore()->setRaw($rowKey, $observed, 3600);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -166,7 +167,7 @@ final class ProjectionFallbackTest extends TestCase
 
         $this->assertSame('Canonical', $row->title);
         $this->assertCount(1, DB::getQueryLog());
-        $this->assertNull($this->cacheStore()->getRaw($rowKey));
+        $this->assertSame($observed, $this->cacheStore()->getRaw($rowKey));
     }
 
     public function test_aliased_source_does_not_accept_original_table_projection_qualifier(): void
@@ -256,7 +257,7 @@ final class ProjectionFallbackTest extends TestCase
         Event::assertNotDispatched(QueryCacheMiss::class);
     }
 
-    public function test_corrupt_canonical_row_is_removed_when_projection_fallback_declines(): void
+    public function test_corrupt_canonical_row_remains_when_projection_fallback_declines(): void
     {
         DB::table('posts')->orderBy('id')->get();
         $rowKey = $this->postRowKey();
@@ -269,7 +270,7 @@ final class ProjectionFallbackTest extends TestCase
 
         $this->assertSame('Canonical', $row->title);
         $this->assertCount(1, DB::getQueryLog());
-        $this->assertNull($this->cacheStore()->getRaw($rowKey));
+        $this->assertSame('not-a-valid-row-payload', $this->cacheStore()->getRaw($rowKey));
     }
 
     public function test_retry_preserves_row_fallback_hit_reason(): void

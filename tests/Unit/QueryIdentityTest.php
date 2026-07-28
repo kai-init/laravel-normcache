@@ -49,4 +49,16 @@ final class QueryIdentityTest extends UnitTestCase
         $this->expectException(\InvalidArgumentException::class);
         $identity->tagHash('');
     }
+
+    public function test_unique_tags_do_not_retain_process_lifetime_state(): void
+    {
+        $identity = new QueryIdentity;
+        $before = memory_get_usage(false);
+
+        for ($index = 0; $index < 50_000; $index++) {
+            $identity->namespace("tenant-{$index}");
+        }
+
+        $this->assertLessThan(2 * 1_024 * 1_024, memory_get_usage(false) - $before);
+    }
 }

@@ -7,11 +7,14 @@ use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use NormCache\Database\Connections\BuildsCachingQueries;
+use NormCache\Planning\DependencyAnalyzer;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class DependencyVectorTest extends TestCase
 {
@@ -322,6 +325,32 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
+    #[DataProvider('driverTimeExpressions')]
+    public function test_driver_time_expressions_are_volatile(string $expression): void
+    {
+        $connection = DB::connection();
+        $query = DB::table('posts')->selectRaw("{$expression} as observed_at");
+        $root = $this->app->make(TableIdentityResolver::class)
+            ->resolve($connection, 'posts');
+        $this->assertNotNull($root);
+
+        $analysis = $this->app->make(DependencyAnalyzer::class)
+            ->analyze($connection, $query, $root);
+
+        $this->assertTrue($analysis->volatile);
+    }
+
+    public static function driverTimeExpressions(): array
+    {
+        return [
+            ['UTC_TIMESTAMP()'],
+            ['UTC_DATE()'],
+            ['UTC_TIME()'],
+            ['CURDATE()'],
+            ['CURTIME()'],
+        ];
+    }
+
     public function test_volatile_raw_source_is_never_cached_even_with_dependencies(): void
     {
         $read = fn() => Author::query()
@@ -441,6 +470,8 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame('Post', $explicit()?->title);
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $this->cacheKeysMatching(':r:g'));
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
 
         DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
         DB::flushQueryLog();

@@ -74,7 +74,11 @@ final class QueryPlanner
             }
         }
 
-        if ($canUseRowShape && $this->isWildcard($query, $root)) {
+        if (
+            $canUseRowShape
+            && $this->isWildcard($query, $root)
+            && (!$root->isView || !$this->hasExternalDependency($root, $dependencies))
+        ) {
             return new QueryPlan(
                 QueryPlan::CANONICAL,
                 $root,
@@ -141,10 +145,15 @@ final class QueryPlanner
         CachingQueryBuilder $query,
     ): bool {
         return !empty($query->unions)
-            && count(array_filter(
-                $dependencies,
-                static fn(TableIdentity $dependency): bool => $dependency->hash !== $root->hash,
-            )) > 0;
+            && $this->hasExternalDependency($root, $dependencies);
+    }
+
+    private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
+    {
+        return count(array_filter(
+            $dependencies,
+            static fn(TableIdentity $dependency): bool => $dependency->hash !== $root->hash,
+        )) > 0;
     }
 
     private function isWildcard(CachingQueryBuilder $query, TableIdentity $root): bool
@@ -170,7 +179,7 @@ final class QueryPlanner
     {
         if (
             is_string($query->from)
-            && preg_match('/\\s+as\\s+([^\\s]+)$/i', trim($query->from), $matches) === 1
+            && preg_match('/\\s+(?:as\\s+)?([^\\s]+)$/i', trim($query->from), $matches) === 1
         ) {
             return strtolower($matches[1]);
         }

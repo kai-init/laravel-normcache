@@ -1258,7 +1258,7 @@ class EloquentContractTest extends TestCase
 
     public function test_flush_tag_allows_arbitrary_characters(): void
     {
-        // v4 tags are hashed before use in any Redis key, so unlike v3 there is
+        // Tags are hashed before use in any Redis key, so there is
         // no character-safety restriction — only emptiness/UTF-8/length are validated.
         $this->assertTrue($this->cacheManager()->flushTag('tag:with:colons/and*stars'));
     }

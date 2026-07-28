@@ -4,7 +4,7 @@ namespace NormCache\Values;
 
 final readonly class TableIdentity
 {
-    private const FORMAT = 'nc4-table';
+    private const FORMAT = 'nc-table';
 
     public function __construct(
         public string $driver,
@@ -55,7 +55,7 @@ final readonly class TableIdentity
         return match ($this->driver) {
             'mysql', 'mariadb' => $this->database . '.' . $this->table,
             'pgsql' => $this->schema . '.' . $this->table,
-            'sqlsrv' => $this->schema . '.' . $this->table,
+            'sqlsrv' => $this->database . '.' . $this->schema . '.' . $this->table,
             default => $this->table,
         };
     }

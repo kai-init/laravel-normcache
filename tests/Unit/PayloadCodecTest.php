@@ -3,7 +3,6 @@
 namespace NormCache\Tests\Unit;
 
 use NormCache\Payload\MembershipCodec;
-use NormCache\Payload\NativeRowAdapter;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheSerializer;
 use NormCache\Tests\UnitTestCase;
@@ -11,7 +10,7 @@ use stdClass;
 
 final class PayloadCodecTest extends UnitTestCase
 {
-    public function test_native_rows_round_trip_with_order_types_and_fresh_objects(): void
+    public function test_raw_result_codec_owns_native_row_conversion(): void
     {
         $row = new stdClass;
         $row->id = 7;
@@ -19,12 +18,12 @@ final class PayloadCodecTest extends UnitTestCase
         $row->binary = "\x00\xff";
         $row->nullable = null;
 
-        $adapter = new NativeRowAdapter;
-        $stored = $adapter->toArray($row);
-        $first = $adapter->toObject($stored);
-        $second = $adapter->toObject($stored);
+        $codec = new RawResultCodec(new CacheSerializer);
 
-        $this->assertSame(['id', 'numeric', 'binary', 'nullable'], array_keys($stored));
+        $first = $codec->decode($codec->encode([$row], '7'))->rows[0];
+        $second = $codec->decode($codec->encode([$row], '7'))->rows[0];
+
+        $this->assertSame(['id', 'numeric', 'binary', 'nullable'], array_keys((array) $first));
         $this->assertSame(7, $first->id);
         $this->assertSame('007', $first->numeric);
         $this->assertSame("\x00\xff", $first->binary);
@@ -32,9 +31,9 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertNotSame($first, $second);
     }
 
-    public function test_raw_result_codec_validates_format_four_envelopes(): void
+    public function test_raw_result_codec_validates_envelopes(): void
     {
-        $codec = new RawResultCodec(new CacheSerializer, new NativeRowAdapter);
+        $codec = new RawResultCodec(new CacheSerializer);
         $row = (object) ['id' => 1, 'amount' => '01.20'];
 
         $encoded = $codec->encode([$row], '7', ['dep' => '12'], '3');
@@ -50,7 +49,7 @@ final class PayloadCodecTest extends UnitTestCase
 
     public function test_row_codec_returns_exactly_one_object_for_every_valid_payload(): void
     {
-        $codec = new RawResultCodec(new CacheSerializer, new NativeRowAdapter);
+        $codec = new RawResultCodec(new CacheSerializer);
         $row = (object) ['id' => 7, 'title' => 'Post'];
 
         $decoded = $codec->decodeRow($codec->encodeRow($row, '9'));
@@ -80,5 +79,19 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertSame('4', $decoded->generation);
         $this->assertSame('3', $decoded->tagVersion);
         $this->assertFalse($codec->decode('{"f":3}')->valid);
+    }
+
+    public function test_membership_codec_rejects_invalid_dependency_versions(): void
+    {
+        $codec = new MembershipCodec;
+        $integerVersion = json_encode([
+            'f' => 4,
+            'ep' => '0',
+            'g' => '0',
+            'ids' => ['i:1'],
+            'vec' => ['dependency' => 1],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->assertFalse($codec->decode($integerVersion)->valid);
     }
 }

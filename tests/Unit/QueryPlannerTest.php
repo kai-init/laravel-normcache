@@ -41,6 +41,43 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertFalse($plan->materializeResult);
     }
 
+    public function test_bare_alias_wildcard_uses_canonical_rows(): void
+    {
+        $query = DB::query()->from('posts p')->select('p.*');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+    }
+
+    public function test_dependency_backed_view_uses_vector_validated_result_storage(): void
+    {
+        $view = TableIdentity::fromParts(
+            'sqlite',
+            'testing',
+            '/tmp/test.sqlite',
+            '',
+            '',
+            'post_titles',
+            true,
+        );
+        $query = DB::query()->from('post_titles')->select('*');
+
+        $plan = $this->planner->plan(
+            $query,
+            $view,
+            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            [$view, $this->posts],
+        );
+
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+    }
+
     public function test_result_cache_override_materializes_wildcard_canonical_result(): void
     {
         $query = DB::query()->from('posts')->useResultCache();

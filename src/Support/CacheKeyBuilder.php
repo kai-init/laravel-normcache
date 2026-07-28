@@ -7,9 +7,6 @@ use NormCache\Values\TableIdentity;
 
 final class CacheKeyBuilder
 {
-    /** @var array<string, string> */
-    private array $tablePrefixes = [];
-
     public function __construct(
         private string $keyPrefix = '',
     ) {
@@ -91,31 +88,31 @@ final class CacheKeyBuilder
 
     public function queryGroupResult(string $queryHash, string $namespace): string
     {
-        return $this->keyPrefix . "{nc4:x:{$queryHash}}:result:{$namespace}";
+        return $this->keyPrefix . "{nc:x:{$queryHash}}:result:{$namespace}";
     }
 
     public function queryGroupBuild(string $queryHash): string
     {
-        return $this->keyPrefix . "{nc4:x:{$queryHash}}:build";
+        return $this->keyPrefix . "{nc:x:{$queryHash}}:build";
     }
 
     public function queryGroupWake(string $queryHash, string $token): string
     {
-        return $this->keyPrefix . "{nc4:x:{$queryHash}}:wake:{$token}";
+        return $this->keyPrefix . "{nc:x:{$queryHash}}:wake:{$token}";
     }
 
     public function tagVersion(string $tagHash): string
     {
-        return $this->keyPrefix . "{nc4:g:{$tagHash}}:ver";
+        return $this->keyPrefix . "{nc:g:{$tagHash}}:ver";
     }
 
     public function epoch(): string
     {
-        return $this->keyPrefix . '{nc4m}:epoch';
+        return $this->keyPrefix . '{ncm}:epoch';
     }
 
     public function tablePrefix(TableIdentity $table): string
     {
-        return $this->tablePrefixes[$table->hash] ??= $this->keyPrefix . "{nc4:t:{$table->hash}}";
+        return $this->keyPrefix . "{nc:t:{$table->hash}}";
     }
 }

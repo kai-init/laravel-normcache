@@ -12,11 +12,14 @@ use NormCache\Tests\TestCase;
 
 final class ResultCacheStrategyTest extends TestCase
 {
+    private int $authorId;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
+        $this->authorId = (int) $author->getKey();
 
         foreach (range(1, 6) as $index) {
             DB::table('posts')->insert([
@@ -80,6 +83,24 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertSame($cold->modelKeys(), $warm->modelKeys());
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_large_result_is_published_without_an_admission_limit(): void
+    {
+        $title = str_repeat('x', 4_194_304 + 1_024);
+        $id = DB::table('posts')->insertGetId([
+            'title' => $title,
+            'views' => 0,
+            'published' => true,
+            'author_id' => $this->authorId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $row = DB::table('posts')->where('id', $id)->select('title')->first();
+
+        $this->assertSame(strlen($title), strlen((string) $row?->title));
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
     }
 
     public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void

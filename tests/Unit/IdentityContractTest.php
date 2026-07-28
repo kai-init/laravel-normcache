@@ -32,23 +32,23 @@ final class IdentityContractTest extends UnitTestCase
             operation: 'select',
         );
 
-        $this->assertSame('bfad48eba036b467ac6c47dd907a40f5', $hash(QueryPlan::CANONICAL));
-        $this->assertSame('6eaf3005c2eec1aa917697e1c33736ef', $hash(QueryPlan::RESULT));
-        $this->assertSame('3de633029da49012b990968ca40ff077', $hash(QueryPlan::QUERY_GROUP));
-        $this->assertSame('d9adbde04aeb0db232db1085af480b23', $hash(QueryPlan::DIRECT_PK));
+        $this->assertSame('60465e1baf4064e424cf842786cb9789', $hash(QueryPlan::CANONICAL));
+        $this->assertSame('3b70a6d0452413dbba57400d1bb63a46', $hash(QueryPlan::RESULT));
+        $this->assertSame('10fe47d045deffca1f538f9d4b28d46b', $hash(QueryPlan::QUERY_GROUP));
+        $this->assertSame('e42fc975f9bae0ce6a5d4eced9d1d21e', $hash(QueryPlan::DIRECT_PK));
     }
 
     public function test_tag_repair_and_table_digests_are_stable(): void
     {
         $identity = new QueryIdentity;
 
-        $this->assertSame('b3838353748f6c156f5592a9b3ea18ce', $identity->tagHash('homepage'));
+        $this->assertSame('70cf626fa4c84d4ae1d3931451bf301c', $identity->tagHash('homepage'));
         $this->assertSame(
-            '8235f0f91f60f29871723f520313747d',
+            'ee352ad782d5558a44ba6e7a01230b9d',
             $identity->repairHash('roothash', '7', ['i:9', 'i:2']),
         );
         $this->assertSame(
-            '3705949d1b712ff0cf2bf4bf8aead17c',
+            '45485a5ec5cba05e1bd85f13cee0e669',
             TableIdentity::fromParts(
                 driver: 'mysql',
                 connection: 'conn',

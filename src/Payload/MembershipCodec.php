@@ -56,6 +56,7 @@ final class MembershipCodec
         }
 
         $ids = array_values($envelope['ids']);
+        $versions = [];
 
         foreach ($ids as $id) {
             if (!is_string($id)) {
@@ -63,12 +64,22 @@ final class MembershipCodec
             }
         }
 
+        foreach ($envelope['vec'] as $key => $value) {
+            if (!is_string($key) || !is_string($value)) {
+                return MembershipPayload::corrupt();
+            }
+
+            $versions[$key] = $value;
+        }
+
+        ksort($versions, SORT_STRING);
+
         return new MembershipPayload(
             valid: true,
             ids: $ids,
             epoch: $envelope['ep'],
             generation: $envelope['g'],
-            versions: $envelope['vec'],
+            versions: $versions,
             tagVersion: $envelope['tv'] ?? null,
         );
     }

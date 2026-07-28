@@ -283,7 +283,7 @@ final class DependencyAnalyzer
     private function isVolatileSql(string $sql): bool
     {
         return preg_match(
-            '/\b(?:rand|random|randomblob|uuid|uuid_short|newid|newsequentialid|gen_random_uuid|uuid_generate_v[0-9]+|nextval|currval|lastval|last_insert_id|last_insert_rowid|changes|total_changes|row_count|found_rows|connection_id|pg_backend_pid|now|sysdate|getdate|sysdatetime|sysutcdatetime|clock_timestamp|statement_timestamp|transaction_timestamp|timeofday|sleep|pg_sleep|benchmark)\s*\(/i',
+            '/\b(?:rand|random|randomblob|uuid|uuid_short|newid|newsequentialid|gen_random_uuid|uuid_generate_v[0-9]+|nextval|currval|lastval|last_insert_id|last_insert_rowid|changes|total_changes|row_count|found_rows|connection_id|pg_backend_pid|now|sysdate|getdate|sysdatetime|sysutcdatetime|utc_timestamp|utc_date|utc_time|curdate|curtime|clock_timestamp|statement_timestamp|transaction_timestamp|timeofday|sleep|pg_sleep|benchmark)\s*\(/i',
             $sql,
         ) === 1
             || preg_match(
