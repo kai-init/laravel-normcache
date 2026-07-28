@@ -155,8 +155,11 @@ final class RedisProtocolTest extends TestCase
     {
         $connection = Redis::connection('normcache-test');
 
-        if (!$connection instanceof PhpRedisConnection) {
-            $this->markTestSkipped('PhpRedis only.');
+        if (
+            !$connection instanceof PhpRedisConnection
+            || !$connection->client() instanceof \Redis
+        ) {
+            $this->markTestSkipped('Standalone PhpRedis only.');
         }
 
         $store = app(RedisStore::class);
