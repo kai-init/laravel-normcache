@@ -8,6 +8,7 @@ use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
 use Predis\NotSupportedException;
+use Predis\Response\ServerException;
 use Throwable;
 
 final class RedisStore
@@ -329,11 +330,24 @@ final class RedisStore
         return $this->withRawValues(function (Connection $connection) use ($keys): array {
             if ($connection instanceof PredisClusterConnection) {
                 $groups = $this->groupByHashTag($keys);
-                $replies = $connection->pipeline(static function ($pipeline) use ($groups): void {
-                    foreach ($groups as $group) {
-                        $pipeline->mget(...$group);
+
+                try {
+                    $replies = $connection->pipeline(static function ($pipeline) use ($groups): void {
+                        foreach ($groups as $group) {
+                            $pipeline->mget(...$group);
+                        }
+                    });
+                } catch (ServerException $exception) {
+                    if (!str_starts_with($exception->getMessage(), 'MOVED ')) {
+                        throw $exception;
                     }
-                });
+
+                    $replies = array_map(
+                        static fn(array $group): mixed => $connection->command('mget', $group),
+                        $groups,
+                    );
+                }
+
                 $values = [];
 
                 foreach ($groups as $groupIndex => $group) {
