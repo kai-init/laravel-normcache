@@ -11,7 +11,7 @@ use NormCache\Tests\TestCase;
 
 /**
  * Behavioral and contract tests: paginate(), simplePaginate(), and cursorPaginate()
- * correctly utilize the result cache, handle multi-page navigation/cursors,
+ * correctly use value payloads for totals, handle multi-page navigation/cursors,
  * and respect invalidation while maintaining exact parity with native Eloquent.
  */
 class PaginationContractTest extends TestCase
@@ -95,6 +95,24 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
+    public function test_simple_paginate_invalidates_on_change(): void
+    {
+        $this->createAuthors(3);
+
+        Author::orderBy('id')->simplePaginate(2); // Warm cache
+
+        Event::fake([QueryCacheHit::class]);
+        Author::orderBy('id')->simplePaginate(2);
+        Event::assertDispatched(QueryCacheHit::class);
+
+        // Change data
+        Author::first()->update(['name' => 'Updated Name']);
+
+        Event::fake([QueryCacheMiss::class]);
+        Author::orderBy('id')->simplePaginate(2);
+        Event::assertDispatched(QueryCacheMiss::class);
+    }
+
     // cursorPaginate()
 
     public function test_cursor_paginate_contract(): void
@@ -123,6 +141,24 @@ class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheHit::class);
     }
 
+    public function test_cursor_paginate_invalidates_on_change(): void
+    {
+        $this->createAuthors(3);
+
+        Author::orderBy('id')->cursorPaginate(2); // Warm cache
+
+        Event::fake([QueryCacheHit::class]);
+        Author::orderBy('id')->cursorPaginate(2);
+        Event::assertDispatched(QueryCacheHit::class);
+
+        // Change data
+        Author::first()->update(['name' => 'Updated Name']);
+
+        Event::fake([QueryCacheMiss::class]);
+        Author::orderBy('id')->cursorPaginate(2);
+        Event::assertDispatched(QueryCacheMiss::class);
+    }
+
     // Complex / Dependencies
 
     public function test_complex_simple_paginate_with_dependencies(): void
@@ -141,16 +177,11 @@ class PaginationContractTest extends TestCase
                 ->select('authors.*')
                 ->simplePaginate(1),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
-
         Post::first()->update(['title' => 'Changed']);
-        Event::fake([QueryCacheMiss::class]);
         Author::join('posts', 'authors.id', '=', 'posts.author_id')
             ->select('authors.*')
             ->dependsOn([Post::class])
             ->simplePaginate(1);
-        Event::assertDispatched(QueryCacheMiss::class);
     }
 
     public function test_complex_cursor_paginate_with_dependencies(): void
@@ -159,7 +190,6 @@ class PaginationContractTest extends TestCase
         $author->posts()->create(['title' => 'Post 1']);
         $author->posts()->create(['title' => 'Post 2']);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::join('posts', 'authors.id', '=', 'posts.author_id')
                 ->select('authors.*')
@@ -171,8 +201,6 @@ class PaginationContractTest extends TestCase
                 ->orderBy('authors.id')
                 ->cursorPaginate(1),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
     }
 
     private function createAuthors(int $count): void

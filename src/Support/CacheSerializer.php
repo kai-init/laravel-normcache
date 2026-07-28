@@ -2,55 +2,41 @@
 
 namespace NormCache\Support;
 
-final class CacheSerializer
+use Throwable;
+
+final readonly class CacheSerializer
 {
     private bool $igbinary;
 
-    public function __construct()
+    public function __construct(?bool $igbinary = null)
     {
-        $this->igbinary = extension_loaded('igbinary');
+        $this->igbinary = $igbinary ?? extension_loaded('igbinary');
+
+        if ($this->igbinary && !extension_loaded('igbinary')) {
+            throw new \RuntimeException('The igbinary codec was requested but the extension is unavailable.');
+        }
     }
 
-    public function serialize(mixed $value): mixed
+    public static function native(): self
     {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
+        return new self(extension_loaded('igbinary'));
     }
 
-    public function unserialize(mixed $value): mixed
+    public function encode(mixed $value): string
     {
-        if (is_numeric($value)) {
-            return str_contains((string) $value, '.') ? (float) $value : (int) $value;
-        }
-
-        if (!is_string($value)) {
-            return $value;
-        }
-
-        if (isset($value[0]) && $value[0] === "\x00") {
-            return $this->igbinary ? igbinary_unserialize($value) : null;
-        }
-
-        if (isset($value[1]) && ($value[1] === ':' || $value[1] === ';')) {
-            return unserialize($value);
-        }
-
-        return $value;
+        return $this->igbinary
+            ? igbinary_serialize($value)
+            : serialize($value);
     }
 
-    public function unserializeMany(array $raw): array
+    public function decode(string $payload): mixed
     {
-        $values = [];
-
-        foreach ($raw as $key => $value) {
-            $values[$key] = $value !== null && $value !== false
-                ? $this->unserialize($value)
-                : null;
+        try {
+            return $this->igbinary
+                ? @igbinary_unserialize($payload)
+                : @unserialize($payload, ['allowed_classes' => false]);
+        } catch (Throwable) {
+            return null;
         }
-
-        return $values;
     }
 }

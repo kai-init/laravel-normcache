@@ -8,11 +8,9 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
 /**
- * Contract tests for CachesPivotRelation::hydratePivotRelation(), which builds the
- * first pivot model the normal way and clones it for every subsequent row instead of
- * calling newExistingPivot() per row. These exercise batches large enough to hit the
- * clone path (not just the first-row template) and guard against the clone leaking
- * one row's pivot data into another.
+ * Contract tests for pivot payloads captured on graph edges. These exercise batches
+ * large enough to ensure a pivot payload is reconstructed independently for every
+ * related model, without leaking one row's data into another.
  */
 class PivotHydrationContractTest extends TestCase
 {
@@ -28,7 +26,7 @@ class PivotHydrationContractTest extends TestCase
         $query = fn() => Author::with(['tags' => fn($q) => $q->withPivot('notes')])->get();
         $native = fn() => Author::withoutCache()->with(['tags' => fn($q) => $q->withPivot('notes')])->get();
 
-        $this->contract($query, $native);
+        $this->contract($query, $native, expectNoStrayQueries: true);
 
         // Guard against the clone-per-row optimization leaking row 1's pivot data into rows 2..N.
         $warm = $query()->first()->tags->sortBy('id')->values();
@@ -53,7 +51,7 @@ class PivotHydrationContractTest extends TestCase
         $query = fn() => Post::with('tags')->get();
         $native = fn() => Post::withoutCache()->with('tags')->get();
 
-        $this->contract($query, $native);
+        $this->contract($query, $native, expectNoStrayQueries: true);
 
         $warm = $query()->first()->tags->sortBy('id')->values();
         $this->assertSame($tags->pluck('id')->sort()->values()->all(), $warm->pluck('id')->all());
@@ -72,8 +70,8 @@ class PivotHydrationContractTest extends TestCase
             $author->tags()->attach($tag->id, ['notes' => "note-{$i}"]);
         }
 
-        // Relation calls with explicit dependencies bypass the pivot cache entirely,
-        // forcing every call through the live hydratePivotRelation() path (no cache hit).
+        // Direct relation calls with an extra dependency remain live. This still
+        // verifies native pivot hydration without invoking a graph manifest.
         $query = fn() => $author->tags()->dependsOn([Post::class])->withPivot('notes')->get();
         $native = fn() => $author->tags()->withoutCache()->withPivot('notes')->get();
 

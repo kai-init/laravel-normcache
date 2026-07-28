@@ -11,9 +11,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\CacheManager;
-use NormCache\CacheManagerFactory;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisStore;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
 
@@ -31,8 +31,8 @@ abstract class TestCase extends OrchestraTestCase
                 foreach ($client as $node) {
                     try {
                         $node->flushdb();
-                    } catch (\Exception $e) {
-                        // Ignore READONLY errors from replicas
+                    } catch (\Exception) {
+                        // Replicas reject FLUSHDB.
                     }
                 }
             } elseif ($client instanceof \RedisCluster) {
@@ -43,8 +43,6 @@ abstract class TestCase extends OrchestraTestCase
         } else {
             $redis->flushdb();
         }
-
-        $this->resetClassKeyCache();
     }
 
     protected function getPackageProviders($app): array
@@ -54,10 +52,18 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function defineEnvironment($app): void
     {
+        $database = sys_get_temp_dir() . '/normcache-tests-' . getmypid() . '.sqlite';
+
+        if (is_file($database)) {
+            unlink($database);
+        }
+
+        touch($database);
+
         $app['config']->set('database.default', 'testing');
         $app['config']->set('database.connections.testing', [
             'driver' => 'sqlite',
-            'database' => ':memory:',
+            'database' => $database,
             'prefix' => '',
         ]);
 
@@ -71,16 +77,19 @@ abstract class TestCase extends OrchestraTestCase
             }
 
             $nodes = explode(',', env('REDIS_CLUSTER_NODES', '127.0.0.1:6379'));
-            $app['config']->set('database.redis.clusters.normcache-test', array_map(function ($node) {
-                [$host, $port] = explode(':', $node);
+            $app['config']->set('database.redis.clusters.normcache-test', array_map(
+                static function (string $node): array {
+                    [$host, $port] = explode(':', $node);
 
-                return [
-                    'host' => $host,
-                    'port' => $port,
-                    'database' => 0,
-                    'password' => env('REDIS_PASSWORD', null),
-                ];
-            }, $nodes));
+                    return [
+                        'host' => $host,
+                        'port' => $port,
+                        'database' => 0,
+                        'password' => env('REDIS_PASSWORD', null),
+                    ];
+                },
+                $nodes,
+            ));
         } else {
             $app['config']->set('database.redis.normcache-test', [
                 'host' => env('REDIS_HOST', '127.0.0.1'),
@@ -94,9 +103,8 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
-        $app['config']->set('normcache.ttl', 3600);
+        $app['config']->set('normcache.row_ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
-        $app['config']->set('normcache.cooldown', 0);
     }
 
     protected function defineDatabaseMigrations(): void
@@ -104,93 +112,55 @@ abstract class TestCase extends OrchestraTestCase
         $this->loadMigrationsFrom(__DIR__ . '/Fixtures/database');
     }
 
-    protected function resetClassKeyCache(): void
-    {
-        CacheKeyBuilder::reset();
-    }
-
-    protected function modelCacheEntry(string $class, mixed $id): mixed
-    {
-        $manager = $this->cacheManager();
-
-        return $manager->store()->get($this->currentModelKey($manager, $class, $id));
-    }
-
-    protected function evictModelCache(string $class, mixed $id): void
-    {
-        $manager = $this->cacheManager();
-        $manager->store()->delete($this->currentModelKey($manager, $class, $id));
-    }
-
-    protected function prefixedModelKey(string $class, mixed $id): string
-    {
-        $manager = $this->cacheManager();
-
-        return $this->currentModelKey($manager, $class, $id);
-    }
-
-    private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
-    {
-        $classKey = $manager->keys()->classKey($class);
-        $version = $manager->currentVersion($class);
-
-        return $manager->keys()->modelPrefix($classKey, $version) . $id;
-    }
-
-    protected function redisKeys(string $pattern = '*'): array
-    {
-        $manager = $this->cacheManager();
-
-        return $manager->store()->scanPattern($manager->keys()->prefixed($pattern));
-    }
-
     protected function cacheManager(): CacheManager
     {
-        return $this->app->make('normcache');
+        return $this->app->make(CacheManager::class);
     }
 
-    protected function setClusterMode(bool $enabled): void
+    protected function cacheStore(): RedisStore
     {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
+        return $this->app->make(RedisStore::class);
+    }
+
+    protected function cacheKeys(): CacheKeyBuilder
+    {
+        return $this->app->make(CacheKeyBuilder::class);
+    }
+
+    protected function cacheKeysMatching(string $needle): array
+    {
+        $connection = Redis::connection('normcache-test');
+        $client = $connection->client();
+        $keys = [];
+
+        if ($client instanceof \RedisCluster) {
+            $raw = $client->keys('*');
+            $keys = is_array($raw) ? array_merge([], ...array_map(static fn(mixed $v): array => (array) $v, $raw)) : [];
+        } elseif (class_exists(Client::class) && $client instanceof Client && $this->isClusterRun()) {
+            foreach ($client as $node) {
+                $keys = [...$keys, ...(array) $node->keys('*')];
+            }
+        } else {
+            $keys = (array) $connection->keys('*');
+        }
+
+        return array_values(array_filter(
+            array_unique(array_map(strval(...), $keys)),
+            static fn(string $key): bool => str_contains($key, $needle),
+        ));
+    }
+
+    private function isClusterRun(): bool
+    {
+        return env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true;
     }
 
     /**
-     * Build a standalone CacheManager (not bound in the container) for tests
-     * that need specific construction parameters like cooldown.
+     * Assert native == cold == warm and return warm SQL for strategy-specific contracts.
+     *
+     * @return list<array<string, mixed>>
      */
-    protected function buildManager(
-        string $connection = 'normcache-test',
-        ?int $ttl = null,
-        ?int $queryTtl = null,
-        string $keyPrefix = 'test:',
-        int $cooldown = 0,
-        bool $enabled = true,
-        bool $dispatchEvents = true,
-        bool $fallback = false,
-        bool $fireRetrieved = false,
-        int $buildingLockTtl = 5,
-        int $stampedeWaitMs = 200,
-        int $stampedeWakeTokens = 64,
-    ): CacheManager {
-        return $this->app->make(CacheManagerFactory::class)->make([
-            'connection' => $connection,
-            'ttl' => $ttl ?? (int) config('normcache.ttl'),
-            'query_ttl' => $queryTtl ?? (int) config('normcache.query_ttl'),
-            'key_prefix' => $keyPrefix,
-            'cooldown' => $cooldown,
-            'enabled' => $enabled,
-            'events' => $dispatchEvents,
-            'fallback' => $fallback,
-            'fire_retrieved' => $fireRetrieved,
-            'building_lock_ttl' => $buildingLockTtl,
-            'stampede_wait_ms' => $stampedeWaitMs,
-            'stampede_wake_tokens' => $stampedeWakeTokens,
-        ]);
-    }
-
-    /** Assert native == cold == warm for a given query. */
-    protected function contract(callable $cached, callable $native, bool $expectNoStrayQueries = false): void
+    protected function contract(callable $cached, callable $native, bool $expectNoStrayQueries = false): array
     {
         $expected = $this->normalize($native());
         $cold = $this->normalize($cached());
@@ -211,6 +181,8 @@ abstract class TestCase extends OrchestraTestCase
         if ($expectNoStrayQueries) {
             $this->assertSame([], $strayQueries, 'expected no SQL queries on the warm cache path');
         }
+
+        return $strayQueries;
     }
 
     protected function normalize(mixed $value): mixed

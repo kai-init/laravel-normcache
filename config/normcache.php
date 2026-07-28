@@ -1,55 +1,33 @@
 <?php
 
 return [
-    // Redis connection from config/database.php.
-    'connection' => env('NORMCACHE_CONNECTION', 'cache'),
-
-    // Boot-time master switch; false bypasses the cache.
     'enabled' => env('NORMCACHE_ENABLED', true),
+    'connection' => env('NORMCACHE_CONNECTION', 'cache'),
+    'key_prefix' => env('NORMCACHE_KEY_PREFIX', ''),
 
-    // Model attribute payload TTL (seconds).
-    'ttl' => (int) env('NORMCACHE_TTL', 604800),
-
-    // Query, result, pivot, and through-cache TTL (seconds).
+    'row_ttl' => (int) env('NORMCACHE_ROW_TTL', 604800),
     'query_ttl' => (int) env('NORMCACHE_QUERY_TTL', 3600),
 
-    // Prefix every NormCache key. Useful when sharing a Redis database.
-    'key_prefix' => env('NORMCACHE_PREFIX', ''),
+    // Each group requires connection, database, and table metadata. Add schema to
+    // restrict a PostgreSQL or SQL Server match. Types are integer or string.
+    'primary_keys' => [
+        // [
+        //     'connection' => 'pgsql',
+        //     'database' => 'app',
+        //     'schema' => 'public',
+        //     'tables' => [
+        //         'events' => ['column' => 'event_id', 'type' => 'string'],
+        //         'orders' => ['column' => 'order_id', 'type' => 'integer'],
+        //     ],
+        // ],
+    ],
 
-    // Debounce automatic version bumps on write-heavy models; 0 bumps immediately (seconds).
-    'cooldown' => (int) env('NORMCACHE_COOLDOWN', 0),
+    'max_precise_invalidation_keys' => 1000,
 
-    // Build-lock expiry (seconds).
     'building_lock_ttl' => (int) env('NORMCACHE_BUILDING_LOCK_TTL', 5),
-
-    // Max wait for another request's build wake signal (milliseconds).
     'stampede_wait_ms' => (int) env('NORMCACHE_STAMPEDE_WAIT_MS', 200),
-
-    // Wake tokens pushed when a cache build releases. Raise for high same-key concurrency.
     'stampede_wake_tokens' => (int) env('NORMCACHE_STAMPEDE_WAKE_TOKENS', 64),
 
-    // Dispatch cache hit, miss, and bypass events. Enable only if something consumes them.
     'events' => (bool) env('NORMCACHE_EVENTS', false),
-
-    // true fails open to DB on Redis errors; false re-throws them.
-    'fallback' => (bool) env('NORMCACHE_FALLBACK', true),
-
-    // Fire retrieved for cached models if observers depend on that Eloquent event.
-    'fire_retrieved' => (bool) env('NORMCACHE_FIRE_RETRIEVED', false),
-
-    // Register the Laravel Debugbar collector for local cache inspection.
-    'debugbar' => env('NORMCACHE_DEBUGBAR', false),
-    // Redis Cluster sharding via model-declared cache spaces.
-    'spaces' => [
-        // Max spaces per model. Writes bump one version key per space.
-        'max_per_model' => 16,
-
-        // Cross-space dependency handling: 'bypass' or 'throw'.
-        'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
-
-        // Optional space => hash-tag override. Default: content => {nc:content}.
-        'placement' => [
-            // 'catalog' => ['hash_tag' => 'nc:catalog'],
-        ],
-    ],
+    'debugbar' => (bool) env('NORMCACHE_DEBUGBAR', false),
 ];

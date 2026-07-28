@@ -4,12 +4,14 @@ namespace NormCache\Events;
 
 final readonly class QueryBypassed
 {
-    /**
-     * @param  array<string, list<string>>  $reasons  Bypass reasons grouped by category.
-     *                                                Categories: 'dependency', 'normalization', 'safety', 'space', 'opted_out'
-     */
+    /** @param list<mixed> $bindings */
     public function __construct(
-        public string $modelClass,
-        public array $reasons,
+        public string $reason,
+        public string $sql,
+        public array $bindings,
+        public ?string $modelClass = null,
+        public ?string $tableHash = null,
+        public ?string $queryHash = null,
+        public ?string $route = null,
     ) {}
 }
