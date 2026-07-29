@@ -4,7 +4,7 @@ namespace NormCache\Cache;
 
 use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
-use NormCache\Enums\CacheReadOutcome;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
@@ -16,9 +16,11 @@ use NormCache\Support\RedisStore;
 use NormCache\Support\Reporter;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
+use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
+use NormCache\Values\RowRepair;
 use NormCache\Values\TableIdentity;
 
 final readonly class Engine
@@ -175,7 +177,7 @@ final readonly class Engine
         }
 
         try {
-            [$state, $cached] = $this->read(
+            $cached = $this->read(
                 $query,
                 $plan,
                 $namespace,
@@ -183,10 +185,10 @@ final readonly class Engine
                 $canonicalQueryHash,
             );
 
-            if ($this->readOutcome($cached)->served()) {
+            if ($cached->served()) {
                 $this->reportRead($query, $plan, $queryHash, $sql, $bindings, $cached);
 
-                return $cached['rows'];
+                return $cached->rows;
             }
         } catch (\Throwable $exception) {
             $this->fail($exception);
@@ -195,7 +197,7 @@ final readonly class Engine
         }
 
         try {
-            $lease = $this->claim($plan, $state, $namespace, $queryHash);
+            $lease = $this->claim($plan, $cached->state, $namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->fail($exception);
 
@@ -208,7 +210,7 @@ final readonly class Engine
             $queryHash,
             $sql,
             $bindings,
-            $cached['reason'] ?? null,
+            $cached->reason,
         );
 
         if (!$lease->owner) {
@@ -218,7 +220,7 @@ final readonly class Engine
                         $lease->wakeKey,
                         $this->config->stampedeWaitMs / 1000,
                     );
-                    [, $retry] = $this->read(
+                    $retry = $this->read(
                         $query,
                         $plan,
                         $namespace,
@@ -226,10 +228,10 @@ final readonly class Engine
                         $canonicalQueryHash,
                     );
 
-                    if ($this->readOutcome($retry)->served()) {
+                    if ($retry->served()) {
                         $this->reportRead($query, $plan, $queryHash, $sql, $bindings, $retry);
 
-                        return $retry['rows'];
+                        return $retry->rows;
                     }
                 } catch (\Throwable $exception) {
                     $this->fail($exception);
@@ -252,11 +254,11 @@ final readonly class Engine
         try {
             $after = $this->state($plan, $namespace, $queryHash);
 
-            if ($after->equals($state)) {
+            if ($after->equals($cached->state)) {
                 $this->publish(
                     $query,
                     $plan,
-                    $state,
+                    $cached->state,
                     $rows,
                     $lease,
                     $namespace,
@@ -273,40 +275,30 @@ final readonly class Engine
         return $rows;
     }
 
-    /** @param array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome} $result */
-    private function readOutcome(array $result): CacheReadOutcome
-    {
-        return $result['outcome'] ?? ($result['hit'] ? CacheReadOutcome::HIT : CacheReadOutcome::MISS);
-    }
-
-    /** @param array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome} $result */
     private function reportRead(
         QueryBuilder $query,
         QueryPlan $plan,
         string $queryHash,
         string $sql,
         array $bindings,
-        array $result,
+        CacheRead $read,
     ): void {
-        $reason = $result['reason'] ?? null;
-
-        if ($this->readOutcome($result) === CacheReadOutcome::REPAIRED) {
-            $this->reporter->repaired($query, $plan, $queryHash, $sql, $bindings, $reason);
+        if ($read->outcome === ReadOutcome::REPAIRED) {
+            $this->reporter->repaired($query, $plan, $queryHash, $sql, $bindings, $read->reason);
 
             return;
         }
 
-        $this->reporter->hit($query, $plan, $queryHash, $sql, $bindings, $reason);
+        $this->reporter->hit($query, $plan, $queryHash, $sql, $bindings, $read->reason);
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function read(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
         ?string $canonicalQueryHash = null,
-    ): array {
+    ): CacheRead {
         if ($plan->route === QueryPlan::CANONICAL) {
             return $plan->materializeResult
                 ? $this->readCanonicalWithResultOverlay(
@@ -331,7 +323,7 @@ final readonly class Engine
                 alsoFetch: [$entryKey],
             );
 
-            return [$state, $this->results->read($state, $values[$entryKey] ?? null)];
+            return $this->results->read($state, $values[$entryKey] ?? null);
         }
 
         if (
@@ -371,16 +363,15 @@ final readonly class Engine
 
         [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
-        return [$state, $this->results->read($state, $raw)];
+        return $this->results->read($state, $raw);
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonicalWithResultOverlay(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-    ): array {
+    ): CacheRead {
         $head = $this->store->fetchResultOrCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
@@ -397,26 +388,26 @@ final readonly class Engine
             [$state] = $this->states->resolve($resultPlan, $namespace, $queryHash, $version);
             $result = $this->results->read($state, $head[2] ?? null);
 
-            if ($this->readOutcome($result)->served()) {
-                return [$state, $result];
+            if ($result->served()) {
+                return $result;
             }
 
-            $overlayReason = $result['reason'] ?? null;
-            [$canonicalState, $canonicalResult] = $this->readCanonical(
+            $overlayReason = $result->reason;
+            $canonicalResult = $this->readCanonical(
                 $query,
                 $plan,
                 $namespace,
                 $queryHash,
             );
 
-            if ($this->readOutcome($canonicalResult)->served()) {
+            if ($canonicalResult->served()) {
                 $promoted = $this->promoteResultPayload(
                     $query,
                     $resultPlan,
-                    $canonicalState,
+                    $canonicalResult->state,
                     $namespace,
                     $queryHash,
-                    $canonicalResult['rows'],
+                    $canonicalResult->rows,
                     wakeWaiters: false,
                 );
 
@@ -428,14 +419,14 @@ final readonly class Engine
                 }
             }
 
-            return [$canonicalState, $canonicalResult];
+            return $canonicalResult;
         }
 
         $generation = is_string($head[2] ?? null) ? $head[2] : '0';
         $canonicalHead = $status === 'membership'
             ? ['hit', $version, $generation, $head[3] ?? null]
             : [$status, $version, $generation];
-        [$state, $result] = $this->readCanonicalHead(
+        $result = $this->readCanonicalHead(
             $query,
             $plan,
             $namespace,
@@ -444,29 +435,28 @@ final readonly class Engine
             true,
         );
 
-        if ($this->readOutcome($result)->served()) {
+        if ($result->served()) {
             $this->promoteResultPayload(
                 $query,
                 $this->resultOverlayPlan($plan),
-                $state,
+                $result->state,
                 $namespace,
                 $queryHash,
-                $result['rows'],
+                $result->rows,
                 wakeWaiters: false,
             );
         }
 
-        return [$state, $result];
+        return $result;
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readResultOrCanonicalProjection(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
         string $canonicalQueryHash,
-    ): array {
+    ): CacheRead {
         $head = $this->store->fetchResultOrCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
@@ -483,11 +473,11 @@ final readonly class Engine
             [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
             $result = $this->results->read($state, $head[2] ?? null);
 
-            if ($this->readOutcome($result)->served()) {
-                return [$state, $result];
+            if ($result->served()) {
+                return $result;
             }
 
-            $fallbackReason = $result['reason'] ?? null;
+            $fallbackReason = $result->reason;
             $head = $this->store->fetchCanonical(
                 versionKey: $this->keys->version($plan->root),
                 generationKey: $this->keys->generation($plan->root),
@@ -507,7 +497,7 @@ final readonly class Engine
                 $plan->dependencies,
                 $plan->primaryKey,
             );
-            [$canonicalState, $result] = $this->readCanonicalHead(
+            $result = $this->readCanonicalHead(
                 $query,
                 $canonicalPlan,
                 $namespace,
@@ -516,55 +506,42 @@ final readonly class Engine
                 false,
             );
 
-            if ($this->readOutcome($result)->served()) {
+            if ($result->served()) {
                 $projected = $this->projectRows(
-                    $result['rows'],
+                    $result->rows,
                     (array) $plan->projectedColumns,
                 );
 
                 if ($projected !== null) {
-                    $result['rows'] = $projected;
+                    $result = $result->withRows($projected);
                     $promoted = $this->promoteResultPayload(
                         $query,
                         $plan,
-                        $canonicalState,
+                        $result->state,
                         $namespace,
                         $queryHash,
                         $projected,
                     );
 
-                    if ($fallbackReason === 'corrupt_payload') {
-                        $result = $this->withOverlayRebuildOutcome($result, $promoted);
-                    } else {
-                        $result['reason'] = 'canonical_projection_fallback';
-                    }
-
-                    return [$canonicalState, $result];
+                    return $fallbackReason === 'corrupt_payload'
+                        ? $this->withOverlayRebuildOutcome($result, $promoted)
+                        : $result->withReason('canonical_projection_fallback');
                 }
             }
 
-            $fallbackReason = $result['reason'] ?? $fallbackReason;
+            $fallbackReason = $result->reason ?? $fallbackReason;
         }
 
         [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
-        return [$state, ['hit' => false, 'rows' => [], 'reason' => $fallbackReason]];
+        return new CacheRead($state, ReadOutcome::MISS, [], $fallbackReason);
     }
 
-    /** @param array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome} $result
-     * @return array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}
-     */
-    private function withOverlayRebuildOutcome(array $result, bool $promoted): array
+    private function withOverlayRebuildOutcome(CacheRead $read, bool $promoted): CacheRead
     {
-        $result['reason'] = $promoted
-            ? 'result_overlay_rebuilt'
-            : 'corrupt_result_overlay_fallback';
-
-        if ($promoted) {
-            $result['outcome'] = CacheReadOutcome::REPAIRED;
-        }
-
-        return $result;
+        return $promoted
+            ? $read->asRepaired('result_overlay_rebuilt')
+            : $read->withReason('corrupt_result_overlay_fallback');
     }
 
     /** @param list<mixed> $rows
@@ -592,8 +569,7 @@ final readonly class Engine
         return $projectedRows;
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
-    private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): array
+    private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): CacheRead
     {
         $cached = $this->readCanonicalRow($plan);
 
@@ -605,19 +581,20 @@ final readonly class Engine
         )[0];
 
         if ($cached['row'] === null) {
-            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => $cached['reason']]];
+            return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached['reason']);
         }
 
         $rows = $this->applySoftDeleteVisibility($plan, $cached['row']);
 
         if ($rows === null) {
-            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
+            return new CacheRead($resolve(), ReadOutcome::MISS, [], 'corrupt_payload');
         }
 
-        return [
+        return new CacheRead(
             $this->directRowState($plan, $cached['generation'], $cached['epoch']),
-            ['hit' => true, 'rows' => $rows, 'reason' => null],
-        ];
+            ReadOutcome::HIT,
+            $rows,
+        );
     }
 
     private function epoch(): string
@@ -649,7 +626,7 @@ final readonly class Engine
     }
 
     /** Reads the current canonical row after a result miss without changing the result-entry protocol. */
-    private function readResultRowFallback(QueryPlan $plan): ?array
+    private function readResultRowFallback(QueryPlan $plan): ?CacheRead
     {
         $cached = $this->readCanonicalRow($plan);
 
@@ -669,10 +646,12 @@ final readonly class Engine
             return null;
         }
 
-        return [
+        return new CacheRead(
             $this->directRowState($plan, $cached['generation'], $cached['epoch']),
-            ['hit' => true, 'rows' => $rows, 'reason' => 'row_cache_fallback'],
-        ];
+            ReadOutcome::HIT,
+            $rows,
+            'row_cache_fallback',
+        );
     }
 
     /** @return array{generation: string, epoch: string|null, row: \stdClass|null, reason: ?string} */
@@ -722,13 +701,12 @@ final readonly class Engine
         );
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonical(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-    ): array {
+    ): CacheRead {
         $head = $this->store->fetchCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
@@ -747,7 +725,6 @@ final readonly class Engine
         );
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonicalHead(
         QueryBuilder $query,
         QueryPlan $plan,
@@ -755,14 +732,14 @@ final readonly class Engine
         string $queryHash,
         array $head,
         bool $repairMissing,
-    ): array {
+    ): CacheRead {
         return $this->canonical->read(
             $plan,
             $namespace,
             $queryHash,
             $head,
             $repairMissing,
-            fn(CacheState $state, array $tokens): array => $this->repairRows(
+            fn(CacheState $state, array $tokens): ?RowRepair => $this->repairRows(
                 $query,
                 $plan,
                 $state,
@@ -771,16 +748,13 @@ final readonly class Engine
         );
     }
 
-    /**
-     * @param  list<string>  $tokens
-     * @return array{rows: array<string, \stdClass>|null, outcome: CacheReadOutcome}
-     */
+    /** @param list<string> $tokens */
     private function repairRows(
         QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $tokens,
-    ): array {
+    ): ?RowRepair {
         $tokens = array_values(array_unique($tokens));
         sort($tokens, SORT_STRING);
 
@@ -810,13 +784,10 @@ final readonly class Engine
             $rows = $this->readRepairedRows($plan, $state, $tokens);
 
             if ($rows === null || !$this->stateStillCurrent($plan, $state)) {
-                return ['rows' => null, 'outcome' => CacheReadOutcome::MISS];
+                return null;
             }
 
-            return [
-                'rows' => $rows,
-                'outcome' => CacheReadOutcome::HIT,
-            ];
+            return new RowRepair($rows, ReadOutcome::HIT);
         }
 
         try {
@@ -838,9 +809,11 @@ final readonly class Engine
         // Null means no publication script ran, so this caller still owns the lease.
         if ($rows === null) {
             $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
+
+            return null;
         }
 
-        return ['rows' => $rows, 'outcome' => CacheReadOutcome::REPAIRED];
+        return new RowRepair($rows, ReadOutcome::REPAIRED);
     }
 
     private function releaseRepair(string $buildingKey, string $wakeKey, string $token): void

@@ -2,7 +2,7 @@
 
 namespace NormCache\Enums;
 
-enum CacheReadOutcome: string
+enum ReadOutcome: string
 {
     case HIT = 'hit';
 

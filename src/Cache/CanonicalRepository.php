@@ -4,15 +4,17 @@ namespace NormCache\Cache;
 
 use Closure;
 use NormCache\Database\QueryBuilder;
-use NormCache\Enums\CacheReadOutcome;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
+use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
+use NormCache\Values\RowRepair;
 
 final readonly class CanonicalRepository
 {
@@ -26,8 +28,7 @@ final readonly class CanonicalRepository
     ) {}
 
     /**
-     * @param  Closure(CacheState, list<string>): array{rows: array<string, \stdClass>|null, outcome: CacheReadOutcome}  $repair
-     * @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}}
+     * @param  Closure(CacheState, list<string>): ?RowRepair  $repair
      */
     public function read(
         QueryPlan $plan,
@@ -36,15 +37,17 @@ final readonly class CanonicalRepository
         array $head,
         bool $repairMissing,
         Closure $repair,
-    ): array {
+    ): CacheRead {
         $status = $head[0] ?? null;
         $version = is_string($head[1] ?? null) ? $head[1] : '0';
         $generation = is_string($head[2] ?? null) ? $head[2] : '0';
         $rawMembership = $status === 'hit' ? ($head[3] ?? null) : null;
-        $miss = fn(?string $reason): array => [
+        $miss = fn(?string $reason): CacheRead => new CacheRead(
             $this->states->resolve($plan, $namespace, $queryHash, $version, $generation)[0],
-            ['hit' => false, 'rows' => [], 'reason' => $reason],
-        ];
+            ReadOutcome::MISS,
+            [],
+            $reason,
+        );
 
         if (!is_string($rawMembership)) {
             return $miss($status === 'corrupt' ? 'corrupt_payload' : null);
@@ -82,11 +85,11 @@ final readonly class CanonicalRepository
             || $membership->versions !== $state->versions
             || $membership->tagVersion !== $state->tag
         ) {
-            return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
+            return new CacheRead($state, ReadOutcome::MISS);
         }
 
         if ($membership->ids === []) {
-            return [$state, ['hit' => true, 'rows' => [], 'reason' => null]];
+            return new CacheRead($state, ReadOutcome::HIT);
         }
 
         $rows = [];
@@ -115,24 +118,25 @@ final readonly class CanonicalRepository
             $rows[$index] = $row;
         }
 
-        $outcome = CacheReadOutcome::HIT;
+        $outcome = ReadOutcome::HIT;
 
         if ($missingAt !== []) {
             if (!$repairMissing) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
+                return new CacheRead($state, ReadOutcome::MISS);
             }
 
             $repairResult = $repair($state, array_values($missingAt));
-            $repaired = $repairResult['rows'];
-            $outcome = $repairResult['outcome'];
 
-            if ($repaired === null) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
+            if ($repairResult === null) {
+                return new CacheRead($state, ReadOutcome::MISS);
             }
+
+            $repaired = $repairResult->rows;
+            $outcome = $repairResult->outcome;
 
             foreach ($missingAt as $index => $token) {
                 if (!isset($repaired[$token])) {
-                    return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
+                    return new CacheRead($state, ReadOutcome::MISS);
                 }
 
                 $rows[$index] = $repaired[$token];
@@ -142,14 +146,14 @@ final readonly class CanonicalRepository
             $rows = array_values($rows);
         }
 
-        return [$state, [
-            'hit' => true,
-            'rows' => $rows,
-            'reason' => $corrupt
+        return new CacheRead(
+            $state,
+            $outcome,
+            $rows,
+            $corrupt
                 ? 'corrupt_payload'
-                : ($outcome === CacheReadOutcome::REPAIRED ? 'row_repair' : null),
-            'outcome' => $outcome,
-        ]];
+                : ($outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
+        );
     }
 
     /** @param array<int, mixed> $rows */

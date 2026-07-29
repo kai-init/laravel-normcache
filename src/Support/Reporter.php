@@ -4,7 +4,7 @@ namespace NormCache\Support;
 
 use NormCache\Database\QueryBuilder;
 use NormCache\Debug\DebugBarCollector;
-use NormCache\Enums\CacheReadOutcome;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Events\CacheInvalidated;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
@@ -34,7 +34,7 @@ final class Reporter
         ?string $reason = null,
     ): void {
         $this->reportQuery(
-            CacheReadOutcome::HIT,
+            ReadOutcome::HIT,
             $query,
             $plan,
             $hash,
@@ -53,7 +53,7 @@ final class Reporter
         ?string $reason = null,
     ): void {
         $this->reportQuery(
-            CacheReadOutcome::REPAIRED,
+            ReadOutcome::REPAIRED,
             $query,
             $plan,
             $hash,
@@ -72,7 +72,7 @@ final class Reporter
         ?string $reason = null,
     ): void {
         $this->reportQuery(
-            CacheReadOutcome::MISS,
+            ReadOutcome::MISS,
             $query,
             $plan,
             $hash,
@@ -83,7 +83,7 @@ final class Reporter
     }
 
     private function reportQuery(
-        CacheReadOutcome $outcome,
+        ReadOutcome $outcome,
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
@@ -96,7 +96,7 @@ final class Reporter
         }
 
         if (
-            $outcome === CacheReadOutcome::MISS
+            $outcome === ReadOutcome::MISS
             && $reason === 'corrupt_payload'
             && !$this->firstCorruption($hash)
         ) {
@@ -120,9 +120,9 @@ final class Reporter
         }
 
         $eventClass = match ($outcome) {
-            CacheReadOutcome::HIT => QueryCacheHit::class,
-            CacheReadOutcome::MISS => QueryCacheMiss::class,
-            CacheReadOutcome::REPAIRED => QueryCacheRepaired::class,
+            ReadOutcome::HIT => QueryCacheHit::class,
+            ReadOutcome::MISS => QueryCacheMiss::class,
+            ReadOutcome::REPAIRED => QueryCacheRepaired::class,
         };
 
         event(new $eventClass(

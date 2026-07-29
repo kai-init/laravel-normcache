@@ -110,7 +110,7 @@ final class RedisProtocolTest extends TestCase
 
         $result = app(ResultRepository::class)->read($state, 'corrupt');
 
-        $this->assertSame('corrupt_payload', $result['reason']);
+        $this->assertSame('corrupt_payload', $result->reason);
         $this->assertSame('corrupt', $store->getRaw($key));
     }
 

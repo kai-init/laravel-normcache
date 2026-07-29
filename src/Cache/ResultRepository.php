@@ -3,11 +3,13 @@
 namespace NormCache\Cache;
 
 use NormCache\Database\QueryBuilder;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
+use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
 
@@ -20,24 +22,23 @@ final readonly class ResultRepository
         private RawResultCodec $codec,
     ) {}
 
-    /** @return array{hit: bool, rows: array, reason: ?string} */
-    public function read(CacheState $state, mixed $raw): array
+    public function read(CacheState $state, mixed $raw): CacheRead
     {
         if (!is_string($raw)) {
-            return ['hit' => false, 'rows' => [], 'reason' => null];
+            return new CacheRead($state, ReadOutcome::MISS);
         }
 
         $payload = $this->codec->decode($raw);
 
         if (!$payload->valid) {
-            return ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload'];
+            return new CacheRead($state, ReadOutcome::MISS, [], 'corrupt_payload');
         }
 
-        $hit = $payload->epoch === $state->epoch
+        return $payload->epoch === $state->epoch
             && $payload->versions === $state->versions
-            && $payload->tagVersion === $state->tag;
-
-        return ['hit' => $hit, 'rows' => $hit ? $payload->rows : [], 'reason' => null];
+            && $payload->tagVersion === $state->tag
+                ? new CacheRead($state, ReadOutcome::HIT, $payload->rows)
+                : new CacheRead($state, ReadOutcome::MISS);
     }
 
     /** @param array<int, mixed> $rows */
