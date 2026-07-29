@@ -4,6 +4,7 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Builder;
+use Illuminate\Database\SQLiteConnection;
 use Mockery;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\UnitTestCase;
@@ -88,6 +89,100 @@ final class TableIdentityResolverTest extends UnitTestCase
 
         $this->assertNull($resolver->resolve($connection, 'posts'));
         $this->assertSame('public', $resolver->resolve($connection, 'posts')?->schema);
+    }
+
+    public function test_a_recycled_connection_object_id_does_not_resolve_to_the_previous_database(): void
+    {
+        $resolver = app(TableIdentityResolver::class);
+        $first = $this->sqliteConnection('tenant_a');
+        $recycledId = spl_object_id($first);
+
+        $this->assertSame(
+            realpath($this->databasePath('tenant_a')),
+            $resolver->resolve($first, 'posts')?->database,
+        );
+
+        $path = $this->databasePath('tenant_b');
+        touch($path);
+        $pdo = new \PDO('sqlite:' . $path);
+
+        unset($first);
+        gc_collect_cycles();
+
+        $this->assertTrue(
+            $this->reclaimObjectId($recycledId),
+            'PHP never reissued the freed object id, so the collision was not exercised.',
+        );
+
+        $second = new SQLiteConnection($pdo, $path, '', ['name' => 'tenant', 'driver' => 'sqlite']);
+
+        $this->assertSame($recycledId, spl_object_id($second));
+        $this->assertSame(realpath($path), $resolver->resolve($second, 'posts')?->database);
+    }
+
+    public function test_metadata_is_released_when_its_connection_is_discarded(): void
+    {
+        $resolver = app(TableIdentityResolver::class);
+        $connection = $this->sqliteConnection('tenant_a');
+
+        $resolver->resolve($connection, 'posts');
+
+        $this->assertSame(1, $this->cachedConnectionCount($resolver));
+
+        unset($connection);
+        gc_collect_cycles();
+
+        $this->assertSame(0, $this->cachedConnectionCount($resolver));
+    }
+
+    private function cachedConnectionCount(TableIdentityResolver $resolver): int
+    {
+        $connections = (new \ReflectionProperty($resolver, 'connections'))->getValue($resolver);
+
+        return count($connections);
+    }
+
+    /** @var list<object> */
+    private array $reclaimFiller = [];
+
+    /**
+     * Leaves $id at the head of PHP's object free list, so the caller's next
+     * allocation lands on it. Fillers are held on the test instance: releasing
+     * them would push their ids ahead of $id and lose the slot.
+     */
+    private function reclaimObjectId(int $id): bool
+    {
+        for ($attempt = 0; $attempt < 20_000; $attempt++) {
+            $probe = new \stdClass;
+
+            if (spl_object_id($probe) === $id) {
+                unset($probe);
+
+                return true;
+            }
+
+            $this->reclaimFiller[] = $probe;
+        }
+
+        return false;
+    }
+
+    private function databasePath(string $tenant): string
+    {
+        return sys_get_temp_dir() . '/normcache-' . $tenant . '.sqlite';
+    }
+
+    private function sqliteConnection(string $tenant): Connection
+    {
+        $path = $this->databasePath($tenant);
+        touch($path);
+
+        return new SQLiteConnection(
+            new \PDO('sqlite:' . $path),
+            $path,
+            '',
+            ['name' => 'tenant', 'driver' => 'sqlite'],
+        );
     }
 
     private function postgresConnection(

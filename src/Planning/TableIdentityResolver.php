@@ -7,39 +7,27 @@ use NormCache\Values\TableIdentity;
 
 final class TableIdentityResolver
 {
-    /** @var array<string, array{connection: string, schema: ?string}> */
-    private array $effectiveSchemas = [];
+    /** @var \WeakMap<Connection, ConnectionMetadata> */
+    private \WeakMap $connections;
 
-    /** @var array<string, ?TableIdentity> */
-    private array $resolvedIdentities = [];
-
-    /** @var array<string, array<string, true>> */
-    private array $viewNames = [];
+    public function __construct()
+    {
+        $this->connections = new \WeakMap;
+    }
 
     public function clear(?string $connection = null): void
     {
         if ($connection === null) {
-            $this->effectiveSchemas = [];
-            $this->resolvedIdentities = [];
-            $this->viewNames = [];
+            $this->connections = new \WeakMap;
 
             return;
         }
 
-        $this->effectiveSchemas = array_filter(
-            $this->effectiveSchemas,
-            static fn(array $entry): bool => $entry['connection'] !== $connection,
-        );
-        $this->resolvedIdentities = array_filter(
-            $this->resolvedIdentities,
-            static fn(?TableIdentity $id, string $key): bool => !str_starts_with($key, $connection . ':'),
-            ARRAY_FILTER_USE_BOTH,
-        );
-        $this->viewNames = array_filter(
-            $this->viewNames,
-            static fn(array $views, string $key): bool => !str_starts_with($key, $connection . ':'),
-            ARRAY_FILTER_USE_BOTH,
-        );
+        foreach ($this->connections as $bound => $_) {
+            if ((string) $bound->getName() === $connection) {
+                unset($this->connections[$bound]);
+            }
+        }
     }
 
     public function resolve(Connection $connection, mixed $from): ?TableIdentity
@@ -48,16 +36,16 @@ final class TableIdentityResolver
             return null;
         }
 
-        $cacheKey = $this->mutableConnectionKey($connection) . ':' . $from;
+        $metadata = $this->metadata($connection);
 
-        if (array_key_exists($cacheKey, $this->resolvedIdentities)) {
-            return $this->resolvedIdentities[$cacheKey];
+        if (array_key_exists($from, $metadata->identities)) {
+            return $metadata->identities[$from];
         }
 
         $identity = $this->doResolve($connection, $from);
 
         if ($identity !== null) {
-            $this->resolvedIdentities[$cacheKey] = $identity;
+            $metadata->identities[$from] = $identity;
         }
 
         return $identity;
@@ -167,10 +155,10 @@ final class TableIdentityResolver
 
     private function effectiveSchema(Connection $connection): ?string
     {
-        $key = $this->mutableConnectionKey($connection) . ':schema';
+        $metadata = $this->metadata($connection);
 
-        if (array_key_exists($key, $this->effectiveSchemas)) {
-            return $this->effectiveSchemas[$key]['schema'];
+        if ($metadata->schema !== null) {
+            return $metadata->schema;
         }
 
         try {
@@ -184,22 +172,16 @@ final class TableIdentityResolver
             $schema = null;
         }
 
-        if ($schema !== null) {
-            $this->effectiveSchemas[$key] = [
-                'connection' => (string) $connection->getName(),
-                'schema' => $schema,
-            ];
-        }
-
-        return $schema;
+        return $metadata->schema = $schema;
     }
 
     private function isView(Connection $connection, string $schema, string $table): ?bool
     {
-        $key = $this->mutableConnectionKey($connection) . ':views:' . $schema;
+        $metadata = $this->metadata($connection);
+        $name = strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table));
 
-        if (isset($this->viewNames[$key])) {
-            return isset($this->viewNames[$key][strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table))]);
+        if (isset($metadata->views[$schema])) {
+            return isset($metadata->views[$schema][$name]);
         }
 
         try {
@@ -213,17 +195,17 @@ final class TableIdentityResolver
                 $views[strtolower($view['name'])] = true;
             }
 
-            $this->viewNames[$key] = $views;
+            $metadata->views[$schema] = $views;
 
-            return isset($views[strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table))]);
+            return isset($views[$name]);
         } catch (\Throwable) {
             return null;
         }
     }
 
-    private function mutableConnectionKey(Connection $connection): string
+    private function metadata(Connection $connection): ConnectionMetadata
     {
-        return (string) $connection->getName() . ':' . spl_object_id($connection);
+        return $this->connections[$connection] ??= new ConnectionMetadata;
     }
 
     private function unqualifiedTable(string $table): string
