@@ -111,6 +111,11 @@ final class CacheKeyBuilder
         return $this->keyPrefix . '{ncm}:epoch';
     }
 
+    public function disabled(): string
+    {
+        return $this->keyPrefix . '{ncm}:disabled';
+    }
+
     public function tablePrefix(TableIdentity $table): string
     {
         return $this->keyPrefix . "{nc:t:{$table->hash}}";

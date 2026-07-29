@@ -3,7 +3,7 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
@@ -12,7 +12,7 @@ final class QueryPlanner
 {
     /** @param list<TableIdentity> $dependencies */
     public function plan(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         TableIdentity $root,
         ?PrimaryKeyMetadata $primaryKey,
         array $dependencies,
@@ -44,7 +44,7 @@ final class QueryPlanner
                 [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query);
 
                 if ($softDeleteSafe) {
-                    $deletedAtColumn = $query->normCacheDeletedAtColumn();
+                    $deletedAtColumn = $query->deletedAtColumn();
 
                     if ($this->isWildcard($query, $root)) {
                         return new QueryPlan(
@@ -84,7 +84,7 @@ final class QueryPlanner
                 $root,
                 $dependencies,
                 $primaryKey,
-                materializeResult: $query->usesNormCacheResultCache(),
+                materializeResult: $query->usesResultCache(),
             );
         }
 
@@ -104,12 +104,12 @@ final class QueryPlanner
         return new QueryPlan(QueryPlan::RESULT, $root, $dependencies, $primaryKey);
     }
 
-    private function allowsDirectControls(CachingQueryBuilder $query): bool
+    private function allowsDirectControls(QueryBuilder $query): bool
     {
-        return $query->normCacheTag() === null && $query->normCacheTtl() === null;
+        return $query->configuredTag() === null && $query->configuredTtl() === null;
     }
 
-    private function isSingleRowShape(CachingQueryBuilder $query): bool
+    private function isSingleRowShape(QueryBuilder $query): bool
     {
         return !$query->distinct
             && $query->aggregate === null
@@ -142,7 +142,7 @@ final class QueryPlanner
     private function hasCrossTableUnion(
         TableIdentity $root,
         array $dependencies,
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
     ): bool {
         return !empty($query->unions)
             && $this->hasExternalDependency($root, $dependencies);
@@ -156,7 +156,7 @@ final class QueryPlanner
         )) > 0;
     }
 
-    private function isWildcard(CachingQueryBuilder $query, TableIdentity $root): bool
+    private function isWildcard(QueryBuilder $query, TableIdentity $root): bool
     {
         if ($query->columns === null || $query->columns === ['*']) {
             return true;
@@ -175,7 +175,7 @@ final class QueryPlanner
             : $column === strtolower($root->table) . '.*';
     }
 
-    private function fromAlias(CachingQueryBuilder $query): ?string
+    private function fromAlias(QueryBuilder $query): ?string
     {
         if (
             is_string($query->from)
@@ -188,7 +188,7 @@ final class QueryPlanner
     }
 
     /** @return list<string>|null */
-    private function plainColumns(CachingQueryBuilder $query, TableIdentity $root): ?array
+    private function plainColumns(QueryBuilder $query, TableIdentity $root): ?array
     {
         if ($query->columns === null || $query->columns === ['*']) {
             return null;
@@ -228,7 +228,7 @@ final class QueryPlanner
     }
 
     private function directPrimaryKeyToken(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         TableIdentity $root,
         PrimaryKeyMetadata $primaryKey,
     ): ?string {
@@ -292,9 +292,9 @@ final class QueryPlanner
     }
 
     /** @return array{0: bool, 1: ?string} */
-    private function softDeleteMode(CachingQueryBuilder $query): array
+    private function softDeleteMode(QueryBuilder $query): array
     {
-        if ($query->normCacheDeletedAtColumn() === null) {
+        if ($query->deletedAtColumn() === null) {
             return [true, null];
         }
 
@@ -325,7 +325,7 @@ final class QueryPlanner
     }
 
     /** @param array<string, mixed> $where */
-    private function isSoftDeleteWhere(CachingQueryBuilder $query, array $where): bool
+    private function isSoftDeleteWhere(QueryBuilder $query, array $where): bool
     {
         return in_array(
             strtolower((string) ($where['type'] ?? '')),
@@ -343,9 +343,9 @@ final class QueryPlanner
             : $qualifier === $table;
     }
 
-    private function isDeletedAtColumn(CachingQueryBuilder $query, mixed $column): bool
+    private function isDeletedAtColumn(QueryBuilder $query, mixed $column): bool
     {
-        if (!is_string($column) || !is_string($query->normCacheDeletedAtColumn())) {
+        if (!is_string($column) || !is_string($query->deletedAtColumn())) {
             return false;
         }
 
@@ -353,6 +353,6 @@ final class QueryPlanner
             $column = substr($column, strrpos($column, '.') + 1);
         }
 
-        return strtolower($column) === strtolower($query->normCacheDeletedAtColumn());
+        return strtolower($column) === strtolower($query->deletedAtColumn());
     }
 }

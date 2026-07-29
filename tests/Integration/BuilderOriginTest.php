@@ -4,41 +4,28 @@ namespace NormCache\Tests\Integration;
 
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 
 final class BuilderOriginTest extends TestCase
 {
-    public function test_connection_table_marks_db_table_origin(): void
-    {
-        $builder = DB::table('posts');
-
-        $this->assertInstanceOf(CachingQueryBuilder::class, $builder);
-        $this->assertSame(CachingQueryBuilder::ORIGIN_DB_TABLE, $builder->normCacheOrigin());
-    }
-
-    public function test_direct_connection_query_remains_unmarked(): void
-    {
-        $builder = DB::query()->from('posts');
-
-        $this->assertInstanceOf(CachingQueryBuilder::class, $builder);
-        $this->assertNull($builder->normCacheOrigin());
-    }
-
-    public function test_cacheable_trait_marks_only_opted_in_eloquent_models(): void
+    public function test_cacheable_trait_exposes_metadata_only_for_opted_in_eloquent_models(): void
     {
         $cached = Post::query()->getQuery();
         $uncached = UncachedPost::query()->getQuery();
 
-        $this->assertInstanceOf(CachingQueryBuilder::class, $cached);
-        $this->assertSame(CachingQueryBuilder::ORIGIN_CACHEABLE_MODEL, $cached->normCacheOrigin());
-        $this->assertSame(Post::class, $cached->normCacheModelClass());
+        $this->assertInstanceOf(QueryBuilder::class, $cached);
+        $this->assertSame(Post::class, $cached->modelClass());
+        $this->assertSame('id', $cached->primaryKey()?->column);
+        $this->assertSame('integer', $cached->primaryKey()?->family);
+        $this->assertSame('deleted_at', $cached->deletedAtColumn());
 
-        $this->assertInstanceOf(CachingQueryBuilder::class, $uncached);
-        $this->assertNull($uncached->normCacheOrigin());
-        $this->assertNull($uncached->normCacheModelClass());
+        $this->assertInstanceOf(QueryBuilder::class, $uncached);
+        $this->assertNull($uncached->modelClass());
+        $this->assertNull($uncached->primaryKey());
+        $this->assertNull($uncached->deletedAtColumn());
     }
 
     public function test_supported_query_entry_points_share_a_concrete_laravel_connection(): void
@@ -54,6 +41,7 @@ final class BuilderOriginTest extends TestCase
         $this->assertInstanceOf(Connection::class, $connection);
 
         foreach ($builders as $builder) {
+            $this->assertInstanceOf(QueryBuilder::class, $builder);
             $this->assertSame($connection, $builder->getConnection());
         }
     }

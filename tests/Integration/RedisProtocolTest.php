@@ -25,9 +25,15 @@ final class RecordingPredisClusterConnection extends PredisClusterConnection
         if (strtolower((string) $method) === 'mget') {
             $this->directMgetCalls++;
 
+            $keys = $parameters[0] ?? [];
+
+            if (!is_array($keys)) {
+                $keys = $parameters;
+            }
+
             return array_map(
                 static fn(string $key): string => "value:{$key}",
-                $parameters,
+                $keys,
             );
         }
 
@@ -59,6 +65,28 @@ final class RedisProtocolTest extends TestCase
         $this->assertSame([
             'pipeline_calls' => 1,
             'direct_mget_calls' => 0,
+        ], [
+            'pipeline_calls' => $connection->pipelineCalls,
+            'direct_mget_calls' => $connection->directMgetCalls,
+        ]);
+    }
+
+    public function test_predis_cluster_same_slot_reads_use_direct_mget(): void
+    {
+        $connection = new RecordingPredisClusterConnection(new Client);
+        $store = new RedisStore('unused');
+        $property = new ReflectionProperty($store, 'connection');
+        $property->setValue($store, $connection);
+
+        $keys = ['{slot-a}:version', '{slot-a}:generation'];
+
+        $this->assertSame([
+            '{slot-a}:version' => 'value:{slot-a}:version',
+            '{slot-a}:generation' => 'value:{slot-a}:generation',
+        ], $store->mget($keys));
+        $this->assertSame([
+            'pipeline_calls' => 0,
+            'direct_mget_calls' => 1,
         ], [
             'pipeline_calls' => $connection->pipelineCalls,
             'direct_mget_calls' => $connection->directMgetCalls,
@@ -148,6 +176,23 @@ final class RedisProtocolTest extends TestCase
             $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
             $connection->del($buildingKey, $wakeKey);
             $client->setOption(\Redis::OPT_SERIALIZER, $originalSerializer);
+        }
+    }
+
+    public function test_release_building_wakes_each_configured_waiter(): void
+    {
+        $connection = Redis::connection('normcache-test');
+        $store = new RedisStore('normcache-test', 3);
+        $buildingKey = 'test:{nc:x:wake-count}:build';
+        $wakeKey = 'test:{nc:x:wake-count}:wake';
+        $token = str_repeat('a', 32);
+
+        try {
+            $this->assertTrue($store->setNxEx($buildingKey, $token, 60));
+            $this->assertTrue($store->releaseBuilding($buildingKey, $wakeKey, $token));
+            $this->assertSame(3, $connection->llen($wakeKey));
+        } finally {
+            $connection->del($buildingKey, $wakeKey);
         }
     }
 

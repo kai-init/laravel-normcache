@@ -2,7 +2,8 @@
 
 namespace NormCache;
 
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Cache\CacheSwitch;
+use NormCache\Database\QueryBuilder;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
@@ -20,6 +21,7 @@ final readonly class Invalidator
     public function __construct(
         private CacheConfig $config,
         private RuntimeState $runtime,
+        private CacheSwitch $switch,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private TableIdentityResolver $tables,
@@ -30,12 +32,12 @@ final readonly class Invalidator
 
     /** @param array<string, mixed>|null $assigned */
     public function afterWrite(
-        CachingQueryBuilder $query,
-        bool $mayAffectRows,
-        bool $forceBroad = false,
+        QueryBuilder $query,
+        bool $mayAffectExistingRows,
+        bool $forceBroadInvalidation = false,
         ?array $assigned = null,
     ): void {
-        if (!$this->config->enabled) {
+        if (!$this->switch->invalidating()) {
             return;
         }
 
@@ -46,10 +48,10 @@ final readonly class Invalidator
             return;
         }
 
-        $broad = $forceBroad;
+        $broad = $forceBroadInvalidation;
         $tokens = [];
 
-        if ($mayAffectRows && !$forceBroad) {
+        if ($mayAffectExistingRows && !$forceBroadInvalidation) {
             $primaryKey = $this->primaryKeys->resolve($query, $connection, $table);
             $extracted = $primaryKey !== null
                 && $primaryKey->family === PrimaryKeyMetadata::INTEGER
@@ -92,7 +94,7 @@ final readonly class Invalidator
 
     public function invalidateTable(TableIdentity $table): bool
     {
-        if (!$this->config->enabled) {
+        if (!$this->switch->invalidating()) {
             return false;
         }
 

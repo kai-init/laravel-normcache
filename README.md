@@ -74,10 +74,13 @@ Writes through cache-aware Eloquent or Query Builder paths invalidate automatica
 Use the facade after writes performed elsewhere:
 
 ```php
+use App\Models\Comment;
+use App\Models\Post;
 use NormCache\Facades\NormCache;
 
-NormCache::invalidateTable('mysql', 'posts');
-NormCache::invalidateTables('mysql', ['posts', 'comments']);
+NormCache::invalidate('posts', connection: 'mysql');
+NormCache::invalidate([Post::class, Comment::class]);
+NormCache::invalidate(['posts', 'comments'], connection: 'mysql');
 NormCache::flushTag('homepage');
 NormCache::flushAll();
 ```
@@ -141,7 +144,7 @@ NormCache bypasses reads when correctness cannot be established, including:
 
 Canonical storage requires a supported single-column integer or string primary key. Queries can still use `result` storage when canonical routing is unavailable.
 
-Writes performed through raw SQL or a connection not installed by NormCache are invisible until `invalidateTable()`, `invalidateTables()`, or `flushAll()` is called. After changing connection database/schema metadata at runtime, call `NormCache::clearSchemaMetadata()` for that connection.
+Writes performed through raw SQL or a connection not installed by NormCache are invisible until `invalidate()` or `flushAll()` is called. After changing connection database/schema metadata at runtime, call `NormCache::clearSchemaMetadata()` for that connection.
 
 ## Redis Cluster
 

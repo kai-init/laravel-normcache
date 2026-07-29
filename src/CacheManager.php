@@ -2,14 +2,17 @@
 
 namespace NormCache;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
+use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\RuntimeState;
+use NormCache\Values\TableIdentity;
 use Throwable;
 
 final readonly class CacheManager
@@ -25,23 +28,69 @@ final readonly class CacheManager
         private QueryIdentity $identity,
     ) {}
 
+    /**
+     * @param  Model|class-string<Model>|string|list<Model|class-string<Model>|string>  $targets
+     */
+    public function invalidate(Model|string|array $targets, ?string $connection = null): bool
+    {
+        $identities = [];
+        $success = true;
+
+        foreach ((array) $targets as $target) {
+            $identity = $this->invalidationIdentity($target, $connection);
+
+            if ($identity === null) {
+                $success = false;
+
+                continue;
+            }
+
+            $identities[$identity->encoded] = $identity;
+        }
+
+        foreach ($identities as $identity) {
+            $success = $this->invalidator->invalidateTable($identity) && $success;
+        }
+
+        return $success;
+    }
+
     public function invalidateTable(string $connection, string $table): bool
     {
-        $identity = $this->tables->resolve(DB::connection($connection), $table);
-
-        return $identity !== null && $this->invalidator->invalidateTable($identity);
+        return $this->invalidate($table, $connection);
     }
 
     /** @param list<string> $tables */
     public function invalidateTables(string $connection, array $tables): bool
     {
-        $success = true;
+        return $this->invalidate($tables, $connection);
+    }
 
-        foreach (array_values(array_unique($tables)) as $table) {
-            $success = $this->invalidateTable($connection, $table) && $success;
+    private function invalidationIdentity(mixed $target, ?string $connection): ?TableIdentity
+    {
+        if ($target instanceof Model) {
+            return $this->tables->resolve(
+                $connection === null ? $target->getConnection() : DB::connection($connection),
+                $target->getTable(),
+            );
         }
 
-        return $success;
+        if (!is_string($target)) {
+            throw new \InvalidArgumentException(
+                'invalidate() expects Eloquent models, model class names, or table names.',
+            );
+        }
+
+        if (is_a($target, Model::class, true)) {
+            $model = new $target;
+
+            return $this->tables->resolve(
+                $connection === null ? $model->getConnection() : DB::connection($connection),
+                $model->getTable(),
+            );
+        }
+
+        return $this->tables->resolve(DB::connection($connection), $target);
     }
 
     public function flushTag(string $tag): bool
@@ -58,6 +107,51 @@ final readonly class CacheManager
         return $this->increment($this->keys->epoch());
     }
 
+    public function disableCache(): bool
+    {
+        if (!$this->config->enabled) {
+            return false;
+        }
+
+        try {
+            $this->store->setRawForever($this->keys->disabled(), '1');
+            $this->runtime->forgetEpoch();
+
+            return true;
+        } catch (Throwable $exception) {
+            $this->runtime->fail($exception);
+
+            return false;
+        }
+    }
+
+    public function enableCache(): ?int
+    {
+        if (!$this->config->enabled) {
+            return null;
+        }
+
+        $this->runtime->forgetEpoch();
+
+        try {
+            $epoch = $this->store->script(
+                RedisScripts::get('enable_cache'),
+                [$this->keys->epoch(), $this->keys->disabled()],
+            );
+
+            return (int) $epoch;
+        } catch (Throwable $exception) {
+            $this->runtime->fail($exception);
+
+            return null;
+        }
+    }
+
+    public function cacheDisabled(): bool
+    {
+        return $this->store->getRaw($this->keys->disabled()) !== null;
+    }
+
     public function clearSchemaMetadata(?string $connection = null): void
     {
         $this->tables->clear($connection);
@@ -66,7 +160,7 @@ final readonly class CacheManager
 
     private function increment(string $key): bool
     {
-        if (!$this->config->enabled || !$this->runtime->available()) {
+        if (!$this->config->enabled) {
             return false;
         }
 

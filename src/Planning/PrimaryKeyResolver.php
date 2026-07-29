@@ -3,11 +3,11 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\TableIdentity;
-use Throwable;
+use Psr\Log\LoggerInterface;
 
 final class PrimaryKeyResolver
 {
@@ -19,16 +19,17 @@ final class PrimaryKeyResolver
 
     public function __construct(
         private readonly CacheConfig $config,
+        private readonly LoggerInterface $logger,
     ) {}
 
     public function resolve(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         Connection $connection,
         TableIdentity $table,
     ): ?PrimaryKeyMetadata {
         if (array_key_exists($table->hash, $this->memo)) {
             $known = $this->memo[$table->hash]['metadata'];
-            $supplied = $query->normCachePrimaryKey();
+            $supplied = $query->primaryKey();
 
             if ($supplied !== null && !$this->same($known, $supplied)) {
                 $this->conflict($table, $known, $supplied);
@@ -41,7 +42,7 @@ final class PrimaryKeyResolver
         }
 
         $candidates = [];
-        $supplied = $query->normCachePrimaryKey();
+        $supplied = $query->primaryKey();
 
         if ($supplied !== null) {
             $candidates[] = $supplied;
@@ -137,7 +138,7 @@ final class PrimaryKeyResolver
         }
 
         $this->warnedConflicts[$table->hash] = true;
-        logger()->warning('NormCache disabled canonical rows for a table with conflicting primary-key metadata.', [
+        $this->logger->warning('NormCache disabled canonical rows for a table with conflicting primary-key metadata.', [
             'table_hash' => $table->hash,
             'connection' => $table->connection,
             'table' => $table->table,
@@ -193,7 +194,7 @@ final class PrimaryKeyResolver
 
                 return new PrimaryKeyMetadata($columnName, $family);
             }
-        } catch (Throwable) {
+        } catch (\Throwable) {
             return null;
         }
 

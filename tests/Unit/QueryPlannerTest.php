@@ -418,7 +418,7 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_narrow_primary_key_projection_computes_soft_delete_mode(): void
     {
         $query = DB::query()->from('posts')->where('id', 42)->select(['title'])
-            ->markCacheableModel(Post::class, 'id', 'int', 'deleted_at');
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
 
         $plan = $this->planner->plan(
             $query,
@@ -439,7 +439,7 @@ final class QueryPlannerTest extends UnitTestCase
             ->whereNull('posts.deleted_at')
             ->whereNotNull('posts.deleted_at')
             ->select(['title'])
-            ->markCacheableModel(Post::class, 'id', 'int', 'deleted_at');
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
 
         $plan = $this->planner->plan(
             $query,
@@ -458,7 +458,7 @@ final class QueryPlannerTest extends UnitTestCase
             ->where('id', 42)
             ->whereNull('posts.deleted_at')
             ->whereNotNull('posts.deleted_at')
-            ->markCacheableModel(Post::class, 'id', 'int', 'deleted_at');
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
 
         $plan = $this->planner->plan(
             $query,

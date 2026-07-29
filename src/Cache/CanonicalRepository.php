@@ -3,7 +3,7 @@
 namespace NormCache\Cache;
 
 use Closure;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Enums\CacheReadOutcome;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
@@ -163,7 +163,7 @@ final readonly class CanonicalRepository
 
     /** @param array<int, mixed> $rows */
     public function publish(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
@@ -205,7 +205,7 @@ final readonly class CanonicalRepository
             expectedVersion: $state->version,
             expectedGeneration: $state->generation,
             membershipPayload: $membership,
-            membershipTtl: $query->normCacheTtl() ?? $this->config->queryTtl,
+            membershipTtl: $query->configuredTtl() ?? $this->config->queryTtl,
             rowTtl: $this->config->rowTtl,
             buildingKey: $lease->buildingKey,
             wakeKey: (string) $lease->wakeKey,

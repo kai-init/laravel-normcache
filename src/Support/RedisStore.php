@@ -9,7 +9,6 @@ use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
 use Predis\NotSupportedException;
 use Predis\Response\ServerException;
-use Throwable;
 
 final class RedisStore
 {
@@ -29,6 +28,13 @@ final class RedisStore
             $value = $connection->get($key);
 
             return $value !== null && $value !== false ? $value : null;
+        });
+    }
+
+    public function setRawForever(string $key, string $value): void
+    {
+        $this->withRawValues(static function (Connection $connection) use ($key, $value): void {
+            $connection->set($key, $value);
         });
     }
 
@@ -276,7 +282,7 @@ final class RedisStore
             } else {
                 $result = $connection->command('evalsha', [$sha, $keyCount, ...$arguments]);
             }
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             if (
                 !str_contains(strtolower($exception->getMessage()), 'noscript')
                 && !($exception instanceof NotSupportedException
@@ -331,6 +337,10 @@ final class RedisStore
             if ($connection instanceof PredisClusterConnection) {
                 $groups = $this->groupByHashTag($keys);
 
+                if (count($groups) === 1) {
+                    return $this->mapMgetValues($groups[0], $connection->mget($groups[0]));
+                }
+
                 try {
                     $replies = $connection->pipeline(static function ($pipeline) use ($groups): void {
                         foreach ($groups as $group) {
@@ -338,7 +348,10 @@ final class RedisStore
                         }
                     });
                 } catch (ServerException $exception) {
-                    if (!str_starts_with($exception->getMessage(), 'MOVED ')) {
+                    if (
+                        !str_starts_with($exception->getMessage(), 'MOVED ')
+                        && !str_starts_with($exception->getMessage(), 'ASK ')
+                    ) {
                         throw $exception;
                     }
 
@@ -351,12 +364,7 @@ final class RedisStore
                 $values = [];
 
                 foreach ($groups as $groupIndex => $group) {
-                    $raw = $replies[$groupIndex] ?? [];
-
-                    foreach ($group as $i => $key) {
-                        $value = $raw[$i] ?? null;
-                        $values[$key] = $value !== null && $value !== false ? $value : null;
-                    }
+                    $values += $this->mapMgetValues($group, $replies[$groupIndex] ?? []);
                 }
 
                 return $values;
@@ -364,15 +372,7 @@ final class RedisStore
 
             // PhpRedis (standalone or cluster) fans a cross-slot MGET out to the owning
             // nodes itself — only Predis's cluster client needs the manual grouping above.
-            $raw = $connection->mget($keys);
-            $values = [];
-
-            foreach ($keys as $i => $key) {
-                $value = $raw[$i] ?? null;
-                $values[$key] = $value !== null && $value !== false ? $value : null;
-            }
-
-            return $values;
+            return $this->mapMgetValues($keys, $connection->mget($keys));
         });
     }
 
@@ -418,6 +418,26 @@ final class RedisStore
 
     /**
      * @param  list<string>  $keys
+     * @return array<string, ?string>
+     */
+    private function mapMgetValues(array $keys, mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            throw new \UnexpectedValueException('Redis MGET must return an array.');
+        }
+
+        $values = [];
+
+        foreach ($keys as $i => $key) {
+            $value = $raw[$i] ?? null;
+            $values[$key] = $value !== null && $value !== false ? $value : null;
+        }
+
+        return $values;
+    }
+
+    /**
+     * @param  list<string>  $keys
      * @return list<list<string>>
      */
     private function groupByHashTag(array $keys): array
@@ -425,11 +445,13 @@ final class RedisStore
         $groups = [];
 
         foreach ($keys as $key) {
-            if (preg_match('/\{([^{}]+)\}/', $key, $matches) === 1) {
-                $groups['tag:' . $matches[1]][] = $key;
-            } else {
-                $groups['key:' . $key][] = $key;
-            }
+            $open = strpos($key, '{');
+            $close = $open === false ? false : strpos($key, '}', $open + 1);
+            $group = $close !== false && $close - $open > 1
+                ? 'tag:' . substr($key, $open + 1, $close - $open - 1)
+                : 'key:' . $key;
+
+            $groups[$group][] = $key;
         }
 
         return array_values($groups);

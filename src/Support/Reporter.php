@@ -2,7 +2,7 @@
 
 namespace NormCache\Support;
 
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Debug\DebugBarCollector;
 use NormCache\Enums\CacheReadOutcome;
 use NormCache\Events\CacheInvalidated;
@@ -25,7 +25,7 @@ final readonly class Reporter
     ) {}
 
     public function hit(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         string $sql,
@@ -44,7 +44,7 @@ final readonly class Reporter
     }
 
     public function repaired(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         string $sql,
@@ -63,7 +63,7 @@ final readonly class Reporter
     }
 
     public function miss(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         string $sql,
@@ -83,7 +83,7 @@ final readonly class Reporter
 
     private function reportQuery(
         CacheReadOutcome $outcome,
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         string $sql,
@@ -110,7 +110,7 @@ final readonly class Reporter
             reason: $reason,
             sql: $sql,
             bindings: $bindings,
-            modelClass: $query->normCacheModelClass(),
+            modelClass: $query->modelClass(),
         );
         $this->sink?->record($record);
 
@@ -136,7 +136,7 @@ final readonly class Reporter
     }
 
     public function bypass(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         string $reason,
         string $sql,
         array $bindings,
@@ -155,7 +155,7 @@ final readonly class Reporter
             reason: $reason,
             sql: $sql,
             bindings: $bindings,
-            modelClass: $query->normCacheModelClass(),
+            modelClass: $query->modelClass(),
         );
         $this->sink?->record($record);
 

@@ -5,7 +5,7 @@ namespace NormCache\Planning;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\DependencyAnalysis;
 use NormCache\Values\TableIdentity;
 
@@ -17,7 +17,7 @@ final class DependencyAnalyzer
 
     public function analyze(
         Connection $connection,
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         TableIdentity $root,
     ): DependencyAnalysis {
         $resolved = [$root->hash => $root];
@@ -34,7 +34,7 @@ final class DependencyAnalyzer
             $volatile,
         );
 
-        $declarations = $query->normCacheDependencies();
+        $declarations = $query->dependencies();
         $explicit = $declarations !== [];
 
         foreach ($declarations as $declaration) {

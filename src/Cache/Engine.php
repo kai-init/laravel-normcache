@@ -4,7 +4,7 @@ namespace NormCache\Cache;
 
 use Illuminate\Database\Connection;
 use InvalidArgumentException;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Enums\CacheReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
@@ -38,6 +38,7 @@ final readonly class Engine
         private RawResultCodec $codec,
         private DependencyAnalyzer $dependencies,
         private Reporter $reporter,
+        private CacheSwitch $switch,
         private CacheStateResolver $states,
         private CanonicalRepository $canonical,
         private ResultRepository $results,
@@ -48,14 +49,14 @@ final readonly class Engine
      * @param  callable(): array  $primaryDatabase
      */
     public function select(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         string $sql,
         array $bindings,
         string $operation,
         callable $database,
         callable $primaryDatabase,
     ): array {
-        if (!$this->config->enabled || !$this->runtime->available()) {
+        if (!$this->switch->readable()) {
             return $database();
         }
 
@@ -74,7 +75,7 @@ final readonly class Engine
             return $database();
         }
 
-        if ($table->isView && $query->normCacheDependencies() === []) {
+        if ($table->isView && $query->dependencies() === []) {
             $this->reporter->bypass(
                 $query,
                 'view_dependencies_required',
@@ -119,7 +120,7 @@ final readonly class Engine
             $analysis->opaque && $directRoot === null,
             $operation,
         );
-        $namespace = $this->identity->namespace($query->normCacheTag());
+        $namespace = $this->identity->namespace($query->configuredTag());
         $canonicalQueryHash = null;
 
         try {
@@ -280,7 +281,7 @@ final readonly class Engine
 
     /** @param array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome} $result */
     private function reportRead(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $queryHash,
         string $sql,
@@ -300,7 +301,7 @@ final readonly class Engine
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function read(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
@@ -375,7 +376,7 @@ final readonly class Engine
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonicalWithResultOverlay(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
@@ -460,7 +461,7 @@ final readonly class Engine
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readResultOrCanonicalProjection(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
@@ -659,7 +660,7 @@ final readonly class Engine
 
     private function epoch(): string
     {
-        return $this->runtime->epoch(fn(): string => $this->store->getRaw($this->keys->epoch()) ?? '0');
+        return $this->switch->epoch();
     }
 
     /** @return list<stdClass>|null null on missing deleted-at column; empty array when filtered by visibility. */
@@ -753,7 +754,7 @@ final readonly class Engine
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonical(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
@@ -778,7 +779,7 @@ final readonly class Engine
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readCanonicalHead(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
@@ -805,7 +806,7 @@ final readonly class Engine
      * @return array{rows: array<string, stdClass>|null, outcome: CacheReadOutcome}
      */
     private function repairRows(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $tokens,
@@ -882,7 +883,7 @@ final readonly class Engine
      * @return array<string, stdClass>|null
      */
     private function buildRepairedRows(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $tokens,
@@ -1057,7 +1058,7 @@ final readonly class Engine
 
     /** @param array<int, mixed> $rows */
     private function publish(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
@@ -1081,7 +1082,7 @@ final readonly class Engine
     }
 
     private function publishResult(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
@@ -1136,7 +1137,7 @@ final readonly class Engine
     }
 
     private function publishCanonical(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
@@ -1182,7 +1183,7 @@ final readonly class Engine
 
     /** @param array<int, mixed> $rows */
     private function promoteResultPayload(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $resultPlan,
         CacheState $sourceState,
         string $namespace,
@@ -1191,7 +1192,7 @@ final readonly class Engine
         bool $wakeWaiters = true,
     ): bool {
         try {
-            $ttl = $query->normCacheTtl() ?? $this->config->queryTtl;
+            $ttl = $query->configuredTtl() ?? $this->config->queryTtl;
             $encoded = $this->codec->encode(
                 $rows,
                 $sourceState->epoch,
@@ -1344,7 +1345,7 @@ final readonly class Engine
 
     /** @param list<string> $dependencyHashes */
     private function canonicalQueryHash(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         Connection $connection,
         array $dependencyHashes,
@@ -1365,12 +1366,12 @@ final readonly class Engine
     }
 
     private function declaredRoot(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         Connection $connection,
     ): ?TableIdentity {
         $resolved = [];
 
-        foreach ($query->normCacheDependencies() as $declaration) {
+        foreach ($query->dependencies() as $declaration) {
             $identity = $declaration->isTable()
                 ? $this->tables->resolve($connection, $declaration->value)
                 : $this->dependencies->modelIdentity($connection, $declaration->value);

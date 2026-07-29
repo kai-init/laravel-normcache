@@ -2,7 +2,7 @@
 
 namespace NormCache\Cache;
 
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
@@ -42,7 +42,7 @@ final readonly class ResultRepository
 
     /** @param array<int, mixed> $rows */
     public function publish(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
@@ -65,7 +65,7 @@ final readonly class ResultRepository
 
         return $this->store->publishVersionedEntries(
             entries: [$state->key => $encoded],
-            ttl: $query->normCacheTtl() ?? $this->config->queryTtl,
+            ttl: $query->configuredTtl() ?? $this->config->queryTtl,
             versionKeys: $versionKeys,
             expectedVersions: $expected,
             buildingKey: $lease->buildingKey,

@@ -4,7 +4,7 @@ namespace NormCache\Tests\Integration;
 
 use Illuminate\Database\Query\Processors\Processor;
 use Illuminate\Support\Facades\DB;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -244,7 +244,7 @@ final class WriteInvalidationTest extends TestCase
                 return 'generated-uuid';
             }
         };
-        $builder = new CachingQueryBuilder(
+        $builder = new QueryBuilder(
             $connection,
             $connection->getQueryGrammar(),
             $processor,

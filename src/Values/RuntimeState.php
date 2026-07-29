@@ -10,6 +10,8 @@ final class RuntimeState
 
     private ?string $epoch = null;
 
+    private ?bool $runtimeDisabled = null;
+
     /** @var array<string, true> */
     private array $reportedFailures = [];
 
@@ -26,13 +28,41 @@ final class RuntimeState
 
     /**
      * Read once per scope, so another process's flushAll() is observed by the next
-     * request/job rather than mid-scope.
+     * request/job rather than mid-scope. The paired read also seeds the kill switch,
+     * since both values arrive from one MGET.
      *
-     * @param  callable(): string  $read
+     * @param  callable(): array{0: string, 1: bool}  $read
      */
     public function epoch(callable $read): string
     {
-        return $this->epoch ??= $read();
+        return $this->state($read)[0];
+    }
+
+    /**
+     * @param  callable(): array{0: string, 1: bool}  $read
+     * @return array{0: string, 1: bool}
+     */
+    public function state(callable $read): array
+    {
+        if ($this->epoch === null) {
+            [$epoch, $disabled] = $read();
+            $this->epoch = $epoch;
+            $this->runtimeDisabled ??= $disabled;
+        }
+
+        return [$this->epoch, $this->runtimeDisabled ?? false];
+    }
+
+    /**
+     * Deliberately does NOT seed the epoch. Write paths ask this question but never need
+     * the epoch, and seeding it from a write would pin an epoch for the rest of the scope
+     * that a later cache read then treats as current.
+     *
+     * @param  callable(): bool  $read
+     */
+    public function runtimeDisabled(callable $read): bool
+    {
+        return $this->runtimeDisabled ??= $read();
     }
 
     public function knownEpoch(): ?string
@@ -48,6 +78,7 @@ final class RuntimeState
     public function forgetEpoch(): void
     {
         $this->epoch = null;
+        $this->runtimeDisabled = null;
     }
 
     public function disable(): void

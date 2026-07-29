@@ -2,25 +2,25 @@
 
 namespace NormCache\Database\Connections;
 
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 
 use function Illuminate\Support\enum_value;
 
 trait BuildsCachingQueries
 {
-    public function query(): CachingQueryBuilder
+    public function query(): QueryBuilder
     {
-        return new CachingQueryBuilder(
+        return new QueryBuilder(
             $this,
             $this->getQueryGrammar(),
             $this->getPostProcessor(),
         );
     }
 
-    public function table($table, $as = null): CachingQueryBuilder
+    public function table($table, $as = null): QueryBuilder
     {
         return $this->query()
             ->from(enum_value($table), $as)
-            ->markDbTable();
+            ->enableCachingForTable();
     }
 }

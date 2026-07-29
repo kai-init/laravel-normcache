@@ -7,57 +7,44 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Database\Query\Processors\Processor;
-use InvalidArgumentException;
 use NormCache\Cache\Engine;
 use NormCache\Invalidator;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\Reporter;
 use NormCache\Values\DependencyDeclaration;
 use NormCache\Values\PrimaryKeyMetadata;
-use PDO;
 
-final class CachingQueryBuilder extends Builder
+final class QueryBuilder extends Builder
 {
-    public const ORIGIN_CACHEABLE_MODEL = 'cacheable_model';
-
-    public const ORIGIN_DB_TABLE = 'db_table';
-
-    // Declared explicitly: Laravel 12's Query\Builder doesn't define fetchUsing()/$fetchUsing
-    // (added in 13), but this class is used under both ^12.0 and ^13.0 per composer.json.
     public array $fetchUsing = [];
 
-    private Connection $normCacheConnection;
+    private Connection $databaseConnection;
 
-    private ?string $normCacheOrigin = null;
+    private bool $eligible = false;
 
     /** @var class-string|null */
-    private ?string $normCacheModelClass = null;
+    private ?string $modelClass = null;
 
-    private ?PrimaryKeyMetadata $normCachePrimaryKey = null;
+    private ?PrimaryKeyMetadata $primaryKey = null;
 
-    private ?string $normCacheDeletedAtColumn = null;
+    private ?string $deletedAtColumn = null;
 
-    private bool $normCacheSkipped = false;
+    private bool $skipped = false;
 
-    private ?int $normCacheTtl = null;
+    private ?int $ttl = null;
 
-    private ?string $normCacheTag = null;
+    private ?string $tag = null;
 
-    private bool $normCacheUseResultCache = false;
+    private bool $useResultCache = false;
 
     /** @var array<string, DependencyDeclaration> */
-    private array $normCacheDependencies = [];
+    private array $dependencies = [];
 
-    private int $normCacheWriteDepth = 0;
+    private int $writeDepth = 0;
 
-    private bool $normCacheTerminalExecuted = false;
+    private bool $writeChanged = false;
 
-    private bool $normCacheWriteChanged = false;
-
-    private bool $normCacheWriteForcedBroad = false;
-
-    /** @var array<string, mixed>|null */
-    private ?array $normCacheWriteAssignments = null;
+    private bool $writeExecuted = false;
 
     public function __construct(
         Connection $connection,
@@ -65,65 +52,60 @@ final class CachingQueryBuilder extends Builder
         ?Processor $processor = null,
     ) {
         parent::__construct($connection, $grammar, $processor);
-        $this->normCacheConnection = $connection;
+        $this->databaseConnection = $connection;
     }
 
     public function getConnection(): Connection
     {
-        return $this->normCacheConnection;
+        return $this->databaseConnection;
     }
 
-    public function markDbTable(): static
+    public function enableCachingForTable(): static
     {
-        $this->normCacheOrigin = self::ORIGIN_DB_TABLE;
+        $this->eligible = true;
 
         return $this;
     }
 
     /** @param class-string $modelClass */
-    public function markCacheableModel(
+    public function enableCachingForModel(
         string $modelClass,
         string $keyName,
         string $keyType,
         ?string $deletedAtColumn = null,
     ): static {
-        $this->normCacheOrigin = self::ORIGIN_CACHEABLE_MODEL;
-        $this->normCacheModelClass = $modelClass;
-        $this->normCachePrimaryKey = new PrimaryKeyMetadata(
+        $this->eligible = true;
+        $this->modelClass = $modelClass;
+        $this->primaryKey = new PrimaryKeyMetadata(
             $keyName,
             $keyType === 'int' || $keyType === 'integer'
                 ? PrimaryKeyMetadata::INTEGER
                 : PrimaryKeyMetadata::STRING,
         );
-        $this->normCacheDeletedAtColumn = $deletedAtColumn;
+        $this->deletedAtColumn = $deletedAtColumn;
 
         return $this;
     }
 
-    public function normCacheOrigin(): ?string
-    {
-        return $this->normCacheOrigin;
-    }
-
     /** @return class-string|null */
-    public function normCacheModelClass(): ?string
+    public function modelClass(): ?string
     {
-        return $this->normCacheModelClass;
+        return $this->modelClass;
     }
 
-    public function normCachePrimaryKey(): ?PrimaryKeyMetadata
+    public function primaryKey(): ?PrimaryKeyMetadata
     {
-        return $this->normCachePrimaryKey;
+        return $this->primaryKey;
     }
 
-    public function normCacheDeletedAtColumn(): ?string
+    public function deletedAtColumn(): ?string
     {
-        return $this->normCacheDeletedAtColumn;
+        return $this->deletedAtColumn;
     }
 
     public function withoutCache(): static
     {
-        $this->normCacheSkipped = true;
+        $this->skipped = true;
 
         return $this;
     }
@@ -131,101 +113,108 @@ final class CachingQueryBuilder extends Builder
     public function ttl(int $seconds): static
     {
         if ($seconds < 1) {
-            throw new InvalidArgumentException('NormCache TTL must be greater than zero.');
+            throw new \InvalidArgumentException('NormCache TTL must be greater than zero.');
         }
 
-        $this->normCacheTtl = $seconds;
+        $this->ttl = $seconds;
 
         return $this;
     }
 
-    public function normCacheTtl(): ?int
+    public function configuredTtl(): ?int
     {
-        return $this->normCacheTtl;
+        return $this->ttl;
     }
 
     public function tag(string $tag): static
     {
         (new QueryIdentity)->tagHash($tag);
-        $this->normCacheTag = $tag;
+        $this->tag = $tag;
 
         return $this;
     }
 
-    public function normCacheTag(): ?string
+    public function configuredTag(): ?string
     {
-        return $this->normCacheTag;
+        return $this->tag;
     }
 
     public function useResultCache(): static
     {
-        $this->normCacheUseResultCache = true;
+        $this->useResultCache = true;
 
         return $this;
     }
 
-    public function usesNormCacheResultCache(): bool
+    public function usesResultCache(): bool
     {
-        return $this->normCacheUseResultCache;
+        return $this->useResultCache;
     }
 
     /** @param array<mixed> $dependencies */
     public function dependsOn(array $dependencies): static
     {
         if ($dependencies === []) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'dependsOn() requires at least one model class or table name.'
             );
         }
 
         foreach ($dependencies as $dependency) {
-            if (!is_string($dependency)) {
-                throw new InvalidArgumentException(
-                    'dependsOn() expects model class names or table names.'
-                );
-            }
-
-            if (
-                class_exists($dependency)
-                || interface_exists($dependency)
-                || trait_exists($dependency)
-                || enum_exists($dependency)
-            ) {
-                if (!is_a($dependency, Model::class, true)) {
-                    throw new InvalidArgumentException(
-                        "dependsOn() class [{$dependency}] must be an Eloquent model."
-                    );
-                }
-
-                $declaration = DependencyDeclaration::model($dependency);
-            } else {
-                $table = trim($dependency);
-
-                if (str_contains($table, '\\')) {
-                    throw new InvalidArgumentException(
-                        "dependsOn() model class [{$dependency}] does not exist."
-                    );
-                }
-
-                if ($table === '' || preg_match('/[:{}\s*]/', $table) === 1) {
-                    throw new InvalidArgumentException(
-                        'dependsOn() table names must not contain reserved characters (: { } * or whitespace).'
-                    );
-                }
-
-                $declaration = DependencyDeclaration::table($table);
-            }
-
-            $this->normCacheDependencies[$declaration->key()] = $declaration;
+            $declaration = $this->dependencyDeclaration($dependency);
+            $this->dependencies[$declaration->key()] = $declaration;
         }
 
         return $this;
     }
 
-    /** @return list<DependencyDeclaration> */
-    public function normCacheDependencies(): array
+    private function dependencyDeclaration(mixed $dependency): DependencyDeclaration
     {
-        return array_values($this->normCacheDependencies);
+        if (!is_string($dependency)) {
+            throw new \InvalidArgumentException(
+                'dependsOn() expects model class names or table names.'
+            );
+        }
+
+        if (is_a($dependency, Model::class, true)) {
+            return DependencyDeclaration::model($dependency);
+        }
+
+        if ($this->isDefinedType($dependency)) {
+            throw new \InvalidArgumentException(
+                "dependsOn() class [{$dependency}] must be an Eloquent model."
+            );
+        }
+
+        $table = trim($dependency);
+
+        if (str_contains($table, '\\')) {
+            throw new \InvalidArgumentException(
+                "dependsOn() model class [{$dependency}] does not exist."
+            );
+        }
+
+        if ($table === '' || preg_match('/[:{}\s*]/', $table) === 1) {
+            throw new \InvalidArgumentException(
+                'dependsOn() table names must not contain reserved characters (: { } * or whitespace).'
+            );
+        }
+
+        return DependencyDeclaration::table($table);
+    }
+
+    private function isDefinedType(string $type): bool
+    {
+        return class_exists($type)
+            || interface_exists($type)
+            || trait_exists($type)
+            || enum_exists($type);
+    }
+
+    /** @return list<DependencyDeclaration> */
+    public function dependencies(): array
+    {
+        return array_values($this->dependencies);
     }
 
     protected function runSelect()
@@ -290,42 +279,14 @@ final class CachingQueryBuilder extends Builder
         return (bool) $result['exists'];
     }
 
-    public function cursor()
-    {
-        if ($this->normCacheOrigin !== null) {
-            app(Reporter::class)->bypass(
-                $this,
-                'streaming_cursor',
-                $this->toSql(),
-                $this->getBindings(),
-            );
-        }
-
-        return parent::cursor();
-    }
-
-    public function explain()
-    {
-        if ($this->normCacheOrigin !== null) {
-            app(Reporter::class)->bypass(
-                $this,
-                'explain_query',
-                $this->toSql(),
-                $this->getBindings(),
-            );
-        }
-
-        return parent::explain();
-    }
-
     public function insert(array $values): bool
     {
-        return $this->observeWrite(
-            mayAffectRows: false,
-            forceWhenExecuted: false,
+        return $this->writeWithInvalidation(
+            mayAffectExistingRows: false,
+            forceInvalidation: false,
             operation: function () use ($values): bool {
                 $result = parent::insert($values);
-                $this->recordTerminal($values !== [], $values !== [] && $result);
+                $this->recordOutcome($values !== [], $values !== [] && $result);
 
                 return $result;
             },
@@ -334,12 +295,12 @@ final class CachingQueryBuilder extends Builder
 
     public function insertOrIgnore(array $values): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             false,
             false,
             function () use ($values): int {
                 $result = parent::insertOrIgnore($values);
-                $this->recordTerminal($values !== [], $result > 0);
+                $this->recordOutcome($values !== [], $result > 0);
 
                 return $result;
             },
@@ -348,12 +309,12 @@ final class CachingQueryBuilder extends Builder
 
     public function insertOrIgnoreReturning(array $values, array $returning = ['*'], $uniqueBy = null): mixed
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             false,
             false,
             function () use ($values, $returning, $uniqueBy): mixed {
                 $result = parent::insertOrIgnoreReturning($values, $returning, $uniqueBy);
-                $this->recordTerminal($values !== [], $result->isNotEmpty());
+                $this->recordOutcome($values !== [], $result->isNotEmpty());
 
                 return $result;
             },
@@ -362,12 +323,12 @@ final class CachingQueryBuilder extends Builder
 
     public function insertGetId(array $values, $sequence = null): int|string
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             false,
             true,
             function () use ($values, $sequence) {
                 $result = parent::insertGetId($values, $sequence);
-                $this->recordTerminal(true, true);
+                $this->recordOutcome(true, true);
 
                 return $result;
             },
@@ -376,12 +337,12 @@ final class CachingQueryBuilder extends Builder
 
     public function insertUsing(array $columns, $query): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             false,
             false,
             function () use ($columns, $query): int {
                 $result = parent::insertUsing($columns, $query);
-                $this->recordTerminal(true, $result > 0);
+                $this->recordOutcome(true, $result > 0);
 
                 return $result;
             },
@@ -390,12 +351,12 @@ final class CachingQueryBuilder extends Builder
 
     public function insertOrIgnoreUsing(array $columns, $query): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             false,
             false,
             function () use ($columns, $query): int {
                 $result = parent::insertOrIgnoreUsing($columns, $query);
-                $this->recordTerminal(true, $result > 0);
+                $this->recordOutcome(true, $result > 0);
 
                 return $result;
             },
@@ -404,12 +365,12 @@ final class CachingQueryBuilder extends Builder
 
     public function update(array $values): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             true,
             false,
             function () use ($values): int {
                 $result = parent::update($values);
-                $this->recordTerminal(true, $result > 0);
+                $this->recordOutcome(true, $result > 0);
 
                 return $result;
             },
@@ -419,12 +380,12 @@ final class CachingQueryBuilder extends Builder
 
     public function updateFrom(array $values): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             true,
             false,
             function () use ($values): int {
                 $result = parent::updateFrom($values);
-                $this->recordTerminal(true, $result > 0);
+                $this->recordOutcome(true, $result > 0);
 
                 return $result;
             },
@@ -434,76 +395,40 @@ final class CachingQueryBuilder extends Builder
 
     public function updateOrInsert(array $attributes, $values = []): bool
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             true,
             true,
             fn(): bool => parent::updateOrInsert($attributes, $values),
-            forceBroad: true,
+            forceBroadInvalidation: true,
         );
     }
 
     public function upsert(array $values, $uniqueBy, $update = null): int
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             true,
             true,
             function () use ($values, $uniqueBy, $update): int {
                 $result = parent::upsert($values, $uniqueBy, $update);
 
-                if ($values !== [] && !$this->normCacheTerminalExecuted) {
-                    $this->recordTerminal(true, $result > 0);
+                if ($values !== []) {
+                    $this->recordOutcome(true, $result > 0);
                 }
 
                 return $result;
             },
-            forceBroad: true,
-        );
-    }
-
-    public function increment($column, $amount = 1, array $extra = []): int
-    {
-        return $this->observeWrite(
-            true,
-            true,
-            fn(): int => parent::increment($column, $amount, $extra),
-        );
-    }
-
-    public function incrementEach(array $columns, array $extra = [])
-    {
-        return $this->observeWrite(
-            true,
-            true,
-            fn() => parent::incrementEach($columns, $extra),
-        );
-    }
-
-    public function decrement($column, $amount = 1, array $extra = []): int
-    {
-        return $this->observeWrite(
-            true,
-            true,
-            fn(): int => parent::decrement($column, $amount, $extra),
-        );
-    }
-
-    public function decrementEach(array $columns, array $extra = [])
-    {
-        return $this->observeWrite(
-            true,
-            true,
-            fn() => parent::decrementEach($columns, $extra),
+            forceBroadInvalidation: true,
         );
     }
 
     public function delete($id = null)
     {
-        return $this->observeWrite(
+        return $this->writeWithInvalidation(
             true,
             false,
             function () use ($id) {
                 $result = parent::delete($id);
-                $this->recordTerminal(true, $result > 0);
+                $this->recordOutcome(true, $result > 0);
 
                 return $result;
             },
@@ -512,26 +437,26 @@ final class CachingQueryBuilder extends Builder
 
     public function truncate(): void
     {
-        $this->observeWrite(
+        $this->writeWithInvalidation(
             true,
             true,
             function (): void {
                 parent::truncate();
-                $this->recordTerminal(true, true);
+                $this->recordOutcome(true, true);
             },
-            forceBroad: true,
+            forceBroadInvalidation: true,
         );
     }
 
     /** @return array{0: bool, 1: ?string} */
     private function bypassDecision(): array
     {
-        if ($this->normCacheOrigin === null || $this->normCacheWriteDepth > 0) {
+        if (!$this->eligible || $this->writeDepth > 0) {
             return [true, null];
         }
 
         $reason = match (true) {
-            $this->normCacheSkipped => 'explicit_without_cache',
+            $this->skipped => 'explicit_without_cache',
             $this->connectionPretending() => 'connection_pretending',
             $this->connection->transactionLevel() > 0 => 'transaction_active',
             $this->useWritePdo => 'write_pdo',
@@ -555,87 +480,79 @@ final class CachingQueryBuilder extends Builder
         return $this->connection->select($sql, $bindings, !$this->useWritePdo);
     }
 
-    private function observeWrite(
-        bool $mayAffectRows,
-        bool $forceWhenExecuted,
+    private function writeWithInvalidation(
+        bool $mayAffectExistingRows,
+        bool $forceInvalidation,
         callable $operation,
-        bool $forceBroad = false,
+        bool $forceBroadInvalidation = false,
         ?array $assigned = null,
     ): mixed {
-        $owner = $this->normCacheWriteDepth === 0;
+        $owner = $this->writeDepth === 0;
 
         if ($owner) {
-            $this->normCacheTerminalExecuted = false;
-            $this->normCacheWriteChanged = false;
-            $this->normCacheWriteForcedBroad = false;
-            $this->normCacheWriteAssignments = null;
+            $this->writeExecuted = false;
+            $this->writeChanged = false;
         }
 
-        $this->normCacheWriteForcedBroad = $this->normCacheWriteForcedBroad || $forceBroad;
-
-        if ($assigned !== null) {
-            $this->normCacheWriteAssignments = $assigned;
-        }
-
-        $this->normCacheWriteDepth++;
+        $this->writeDepth++;
 
         try {
             $result = $operation();
         } finally {
-            $this->normCacheWriteDepth--;
+            $this->writeDepth--;
         }
 
         if ($owner) {
             $this->finishWriteObservation(
-                $mayAffectRows,
-                $forceWhenExecuted,
-                $this->normCacheTerminalExecuted,
-                $this->normCacheWriteChanged,
-                $this->normCacheWriteForcedBroad,
-                $this->normCacheWriteAssignments,
+                $mayAffectExistingRows,
+                $forceInvalidation,
+                $this->writeExecuted,
+                $this->writeChanged,
+                $forceBroadInvalidation,
+                $assigned,
             );
         }
 
         return $result;
     }
 
-    protected function recordTerminal(bool $executed, bool $changed): void
+    protected function recordOutcome(bool $executed, bool $changed): void
     {
-        $this->normCacheTerminalExecuted = $this->normCacheTerminalExecuted || $executed;
-        $this->normCacheWriteChanged = $this->normCacheWriteChanged || $changed;
+        $this->writeExecuted = $this->writeExecuted || $executed;
+        $this->writeChanged = $this->writeChanged || $changed;
     }
 
     /** @param array<string, mixed>|null $assignments */
     protected function finishWriteObservation(
-        bool $mayAffectRows,
-        bool $forceWhenExecuted,
+        bool $mayAffectExistingRows,
+        bool $forceInvalidation,
         bool $executed,
         bool $changed,
-        bool $forceBroad,
+        bool $forceBroadInvalidation,
         ?array $assignments,
     ): void {
-        if (!$executed || !$forceWhenExecuted && !$changed) {
+        if (!$executed || !$forceInvalidation && !$changed) {
             return;
         }
 
         app(Invalidator::class)->afterWrite(
             $this,
-            $mayAffectRows,
-            $forceBroad,
+            $mayAffectExistingRows,
+            $forceBroadInvalidation,
             $assignments,
         );
     }
 
     private function connectionPretending(): bool
     {
-        return $this->normCacheConnection->pretending();
+        return $this->databaseConnection->pretending();
     }
 
     private function hasCustomDefaultFetchMode(): bool
     {
-        $options = (array) $this->normCacheConnection->getConfig('options');
-        $mode = $options[PDO::ATTR_DEFAULT_FETCH_MODE] ?? PDO::FETCH_OBJ;
+        $options = (array) $this->databaseConnection->getConfig('options');
+        $mode = $options[\PDO::ATTR_DEFAULT_FETCH_MODE] ?? \PDO::FETCH_OBJ;
 
-        return $mode !== PDO::FETCH_OBJ;
+        return $mode !== \PDO::FETCH_OBJ;
     }
 }

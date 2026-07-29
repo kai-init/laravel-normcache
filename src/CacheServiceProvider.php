@@ -9,9 +9,12 @@ use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\CacheStateResolver;
+use NormCache\Cache\CacheSwitch;
 use NormCache\Cache\CanonicalRepository;
 use NormCache\Cache\Engine;
 use NormCache\Cache\ResultRepository;
+use NormCache\Console\DisableCommand;
+use NormCache\Console\EnableCommand;
 use NormCache\Console\FlushCommand;
 use NormCache\Database\Connections\MariaDbConnection;
 use NormCache\Database\Connections\MySqlConnection;
@@ -33,7 +36,7 @@ use NormCache\Support\RedisStore;
 use NormCache\Support\Reporter;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\RuntimeState;
-use ReflectionFunction;
+use Psr\Log\LoggerInterface;
 
 final class CacheServiceProvider extends ServiceProvider
 {
@@ -78,6 +81,7 @@ final class CacheServiceProvider extends ServiceProvider
         });
 
         $this->app->scoped(RuntimeState::class);
+        $this->app->scoped(CacheSwitch::class);
         $this->app->scoped(CacheStateResolver::class);
         $this->app->scoped(CanonicalRepository::class);
         $this->app->scoped(ResultRepository::class);
@@ -105,7 +109,7 @@ final class CacheServiceProvider extends ServiceProvider
                 __DIR__ . '/../config/normcache.php' => config_path('normcache.php'),
             ], 'normcache-config');
 
-            $this->commands([FlushCommand::class]);
+            $this->commands([FlushCommand::class, DisableCommand::class, EnableCommand::class]);
         }
     }
 
@@ -123,10 +127,10 @@ final class CacheServiceProvider extends ServiceProvider
             $existing = Connection::getResolver($driver);
 
             if ($existing !== null) {
-                $reflection = new ReflectionFunction($existing);
+                $reflection = new \ReflectionFunction($existing);
 
                 if ($reflection->getFileName() !== __FILE__) {
-                    $this->app->make('log')->warning(
+                    $this->app->make(LoggerInterface::class)->warning(
                         'NormCache did not replace an existing database connection resolver.',
                         ['driver' => $driver],
                     );

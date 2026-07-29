@@ -12,6 +12,7 @@ final readonly class CacheStateResolver
 {
     public function __construct(
         private RuntimeState $runtime,
+        private CacheSwitch $switch,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
     ) {}
@@ -227,6 +228,6 @@ final readonly class CacheStateResolver
 
     private function epoch(): string
     {
-        return $this->runtime->epoch(fn(): string => $this->store->getRaw($this->keys->epoch()) ?? '0');
+        return $this->switch->epoch();
     }
 }

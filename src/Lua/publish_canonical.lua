@@ -22,13 +22,20 @@ local n = tonumber(ARGV[1])
 local lease_index = 4 + n
 local wake_index = 5 + n
 local token = ARGV[7 + n]
+local wake_count = tonumber(ARGV[8 + n])
+local wake_tokens = {}
+
+for i = 1, wake_count do
+    wake_tokens[i] = '1'
+end
+
+local function wake()
+    redis.call('LPUSH', KEYS[wake_index], unpack(wake_tokens))
+end
 
 local function release()
     redis.call('DEL', KEYS[lease_index])
-    local wake_count = tonumber(ARGV[8 + n])
-    for i = 1, wake_count do
-        redis.call('LPUSH', KEYS[wake_index], '1')
-    end
+    wake()
     redis.call('EXPIRE', KEYS[wake_index], tonumber(ARGV[9 + n]))
 end
 

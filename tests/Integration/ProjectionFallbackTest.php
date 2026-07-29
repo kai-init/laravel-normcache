@@ -297,7 +297,7 @@ final class ProjectionFallbackTest extends TestCase
             $analysis->tables,
         );
         $identity = $this->app->make(QueryIdentity::class);
-        $namespace = $identity->namespace($query->normCacheTag());
+        $namespace = $identity->namespace($query->configuredTag());
         $queryHash = $identity->hash(
             route: $plan->route,
             rootHash: $table->hash,

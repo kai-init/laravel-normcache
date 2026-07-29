@@ -66,21 +66,14 @@ final class DiagnosticsTest extends TestCase
         Event::assertNotDispatched(QueryBypassed::class);
     }
 
-    public function test_cursor_and_explain_emit_stable_bypass_reasons(): void
+    public function test_cursor_and_explain_are_not_overridden_and_report_nothing(): void
     {
         Event::fake([QueryBypassed::class]);
 
         DB::table('posts')->cursor()->all();
         DB::table('posts')->explain();
 
-        Event::assertDispatched(
-            QueryBypassed::class,
-            fn(QueryBypassed $event): bool => $event->reason === 'streaming_cursor',
-        );
-        Event::assertDispatched(
-            QueryBypassed::class,
-            fn(QueryBypassed $event): bool => $event->reason === 'explain_query',
-        );
+        Event::assertNotDispatched(QueryBypassed::class);
     }
 
     public function test_execution_safety_bypass_reasons_remain_stable(): void
