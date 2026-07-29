@@ -11,10 +11,13 @@ use Psr\Log\LoggerInterface;
 
 final class PrimaryKeyResolver
 {
-    /** @var array<string, array{connection: string, metadata: PrimaryKeyMetadata|null}> */
+    /** @var array<string, array<string, PrimaryKeyMetadata|null>> */
     private array $memo = [];
 
-    /** @var array<string, true> */
+    /** @var array<string, PrimaryKeyMetadata> */
+    private array $interned = [];
+
+    /** @var array<string, array<string, true>> */
     private array $warnedConflicts = [];
 
     public function __construct(
@@ -27,13 +30,13 @@ final class PrimaryKeyResolver
         Connection $connection,
         TableIdentity $table,
     ): ?PrimaryKeyMetadata {
-        if (array_key_exists($table->hash, $this->memo)) {
-            $known = $this->memo[$table->hash]['metadata'];
+        if (array_key_exists($table->hash, $this->memo[$table->connection] ?? [])) {
+            $known = $this->memo[$table->connection][$table->hash];
             $supplied = $query->primaryKey();
 
             if ($supplied !== null && !$this->same($known, $supplied)) {
                 $this->conflict($table, $known, $supplied);
-                $this->memo[$table->hash]['metadata'] = null;
+                $this->memo[$table->connection][$table->hash] = null;
 
                 return null;
             }
@@ -69,10 +72,8 @@ final class PrimaryKeyResolver
         }
 
         if ($schema !== false || $metadata !== null) {
-            $this->memo[$table->hash] = [
-                'connection' => $table->connection,
-                'metadata' => $metadata,
-            ];
+            $metadata = $metadata === null ? null : $this->intern($metadata);
+            $this->memo[$table->connection][$table->hash] = $metadata;
         }
 
         return $metadata;
@@ -82,15 +83,17 @@ final class PrimaryKeyResolver
     {
         if ($connection === null) {
             $this->memo = [];
+            $this->warnedConflicts = [];
 
             return;
         }
 
-        foreach ($this->memo as $hash => $entry) {
-            if ($entry['connection'] === $connection) {
-                unset($this->memo[$hash]);
-            }
-        }
+        unset($this->memo[$connection], $this->warnedConflicts[$connection]);
+    }
+
+    private function intern(PrimaryKeyMetadata $metadata): PrimaryKeyMetadata
+    {
+        return $this->interned[$metadata->column . '|' . $metadata->family] ??= $metadata;
     }
 
     /** @return list<PrimaryKeyMetadata> */
@@ -135,11 +138,11 @@ final class PrimaryKeyResolver
         ?PrimaryKeyMetadata $left,
         ?PrimaryKeyMetadata $right,
     ): void {
-        if (isset($this->warnedConflicts[$table->hash])) {
+        if (isset($this->warnedConflicts[$table->connection][$table->hash])) {
             return;
         }
 
-        $this->warnedConflicts[$table->hash] = true;
+        $this->warnedConflicts[$table->connection][$table->hash] = true;
         $this->logger->warning('NormCache disabled canonical rows for a table with conflicting primary-key metadata.', [
             'table_hash' => $table->hash,
             'connection' => $table->connection,

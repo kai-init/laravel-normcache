@@ -4,6 +4,7 @@ namespace NormCache;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
@@ -11,14 +12,13 @@ use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
-use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
 
 final readonly class CacheManager
 {
     public function __construct(
         private CacheConfig $config,
-        private RuntimeState $runtime,
+        private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,

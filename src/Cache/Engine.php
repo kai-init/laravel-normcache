@@ -19,14 +19,13 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheState;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
 
 final readonly class Engine
 {
     public function __construct(
         private CacheConfig $config,
-        private RuntimeState $runtime,
+        private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private TableIdentityResolver $tables,
@@ -36,7 +35,6 @@ final readonly class Engine
         private RawResultCodec $codec,
         private DependencyAnalyzer $dependencies,
         private Reporter $reporter,
-        private CacheSwitch $switch,
         private CacheStateResolver $states,
         private CanonicalRepository $canonical,
         private ResultRepository $results,
@@ -54,7 +52,7 @@ final readonly class Engine
         callable $database,
         callable $primaryDatabase,
     ): array {
-        if (!$this->switch->readable()) {
+        if (!$this->runtime->readable()) {
             return $database();
         }
 
@@ -624,7 +622,7 @@ final readonly class Engine
 
     private function epoch(): string
     {
-        return $this->switch->epoch();
+        return $this->runtime->epoch();
     }
 
     /** @return list<\stdClass>|null null on missing deleted-at column; empty array when filtered by visibility. */

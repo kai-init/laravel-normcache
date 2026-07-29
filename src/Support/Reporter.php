@@ -13,15 +13,16 @@ use NormCache\Events\QueryCacheRepaired;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\ObservationRecord;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
 
-final readonly class Reporter
+final class Reporter
 {
+    /** @var array<string, true> */
+    private array $reportedCorruptions = [];
+
     public function __construct(
-        private CacheConfig $config,
-        private ?DebugBarCollector $sink,
-        private RuntimeState $runtime,
+        private readonly CacheConfig $config,
+        private readonly ?DebugBarCollector $sink,
     ) {}
 
     public function hit(
@@ -97,7 +98,7 @@ final readonly class Reporter
         if (
             $outcome === CacheReadOutcome::MISS
             && $reason === 'corrupt_payload'
-            && !$this->runtime->firstCorruption($hash)
+            && !$this->firstCorruption($hash)
         ) {
             return;
         }
@@ -200,5 +201,16 @@ final readonly class Reporter
     private function route(string $route): string
     {
         return str_replace('-', '_', $route);
+    }
+
+    private function firstCorruption(string $keyHash): bool
+    {
+        if (isset($this->reportedCorruptions[$keyHash])) {
+            return false;
+        }
+
+        $this->reportedCorruptions[$keyHash] = true;
+
+        return true;
     }
 }

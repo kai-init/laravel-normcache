@@ -9,8 +9,8 @@ use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
-use NormCache\Cache\CacheSwitch;
 use NormCache\Cache\CanonicalRepository;
 use NormCache\Cache\Engine;
 use NormCache\Cache\ResultRepository;
@@ -36,7 +36,6 @@ use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
 use NormCache\Support\Reporter;
 use NormCache\Values\CacheConfig;
-use NormCache\Values\RuntimeState;
 use Psr\Log\LoggerInterface;
 
 final class CacheServiceProvider extends ServiceProvider
@@ -78,11 +77,10 @@ final class CacheServiceProvider extends ServiceProvider
                 }
             }
 
-            return new Reporter($config, $collector, $app->make(RuntimeState::class));
+            return new Reporter($config, $collector);
         });
 
-        $this->app->scoped(RuntimeState::class);
-        $this->app->scoped(CacheSwitch::class);
+        $this->app->scoped(CacheRuntime::class);
         $this->app->scoped(CacheStateResolver::class);
         $this->app->scoped(CanonicalRepository::class);
         $this->app->scoped(ResultRepository::class);

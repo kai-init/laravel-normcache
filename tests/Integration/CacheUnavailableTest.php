@@ -4,11 +4,11 @@ namespace NormCache\Tests\Integration;
 
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
-use NormCache\Values\RuntimeState;
 
 final class CacheUnavailableTest extends TestCase
 {
@@ -44,7 +44,32 @@ final class CacheUnavailableTest extends TestCase
             $this->app->forgetScopedInstances();
 
             $this->assertFalse($this->cacheManager()->cacheDisabled());
-            $this->assertFalse($this->app->make(RuntimeState::class)->available());
+            $this->assertFalse($this->app->make(CacheRuntime::class)->available());
+        } finally {
+            $this->app->instance(RedisStore::class, $store);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
+    public function test_reads_stop_entering_the_cache_path_after_a_failure(): void
+    {
+        $store = $this->app->make(RedisStore::class);
+
+        try {
+            $this->app->instance(
+                RedisStore::class,
+                new RedisStore('missing-normcache-connection'),
+            );
+            $this->app->forgetScopedInstances();
+
+            $runtime = $this->app->make(CacheRuntime::class);
+
+            $this->assertFalse($runtime->readable());
+            $this->assertFalse($this->app->make(CacheRuntime::class)->available());
+            $this->assertFalse(
+                $runtime->readable(),
+                'a scope that has already failed must not re-enter the cache path',
+            );
         } finally {
             $this->app->instance(RedisStore::class, $store);
             $this->app->forgetScopedInstances();
@@ -64,7 +89,7 @@ final class CacheUnavailableTest extends TestCase
 
             $this->app['events']->dispatch(new MigrationsEnded('up'));
 
-            $this->assertFalse($this->app->make(RuntimeState::class)->available());
+            $this->assertFalse($this->app->make(CacheRuntime::class)->available());
         } finally {
             $this->app->instance(RedisStore::class, $store);
             $this->app->forgetScopedInstances();
@@ -105,7 +130,7 @@ final class CacheUnavailableTest extends TestCase
         $versionKey = $this->cacheKeys()->version($table);
         $before = $this->cacheStore()->getRaw($versionKey) ?? '0';
 
-        $this->app->make(RuntimeState::class)->disable();
+        $this->app->make(CacheRuntime::class)->disable();
         DB::table('posts')->where('id', 1)->update(['title' => 'After']);
 
         $this->assertSame((string) ((int) $before + 1), $this->cacheStore()->getRaw($versionKey));

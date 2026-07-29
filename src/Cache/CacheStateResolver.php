@@ -6,13 +6,11 @@ use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RuntimeState;
 
 final readonly class CacheStateResolver
 {
     public function __construct(
-        private RuntimeState $runtime,
-        private CacheSwitch $switch,
+        private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
     ) {}
@@ -228,6 +226,6 @@ final readonly class CacheStateResolver
 
     private function epoch(): string
     {
-        return $this->switch->epoch();
+        return $this->runtime->epoch();
     }
 }

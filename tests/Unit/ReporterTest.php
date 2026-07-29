@@ -11,7 +11,6 @@ use NormCache\Support\Reporter;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
 
 final class ReporterTest extends UnitTestCase
@@ -27,7 +26,6 @@ final class ReporterTest extends UnitTestCase
         $reporter = new Reporter(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
-            new RuntimeState,
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = new QueryPlan(QueryPlan::QUERY_GROUP, $table, [$table]);
@@ -75,7 +73,6 @@ final class ReporterTest extends UnitTestCase
         $reporter = new Reporter(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
-            new RuntimeState,
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = new QueryPlan(QueryPlan::RESULT, $table, []);
