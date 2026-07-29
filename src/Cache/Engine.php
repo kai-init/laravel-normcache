@@ -17,6 +17,7 @@ use NormCache\Support\Reporter;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheState;
+use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
@@ -109,19 +110,10 @@ final readonly class Engine
 
         $dependencies = $analysis->tables;
         $forceQueryGroup = $analysis->opaque && $directRoot === null;
-        $primaryKey = $this->planner->requiresPrimaryKey(
-            $query,
-            $table,
-            $dependencies,
-            $forceQueryGroup,
-            $operation,
-        )
-            ? $this->primaryKeys->resolve($query, $connection, $table)
-            : null;
         $plan = $this->planner->plan(
             $query,
             $table,
-            $primaryKey,
+            fn(): ?PrimaryKeyMetadata => $this->primaryKeys->resolve($query, $connection, $table),
             $dependencies,
             $forceQueryGroup,
             $operation,

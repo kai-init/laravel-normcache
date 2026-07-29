@@ -10,50 +10,35 @@ use NormCache\Values\TableIdentity;
 
 final class QueryPlanner
 {
-    /** @param list<TableIdentity> $dependencies */
-    public function requiresPrimaryKey(
-        QueryBuilder $query,
-        TableIdentity $root,
-        array $dependencies,
-        bool $forceQueryGroup = false,
-        string $operation = 'select',
-    ): bool {
-        $dependencies = $this->uniqueDependencies($dependencies);
-
-        if (
-            $forceQueryGroup
-            || $query->joins !== null && $query->joins !== []
-            || $this->hasCrossTableUnion($root, $dependencies, $query)
-            || !$this->canUseRowShape($query, $operation)
-        ) {
-            return false;
-        }
-
-        return $this->isWildcard($query, $root)
-            || $this->plainColumns($query, $root) !== null;
-    }
-
-    /** @param list<TableIdentity> $dependencies */
+    /**
+     * @param  list<TableIdentity>  $dependencies
+     * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey  invoked only for shapes that can use the metadata
+     */
     public function plan(
         QueryBuilder $query,
         TableIdentity $root,
-        ?PrimaryKeyMetadata $primaryKey,
+        callable $resolvePrimaryKey,
         array $dependencies,
         bool $forceQueryGroup = false,
         string $operation = 'select',
     ): QueryPlan {
         $dependencies = $this->uniqueDependencies($dependencies);
 
-        if ($forceQueryGroup || $query->joins !== null && $query->joins !== []) {
-            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies, $primaryKey);
+        if (
+            $forceQueryGroup
+            || $query->joins !== null && $query->joins !== []
+            || $this->hasCrossTableUnion($root, $dependencies, $query)
+        ) {
+            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies);
         }
 
-        if ($this->hasCrossTableUnion($root, $dependencies, $query)) {
-            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies, $primaryKey);
-        }
-
-        $canUseRowShape = $primaryKey !== null
-            && $this->canUseRowShape($query, $operation);
+        $wildcard = $this->isWildcard($query, $root);
+        $plainColumns = $wildcard ? null : $this->plainColumns($query, $root);
+        $primaryKey = $this->canUseRowShape($query, $operation)
+            && ($wildcard || $plainColumns !== null)
+                ? $resolvePrimaryKey()
+                : null;
+        $canUseRowShape = $primaryKey !== null;
 
         if (
             $canUseRowShape
@@ -68,7 +53,7 @@ final class QueryPlanner
                 if ($softDeleteSafe) {
                     $deletedAtColumn = $query->deletedAtColumn();
 
-                    if ($this->isWildcard($query, $root)) {
+                    if ($wildcard) {
                         return new QueryPlan(
                             QueryPlan::DIRECT_PK,
                             $root,
@@ -80,7 +65,7 @@ final class QueryPlanner
                         );
                     }
 
-                    if (($projectedColumns = $this->plainColumns($query, $root)) !== null) {
+                    if ($plainColumns !== null) {
                         return new QueryPlan(
                             QueryPlan::RESULT,
                             $root,
@@ -89,7 +74,7 @@ final class QueryPlanner
                             $directToken,
                             softDeleteMode: $softDeleteMode,
                             deletedAtColumn: $deletedAtColumn,
-                            projectedColumns: $projectedColumns,
+                            projectedColumns: $plainColumns,
                         );
                     }
                 }
@@ -98,7 +83,7 @@ final class QueryPlanner
 
         if (
             $canUseRowShape
-            && $this->isWildcard($query, $root)
+            && $wildcard
             && (!$root->isView || !$this->hasExternalDependency($root, $dependencies))
         ) {
             return new QueryPlan(
@@ -110,16 +95,13 @@ final class QueryPlanner
             );
         }
 
-        if (
-            $canUseRowShape
-            && ($projectedColumns = $this->plainColumns($query, $root)) !== null
-        ) {
+        if ($canUseRowShape && $plainColumns !== null) {
             return new QueryPlan(
                 QueryPlan::RESULT,
                 $root,
                 $dependencies,
                 $primaryKey,
-                projectedColumns: $projectedColumns,
+                projectedColumns: $plainColumns,
             );
         }
 
@@ -175,12 +157,16 @@ final class QueryPlanner
             && $this->hasExternalDependency($root, $dependencies);
     }
 
+    /** @param list<TableIdentity> $dependencies */
     private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
     {
-        return count(array_filter(
-            $dependencies,
-            static fn(TableIdentity $dependency): bool => $dependency->hash !== $root->hash,
-        )) > 0;
+        foreach ($dependencies as $dependency) {
+            if ($dependency->hash !== $root->hash) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isWildcard(QueryBuilder $query, TableIdentity $root): bool

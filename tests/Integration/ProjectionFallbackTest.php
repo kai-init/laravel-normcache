@@ -293,7 +293,7 @@ final class ProjectionFallbackTest extends TestCase
         $plan = $this->app->make(QueryPlanner::class)->plan(
             $query,
             $table,
-            $primaryKey,
+            fn() => $primaryKey,
             $analysis->tables,
         );
         $identity = $this->app->make(QueryIdentity::class);

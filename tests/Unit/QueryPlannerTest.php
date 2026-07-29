@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Database\QueryBuilder;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\UnitTestCase;
@@ -32,7 +33,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            $primaryKey,
+            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
@@ -48,7 +49,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -71,7 +72,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $view,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$view, $this->posts],
         );
 
@@ -85,7 +86,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -104,7 +105,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -120,7 +121,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -135,7 +136,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            $primaryKey,
+            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
@@ -151,7 +152,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
             operation: 'exists',
         );
@@ -159,40 +160,62 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_primary_key_metadata_is_not_required_for_result_only_shapes(): void
+    public function test_primary_key_metadata_is_not_requested_for_result_only_shapes(): void
     {
         $aggregate = DB::query()->from('posts');
         $aggregate->aggregate = ['function' => 'count', 'columns' => ['*']];
 
-        $this->assertFalse($this->planner->requiresPrimaryKey(
-            $aggregate,
-            $this->posts,
-            [$this->posts],
-        ));
-        $this->assertFalse($this->planner->requiresPrimaryKey(
+        $this->assertFalse($this->wasPrimaryKeyRequested($aggregate));
+        $this->assertFalse($this->wasPrimaryKeyRequested(
             DB::query()->from('posts')->join('authors', 'authors.id', '=', 'posts.author_id'),
-            $this->posts,
-            [$this->posts],
         ));
-        $this->assertFalse($this->planner->requiresPrimaryKey(
+        $this->assertFalse($this->wasPrimaryKeyRequested(
             DB::query()->from('posts')->selectRaw('lower(title)'),
-            $this->posts,
-            [$this->posts],
         ));
     }
 
-    public function test_primary_key_metadata_remains_required_for_canonical_and_row_fallback_shapes(): void
+    public function test_primary_key_metadata_is_requested_for_canonical_and_row_fallback_shapes(): void
     {
-        $this->assertTrue($this->planner->requiresPrimaryKey(
-            DB::query()->from('posts'),
-            $this->posts,
-            [$this->posts],
-        ));
-        $this->assertTrue($this->planner->requiresPrimaryKey(
+        $this->assertTrue($this->wasPrimaryKeyRequested(DB::query()->from('posts')));
+        $this->assertTrue($this->wasPrimaryKeyRequested(
             DB::query()->from('posts')->select(['id', 'title']),
-            $this->posts,
-            [$this->posts],
         ));
+    }
+
+    public function test_primary_key_metadata_is_requested_at_most_once_per_plan(): void
+    {
+        $calls = 0;
+
+        $this->planner->plan(
+            DB::query()->from('posts')->where('id', 1),
+            $this->posts,
+            function () use (&$calls): PrimaryKeyMetadata {
+                $calls++;
+
+                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+            },
+            [$this->posts],
+        );
+
+        $this->assertSame(1, $calls);
+    }
+
+    private function wasPrimaryKeyRequested(QueryBuilder $query): bool
+    {
+        $requested = false;
+
+        $this->planner->plan(
+            $query,
+            $this->posts,
+            function () use (&$requested): PrimaryKeyMetadata {
+                $requested = true;
+
+                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+            },
+            [$this->posts],
+        );
+
+        return $requested;
     }
 
     public function test_primary_key_aggregate_never_uses_a_canonical_row_route(): void
@@ -203,7 +226,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -218,7 +241,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            $primaryKey,
+            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
@@ -235,7 +258,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -250,7 +273,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -265,7 +288,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -280,7 +303,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -295,7 +318,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -310,7 +333,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -326,7 +349,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -342,7 +365,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -357,7 +380,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -377,7 +400,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            $primaryKey,
+            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
@@ -397,7 +420,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -413,7 +436,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -428,7 +451,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -443,7 +466,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -459,7 +482,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -480,7 +503,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -499,7 +522,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -518,7 +541,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts, $comments],
         );
 
@@ -536,7 +559,7 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts, $comments],
         );
 
