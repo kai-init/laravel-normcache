@@ -120,6 +120,10 @@ final readonly class Engine
         );
         $namespace = $this->identity->namespace($query->configuredTag());
         $canonicalQueryHash = null;
+        $preparedBindings = null;
+        $prepareBindings = function () use (&$preparedBindings, $connection, $bindings): array {
+            return $preparedBindings ??= $connection->prepareBindings($bindings);
+        };
 
         try {
             $dependencyHashes = array_map(
@@ -136,6 +140,7 @@ final readonly class Engine
                     $namespace,
                     $sql,
                     $bindings,
+                    $prepareBindings,
                 );
             } else {
                 $queryHash = $this->identity->hash(
@@ -143,7 +148,7 @@ final readonly class Engine
                     rootHash: $table->hash,
                     dependencyHashes: $dependencyHashes,
                     sql: $sql,
-                    bindings: $connection->prepareBindings($bindings),
+                    bindings: $prepareBindings(),
                     namespace: $namespace,
                     operation: $operation,
                 );
@@ -162,6 +167,7 @@ final readonly class Engine
                     $namespace,
                     $sql,
                     $bindings,
+                    $prepareBindings,
                 );
             }
         } catch (\InvalidArgumentException) {
@@ -1256,6 +1262,7 @@ final readonly class Engine
         string $namespace,
         string $sql,
         array $bindings,
+        callable $prepareBindings,
     ): string {
         if ($query->columns === null || $query->columns === ['*']) {
             return $this->identity->hash(
@@ -1263,7 +1270,7 @@ final readonly class Engine
                 rootHash: $plan->root->hash,
                 dependencyHashes: $dependencyHashes,
                 sql: $sql,
-                bindings: $connection->prepareBindings($bindings),
+                bindings: $prepareBindings(),
                 namespace: $namespace,
                 operation: 'select',
             );
@@ -1277,7 +1284,9 @@ final readonly class Engine
             rootHash: $plan->root->hash,
             dependencyHashes: $dependencyHashes,
             sql: $canonical->toSql(),
-            bindings: $connection->prepareBindings($canonical->getBindings()),
+            bindings: $query->bindings['select'] === []
+                 ? $prepareBindings()
+                 : $connection->prepareBindings($canonical->getBindings()),
             namespace: $namespace,
             operation: 'select',
         );
