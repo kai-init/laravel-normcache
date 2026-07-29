@@ -6,6 +6,7 @@ use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheSerializer;
 use NormCache\Tests\UnitTestCase;
+use NormCache\Values\PrimaryKeyMetadata;
 
 final class PayloadCodecTest extends UnitTestCase
 {
@@ -57,6 +58,16 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertCount(1, $decoded->rows);
         $this->assertInstanceOf(\stdClass::class, $decoded->rows[0]);
         $this->assertSame(7, $decoded->rows[0]->id);
+    }
+
+    public function test_row_codec_rejects_a_non_canonical_primary_key_token(): void
+    {
+        $codec = new RawResultCodec(new CacheSerializer);
+        $metadata = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+        $payload = $codec->encodeRow((object) ['id' => 7], '9');
+
+        $this->assertTrue($codec->decodeRow($payload, $metadata, 'i:7')->valid);
+        $this->assertFalse($codec->decodeRow($payload, $metadata, 's:7')->valid);
     }
 
     public function test_membership_codec_preserves_order_duplicates_and_string_counters(): void

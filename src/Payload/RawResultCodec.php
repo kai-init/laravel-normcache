@@ -128,13 +128,7 @@ final readonly class RawResultCodec
         if ($primaryKey !== null && $expectedToken !== null) {
             $value = $envelope['row'][$primaryKey->column] ?? null;
 
-            if (
-                $primaryKey->family === PrimaryKeyMetadata::INTEGER
-                    ? (!is_int($value) && !is_string($value)
-                        || substr($expectedToken, 2) !== (string) $value)
-                    : (!is_string($value)
-                        || $expectedToken !== 's:' . rtrim(strtr(base64_encode($value), '+/', '-_'), '='))
-            ) {
+            if (!$primaryKey->matchesToken($value, $expectedToken)) {
                 return null;
             }
         }
@@ -155,16 +149,7 @@ final readonly class RawResultCodec
             return false;
         }
 
-        $value = $row[$primaryKey->column];
-
-        if ($primaryKey->family === PrimaryKeyMetadata::INTEGER) {
-            return (is_int($value) || is_string($value))
-                && str_starts_with($expectedToken, 'i:')
-                && substr($expectedToken, 2) === (string) $value;
-        }
-
-        return is_string($value)
-            && $expectedToken === 's:' . rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+        return $primaryKey->matchesToken($row[$primaryKey->column], $expectedToken);
     }
 
     /** @return array<string, string>|null */

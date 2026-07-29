@@ -605,67 +605,29 @@ final readonly class Engine
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */
     private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): array
     {
-        $result = $this->store->fetchRow(
-            $this->keys->generation($plan->root),
-            $this->keys->tablePrefix($plan->root),
-            (string) $plan->primaryKeyToken,
-        );
-        $generation = is_string($result[0] ?? null) ? $result[0] : '0';
-        $raw = $result[1] ?? null;
+        $cached = $this->readCanonicalRow($plan);
 
         $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,
             $queryHash,
-            knownGeneration: $generation,
+            knownGeneration: $cached['generation'],
         )[0];
 
-        if (!is_string($raw)) {
-            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => null]];
+        if ($cached['row'] === null) {
+            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => $cached['reason']]];
         }
 
-        $payload = $this->codec->decodeRow(
-            $raw,
-            $plan->primaryKey,
-            $plan->primaryKeyToken,
-        );
+        $rows = $this->applySoftDeleteVisibility($plan, $cached['row']);
 
-        if (!$payload->valid) {
+        if ($rows === null) {
             return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
         }
 
-        $epoch = $this->epoch();
-        $hit = $payload->epoch === $epoch;
-        $rows = $hit ? $payload->rows : [];
-
-        if ($hit) {
-            $visible = $this->applySoftDeleteVisibility($plan, $rows[0]);
-
-            if ($visible === null) {
-                return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
-            }
-
-            $rows = $visible;
-        }
-
-        if ($hit) {
-            // version/versions are placeholders: select() returns on a hit and
-            // never reads the state. Resolving them truthfully costs a round trip.
-            return [
-                new CacheState(
-                    key: $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                    epoch: $epoch,
-                    version: '0',
-                    generation: $generation,
-                    versions: [],
-                    tag: null,
-                    tagKey: null,
-                ),
-                ['hit' => true, 'rows' => $rows, 'reason' => null],
-            ];
-        }
-
-        return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => null]];
+        return [
+            $this->directRowState($plan, $cached['generation'], $cached['epoch']),
+            ['hit' => true, 'rows' => $rows, 'reason' => null],
+        ];
     }
 
     private function epoch(): string
@@ -699,6 +661,33 @@ final readonly class Engine
     /** Reads the current canonical row after a result miss without changing the result-entry protocol. */
     private function readResultRowFallback(QueryPlan $plan): ?array
     {
+        $cached = $this->readCanonicalRow($plan);
+
+        if ($cached['row'] === null) {
+            return null;
+        }
+
+        $rows = $this->applySoftDeleteVisibility($plan, $cached['row']);
+
+        if ($rows === null) {
+            return null;
+        }
+
+        $rows = $this->projectRows($rows, (array) $plan->projectedColumns);
+
+        if ($rows === null) {
+            return null;
+        }
+
+        return [
+            $this->directRowState($plan, $cached['generation'], $cached['epoch']),
+            ['hit' => true, 'rows' => $rows, 'reason' => 'row_cache_fallback'],
+        ];
+    }
+
+    /** @return array{generation: string, epoch: string|null, row: \stdClass|null, reason: ?string} */
+    private function readCanonicalRow(QueryPlan $plan): array
+    {
         $result = $this->store->fetchRow(
             $this->keys->generation($plan->root),
             $this->keys->tablePrefix($plan->root),
@@ -708,10 +697,9 @@ final readonly class Engine
         $raw = $result[1] ?? null;
 
         if (!is_string($raw)) {
-            return null;
+            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => null];
         }
 
-        $epoch = $this->epoch();
         $payload = $this->codec->decodeRow(
             $raw,
             $plan->primaryKey,
@@ -719,47 +707,29 @@ final readonly class Engine
         );
 
         if (!$payload->valid) {
-            return null;
+            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => 'corrupt_payload'];
         }
+
+        $epoch = $this->epoch();
 
         if ($payload->epoch !== $epoch) {
-            return null;
+            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => null];
         }
 
-        $row = $payload->rows[0];
+        return ['generation' => $generation, 'epoch' => $epoch, 'row' => $payload->rows[0], 'reason' => null];
+    }
 
-        $rows = $this->applySoftDeleteVisibility($plan, $row);
-
-        if ($rows === null) {
-            return null;
-        }
-
-        if ($rows !== []) {
-            $projected = new \stdClass;
-
-            foreach ((array) $plan->projectedColumns as $column) {
-                if (!property_exists($row, $column)) {
-                    return null;
-                }
-
-                $projected->{$column} = $row->{$column};
-            }
-
-            $rows = [$projected];
-        }
-
-        return [
-            new CacheState(
-                key: $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                epoch: $epoch,
-                version: '0',
-                generation: $generation,
-                versions: [],
-                tag: null,
-                tagKey: null,
-            ),
-            ['hit' => true, 'rows' => $rows, 'reason' => 'row_cache_fallback'],
-        ];
+    private function directRowState(QueryPlan $plan, string $generation, string $epoch): CacheState
+    {
+        return new CacheState(
+            key: $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
+            epoch: $epoch,
+            version: '0',
+            generation: $generation,
+            versions: [],
+            tag: null,
+            tagKey: null,
+        );
     }
 
     /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}} */

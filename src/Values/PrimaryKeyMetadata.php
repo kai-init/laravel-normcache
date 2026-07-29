@@ -28,6 +28,11 @@ final readonly class PrimaryKeyMetadata
             : $this->stringToken($value);
     }
 
+    public function matchesToken(mixed $value, string $token): bool
+    {
+        return $this->token($value) === $token;
+    }
+
     public function valueFromToken(string $token): int|string|null
     {
         if ($this->family === self::INTEGER) {

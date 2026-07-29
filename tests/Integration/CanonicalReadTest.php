@@ -6,6 +6,7 @@ use Closure;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
+use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -93,6 +94,50 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertSame($this->postId, $row?->id);
         $this->assertSame('Canonical', $row?->title);
+    }
+
+    public function test_canonical_membership_tokens_must_match_the_primary_key_family(): void
+    {
+        $expected = DB::table('posts')->orderBy('id')->get();
+        $query = DB::table('posts');
+        $table = $this->app->make(TableIdentityResolver::class)
+            ->resolve($query->getConnection(), $query->from);
+        $this->assertNotNull($table);
+
+        $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+        $this->assertIsString($membershipKey);
+        $membership = $this->app->make(MembershipCodec::class)
+            ->decode((string) $this->cacheStore()->getRaw($membershipKey));
+        $this->assertTrue($membership->valid);
+
+        $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
+        $validRowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->postId);
+        $invalidRowKey = $this->cacheKeys()->row($table, $generation, 's:' . $this->postId);
+        $validRow = $this->cacheStore()->getRaw($validRowKey);
+        $this->assertNotNull($validRow);
+        $this->cacheStore()->setRaw($invalidRowKey, $validRow, 60);
+        $this->cacheStore()->setRaw(
+            $membershipKey,
+            $this->app->make(MembershipCodec::class)->encode(
+                $membership->epoch,
+                $membership->generation,
+                ['s:' . $this->postId],
+                $membership->versions,
+                $membership->tagVersion,
+            ),
+            60,
+        );
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = DB::table('posts')->orderBy('id')->get();
+        DB::disableQueryLog();
+
+        $this->assertSame(
+            $expected->map(static fn(object $row): array => (array) $row)->all(),
+            $actual->map(static fn(object $row): array => (array) $row)->all(),
+        );
+        $this->assertCount(1, DB::getQueryLog());
     }
 
     public function test_large_canonical_query_is_published_without_an_admission_limit(): void

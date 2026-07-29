@@ -92,8 +92,6 @@ final readonly class CanonicalRepository
         $rows = [];
         $missingAt = [];
         $corrupt = false;
-        $primaryKeyColumn = $plan->primaryKey->column;
-        $integerPrimaryKey = $plan->primaryKey->family === 'integer';
 
         foreach ($membership->ids as $index => $token) {
             $rowKey = $rowPrefix . $token;
@@ -106,14 +104,14 @@ final readonly class CanonicalRepository
             }
 
             $row = $this->codec->decodeRowObject($rawRow, $state->epoch);
-            $primaryKeyValue = $row->{$primaryKeyColumn} ?? null;
-            $matchesToken = $integerPrimaryKey
-                ? (is_int($primaryKeyValue) || is_string($primaryKeyValue))
-                    && substr($token, 2) === (string) $primaryKeyValue
-                : is_string($primaryKeyValue)
-                    && $token === 's:' . rtrim(strtr(base64_encode($primaryKeyValue), '+/', '-_'), '=');
 
-            if ($row === null || !$matchesToken) {
+            if (
+                $row === null
+                || !$plan->primaryKey->matchesToken(
+                    $row->{$plan->primaryKey->column} ?? null,
+                    $token,
+                )
+            ) {
                 $corrupt = true;
                 $missingAt[$index] = $token;
 
