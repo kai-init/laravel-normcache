@@ -254,6 +254,14 @@ final class RedisStore
         );
     }
 
+    public function enableCache(string $epochKey, string $disabledKey): int
+    {
+        return (int) $this->script(
+            RedisScripts::get('enable_cache'),
+            [$epochKey, $disabledKey],
+        );
+    }
+
     public function brpop(string $key, float $timeoutSeconds): bool
     {
         return $this->withRawValues(static function (Connection $connection) use ($key, $timeoutSeconds): bool {
@@ -269,7 +277,7 @@ final class RedisStore
      * @param  list<string>  $keys
      * @param  list<mixed>  $args
      */
-    public function script(string $script, array $keys, array $args = []): mixed
+    private function script(string $script, array $keys, array $args = []): mixed
     {
         $connection = $this->connection();
         $keyCount = count($keys);

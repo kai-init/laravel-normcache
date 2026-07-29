@@ -9,7 +9,6 @@ use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
-use NormCache\Support\RedisScripts;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\TableIdentity;
@@ -133,12 +132,10 @@ final readonly class CacheManager
         $this->runtime->forgetEpoch();
 
         try {
-            $epoch = $this->store->script(
-                RedisScripts::get('enable_cache'),
-                [$this->keys->epoch(), $this->keys->disabled()],
+            return $this->store->enableCache(
+                $this->keys->epoch(),
+                $this->keys->disabled(),
             );
-
-            return (int) $epoch;
         } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 

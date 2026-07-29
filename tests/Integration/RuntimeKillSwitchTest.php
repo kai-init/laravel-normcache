@@ -76,6 +76,21 @@ final class RuntimeKillSwitchTest extends TestCase
         $this->assertFalse(NormCache::cacheDisabled());
     }
 
+    public function test_store_enable_returns_the_advanced_epoch_and_clears_the_flag(): void
+    {
+        $epochKey = $this->cacheKeys()->epoch();
+        $disabledKey = $this->cacheKeys()->disabled();
+        $this->assertTrue(NormCache::disableCache());
+        $before = (int) ($this->cacheStore()->getRaw($epochKey) ?? '0');
+        $this->assertNotNull($this->cacheStore()->getRaw($disabledKey));
+
+        $epoch = $this->cacheStore()->enableCache($epochKey, $disabledKey);
+
+        $this->assertSame($before + 1, $epoch);
+        $this->assertSame((string) ($before + 1), $this->cacheStore()->getRaw($epochKey));
+        $this->assertNull($this->cacheStore()->getRaw($disabledKey));
+    }
+
     public function test_payloads_cached_before_a_disable_are_not_served_after_enable(): void
     {
         $read = fn() => DB::table('posts')->where('id', 1)->value('title');
