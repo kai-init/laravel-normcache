@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] — 2026-07-29
+
+### Added
+
+- **Query Builder caching:** supported `DB::table()` reads now participate in NormCache automatically, alongside Eloquent reads. Writes through those cache-aware builders invalidate affected tables automatically.
+- **Unified dependencies:** `dependsOn()` now accepts Eloquent model classes and raw table names in one declaration.
+- **Result overlays:** `useResultCache()` adds a complete-result payload on top of canonical row storage, letting warm reads avoid row-by-row assembly while retaining canonical fallback and repair.
+- **Global tags:** use `tag('name')` to group cached query payloads and `NormCache::flushTag('name')` to invalidate that group.
+- **Unified manual invalidation:** `NormCache::invalidate()` accepts a model instance, model class, table name, or an array of those targets. A model target uses its model connection; table targets use Laravel's default connection unless `connection:` is supplied.
+- **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus `disableCache()`, `enableCache()`, and `cacheDisabled()`, pause caching across application nodes. Re-enabling advances the global epoch before serving cached data again.
+- **Primary-key overrides:** configure `primary_keys` for tables whose key column or type cannot be discovered reliably.
+
+### Changed
+
+- **BREAKING:** Redis Cluster cache spaces have been removed. Remove `$normCacheSpaces`, `space()`, and the `spaces` configuration. NormCache now derives Redis placement from each physical table and query group.
+- **BREAKING:** cache key formats have changed. v4 begins with a cold cache; v3 payloads are not reused and expire under their existing TTLs.
+- **BREAKING:** `dependsOnTables()` has been removed; pass table names to `dependsOn()` instead.
+- **BREAKING:** manual invalidation is now `NormCache::invalidate()`. The old `flushModel()`, `invalidateTableVersion()`, and related table-version APIs are no longer available.
+- **BREAKING:** tag flushing is global: replace `flushTag(Model::class, 'tag')` and `flushTagAcrossModels('tag')` with `flushTag('tag')`.
+- **BREAKING:** `normcache:flush` now always advances the global epoch; its `--model` and `--space` options have been removed.
+- Row payload lifetime is configured with `row_ttl` / `NORMCACHE_ROW_TTL`, replacing `ttl` / `NORMCACHE_TTL`. The key-prefix environment variable is now `NORMCACHE_KEY_PREFIX`.
+- Completed Laravel migrations clear cached schema metadata and advance the global epoch automatically.
+
+### Removed
+
+- Cache-space configuration and space-targeted flushing.
+- The `cooldown`, `fallback`, and `fire_retrieved` configuration options.
+- `Builder::explain()` and the legacy cache-manager service accessors exposed by the facade.
+- `CacheMetricRecorded` and model-level cache hit/miss events. Query outcome events remain available when `events` is enabled.
+
+---
+
 ## [3.1.0] — 2026-07-23
 
 ### Added

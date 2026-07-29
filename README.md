@@ -7,7 +7,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-NormCache stores complete model rows once and lets many cached queries share them. Writes bumps Redis counters instead of scanning and deleting every query that might contain a changed row.
+NormCache stores complete model rows once and lets many cached queries share them. Writes bump Redis counters instead of scanning and deleting every query that might contain a changed row.
 
 Requirements: PHP 8.2+, Laravel 12/13, Redis 6.0+.
 
@@ -15,8 +15,19 @@ Requirements: PHP 8.2+, Laravel 12/13, Redis 6.0+.
 
 ```bash
 composer require kai-init/laravel-normcache
+```
+
+Publish the configuration:
+
+```bash
 php artisan vendor:publish --tag=normcache-config
 ```
+
+### Optional igbinary serialization
+
+When the `ext-igbinary` PHP extension is available, NormCache detects it automatically and uses it for cached payloads. Otherwise it falls back to PHP's native serialization; no configuration is required.
+
+Every application node and worker sharing the same Redis cache must use the same serializer. After installing or removing igbinary, run `php artisan normcache:flush` before serving traffic so payloads written with the previous format are not reused.
 
 Add `Cacheable` to Eloquent models whose writes and reads NormCache should observe:
 
@@ -41,7 +52,7 @@ Post::find(1);
 DB::table('posts')->where('published', true)->orderBy('id')->get();
 ```
 
-Query controls are available on Eloquent and Query Builder:
+Cache controls are available on Eloquent and Query Builder:
 
 ```php
 Post::query()->withoutCache()->get();
@@ -50,9 +61,30 @@ Post::query()->where('published', true)->tag('homepage')->get();
 Post::query()->orderBy('id')->useResultCache()->get();
 ```
 
-`useResultCache()` materializes a complete result payload in addition to normalized canonical storage. It is useful for repeatedly reading large result sets when model sharing is less important than avoiding row-by-row payload assembly.
+`useResultCache()` keeps canonical storage and also caches the complete result as one payload. Warm reads use that payload directly; if it is missing or corrupt, NormCache falls back to canonical rows and rebuilds it.
 
-Aggregates, `exists`, `value`, `pluck`, pagination totals, relationship eager loading, and supported relationship aggregates use the same planner and safety checks.
+## Tags and selective flushing
+
+Use `tag()` to group related cached queries under a named invalidation namespace:
+
+```php
+$posts = Post::query()
+    ->where('published', true)
+    ->tag('homepage')
+    ->get();
+```
+
+The tagged and untagged forms of the same query are cached separately. Any number of different queries can share the same tag, and flushing that tag invalidates all of their query-shaped payloads without affecting untagged queries or queries using another tag:
+
+```php
+use NormCache\Facades\NormCache;
+
+NormCache::flushTag('homepage');
+```
+
+`flushTag()` advances a Redis version counter; it does not scan for or delete matching keys. The affected queries miss and rebuild on their next read, while old payloads expire naturally. Tags are an additional manual invalidation boundary and do not replace automatic dependency invalidation when an underlying table changes.
+
+Tags must be non-empty valid UTF-8 strings of at most 128 bytes.
 
 ## Dependencies
 
@@ -92,6 +124,31 @@ php artisan normcache:flush
 ```
 
 `flushAll()` and the command advance a global epoch. Old payloads expire naturally; NormCache does not scan Redis keys.
+
+## Temporarily disabling the cache
+
+Use the runtime commands when NormCache needs to be paused across all application nodes without changing configuration or redeploying:
+
+```bash
+php artisan normcache:disable
+php artisan normcache:enable
+```
+
+While disabled, reads bypass NormCache and go directly to the database, and writes do not perform cache invalidation. The switch is stored in Redis and is observed by new requests and jobs across every node.
+
+`normcache:enable` atomically advances the global epoch before clearing the disabled flag. This prevents payloads cached before the pause from being served after writes occurred while invalidation was disabled.
+
+The same controls are available programmatically:
+
+```php
+use NormCache\Facades\NormCache;
+
+NormCache::disableCache();
+$disabled = NormCache::cacheDisabled();
+$newEpoch = NormCache::enableCache();
+```
+
+This runtime switch is separate from `NORMCACHE_ENABLED=false`. A cache disabled in configuration cannot be enabled with `normcache:enable`; update the configuration first.
 
 ## Configuration
 

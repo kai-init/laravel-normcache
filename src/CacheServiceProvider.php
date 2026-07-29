@@ -4,6 +4,7 @@ namespace NormCache;
 
 use DebugBar\DataCollector\TimeDataCollector;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
@@ -102,6 +103,11 @@ final class CacheServiceProvider extends ServiceProvider
             if ($event->connection->transactionLevel() === 0) {
                 $this->app->make(Invalidator::class)->rollback((string) $event->connection->getName());
             }
+        });
+        Event::listen(MigrationsEnded::class, function (): void {
+            $cache = $this->app->make(CacheManager::class);
+            $cache->clearSchemaMetadata();
+            $cache->flushAll();
         });
 
         if ($this->app->runningInConsole()) {

@@ -10,11 +10,13 @@ final readonly class CacheSerializer
 
     public function __construct(?bool $igbinary = null)
     {
-        $this->igbinary = $igbinary ?? extension_loaded('igbinary');
+        $available = extension_loaded('igbinary');
 
-        if ($this->igbinary && !extension_loaded('igbinary')) {
+        if ($igbinary === true && !$available) {
             throw new \RuntimeException('The igbinary codec was requested but the extension is unavailable.');
         }
+
+        $this->igbinary = $igbinary ?? $available;
     }
 
     public static function native(): self
