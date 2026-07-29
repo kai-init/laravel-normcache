@@ -13,11 +13,15 @@ final class TableIdentityResolver
     /** @var array<string, ?TableIdentity> */
     private array $resolvedIdentities = [];
 
+    /** @var array<string, array<string, true>> */
+    private array $viewNames = [];
+
     public function clear(?string $connection = null): void
     {
         if ($connection === null) {
             $this->effectiveSchemas = [];
             $this->resolvedIdentities = [];
+            $this->viewNames = [];
 
             return;
         }
@@ -29,6 +33,11 @@ final class TableIdentityResolver
         $this->resolvedIdentities = array_filter(
             $this->resolvedIdentities,
             static fn(?TableIdentity $id, string $key): bool => !str_starts_with($key, $connection . ':'),
+            ARRAY_FILTER_USE_BOTH,
+        );
+        $this->viewNames = array_filter(
+            $this->viewNames,
+            static fn(array $views, string $key): bool => !str_starts_with($key, $connection . ':'),
             ARRAY_FILTER_USE_BOTH,
         );
     }
@@ -187,11 +196,26 @@ final class TableIdentityResolver
 
     private function isView(Connection $connection, string $schema, string $table): ?bool
     {
-        try {
-            $view = $this->unqualifiedTable($table);
-            $reference = $schema === '' ? $view : $schema . '.' . $view;
+        $key = $this->mutableConnectionKey($connection) . ':views:' . $schema;
 
-            return $connection->getSchemaBuilder()->hasView($reference);
+        if (isset($this->viewNames[$key])) {
+            return isset($this->viewNames[$key][strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table))]);
+        }
+
+        try {
+            $views = [];
+
+            $viewSchema = $schema === '' && $connection->getDriverName() === 'sqlite'
+                ? 'main'
+                : ($schema === '' ? null : $schema);
+
+            foreach ($connection->getSchemaBuilder()->getViews($viewSchema) as $view) {
+                $views[strtolower($view['name'])] = true;
+            }
+
+            $this->viewNames[$key] = $views;
+
+            return isset($views[strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table))]);
         } catch (\Throwable) {
             return null;
         }
@@ -199,22 +223,7 @@ final class TableIdentityResolver
 
     private function mutableConnectionKey(Connection $connection): string
     {
-        $name = (string) $connection->getName();
-        $configFingerprint = hash('xxh128', serialize([
-            $connection->getConfig('search_path'),
-            $connection->getConfig('schema'),
-            $connection->getConfig('username'),
-        ]));
-
-        return $name . ':' . spl_object_id($connection) . ':' . hash(
-            'xxh128',
-            TableIdentity::encodeFields([
-                (string) $connection->getDriverName(),
-                (string) $connection->getDatabaseName(),
-                (string) $connection->getTablePrefix(),
-                $configFingerprint,
-            ]),
-        );
+        return (string) $connection->getName() . ':' . spl_object_id($connection);
     }
 
     private function unqualifiedTable(string $table): string

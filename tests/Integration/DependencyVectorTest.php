@@ -451,6 +451,7 @@ final class DependencyVectorTest extends TestCase
     public function test_database_views_require_explicit_table_dependencies(): void
     {
         DB::statement('create view post_titles as select id, title from posts');
+        $this->cacheManager()->clearSchemaMetadata();
 
         $implicit = fn() => DB::table('post_titles')->where('id', $this->postId)->first();
         $this->assertSame('Post', $implicit()?->title);

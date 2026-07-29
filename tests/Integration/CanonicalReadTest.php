@@ -46,6 +46,22 @@ final class CanonicalReadTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_implicit_and_explicit_wildcards_share_the_canonical_cache_entry(): void
+    {
+        $expected = DB::table('posts')->orderBy('id')->get();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = DB::table('posts')->select('*')->orderBy('id')->get();
+        DB::disableQueryLog();
+
+        $this->assertSame(
+            $expected->map(static fn(object $row): array => (array) $row)->all(),
+            $actual->map(static fn(object $row): array => (array) $row)->all(),
+        );
+        $this->assertSame([], DB::getQueryLog());
+    }
+
     public function test_canonical_row_payload_must_match_the_primary_key_in_its_key(): void
     {
         $secondId = DB::table('posts')->insertGetId([

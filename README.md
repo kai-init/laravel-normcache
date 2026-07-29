@@ -201,7 +201,7 @@ NormCache bypasses reads when correctness cannot be established, including:
 
 Canonical storage requires a supported single-column integer or string primary key. Queries can still use `result` storage when canonical routing is unavailable.
 
-Writes performed through raw SQL or a connection not installed by NormCache are invisible until `invalidate()` or `flushAll()` is called. After changing connection database/schema metadata at runtime, call `NormCache::clearSchemaMetadata()` for that connection.
+Writes performed through raw SQL or a connection not installed by NormCache are invisible until `invalidate()` or `flushAll()` is called. After changing a connection's database, schema, or database objects at runtime, call `NormCache::clearSchemaMetadata()` for that connection.
 
 ### Consistency & Failure Modes
 

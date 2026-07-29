@@ -159,6 +159,42 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
+    public function test_primary_key_metadata_is_not_required_for_result_only_shapes(): void
+    {
+        $aggregate = DB::query()->from('posts');
+        $aggregate->aggregate = ['function' => 'count', 'columns' => ['*']];
+
+        $this->assertFalse($this->planner->requiresPrimaryKey(
+            $aggregate,
+            $this->posts,
+            [$this->posts],
+        ));
+        $this->assertFalse($this->planner->requiresPrimaryKey(
+            DB::query()->from('posts')->join('authors', 'authors.id', '=', 'posts.author_id'),
+            $this->posts,
+            [$this->posts],
+        ));
+        $this->assertFalse($this->planner->requiresPrimaryKey(
+            DB::query()->from('posts')->selectRaw('lower(title)'),
+            $this->posts,
+            [$this->posts],
+        ));
+    }
+
+    public function test_primary_key_metadata_remains_required_for_canonical_and_row_fallback_shapes(): void
+    {
+        $this->assertTrue($this->planner->requiresPrimaryKey(
+            DB::query()->from('posts'),
+            $this->posts,
+            [$this->posts],
+        ));
+        $this->assertTrue($this->planner->requiresPrimaryKey(
+            DB::query()->from('posts')->select(['id', 'title']),
+            $this->posts,
+            [$this->posts],
+        ));
+    }
+
     public function test_primary_key_aggregate_never_uses_a_canonical_row_route(): void
     {
         $query = DB::query()->from('posts')->where('id', 42);

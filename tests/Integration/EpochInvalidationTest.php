@@ -6,14 +6,10 @@ use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CacheConfig;
 
 final class EpochInvalidationTest extends TestCase
 {
-    /**
-     * Regression guard: a write must not seed the scope's epoch memo. When it did, the
-     * epoch captured before a concurrent flush was reused to stamp published payloads,
-     * and the flush's own INCR could land on that same value.
-     */
     public function test_flush_all_evicts_a_pk_value_read(): void
     {
 
@@ -33,6 +29,30 @@ final class EpochInvalidationTest extends TestCase
         $this->app->forgetScopedInstances();
 
         $this->assertSame('Changed', $read());
+    }
+
+    public function test_completed_migrations_advance_the_epoch_while_cache_is_disabled_by_configuration(): void
+    {
+        $epochKey = $this->cacheKeys()->epoch();
+        $before = (int) ($this->cacheStore()->getRaw($epochKey) ?? '0');
+        $original = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['enabled'] = false;
+
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            $this->app['events']->dispatch(new MigrationsEnded('up'));
+        } finally {
+            $this->app->instance(CacheConfig::class, $original);
+            $this->app->forgetScopedInstances();
+        }
+
+        $this->assertSame(
+            $before + 1,
+            (int) $this->cacheStore()->getRaw($epochKey),
+        );
     }
 
     public function test_completed_migrations_advance_the_epoch(): void

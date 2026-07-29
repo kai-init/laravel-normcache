@@ -108,13 +108,22 @@ final readonly class Engine
         }
 
         $dependencies = $analysis->tables;
-        $primaryKey = $this->primaryKeys->resolve($query, $connection, $table);
+        $forceQueryGroup = $analysis->opaque && $directRoot === null;
+        $primaryKey = $this->planner->requiresPrimaryKey(
+            $query,
+            $table,
+            $dependencies,
+            $forceQueryGroup,
+            $operation,
+        )
+            ? $this->primaryKeys->resolve($query, $connection, $table)
+            : null;
         $plan = $this->planner->plan(
             $query,
             $table,
             $primaryKey,
             $dependencies,
-            $analysis->opaque && $directRoot === null,
+            $forceQueryGroup,
             $operation,
         );
         $namespace = $this->identity->namespace($query->configuredTag());
@@ -133,6 +142,8 @@ final readonly class Engine
                     $connection,
                     $dependencyHashes,
                     $namespace,
+                    $sql,
+                    $bindings,
                 );
             } else {
                 $queryHash = $this->identity->hash(
@@ -157,6 +168,8 @@ final readonly class Engine
                     $connection,
                     $dependencyHashes,
                     $namespace,
+                    $sql,
+                    $bindings,
                 );
             }
         } catch (\InvalidArgumentException) {
@@ -1347,7 +1360,21 @@ final readonly class Engine
         Connection $connection,
         array $dependencyHashes,
         string $namespace,
+        string $sql,
+        array $bindings,
     ): string {
+        if ($query->columns === null || $query->columns === ['*']) {
+            return $this->identity->hash(
+                route: QueryPlan::CANONICAL,
+                rootHash: $plan->root->hash,
+                dependencyHashes: $dependencyHashes,
+                sql: $sql,
+                bindings: $connection->prepareBindings($bindings),
+                namespace: $namespace,
+                operation: 'select',
+            );
+        }
+
         $canonical = $query->cloneWithoutBindings(['select']);
         $canonical->columns = ['*'];
 

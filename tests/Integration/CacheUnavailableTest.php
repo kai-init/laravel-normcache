@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration;
 
+use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Support\Facades\DB;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisStore;
@@ -33,14 +34,41 @@ final class CacheUnavailableTest extends TestCase
 
     public function test_cache_disabled_status_fails_open_when_redis_is_unavailable(): void
     {
-        $this->app->instance(
-            RedisStore::class,
-            new RedisStore('missing-normcache-connection'),
-        );
-        $this->app->forgetScopedInstances();
+        $store = $this->app->make(RedisStore::class);
 
-        $this->assertFalse($this->cacheManager()->cacheDisabled());
-        $this->assertFalse($this->app->make(RuntimeState::class)->available());
+        try {
+            $this->app->instance(
+                RedisStore::class,
+                new RedisStore('missing-normcache-connection'),
+            );
+            $this->app->forgetScopedInstances();
+
+            $this->assertFalse($this->cacheManager()->cacheDisabled());
+            $this->assertFalse($this->app->make(RuntimeState::class)->available());
+        } finally {
+            $this->app->instance(RedisStore::class, $store);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
+    public function test_completed_migrations_do_not_fail_when_redis_is_unavailable(): void
+    {
+        $store = $this->app->make(RedisStore::class);
+
+        try {
+            $this->app->instance(
+                RedisStore::class,
+                new RedisStore('missing-normcache-connection'),
+            );
+            $this->app->forgetScopedInstances();
+
+            $this->app['events']->dispatch(new MigrationsEnded('up'));
+
+            $this->assertFalse($this->app->make(RuntimeState::class)->available());
+        } finally {
+            $this->app->instance(RedisStore::class, $store);
+            $this->app->forgetScopedInstances();
+        }
     }
 
     public function test_first_write_fails_open_when_redis_is_not_configured(): void

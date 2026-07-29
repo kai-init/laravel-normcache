@@ -103,7 +103,7 @@ final readonly class CacheManager
     {
         $this->runtime->forgetEpoch();
 
-        return $this->increment($this->keys->epoch());
+        return $this->increment($this->keys->epoch(), force: true);
     }
 
     public function disableCache(): bool
@@ -167,9 +167,9 @@ final readonly class CacheManager
         $this->primaryKeys->clear($connection);
     }
 
-    private function increment(string $key): bool
+    private function increment(string $key, bool $force = false): bool
     {
-        if (!$this->config->enabled) {
+        if (!$force && !$this->config->enabled) {
             return false;
         }
 

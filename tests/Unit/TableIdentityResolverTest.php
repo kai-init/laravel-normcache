@@ -39,20 +39,34 @@ final class TableIdentityResolverTest extends UnitTestCase
         $builder = Mockery::mock(Builder::class);
         $builder->shouldReceive('getCurrentSchemaName')->once()->andReturn('public');
         $viewCalls = 0;
-        $builder->shouldReceive('hasView')
+        $builder->shouldReceive('getViews')
             ->twice()
-            ->andReturnUsing(function () use (&$viewCalls): bool {
+            ->andReturnUsing(function () use (&$viewCalls): array {
                 if ($viewCalls++ === 0) {
                     throw new \RuntimeException('denied');
                 }
 
-                return false;
+                return [];
             });
         $connection = $this->postgresConnection(null, $builder);
         $resolver = app(TableIdentityResolver::class);
 
         $this->assertNull($resolver->resolve($connection, 'posts'));
         $this->assertSame('public', $resolver->resolve($connection, 'posts')?->schema);
+    }
+
+    public function test_view_list_is_shared_by_tables_in_the_same_schema(): void
+    {
+        $builder = Mockery::mock(Builder::class);
+        $builder->shouldReceive('getCurrentSchemaName')->once()->andReturn('public');
+        $builder->shouldReceive('getViews')->once()->andReturn([
+            ['name' => 'post_summary'],
+        ]);
+        $connection = $this->postgresConnection(null, $builder);
+        $resolver = app(TableIdentityResolver::class);
+
+        $this->assertFalse($resolver->resolve($connection, 'posts')?->isView);
+        $this->assertTrue($resolver->resolve($connection, 'post_summary')?->isView);
     }
 
     public function test_failed_effective_schema_lookup_is_retried(): void
@@ -68,7 +82,7 @@ final class TableIdentityResolverTest extends UnitTestCase
 
                 return 'public';
             });
-        $builder->shouldReceive('hasView')->once()->andReturn(false);
+        $builder->shouldReceive('getViews')->once()->andReturn([]);
         $connection = $this->postgresConnection(null, $builder);
         $resolver = app(TableIdentityResolver::class);
 
@@ -81,7 +95,7 @@ final class TableIdentityResolverTest extends UnitTestCase
         ?Builder $builder = null,
     ): Connection {
         $builder ??= Mockery::mock(Builder::class);
-        $builder->shouldReceive('hasView')->byDefault()->andReturn(false);
+        $builder->shouldReceive('getViews')->byDefault()->andReturn([]);
 
         if ($schema !== null) {
             $builder->shouldReceive('getCurrentSchemaName')
@@ -94,7 +108,7 @@ final class TableIdentityResolverTest extends UnitTestCase
         $connection->shouldReceive('getName')->andReturn('testing');
         $connection->shouldReceive('getDatabaseName')->andReturn('app');
         $connection->shouldReceive('getTablePrefix')->andReturn('');
-        $connection->shouldReceive('getConfig')->byDefault()->andReturn(null);
+        $connection->shouldNotReceive('getConfig');
         $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
 
         return $connection;

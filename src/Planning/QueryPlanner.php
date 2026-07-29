@@ -11,6 +11,29 @@ use NormCache\Values\TableIdentity;
 final class QueryPlanner
 {
     /** @param list<TableIdentity> $dependencies */
+    public function requiresPrimaryKey(
+        QueryBuilder $query,
+        TableIdentity $root,
+        array $dependencies,
+        bool $forceQueryGroup = false,
+        string $operation = 'select',
+    ): bool {
+        $dependencies = $this->uniqueDependencies($dependencies);
+
+        if (
+            $forceQueryGroup
+            || $query->joins !== null && $query->joins !== []
+            || $this->hasCrossTableUnion($root, $dependencies, $query)
+            || !$this->canUseRowShape($query, $operation)
+        ) {
+            return false;
+        }
+
+        return $this->isWildcard($query, $root)
+            || $this->plainColumns($query, $root) !== null;
+    }
+
+    /** @param list<TableIdentity> $dependencies */
     public function plan(
         QueryBuilder $query,
         TableIdentity $root,
@@ -29,9 +52,8 @@ final class QueryPlanner
             return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies, $primaryKey);
         }
 
-        $canUseRowShape = $operation === 'select'
-            && $primaryKey !== null
-            && $this->isSingleRowShape($query);
+        $canUseRowShape = $primaryKey !== null
+            && $this->canUseRowShape($query, $operation);
 
         if (
             $canUseRowShape
@@ -117,6 +139,11 @@ final class QueryPlanner
             && empty($query->groups)
             && empty($query->havings)
             && empty($query->unions);
+    }
+
+    private function canUseRowShape(QueryBuilder $query, string $operation): bool
+    {
+        return $operation === 'select' && $this->isSingleRowShape($query);
     }
 
     /** @param list<TableIdentity> $dependencies
