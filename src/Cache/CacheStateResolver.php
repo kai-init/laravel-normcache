@@ -43,10 +43,8 @@ final readonly class CacheStateResolver
             QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
             default => null,
         } : null;
-        $tagKey = str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
-            : null;
-        $epochKey = $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
+        $tagKey = $this->tagKey($namespace);
+        $epochKey = $this->unknownEpochKey();
         $values = $this->store->mget(array_values(array_unique(array_filter([
             $epochKey,
             ...array_values($versionKeys),
@@ -54,10 +52,7 @@ final readonly class CacheStateResolver
             $tagKey,
             ...$alsoFetch,
         ]))));
-
-        if ($epochKey !== null) {
-            $this->runtime->rememberEpoch($values[$epochKey] ?? '0');
-        }
+        $this->rememberEpochFrom($epochKey, $values);
 
         if (
             $knownVersion !== null
@@ -109,7 +104,7 @@ final readonly class CacheStateResolver
         return [
             new CacheState(
                 key: $key,
-                epoch: $this->epoch(),
+                epoch: $this->runtime->epoch(),
                 version: $rootVersion,
                 generation: $generation,
                 versions: $versions,
@@ -121,68 +116,21 @@ final readonly class CacheStateResolver
     }
 
     /**
-     * @return array{
-     *     epoch: ?string,
-     *     version: string,
-     *     generation: string,
-     *     dependencies: array<string, string>,
-     *     tag: ?string,
-     *     final: list<string>
-     * }
+     * @param  list<string>  $rowKeys
+     * @return array{0: CacheState, 1: array<string, ?string>}
      */
-    public function canonicalKeys(QueryPlan $plan, string $namespace): array
-    {
-        $dependencyKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash) {
-                $dependencyKeys[$dependency->hash] = $this->keys->version($dependency);
-            }
-        }
-
-        $epochKey = $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
-        $versionKey = $this->keys->version($plan->root);
-        $generationKey = $this->keys->generation($plan->root);
-        $tagKey = str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
-            : null;
-        $externalKeys = array_values(array_filter([
-            $epochKey,
-            ...array_values($dependencyKeys),
-            $tagKey,
-        ]));
-
-        return [
-            'epoch' => $epochKey,
-            'version' => $versionKey,
-            'generation' => $generationKey,
-            'dependencies' => $dependencyKeys,
-            'tag' => $tagKey,
-            'final' => [$versionKey, $generationKey, ...$externalKeys],
-        ];
-    }
-
-    /**
-     * @param  array{
-     *     epoch: ?string,
-     *     version: string,
-     *     generation: string,
-     *     dependencies: array<string, string>,
-     *     tag: ?string,
-     *     final: list<string>
-     * }  $keys
-     * @param  array<string, ?string>  $values
-     */
-    public function canonicalFromFetched(
+    public function resolveCanonical(
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-        array $keys,
-        array $values,
-    ): CacheState {
-        if ($keys['epoch'] !== null) {
-            $this->runtime->rememberEpoch($values[$keys['epoch']] ?? '0');
-        }
+        array $rowKeys,
+    ): array {
+        $keys = $this->stateKeys($plan, $this->tagKey($namespace), $this->unknownEpochKey());
+        $values = $this->store->mget(array_values(array_unique([
+            ...$rowKeys,
+            ...$keys['all'],
+        ])));
+        $this->rememberEpochFrom($keys['epoch'], $values);
 
         $versions = [];
 
@@ -192,40 +140,102 @@ final readonly class CacheStateResolver
 
         ksort($versions, SORT_STRING);
         $version = $values[$keys['version']] ?? '0';
-        $generation = $values[$keys['generation']] ?? '0';
-        $tag = $keys['tag'] !== null ? ($values[$keys['tag']] ?? '0') : null;
 
-        return new CacheState(
-            key: $this->keys->membership(
-                $plan->root,
-                $version,
-                $namespace,
-                $queryHash,
+        return [
+            new CacheState(
+                key: $this->keys->membership($plan->root, $version, $namespace, $queryHash),
+                epoch: $this->runtime->epoch(),
+                version: $version,
+                generation: $values[$keys['generation']] ?? '0',
+                versions: $versions,
+                tag: $keys['tag'] !== null ? ($values[$keys['tag']] ?? '0') : null,
+                tagKey: $keys['tag'],
             ),
-            epoch: $this->epoch(),
-            version: $version,
-            generation: $generation,
-            versions: $versions,
-            tag: $tag,
-            tagKey: $keys['tag'],
-        );
+            $values,
+        ];
+    }
+
+    /** @phpstan-impure re-read on each call: callers check either side of a publish */
+    public function isCurrent(QueryPlan $plan, CacheState $expected): bool
+    {
+        $keys = $this->stateKeys($plan, $expected->tagKey, $this->keys->epoch());
+        $values = $this->store->mget($keys['all']);
+        $current = static fn(string $key): string => $values[$key] ?? '0';
+
+        if (
+            $current((string) $keys['epoch']) !== $expected->epoch
+            || $current($keys['version']) !== $expected->version
+            || $current($keys['generation']) !== $expected->generation
+        ) {
+            return false;
+        }
+
+        foreach ($keys['dependencies'] as $hash => $key) {
+            if ($current($key) !== ($expected->versions[$hash] ?? null)) {
+                return false;
+            }
+        }
+
+        return $expected->tag === null
+            || $keys['tag'] !== null && $current($keys['tag']) === $expected->tag;
     }
 
     /**
-     * @param  list<string>  $keys
-     * @param  list<string>  $alsoFetch
-     * @return array<string, ?string>
+     * @return array{
+     *     epoch: ?string,
+     *     version: string,
+     *     generation: string,
+     *     dependencies: array<string, string>,
+     *     tag: ?string,
+     *     all: list<string>
+     * }
      */
-    public function fetch(array $keys, array $alsoFetch = []): array
+    private function stateKeys(QueryPlan $plan, ?string $tagKey, ?string $epochKey): array
     {
-        return $this->store->mget(array_values(array_unique([
-            ...$keys,
-            ...$alsoFetch,
-        ])));
+        $dependencies = [];
+
+        foreach ($plan->dependencies as $dependency) {
+            if ($dependency->hash !== $plan->root->hash) {
+                $dependencies[$dependency->hash] = $this->keys->version($dependency);
+            }
+        }
+
+        $versionKey = $this->keys->version($plan->root);
+        $generationKey = $this->keys->generation($plan->root);
+
+        return [
+            'epoch' => $epochKey,
+            'version' => $versionKey,
+            'generation' => $generationKey,
+            'dependencies' => $dependencies,
+            'tag' => $tagKey,
+            'all' => array_values(array_filter([
+                $versionKey,
+                $generationKey,
+                $epochKey,
+                ...array_values($dependencies),
+                $tagKey,
+            ])),
+        ];
     }
 
-    private function epoch(): string
+    private function tagKey(string $namespace): ?string
     {
-        return $this->runtime->epoch();
+        return str_starts_with($namespace, 'g')
+            ? $this->keys->tagVersion(substr($namespace, 1))
+            : null;
+    }
+
+    private function unknownEpochKey(): ?string
+    {
+        return $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
+    }
+
+    /** @param array<string, ?string> $values */
+    private function rememberEpochFrom(?string $epochKey, array $values): void
+    {
+        if ($epochKey !== null) {
+            $this->runtime->rememberEpoch($values[$epochKey] ?? '0');
+        }
     }
 }

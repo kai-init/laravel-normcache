@@ -67,14 +67,11 @@ final readonly class CanonicalRepository
             $unique[$rowPrefix . $token] = true;
         }
 
-        $stateKeys = $this->states->canonicalKeys($plan, $namespace);
-        $fetched = $this->states->fetch(array_keys($unique), $stateKeys['final']);
-        $state = $this->states->canonicalFromFetched(
+        [$state, $fetched] = $this->states->resolveCanonical(
             $plan,
             $namespace,
             $queryHash,
-            $stateKeys,
-            $fetched,
+            array_keys($unique),
         );
 
         if (

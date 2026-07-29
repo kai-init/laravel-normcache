@@ -783,7 +783,7 @@ final readonly class Engine
 
             $rows = $this->readRepairedRows($plan, $state, $tokens);
 
-            if ($rows === null || !$this->stateStillCurrent($plan, $state)) {
+            if ($rows === null || !$this->states->isCurrent($plan, $state)) {
                 return null;
             }
 
@@ -881,7 +881,7 @@ final readonly class Engine
             return null;
         }
 
-        if (!$this->stateStillCurrent($plan, $state)) {
+        if (!$this->states->isCurrent($plan, $state)) {
             return null;
         }
 
@@ -916,7 +916,7 @@ final readonly class Engine
             return [];
         }
 
-        return $this->stateStillCurrent($plan, $state) ? $rowsByToken : [];
+        return $this->states->isCurrent($plan, $state) ? $rowsByToken : [];
     }
 
     /**
@@ -934,7 +934,7 @@ final readonly class Engine
             $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
         }
 
-        $raw = $this->states->fetch(array_values($rowKeys));
+        $raw = $this->store->mget(array_values($rowKeys));
         $rows = [];
 
         foreach ($rowKeys as $token => $rowKey) {
@@ -959,45 +959,6 @@ final readonly class Engine
     }
 
     /** @phpstan-impure */
-    private function stateStillCurrent(QueryPlan $plan, CacheState $state): bool
-    {
-        $epochKey = $this->keys->epoch();
-        $versionKey = $this->keys->version($plan->root);
-        $generationKey = $this->keys->generation($plan->root);
-        $dependencyKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash) {
-                $dependencyKeys[$dependency->hash] = $this->keys->version($dependency);
-            }
-        }
-
-        $values = $this->store->mget(array_values(array_filter([
-            $epochKey,
-            $versionKey,
-            $generationKey,
-            $state->tagKey,
-            ...array_values($dependencyKeys),
-        ])));
-        $current = static fn(string $key): string => $values[$key] ?? '0';
-
-        if (
-            $current($epochKey) !== $state->epoch
-            || $current($versionKey) !== $state->version
-            || $current($generationKey) !== $state->generation
-        ) {
-            return false;
-        }
-
-        foreach ($dependencyKeys as $hash => $key) {
-            if ($current($key) !== ($state->versions[$hash] ?? null)) {
-                return false;
-            }
-        }
-
-        return $state->tag === null
-            || $state->tagKey !== null && $current($state->tagKey) === $state->tag;
-    }
 
     /** @param array<int, mixed> $rows */
     private function publish(
