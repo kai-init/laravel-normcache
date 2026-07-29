@@ -54,6 +54,12 @@ final readonly class CacheSwitch
 
     public function epoch(): string
     {
+        $known = $this->runtime->knownEpoch();
+
+        if ($known !== null) {
+            return $known;
+        }
+
         return $this->runtime->epoch(fn(): array => $this->readPair());
     }
 

@@ -50,6 +50,7 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
         $integer = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
         $string = new PrimaryKeyMetadata('uuid', PrimaryKeyMetadata::STRING);
 
+        $this->assertTrue($integer->matchesToken(42, 'i:42'));
         $this->assertTrue($integer->matchesToken('42', 'i:42'));
         $this->assertFalse($integer->matchesToken('42', 's:42'));
         $this->assertFalse($integer->matchesToken('42', 'i:0042'));

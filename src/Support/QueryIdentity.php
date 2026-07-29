@@ -23,8 +23,10 @@ final class QueryIdentity
         string $namespace,
         string $operation,
     ): string {
-        $dependencyHashes = array_values(array_unique($dependencyHashes));
-        sort($dependencyHashes, SORT_STRING);
+        if (count($dependencyHashes) > 1) {
+            $dependencyHashes = array_values(array_unique($dependencyHashes));
+            sort($dependencyHashes, SORT_STRING);
+        }
 
         $prepared = '';
 

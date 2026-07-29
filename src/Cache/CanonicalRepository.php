@@ -103,15 +103,9 @@ final readonly class CanonicalRepository
                 continue;
             }
 
-            $row = $this->codec->decodeRowObject($rawRow, $state->epoch);
+            $row = $this->codec->decodeRowObject($rawRow, $state->epoch, $plan->primaryKey, $token);
 
-            if (
-                $row === null
-                || !$plan->primaryKey->matchesToken(
-                    $row->{$plan->primaryKey->column} ?? null,
-                    $token,
-                )
-            ) {
+            if ($row === null) {
                 $corrupt = true;
                 $missingAt[$index] = $token;
 
