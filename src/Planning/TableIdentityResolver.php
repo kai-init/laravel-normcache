@@ -4,7 +4,6 @@ namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
 use NormCache\Values\TableIdentity;
-use Throwable;
 
 final class TableIdentityResolver
 {
@@ -47,7 +46,10 @@ final class TableIdentityResolver
         }
 
         $identity = $this->doResolve($connection, $from);
-        $this->resolvedIdentities[$cacheKey] = $identity;
+
+        if ($identity !== null) {
+            $this->resolvedIdentities[$cacheKey] = $identity;
+        }
 
         return $identity;
     }
@@ -169,14 +171,16 @@ final class TableIdentityResolver
             if ($schema === '') {
                 $schema = null;
             }
-        } catch (Throwable) {
+        } catch (\Throwable) {
             $schema = null;
         }
 
-        $this->effectiveSchemas[$key] = [
-            'connection' => (string) $connection->getName(),
-            'schema' => $schema,
-        ];
+        if ($schema !== null) {
+            $this->effectiveSchemas[$key] = [
+                'connection' => (string) $connection->getName(),
+                'schema' => $schema,
+            ];
+        }
 
         return $schema;
     }
@@ -188,7 +192,7 @@ final class TableIdentityResolver
             $reference = $schema === '' ? $view : $schema . '.' . $view;
 
             return $connection->getSchemaBuilder()->hasView($reference);
-        } catch (Throwable) {
+        } catch (\Throwable) {
             return null;
         }
     }

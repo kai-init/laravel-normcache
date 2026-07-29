@@ -13,7 +13,6 @@ use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
-use Throwable;
 
 final readonly class CacheManager
 {
@@ -118,7 +117,7 @@ final readonly class CacheManager
             $this->runtime->forgetEpoch();
 
             return true;
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
             return false;
@@ -140,7 +139,7 @@ final readonly class CacheManager
             );
 
             return (int) $epoch;
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
             return null;
@@ -149,7 +148,17 @@ final readonly class CacheManager
 
     public function cacheDisabled(): bool
     {
-        return $this->store->getRaw($this->keys->disabled()) !== null;
+        if (!$this->config->enabled) {
+            return false;
+        }
+
+        try {
+            return $this->store->getRaw($this->keys->disabled()) !== null;
+        } catch (\Throwable $exception) {
+            $this->runtime->fail($exception);
+
+            return false;
+        }
     }
 
     public function clearSchemaMetadata(?string $connection = null): void
@@ -168,7 +177,7 @@ final readonly class CacheManager
             $this->store->increment($key);
 
             return true;
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
             return false;

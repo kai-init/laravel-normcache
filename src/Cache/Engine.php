@@ -3,7 +3,6 @@
 namespace NormCache\Cache;
 
 use Illuminate\Database\Connection;
-use InvalidArgumentException;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\CacheReadOutcome;
 use NormCache\Payload\RawResultCodec;
@@ -21,8 +20,6 @@ use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
-use stdClass;
-use Throwable;
 
 final readonly class Engine
 {
@@ -162,7 +159,7 @@ final readonly class Engine
                     $namespace,
                 );
             }
-        } catch (InvalidArgumentException) {
+        } catch (\InvalidArgumentException) {
             $this->reporter->bypass(
                 $query,
                 'unsupported_query_shape',
@@ -188,7 +185,7 @@ final readonly class Engine
 
                 return $cached['rows'];
             }
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->fail($exception);
 
             return $database();
@@ -196,7 +193,7 @@ final readonly class Engine
 
         try {
             $lease = $this->claim($plan, $state, $namespace, $queryHash);
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->fail($exception);
 
             return $database();
@@ -231,7 +228,7 @@ final readonly class Engine
 
                         return $retry['rows'];
                     }
-                } catch (Throwable $exception) {
+                } catch (\Throwable $exception) {
                     $this->fail($exception);
 
                     return $database();
@@ -243,7 +240,7 @@ final readonly class Engine
 
         try {
             $rows = $primaryDatabase();
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->release($lease);
 
             throw $exception;
@@ -265,7 +262,7 @@ final readonly class Engine
             } else {
                 $this->release($lease);
             }
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->release($lease);
             $this->fail($exception);
         }
@@ -569,14 +566,14 @@ final readonly class Engine
 
     /** @param list<mixed> $rows
      * @param  list<string>  $columns
-     * @return list<stdClass>|null
+     * @return list<\stdClass>|null
      */
     private function projectRows(array $rows, array $columns): ?array
     {
         $projectedRows = [];
 
         foreach ($rows as $row) {
-            $projected = new stdClass;
+            $projected = new \stdClass;
 
             foreach ($columns as $column) {
                 if (!property_exists($row, $column)) {
@@ -663,8 +660,8 @@ final readonly class Engine
         return $this->switch->epoch();
     }
 
-    /** @return list<stdClass>|null null on missing deleted-at column; empty array when filtered by visibility. */
-    private function applySoftDeleteVisibility(QueryPlan $plan, stdClass $row): ?array
+    /** @return list<\stdClass>|null null on missing deleted-at column; empty array when filtered by visibility. */
+    private function applySoftDeleteVisibility(QueryPlan $plan, \stdClass $row): ?array
     {
         if ($plan->softDeleteMode === null || $plan->deletedAtColumn === null) {
             return [$row];
@@ -725,7 +722,7 @@ final readonly class Engine
         }
 
         if ($rows !== []) {
-            $projected = new stdClass;
+            $projected = new \stdClass;
 
             foreach ((array) $plan->projectedColumns as $column) {
                 if (!property_exists($row, $column)) {
@@ -803,7 +800,7 @@ final readonly class Engine
 
     /**
      * @param  list<string>  $tokens
-     * @return array{rows: array<string, stdClass>|null, outcome: CacheReadOutcome}
+     * @return array{rows: array<string, \stdClass>|null, outcome: CacheReadOutcome}
      */
     private function repairRows(
         QueryBuilder $query,
@@ -859,7 +856,7 @@ final readonly class Engine
                 $wakeKey,
                 $leaseToken,
             );
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
 
             throw $exception;
@@ -880,7 +877,7 @@ final readonly class Engine
 
     /**
      * @param  list<string>  $tokens
-     * @return array<string, stdClass>|null
+     * @return array<string, \stdClass>|null
      */
     private function buildRepairedRows(
         QueryBuilder $query,
@@ -934,7 +931,7 @@ final readonly class Engine
                     $rowsByToken[$token] = $row;
                 }
             }
-        } catch (Throwable) {
+        } catch (\Throwable) {
             return null;
         }
 
@@ -978,7 +975,7 @@ final readonly class Engine
 
     /**
      * @param  list<string>  $tokens
-     * @return array<string, stdClass>|null
+     * @return array<string, \stdClass>|null
      */
     private function readRepairedRows(
         QueryPlan $plan,
@@ -1106,7 +1103,7 @@ final readonly class Engine
     ): void {
         if (
             count($rows) !== 1
-            || !$rows[0] instanceof stdClass
+            || !$rows[0] instanceof \stdClass
             || !property_exists($rows[0], $plan->primaryKey->column)
             || $plan->primaryKey->token($rows[0]->{$plan->primaryKey->column})
                 !== $plan->primaryKeyToken
@@ -1236,11 +1233,11 @@ final readonly class Engine
                 token: $lease->token,
                 wakeTtl: $this->wakeTtl(),
             );
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             if (isset($lease) && $lease->owner) {
                 try {
                     $this->release($lease, $wakeWaiters);
-                } catch (Throwable) {
+                } catch (\Throwable) {
                     // The original Redis failure is the useful diagnostic.
                 }
             }
@@ -1331,7 +1328,7 @@ final readonly class Engine
                 $lease->token,
                 $this->wakeTtl(),
             );
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->fail($exception);
         }
     }
@@ -1386,7 +1383,7 @@ final readonly class Engine
         return array_values($resolved)[0] ?? null;
     }
 
-    private function fail(Throwable $exception): void
+    private function fail(\Throwable $exception): void
     {
         $this->runtime->fail($exception);
     }

@@ -1,6 +1,7 @@
 vendor/
 benchmark/
 composer.lock
+package-lock.json
 .phpunit.result.cache
 .phpunit.cache/
 tests/Benchmark/

@@ -6,7 +6,6 @@ use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\RuntimeState;
-use Throwable;
 
 final readonly class CacheSwitch
 {
@@ -29,7 +28,7 @@ final readonly class CacheSwitch
 
         try {
             return !$this->runtime->state(fn(): array => $this->readPair())[1];
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
             return false;
@@ -48,7 +47,7 @@ final readonly class CacheSwitch
 
         try {
             return !$this->runtime->runtimeDisabled(fn(): bool => $this->readFlag());
-        } catch (Throwable) {
+        } catch (\Throwable) {
             return true;
         }
     }

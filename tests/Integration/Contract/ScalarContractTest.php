@@ -14,7 +14,7 @@ use NormCache\Tests\TestCase;
  * exists, doesntExist, value, pluck) must return identical results on the
  * native path (withoutCache), cold-cache path, and warm-cache path.
  */
-class ScalarContractTest extends TestCase
+final class ScalarContractTest extends TestCase
 {
     private function fixtures(): array
     {

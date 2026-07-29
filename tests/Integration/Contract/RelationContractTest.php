@@ -14,7 +14,7 @@ use NormCache\Tests\TestCase;
  * Contract tests: eager loading operations must return identical results on
  * the native path (withoutCache), cold-cache path, and warm-cache path.
  */
-class RelationContractTest extends TestCase
+final class RelationContractTest extends TestCase
 {
     private function fixtures(): array
     {

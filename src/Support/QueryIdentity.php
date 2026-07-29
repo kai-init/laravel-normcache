@@ -4,7 +4,6 @@ namespace NormCache\Support;
 
 use BackedEnum;
 use DateTimeInterface;
-use InvalidArgumentException;
 use NormCache\Values\TableIdentity;
 use Stringable;
 use UnitEnum;
@@ -57,7 +56,7 @@ final class QueryIdentity
     public function tagHash(string $tag): string
     {
         if ($tag === '' || strlen($tag) > 128 || !mb_check_encoding($tag, 'UTF-8')) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'NormCache tag must be non-empty valid UTF-8 and at most 128 bytes.'
             );
         }
@@ -99,7 +98,7 @@ final class QueryIdentity
             is_int($value) => '3:int' . strlen($digits = (string) $value) . ':' . $digits,
             is_float($value) => '5:float8:' . pack('E', $value),
             is_string($value) => '6:string' . strlen($value) . ':' . $value,
-            default => throw new InvalidArgumentException('NormCache cannot hash an unsupported query binding.'),
+            default => throw new \InvalidArgumentException('NormCache cannot hash an unsupported query binding.'),
         };
     }
 }

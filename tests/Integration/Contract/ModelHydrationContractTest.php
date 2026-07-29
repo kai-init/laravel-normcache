@@ -8,7 +8,6 @@ use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
-use stdClass;
 
 final class CustomHydrationModel extends Model
 {
@@ -16,11 +15,11 @@ final class CustomHydrationModel extends Model
 
     public static int $newInstanceCalls = 0;
 
-    public stdClass $marker;
+    public \stdClass $marker;
 
     public function __construct(array $attributes = [])
     {
-        $this->marker = new stdClass;
+        $this->marker = new \stdClass;
 
         parent::__construct($attributes);
     }
@@ -36,7 +35,7 @@ final class CustomHydrationModel extends Model
 /**
  * Contract tests for model hydration after a cached query has been resolved.
  */
-class ModelHydrationContractTest extends TestCase
+final class ModelHydrationContractTest extends TestCase
 {
     public function test_custom_model_lifecycle_uses_fresh_laravel_instances(): void
     {

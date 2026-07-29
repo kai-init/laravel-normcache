@@ -5,7 +5,6 @@ namespace NormCache\Payload;
 use NormCache\Support\CacheSerializer;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\RawResultPayload;
-use stdClass;
 
 final readonly class RawResultCodec
 {
@@ -14,7 +13,7 @@ final readonly class RawResultCodec
     ) {}
 
     /**
-     * @param  list<stdClass>  $rows
+     * @param  list<\stdClass>  $rows
      * @param  array<string, string>  $versions
      */
     public function encode(
@@ -76,7 +75,7 @@ final readonly class RawResultCodec
         );
     }
 
-    public function encodeRow(stdClass $row, string $epoch): string
+    public function encodeRow(\stdClass $row, string $epoch): string
     {
         return $this->serializer->encode([
             'f' => 4,
@@ -114,7 +113,7 @@ final readonly class RawResultCodec
         string $expectedEpoch,
         ?PrimaryKeyMetadata $primaryKey = null,
         ?string $expectedToken = null,
-    ): ?stdClass {
+    ): ?\stdClass {
         $envelope = $this->serializer->decode($payload);
 
         if (
@@ -186,7 +185,7 @@ final readonly class RawResultCodec
         return $result;
     }
 
-    /** @return list<stdClass>|null */
+    /** @return list<\stdClass>|null */
     private function rowList(array $rows): ?array
     {
         $result = [];

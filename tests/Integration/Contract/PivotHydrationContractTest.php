@@ -12,7 +12,7 @@ use NormCache\Tests\TestCase;
  * large enough to ensure a pivot payload is reconstructed independently for every
  * related model, without leaking one row's data into another.
  */
-class PivotHydrationContractTest extends TestCase
+final class PivotHydrationContractTest extends TestCase
 {
     public function test_belongs_to_many_pivot_hydration_matches_native_across_many_rows(): void
     {

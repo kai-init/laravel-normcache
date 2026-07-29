@@ -2,7 +2,6 @@
 
 namespace NormCache\Support;
 
-use InvalidArgumentException;
 use NormCache\Values\TableIdentity;
 
 final class CacheKeyBuilder
@@ -11,7 +10,7 @@ final class CacheKeyBuilder
         private string $keyPrefix = '',
     ) {
         if (str_contains($keyPrefix, '{') || str_contains($keyPrefix, '}')) {
-            throw new InvalidArgumentException('NormCache key prefix must not contain Redis hash-tag braces.');
+            throw new \InvalidArgumentException('NormCache key prefix must not contain Redis hash-tag braces.');
         }
     }
 

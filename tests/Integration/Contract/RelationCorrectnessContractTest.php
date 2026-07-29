@@ -13,7 +13,7 @@ use NormCache\Tests\TestCase;
  * Final contract verification: complex relation queries with raw expressions
  * and custom selects must maintain perfect hydration parity.
  */
-class RelationCorrectnessContractTest extends TestCase
+final class RelationCorrectnessContractTest extends TestCase
 {
     private function fixtures(): void
     {

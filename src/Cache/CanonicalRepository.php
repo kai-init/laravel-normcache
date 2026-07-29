@@ -13,7 +13,6 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
-use stdClass;
 
 final readonly class CanonicalRepository
 {
@@ -27,7 +26,7 @@ final readonly class CanonicalRepository
     ) {}
 
     /**
-     * @param  Closure(CacheState, list<string>): array{rows: array<string, stdClass>|null, outcome: CacheReadOutcome}  $repair
+     * @param  Closure(CacheState, list<string>): array{rows: array<string, \stdClass>|null, outcome: CacheReadOutcome}  $repair
      * @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string, outcome?: CacheReadOutcome}}
      */
     public function read(
@@ -174,7 +173,7 @@ final readonly class CanonicalRepository
         $encodedRows = [];
 
         foreach ($rows as $row) {
-            if (!$row instanceof stdClass || !property_exists($row, $plan->primaryKey->column)) {
+            if (!$row instanceof \stdClass || !property_exists($row, $plan->primaryKey->column)) {
                 return false;
             }
 

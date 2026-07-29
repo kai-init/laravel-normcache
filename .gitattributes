@@ -1,0 +1,11 @@
+/.github export-ignore
+/.vscode export-ignore
+/.editorconfig export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore
+/docker-compose.yml export-ignore
+/package-lock.json export-ignore
+/phpstan.neon export-ignore
+/phpunit.xml export-ignore
+/pint.json export-ignore
+/tests export-ignore

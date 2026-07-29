@@ -6,13 +6,12 @@ use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheSerializer;
 use NormCache\Tests\UnitTestCase;
-use stdClass;
 
 final class PayloadCodecTest extends UnitTestCase
 {
     public function test_raw_result_codec_owns_native_row_conversion(): void
     {
-        $row = new stdClass;
+        $row = new \stdClass;
         $row->id = 7;
         $row->numeric = '007';
         $row->binary = "\x00\xff";
@@ -56,7 +55,7 @@ final class PayloadCodecTest extends UnitTestCase
 
         $this->assertTrue($decoded->valid);
         $this->assertCount(1, $decoded->rows);
-        $this->assertInstanceOf(stdClass::class, $decoded->rows[0]);
+        $this->assertInstanceOf(\stdClass::class, $decoded->rows[0]);
         $this->assertSame(7, $decoded->rows[0]->id);
     }
 

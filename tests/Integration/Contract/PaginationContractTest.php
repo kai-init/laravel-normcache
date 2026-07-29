@@ -14,7 +14,7 @@ use NormCache\Tests\TestCase;
  * correctly use value payloads for totals, handle multi-page navigation/cursors,
  * and respect invalidation while maintaining exact parity with native Eloquent.
  */
-class PaginationContractTest extends TestCase
+final class PaginationContractTest extends TestCase
 {
     // Standard paginate()
 

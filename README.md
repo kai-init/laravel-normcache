@@ -61,7 +61,7 @@ Post::query()->where('published', true)->tag('homepage')->get();
 Post::query()->orderBy('id')->useResultCache()->get();
 ```
 
-`useResultCache()` keeps canonical storage and also caches the complete result as one payload. Warm reads use that payload directly; if it is missing or corrupt, NormCache falls back to canonical rows and rebuilds it.
+For queries that would normally use canonical storage, `useResultCache()` also stores the complete result as one payload. Warm reads can use that payload directly, while canonical storage remains available as a fallback.
 
 ## Tags and selective flushing
 
@@ -202,6 +202,11 @@ NormCache bypasses reads when correctness cannot be established, including:
 Canonical storage requires a supported single-column integer or string primary key. Queries can still use `result` storage when canonical routing is unavailable.
 
 Writes performed through raw SQL or a connection not installed by NormCache are invisible until `invalidate()` or `flushAll()` is called. After changing connection database/schema metadata at runtime, call `NormCache::clearSchemaMetadata()` for that connection.
+
+### Consistency & Failure Modes
+
+- **Fail-Open Invalidation**: Database availability is prioritized over cache state. If Redis is unreachable during a write operation, NormCache fails open on the writing node (bypassing cache for subsequent reads on that node) and logs a warning. Note that other application nodes connected to Redis may continue serving cached queries until TTL expiration or subsequent invalidation.
+- **Triggers & Database Cascades**: Foreign key `ON DELETE CASCADE` rules, database triggers, and stored procedures operating within the database engine are not intercepted at the application layer. When executing operations that trigger database-side side-effect updates, call `NormCache::invalidate([...])` explicitly for affected secondary tables.
 
 ## Redis Cluster
 

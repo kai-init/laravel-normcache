@@ -2,8 +2,6 @@
 
 namespace NormCache\Values;
 
-use InvalidArgumentException;
-
 final readonly class PrimaryKeyMetadata
 {
     public const INTEGER = 'integer';
@@ -15,11 +13,11 @@ final readonly class PrimaryKeyMetadata
         public string $family,
     ) {
         if ($column === '') {
-            throw new InvalidArgumentException('Primary-key column must not be empty.');
+            throw new \InvalidArgumentException('Primary-key column must not be empty.');
         }
 
         if (!in_array($family, [self::INTEGER, self::STRING], true)) {
-            throw new InvalidArgumentException('Primary-key family must be integer or string.');
+            throw new \InvalidArgumentException('Primary-key family must be integer or string.');
         }
     }
 

@@ -34,16 +34,46 @@ final class TableIdentityResolverTest extends UnitTestCase
         $this->assertSame('other', $resolver->resolve($connection, 'posts')?->schema);
     }
 
-    public function test_failed_view_metadata_lookup_remains_unknown(): void
+    public function test_failed_view_metadata_lookup_is_retried(): void
     {
         $builder = Mockery::mock(Builder::class);
         $builder->shouldReceive('getCurrentSchemaName')->once()->andReturn('public');
-        $builder->shouldReceive('hasView')->once()->andThrow(new \RuntimeException('denied'));
-        $connection = $this->postgresConnection(null, $builder);
+        $viewCalls = 0;
+        $builder->shouldReceive('hasView')
+            ->twice()
+            ->andReturnUsing(function () use (&$viewCalls): bool {
+                if ($viewCalls++ === 0) {
+                    throw new \RuntimeException('denied');
+                }
 
-        $this->assertNull(
-            app(TableIdentityResolver::class)->resolve($connection, 'posts'),
-        );
+                return false;
+            });
+        $connection = $this->postgresConnection(null, $builder);
+        $resolver = app(TableIdentityResolver::class);
+
+        $this->assertNull($resolver->resolve($connection, 'posts'));
+        $this->assertSame('public', $resolver->resolve($connection, 'posts')?->schema);
+    }
+
+    public function test_failed_effective_schema_lookup_is_retried(): void
+    {
+        $builder = Mockery::mock(Builder::class);
+        $schemaCalls = 0;
+        $builder->shouldReceive('getCurrentSchemaName')
+            ->twice()
+            ->andReturnUsing(function () use (&$schemaCalls): string {
+                if ($schemaCalls++ === 0) {
+                    throw new \RuntimeException('denied');
+                }
+
+                return 'public';
+            });
+        $builder->shouldReceive('hasView')->once()->andReturn(false);
+        $connection = $this->postgresConnection(null, $builder);
+        $resolver = app(TableIdentityResolver::class);
+
+        $this->assertNull($resolver->resolve($connection, 'posts'));
+        $this->assertSame('public', $resolver->resolve($connection, 'posts')?->schema);
     }
 
     private function postgresConnection(

@@ -2,8 +2,6 @@
 
 namespace NormCache\Values;
 
-use InvalidArgumentException;
-
 final readonly class CacheConfig
 {
     public const MAX_PRECISE_INVALIDATION_KEYS = 1000;
@@ -29,7 +27,7 @@ final readonly class CacheConfig
         $keyPrefix = (string) ($values['key_prefix'] ?? '');
 
         if (str_contains($keyPrefix, '{') || str_contains($keyPrefix, '}')) {
-            throw new InvalidArgumentException('NormCache key_prefix must not contain Redis hash-tag braces.');
+            throw new \InvalidArgumentException('NormCache key_prefix must not contain Redis hash-tag braces.');
         }
 
         $rowTtl = self::positive($values, 'row_ttl', 604_800);
@@ -65,7 +63,7 @@ final readonly class CacheConfig
         $value = (int) ($values[$key] ?? $default);
 
         if ($value < 1) {
-            throw new InvalidArgumentException("NormCache {$key} must be at least 1.");
+            throw new \InvalidArgumentException("NormCache {$key} must be at least 1.");
         }
 
         return $value;
@@ -77,7 +75,7 @@ final readonly class CacheConfig
         $value = self::positive($values, $key, $maximum);
 
         if ($value > $maximum) {
-            throw new InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
+            throw new \InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
         }
 
         return $value;
@@ -87,14 +85,14 @@ final readonly class CacheConfig
     private static function primaryKeys(mixed $value): array
     {
         if (!is_array($value)) {
-            throw new InvalidArgumentException('NormCache primary_keys must be an array.');
+            throw new \InvalidArgumentException('NormCache primary_keys must be an array.');
         }
 
         $result = [];
 
         foreach ($value as $group) {
             if (!is_array($group)) {
-                throw new InvalidArgumentException(
+                throw new \InvalidArgumentException(
                     'Each NormCache primary_keys entry must be a structured array.',
                 );
             }
@@ -112,14 +110,14 @@ final readonly class CacheConfig
     {
         foreach (['connection', 'database'] as $field) {
             if (!is_string($group[$field] ?? null) || $group[$field] === '') {
-                throw new InvalidArgumentException(
+                throw new \InvalidArgumentException(
                     "NormCache primary_keys groups require a non-empty {$field}.",
                 );
             }
         }
 
         if (array_key_exists('schema', $group) && !is_string($group['schema'])) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'NormCache primary_keys group schema must be a string when present.',
             );
         }
@@ -127,7 +125,7 @@ final readonly class CacheConfig
         $tables = $group['tables'] ?? null;
 
         if (!is_array($tables) || $tables === []) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'NormCache primary_keys groups require a non-empty tables array.',
             );
         }
@@ -136,13 +134,13 @@ final readonly class CacheConfig
 
         foreach ($tables as $table => $metadata) {
             if (!is_string($table) || $table === '') {
-                throw new InvalidArgumentException(
+                throw new \InvalidArgumentException(
                     'NormCache primary_keys table names must be non-empty strings.',
                 );
             }
 
             if (!is_array($metadata)) {
-                throw new InvalidArgumentException(
+                throw new \InvalidArgumentException(
                     'NormCache primary_keys table metadata must be a structured array.',
                 );
             }
@@ -172,7 +170,7 @@ final readonly class CacheConfig
     {
         foreach (['connection', 'database', 'table', 'column', 'type'] as $field) {
             if (!is_string($override[$field] ?? null) || $override[$field] === '') {
-                throw new InvalidArgumentException(
+                throw new \InvalidArgumentException(
                     "NormCache primary_keys entries require a non-empty {$field}.",
                 );
             }
@@ -182,13 +180,13 @@ final readonly class CacheConfig
             array_key_exists('schema', $override)
             && !is_string($override['schema'])
         ) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'NormCache primary_keys schema must be a string when present.',
             );
         }
 
         if (!in_array($override['type'], ['integer', 'string'], true)) {
-            throw new InvalidArgumentException(
+            throw new \InvalidArgumentException(
                 'NormCache primary_keys type must be integer or string.',
             );
         }

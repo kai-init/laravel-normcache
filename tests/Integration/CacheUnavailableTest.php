@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration;
 
 use Illuminate\Support\Facades\DB;
 use NormCache\Planning\TableIdentityResolver;
+use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\RuntimeState;
@@ -28,6 +29,18 @@ final class CacheUnavailableTest extends TestCase
 
         $this->assertSame('Live database', $first?->title);
         $this->assertSame('Live database', $second?->title);
+    }
+
+    public function test_cache_disabled_status_fails_open_when_redis_is_unavailable(): void
+    {
+        $this->app->instance(
+            RedisStore::class,
+            new RedisStore('missing-normcache-connection'),
+        );
+        $this->app->forgetScopedInstances();
+
+        $this->assertFalse($this->cacheManager()->cacheDisabled());
+        $this->assertFalse($this->app->make(RuntimeState::class)->available());
     }
 
     public function test_first_write_fails_open_when_redis_is_not_configured(): void

@@ -25,7 +25,7 @@ use ReflectionProperty;
  *
  * A failure means NormCache's cached result diverges from native Eloquent.
  */
-class EloquentContractTest extends TestCase
+final class EloquentContractTest extends TestCase
 {
     // Helpers
 

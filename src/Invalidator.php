@@ -14,7 +14,6 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\RuntimeState;
 use NormCache\Values\TableIdentity;
-use Throwable;
 
 final readonly class Invalidator
 {
@@ -117,7 +116,7 @@ final readonly class Invalidator
             $this->reporter->invalidated($table, $mode, $tokens);
 
             return true;
-        } catch (Throwable $exception) {
+        } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
             return false;

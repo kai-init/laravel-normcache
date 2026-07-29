@@ -10,7 +10,7 @@ use NormCache\Tests\TestCase;
 /**
  * Contract tests for cacheable relationship-existence queries.
  */
-class WhereHasContractTest extends TestCase
+final class WhereHasContractTest extends TestCase
 {
     public function test_simple_has_many_where_has_matches_native_eloquent(): void
     {

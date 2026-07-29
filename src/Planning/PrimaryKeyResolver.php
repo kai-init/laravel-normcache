@@ -54,7 +54,7 @@ final class PrimaryKeyResolver
 
         $schema = $this->introspect($connection, $table);
 
-        if ($schema !== null) {
+        if ($schema instanceof PrimaryKeyMetadata) {
             $candidates[] = $schema;
         }
 
@@ -68,10 +68,12 @@ final class PrimaryKeyResolver
             }
         }
 
-        $this->memo[$table->hash] = [
-            'connection' => $table->connection,
-            'metadata' => $metadata,
-        ];
+        if ($schema !== false || $metadata !== null) {
+            $this->memo[$table->hash] = [
+                'connection' => $table->connection,
+                'metadata' => $metadata,
+            ];
+        }
 
         return $metadata;
     }
@@ -150,7 +152,7 @@ final class PrimaryKeyResolver
     private function introspect(
         Connection $connection,
         TableIdentity $table,
-    ): ?PrimaryKeyMetadata {
+    ): PrimaryKeyMetadata|null|false {
         try {
             $schema = $connection->getSchemaBuilder();
             $indexes = $schema->getIndexes($table->qualifiedTable());
@@ -195,7 +197,7 @@ final class PrimaryKeyResolver
                 return new PrimaryKeyMetadata($columnName, $family);
             }
         } catch (\Throwable) {
-            return null;
+            return false;
         }
 
         return null;

@@ -2,8 +2,6 @@
 
 namespace NormCache\Support;
 
-use Throwable;
-
 final readonly class CacheSerializer
 {
     private bool $igbinary;
@@ -37,7 +35,7 @@ final readonly class CacheSerializer
             return $this->igbinary
                 ? @igbinary_unserialize($payload)
                 : @unserialize($payload, ['allowed_classes' => false]);
-        } catch (Throwable) {
+        } catch (\Throwable) {
             return null;
         }
     }

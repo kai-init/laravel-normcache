@@ -2,8 +2,6 @@
 
 namespace NormCache\Values;
 
-use Throwable;
-
 final class RuntimeState
 {
     private bool $cacheAvailable = true;
@@ -26,13 +24,6 @@ final class RuntimeState
         return $this->cacheAvailable;
     }
 
-    /**
-     * Read once per scope, so another process's flushAll() is observed by the next
-     * request/job rather than mid-scope. The paired read also seeds the kill switch,
-     * since both values arrive from one MGET.
-     *
-     * @param  callable(): array{0: string, 1: bool}  $read
-     */
     public function epoch(callable $read): string
     {
         return $this->state($read)[0];
@@ -53,16 +44,15 @@ final class RuntimeState
         return [$this->epoch, $this->runtimeDisabled ?? false];
     }
 
-    /**
-     * Deliberately does NOT seed the epoch. Write paths ask this question but never need
-     * the epoch, and seeding it from a write would pin an epoch for the rest of the scope
-     * that a later cache read then treats as current.
-     *
-     * @param  callable(): bool  $read
-     */
     public function runtimeDisabled(callable $read): bool
     {
-        return $this->runtimeDisabled ??= $read();
+        if ($this->runtimeDisabled === true) {
+            $this->runtimeDisabled = $read();
+        } else {
+            $this->runtimeDisabled ??= $read();
+        }
+
+        return $this->runtimeDisabled;
     }
 
     public function knownEpoch(): ?string
@@ -86,7 +76,7 @@ final class RuntimeState
         $this->cacheAvailable = false;
     }
 
-    public function fail(Throwable $exception): void
+    public function fail(\Throwable $exception): void
     {
         $this->disable();
 

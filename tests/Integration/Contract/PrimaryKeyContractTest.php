@@ -11,7 +11,7 @@ use NormCache\Tests\TestCase;
  * results on the native path (withoutCache), cold-cache path, and warm-cache path,
  * particularly regarding result ordering and fast-path bypass.
  */
-class PrimaryKeyContractTest extends TestCase
+final class PrimaryKeyContractTest extends TestCase
 {
     public function test_where_in_primary_key_order_contract(): void
     {

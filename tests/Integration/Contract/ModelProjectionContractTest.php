@@ -8,7 +8,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
 /** Model projection contracts preserve Eloquent casts and raw aliases across cache paths. */
-class ModelProjectionContractTest extends TestCase
+final class ModelProjectionContractTest extends TestCase
 {
     private function author(): Author
     {

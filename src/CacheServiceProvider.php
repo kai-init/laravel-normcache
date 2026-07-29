@@ -106,8 +106,11 @@ final class CacheServiceProvider extends ServiceProvider
         });
         Event::listen(MigrationsEnded::class, function (): void {
             $cache = $this->app->make(CacheManager::class);
+            $runtime = $this->app->make(RuntimeState::class);
             $cache->clearSchemaMetadata();
-            $cache->flushAll();
+            if ($runtime->available() && (bool) config('normcache.enabled', true) && !$cache->flushAll()) {
+                throw new \RuntimeException('NormCache failed to flush cache epoch after migrations completed.');
+            }
         });
 
         if ($this->app->runningInConsole()) {

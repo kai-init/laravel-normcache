@@ -7,7 +7,6 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
-use stdClass;
 
 final class ReadInterceptionTest extends TestCase
 {
@@ -37,8 +36,8 @@ final class ReadInterceptionTest extends TestCase
         $warm = DB::table('posts')->where('id', $this->postId)->get();
         DB::disableQueryLog();
 
-        $this->assertInstanceOf(stdClass::class, $cold[0]);
-        $this->assertInstanceOf(stdClass::class, $warm[0]);
+        $this->assertInstanceOf(\stdClass::class, $cold[0]);
+        $this->assertInstanceOf(\stdClass::class, $warm[0]);
         $this->assertNotSame($cold[0], $warm[0]);
         $this->assertSame((array) $cold[0], (array) $warm[0]);
         $this->assertSame([], DB::getQueryLog());
@@ -116,7 +115,7 @@ final class ReadInterceptionTest extends TestCase
         $this->assertTrue($query()->exists());
         $row = $query()->first();
 
-        $this->assertInstanceOf(stdClass::class, $row);
+        $this->assertInstanceOf(\stdClass::class, $row);
         $this->assertSame('Cached', $row->title);
     }
 
@@ -127,7 +126,7 @@ final class ReadInterceptionTest extends TestCase
         $this->assertSame(1, $query()->count());
         $row = $query()->first();
 
-        $this->assertInstanceOf(stdClass::class, $row);
+        $this->assertInstanceOf(\stdClass::class, $row);
         $this->assertSame('Cached', $row->title);
     }
 
