@@ -9,6 +9,7 @@ use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
+use Psr\Log\LoggerInterface;
 
 final class CacheUnavailableTest extends TestCase
 {
@@ -108,6 +109,34 @@ final class CacheUnavailableTest extends TestCase
         $this->assertTrue(
             DB::table('authors')->where('name', 'Updated')->exists(),
         );
+    }
+
+    public function test_failed_invalidation_is_logged_as_critical(): void
+    {
+        $authorId = DB::table('authors')->insertGetId(['name' => 'Author']);
+        DB::table('posts')->insert([
+            'title' => 'Before',
+            'author_id' => $authorId,
+        ]);
+
+        $store = $this->app->make(RedisStore::class);
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())
+            ->method('critical');
+
+        try {
+            $this->app->instance(LoggerInterface::class, $logger);
+            $this->app->instance(
+                RedisStore::class,
+                new RedisStore('missing-normcache-connection'),
+            );
+            $this->app->forgetScopedInstances();
+
+            DB::table('posts')->where('id', 1)->update(['title' => 'After']);
+        } finally {
+            $this->app->instance(RedisStore::class, $store);
+            $this->app->forgetScopedInstances();
+        }
     }
 
     public function test_disabled_cache_reads_do_not_suppress_write_invalidation(): void

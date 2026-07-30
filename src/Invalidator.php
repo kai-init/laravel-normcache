@@ -13,6 +13,7 @@ use NormCache\Support\Reporter;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\TableIdentity;
+use Psr\Log\LoggerInterface;
 
 final class Invalidator
 {
@@ -28,6 +29,7 @@ final class Invalidator
         private readonly PrimaryKeyResolver $primaryKeys,
         private readonly MutationKeyExtractor $mutationKeys,
         private readonly Reporter $reporter,
+        private readonly LoggerInterface $logger,
     ) {}
 
     /** @param array<string, mixed>|null $assigned */
@@ -130,9 +132,9 @@ final class Invalidator
     /** @param list<string> $tokens */
     private function apply(TableIdentity $table, bool $broad, array $tokens): bool
     {
-        try {
-            $mode = $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise');
+        $mode = $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise');
 
+        try {
             $this->store->invalidateTableState(
                 versionKey: $this->keys->version($table),
                 generationKey: $this->keys->generation($table),
@@ -144,6 +146,15 @@ final class Invalidator
 
             return true;
         } catch (\Throwable $exception) {
+            $this->logger->critical(
+                'NormCache invalidation failed; cached reads may be stale.',
+                [
+                    'exception' => $exception,
+                    'table' => $table->connection . ':' . $table->qualifiedTable(),
+                    'mode' => $mode,
+                    'tokens' => $tokens,
+                ],
+            );
             $this->runtime->fail($exception);
 
             return false;

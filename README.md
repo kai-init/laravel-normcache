@@ -61,7 +61,7 @@ At the core of NormCache is **normalized row storage**. Unlike traditional query
 - **Single Storage for Model Rows**: Individual database rows are stored once under canonical primary key IDs (`table:r:<id>`).
 - **Lightweight Query Memberships**: Queries cache only a list of primary key IDs (`table:m:<query_hash>`), not full duplicate model attributes.
 - **$O(1)$ Invalidation Without Redis SCAN**: When a model is updated or deleted, NormCache invalidates only that specific row key (`table:r:<id>`) and advances the table version counter (`table:v`). There are no expensive `KEYS` or `SCAN` commands in Redis.
-- **Global Row Freshness**: Every query reading Post #42 automatically receives the updated row data on its next fetch, ensuring instant consistency across all application queries without clearing individual query keys.
+- **Global Row Freshness**: While Redis is available for invalidation, every query reading Post #42 receives updated row data on its next fetch without clearing individual query keys.
 
 ## Automatic Result & Projection Overlay
 
@@ -125,6 +125,16 @@ php artisan normcache:flush
 ```
 
 `flushAll()` and the command advance a global epoch. Old payloads expire naturally; NormCache does not scan Redis keys.
+
+## Redis invalidation outages
+
+NormCache fails open when Redis is unavailable: the database write succeeds and the affected request bypasses cache access. If only that writer cannot reach Redis while other application nodes can still read it, those nodes can serve stale cached data until the affected entry expires or invalidation later succeeds. NormCache logs this condition at `critical` level with the affected table and invalidation mode.
+
+After Redis connectivity is restored, run the global flush to advance the epoch and make any payloads from the outage unreachable:
+
+```bash
+php artisan normcache:flush
+```
 
 ## Temporarily disabling the cache
 
