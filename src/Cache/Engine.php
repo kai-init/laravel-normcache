@@ -6,7 +6,6 @@ use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
-use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
@@ -26,8 +25,6 @@ use NormCache\Values\TableIdentity;
 
 final readonly class Engine
 {
-    private const MAX_AUTO_OVERLAY_BYTES = 50 * 1024;
-
     public function __construct(
         private CacheConfig $config,
         private CacheRuntime $runtime,
@@ -37,12 +34,15 @@ final readonly class Engine
         private PrimaryKeyResolver $primaryKeys,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
-        private RawResultCodec $codec,
         private DependencyAnalyzer $dependencies,
         private Reporter $reporter,
         private CacheStateResolver $states,
         private CanonicalRepository $canonical,
         private ResultRepository $results,
+        private BuildLeaseCoordinator $leases,
+        private RowRepairer $repairer,
+        private ResultOverlayPublisher $overlays,
+        private CanonicalRowRepository $rows,
     ) {}
 
     /**
@@ -175,7 +175,7 @@ final readonly class Engine
         $queryHash = $hash->value();
 
         try {
-            $lease = $this->claim($plan, $cached->state, $namespace, $queryHash);
+            $lease = $this->leases->claim($plan, $cached->state, $namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->fail($exception);
 
@@ -229,7 +229,7 @@ final readonly class Engine
         try {
             $rows = $primaryDatabase();
         } catch (\Throwable $exception) {
-            $this->release($lease);
+            $this->leases->release($lease);
 
             throw $exception;
         }
@@ -248,10 +248,10 @@ final readonly class Engine
                     $queryHash,
                 );
             } else {
-                $this->release($lease);
+                $this->leases->release($lease);
             }
         } catch (\Throwable $exception) {
-            $this->release($lease);
+            $this->leases->release($lease);
             $this->fail($exception);
         }
 
@@ -494,7 +494,7 @@ final readonly class Engine
             );
 
             if ($canonicalResult->served()) {
-                $promoted = $this->promoteResultPayload(
+                $promoted = $this->overlays->promote(
                     $query,
                     $resultPlan,
                     $canonicalResult->state,
@@ -505,7 +505,7 @@ final readonly class Engine
                 );
 
                 if ($overlayReason === 'corrupt_payload') {
-                    $canonicalResult = $this->withOverlayRebuildOutcome(
+                    $canonicalResult = $this->overlays->rebuildOutcome(
                         $canonicalResult,
                         $promoted,
                     );
@@ -529,7 +529,7 @@ final readonly class Engine
         );
 
         if ($result->served()) {
-            $this->promoteResultPayload(
+            $this->overlays->promote(
                 $query,
                 $plan->asFullResultOverlay(),
                 $result->state,
@@ -601,7 +601,7 @@ final readonly class Engine
 
                 if ($projected !== null) {
                     $result = $result->withRows($projected);
-                    $promoted = $this->promoteResultPayload(
+                    $promoted = $this->overlays->promote(
                         $query,
                         $plan,
                         $result->state,
@@ -611,7 +611,7 @@ final readonly class Engine
                     );
 
                     return $fallbackReason === 'corrupt_payload'
-                        ? $this->withOverlayRebuildOutcome($result, $promoted)
+                        ? $this->overlays->rebuildOutcome($result, $promoted)
                         : $result->withReason('canonical_projection_fallback');
                 }
             }
@@ -622,13 +622,6 @@ final readonly class Engine
         [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
         return new CacheRead($state, ReadOutcome::MISS, [], $fallbackReason);
-    }
-
-    private function withOverlayRebuildOutcome(CacheRead $read, bool $promoted): CacheRead
-    {
-        return $promoted
-            ? $read->asRepaired('result_overlay_rebuilt')
-            : $read->withReason('corrupt_result_overlay_fallback');
     }
 
     /** @param list<mixed> $rows
@@ -658,70 +651,42 @@ final readonly class Engine
 
     private function readDirect(QueryPlan $plan, string $namespace, QueryHashResolver $hash): CacheRead
     {
-        $cached = $this->readCanonicalRow($plan);
+        $cached = $this->rows->read($plan);
 
         $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,
             $hash->value(),
-            knownGeneration: $cached['generation'],
+            knownGeneration: $cached->generation,
         )[0];
 
-        if ($cached['row'] === null) {
-            return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached['reason']);
+        if ($cached->row === null) {
+            return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached->reason);
         }
 
-        $rows = $this->applySoftDeleteVisibility($plan, $cached['row']);
+        $rows = $this->rows->visibleRows($plan, $cached->row);
 
         if ($rows === null) {
             return new CacheRead($resolve(), ReadOutcome::MISS, [], 'corrupt_payload');
         }
 
         return new CacheRead(
-            $this->directRowState($plan, $cached['generation'], $cached['epoch']),
+            $this->rows->state($plan, $cached->generation, (string) $cached->epoch),
             ReadOutcome::HIT,
             $rows,
         );
     }
 
-    private function epoch(): string
-    {
-        return $this->runtime->epoch();
-    }
-
-    /** @return list<\stdClass>|null null on missing deleted-at column; empty array when filtered by visibility. */
-    private function applySoftDeleteVisibility(QueryPlan $plan, \stdClass $row): ?array
-    {
-        if ($plan->softDeleteMode === null || $plan->deletedAtColumn === null) {
-            return [$row];
-        }
-
-        if (!property_exists($row, $plan->deletedAtColumn)) {
-            return null;
-        }
-
-        $deleted = $row->{$plan->deletedAtColumn} !== null;
-
-        if (
-            $plan->softDeleteMode === 'default' && $deleted
-            || $plan->softDeleteMode === 'only' && !$deleted
-        ) {
-            return [];
-        }
-
-        return [$row];
-    }
-
     /** Reads the current canonical row after a result miss without changing the result-entry protocol. */
     private function readResultRowFallback(QueryPlan $plan): ?CacheRead
     {
-        $cached = $this->readCanonicalRow($plan);
+        $cached = $this->rows->read($plan);
 
-        if ($cached['row'] === null) {
+        if ($cached->row === null) {
             return null;
         }
 
-        $rows = $this->applySoftDeleteVisibility($plan, $cached['row']);
+        $rows = $this->rows->visibleRows($plan, $cached->row);
 
         if ($rows === null) {
             return null;
@@ -734,57 +699,10 @@ final readonly class Engine
         }
 
         return new CacheRead(
-            $this->directRowState($plan, $cached['generation'], $cached['epoch']),
+            $this->rows->state($plan, $cached->generation, (string) $cached->epoch),
             ReadOutcome::HIT,
             $rows,
             'row_cache_fallback',
-        );
-    }
-
-    /** @return array{generation: string, epoch: string|null, row: \stdClass|null, reason: ?string} */
-    private function readCanonicalRow(QueryPlan $plan): array
-    {
-        $result = $this->store->fetchRow(
-            $this->keys->generation($plan->root),
-            $this->keys->tablePrefix($plan->root),
-            (string) $plan->primaryKeyToken,
-        );
-        $generation = is_string($result[0] ?? null) ? $result[0] : '0';
-        $raw = $result[1] ?? null;
-
-        if (!is_string($raw)) {
-            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => null];
-        }
-
-        $payload = $this->codec->decodeRow(
-            $raw,
-            $plan->primaryKey,
-            $plan->primaryKeyToken,
-        );
-
-        if (!$payload->valid) {
-            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => 'corrupt_payload'];
-        }
-
-        $epoch = $this->epoch();
-
-        if ($payload->epoch !== $epoch) {
-            return ['generation' => $generation, 'epoch' => null, 'row' => null, 'reason' => null];
-        }
-
-        return ['generation' => $generation, 'epoch' => $epoch, 'row' => $payload->rows[0], 'reason' => null];
-    }
-
-    private function directRowState(QueryPlan $plan, string $generation, string $epoch): CacheState
-    {
-        return new CacheState(
-            key: $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-            epoch: $epoch,
-            version: '0',
-            generation: $generation,
-            versions: [],
-            tag: null,
-            tagKey: null,
         );
     }
 
@@ -826,223 +744,13 @@ final readonly class Engine
             $queryHash,
             $head,
             $repairMissing,
-            fn(CacheState $state, array $tokens): ?RowRepair => $this->repairRows(
+            fn(CacheState $state, array $tokens): ?RowRepair => $this->repairer->repair(
                 $query,
                 $plan,
                 $state,
                 $tokens,
             ),
         );
-    }
-
-    /** @param list<string> $tokens */
-    private function repairRows(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-    ): ?RowRepair {
-        $tokens = array_values(array_unique($tokens));
-        sort($tokens, SORT_STRING);
-
-        $repairHash = $this->identity->repairHash(
-            $plan->root->hash,
-            $state->generation,
-            $tokens,
-        );
-        $buildingKey = $this->keys->repairBuild($plan->root, $repairHash);
-        $leaseToken = bin2hex(random_bytes(16));
-        $wakeKey = $this->keys->repairWake($plan->root, $repairHash, $leaseToken);
-
-        if (!$this->store->setNxEx(
-            $buildingKey,
-            $leaseToken,
-            $this->config->buildingLockTtl,
-        )) {
-            $owner = $this->store->getRaw($buildingKey);
-
-            if (is_string($owner)) {
-                $this->store->brpop(
-                    $this->keys->repairWake($plan->root, $repairHash, $owner),
-                    $this->config->stampedeWaitMs / 1000,
-                );
-            }
-
-            $rows = $this->readRepairedRows($plan, $state, $tokens);
-
-            if ($rows === null || !$this->states->isCurrent($plan, $state)) {
-                return null;
-            }
-
-            return new RowRepair($rows, ReadOutcome::HIT);
-        }
-
-        try {
-            $rows = $this->buildRepairedRows(
-                $query,
-                $plan,
-                $state,
-                $tokens,
-                $buildingKey,
-                $wakeKey,
-                $leaseToken,
-            );
-        } catch (\Throwable $exception) {
-            $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
-
-            throw $exception;
-        }
-
-        // Null means no publication script ran, so this caller still owns the lease.
-        if ($rows === null) {
-            $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
-
-            return null;
-        }
-
-        return new RowRepair($rows, ReadOutcome::REPAIRED);
-    }
-
-    private function releaseRepair(string $buildingKey, string $wakeKey, string $token): void
-    {
-        $this->store->releaseBuilding($buildingKey, $wakeKey, $token, $this->wakeTtl());
-    }
-
-    /**
-     * @param  list<string>  $tokens
-     * @return array<string, \stdClass>|null
-     */
-    private function buildRepairedRows(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-        string $buildingKey,
-        string $wakeKey,
-        string $leaseToken,
-    ): ?array {
-        $connection = $query->getConnection();
-        $values = [];
-
-        foreach ($tokens as $token) {
-            $value = $plan->primaryKey->valueFromToken($token);
-
-            if ($value === null) {
-                return null;
-            }
-
-            $values[] = $value;
-        }
-
-        $limit = match ($plan->root->driver) {
-            'sqlite' => 900,
-            'sqlsrv' => 2000,
-            default => 1000,
-        };
-        $rowsByToken = [];
-
-        try {
-            foreach (array_chunk($values, $limit) as $batch) {
-                $rows = $connection
-                    ->query()
-                    ->from($plan->root->qualifiedTable())
-                    ->whereIn($plan->primaryKey->column, $batch)
-                    ->useWritePdo()
-                    ->get();
-
-                foreach ($rows as $row) {
-                    if (!property_exists($row, $plan->primaryKey->column)) {
-                        return null;
-                    }
-
-                    $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
-
-                    if ($token === null) {
-                        return null;
-                    }
-
-                    $rowsByToken[$token] = $row;
-                }
-            }
-        } catch (\Throwable) {
-            return null;
-        }
-
-        if (!$this->states->isCurrent($plan, $state)) {
-            return null;
-        }
-
-        $rows = [];
-
-        foreach ($tokens as $token) {
-            if (!isset($rowsByToken[$token])) {
-                return null;
-            }
-
-            $rowKey = $this->keys->row($plan->root, $state->generation, $token);
-            $encoded = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
-            $rows[$rowKey] = $encoded;
-        }
-
-        if (!$this->store->publishVersionedEntries(
-            entries: $rows,
-            ttl: $this->config->rowTtl,
-            versionKeys: [
-                $this->keys->version($plan->root),
-                $this->keys->generation($plan->root),
-            ],
-            expectedVersions: [
-                $state->version,
-                $state->generation,
-            ],
-            buildingKey: $buildingKey,
-            wakeKey: $wakeKey,
-            token: $leaseToken,
-            wakeTtl: $this->wakeTtl(),
-        )) {
-            return [];
-        }
-
-        return $this->states->isCurrent($plan, $state) ? $rowsByToken : [];
-    }
-
-    /**
-     * @param  list<string>  $tokens
-     * @return array<string, \stdClass>|null
-     */
-    private function readRepairedRows(
-        QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-    ): ?array {
-        $rowKeys = [];
-
-        foreach ($tokens as $token) {
-            $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
-        }
-
-        $raw = $this->store->mget(array_values($rowKeys));
-        $rows = [];
-
-        foreach ($rowKeys as $token => $rowKey) {
-            $payload = $raw[$rowKey] ?? null;
-            $row = $payload === null
-                ? null
-                : $this->codec->decodeRowObject(
-                    $payload,
-                    $state->epoch,
-                    $plan->primaryKey,
-                    $token,
-                );
-
-            if ($row === null) {
-                return null;
-            }
-
-            $rows[$token] = $row;
-        }
-
-        return $rows;
     }
 
     /** @phpstan-impure */
@@ -1067,7 +775,7 @@ final readonly class Engine
                 $namespace,
                 $queryHash,
             ),
-            QueryPlan::DIRECT_PK => $this->publishDirect($plan, $state, $rows, $lease),
+            QueryPlan::DIRECT_PK => $this->rows->publish($plan, $state, $rows, $lease),
             default => $this->publishResult($query, $plan, $state, $rows, $lease),
         };
     }
@@ -1085,45 +793,7 @@ final readonly class Engine
             $state,
             $rows,
             $lease,
-            $this->wakeTtl(),
-        );
-    }
-
-    private function publishDirect(
-        QueryPlan $plan,
-        CacheState $state,
-        array $rows,
-        BuildLease $lease,
-    ): void {
-        if (
-            count($rows) !== 1
-            || !$rows[0] instanceof \stdClass
-            || !property_exists($rows[0], $plan->primaryKey->column)
-            || $plan->primaryKey->token($rows[0]->{$plan->primaryKey->column})
-                !== $plan->primaryKeyToken
-        ) {
-            $this->release($lease);
-
-            return;
-        }
-
-        $encoded = $this->codec->encodeRow($rows[0], $state->epoch);
-
-        $this->store->publishVersionedEntries(
-            entries: [$state->key => $encoded],
-            ttl: $this->config->rowTtl,
-            versionKeys: [
-                $this->keys->version($plan->root),
-                $this->keys->generation($plan->root),
-            ],
-            expectedVersions: [
-                $state->version,
-                $state->generation,
-            ],
-            buildingKey: $lease->buildingKey,
-            wakeKey: $lease->wakeKey,
-            token: $lease->token,
-            wakeTtl: $this->wakeTtl(),
+            $this->config->wakeTtl(),
         );
     }
 
@@ -1142,15 +812,15 @@ final readonly class Engine
             $state,
             $rows,
             $lease,
-            $this->wakeTtl(),
+            $this->config->wakeTtl(),
         )) {
-            $this->release($lease);
+            $this->leases->release($lease);
 
             return;
         }
 
         if ($plan->materializeResult) {
-            $this->promoteResultPayload(
+            $this->overlays->promote(
                 $query,
                 $plan->asFullResultOverlay(),
                 $state,
@@ -1162,177 +832,9 @@ final readonly class Engine
         }
     }
 
-    /** @param array<int, mixed> $rows */
-    private function promoteResultPayload(
-        QueryBuilder $query,
-        QueryPlan $resultPlan,
-        CacheState $sourceState,
-        string $namespace,
-        string $queryHash,
-        array $rows,
-        bool $wakeWaiters = true,
-    ): bool {
-        try {
-            if (
-                $this->config->maxAutoOverlayRows === 0
-                || count($rows) > $this->config->maxAutoOverlayRows + 1
-            ) {
-                return false;
-            }
-
-            $ttl = $query->configuredTtl() ?? $this->config->queryTtl;
-            $encoded = $this->codec->encode(
-                $rows,
-                $sourceState->epoch,
-                $sourceState->versions,
-                $sourceState->tag,
-            );
-
-            if (strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES) {
-                return false;
-            }
-
-            $resultState = new CacheState(
-                key: $this->keys->result(
-                    $resultPlan->root,
-                    $sourceState->version,
-                    $namespace,
-                    $queryHash,
-                ),
-                epoch: $sourceState->epoch,
-                version: $sourceState->version,
-                generation: '0',
-                versions: $sourceState->versions,
-                tag: $sourceState->tag,
-                tagKey: $sourceState->tagKey,
-            );
-            $lease = $this->claim($resultPlan, $resultState, $namespace, $queryHash);
-
-            if (!$lease->owner) {
-                return false;
-            }
-
-            if (!$this->state($resultPlan, $namespace, $queryHash)->equals($resultState)) {
-                $this->release($lease, $wakeWaiters);
-
-                return false;
-            }
-
-            return $this->store->publishVersionedEntries(
-                entries: [$resultState->key => $encoded],
-                ttl: $ttl,
-                versionKeys: [$this->keys->version($resultPlan->root)],
-                expectedVersions: [$resultState->version],
-                buildingKey: $lease->buildingKey,
-                wakeKey: $wakeWaiters ? $lease->wakeKey : null,
-                token: $lease->token,
-                wakeTtl: $this->wakeTtl(),
-            );
-        } catch (\Throwable $exception) {
-            if (isset($lease) && $lease->owner) {
-                try {
-                    $this->release($lease, $wakeWaiters);
-                } catch (\Throwable) {
-                    // The original Redis failure is the useful diagnostic.
-                }
-            }
-
-            $this->fail($exception);
-
-            return false;
-        }
-    }
-
     private function state(QueryPlan $plan, string $namespace, string $queryHash): CacheState
     {
         return $this->states->resolve($plan, $namespace, $queryHash)[0];
-    }
-
-    private function claim(
-        QueryPlan $plan,
-        CacheState $state,
-        string $namespace,
-        string $queryHash,
-    ): BuildLease {
-        $buildingKey = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membershipBuild(
-                $plan->root,
-                $state->version,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::RESULT => $this->keys->resultBuild(
-                $plan->root,
-                $state->version,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->rowBuild(
-                $plan->root,
-                $state->generation,
-                (string) $plan->primaryKeyToken,
-            ),
-            default => $this->keys->queryGroupBuild($queryHash),
-        };
-        $token = bin2hex(random_bytes(16));
-
-        if ($this->store->setNxEx($buildingKey, $token, $this->config->buildingLockTtl)) {
-            return new BuildLease(
-                true,
-                $buildingKey,
-                $this->wakeKey($plan, $queryHash, $token),
-                $token,
-            );
-        }
-
-        $owner = $this->store->getRaw($buildingKey);
-
-        return new BuildLease(
-            false,
-            $buildingKey,
-            is_string($owner) ? $this->wakeKey($plan, $queryHash, $owner) : null,
-            $owner,
-        );
-    }
-
-    private function wakeKey(QueryPlan $plan, string $queryHash, string $token): string
-    {
-        return match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->wake($plan->root, 'm', $queryHash, $token),
-            QueryPlan::RESULT => $this->keys->wake($plan->root, 'e', $queryHash, $token),
-            QueryPlan::DIRECT_PK => $this->keys->wake(
-                $plan->root,
-                'r',
-                (string) $plan->primaryKeyToken,
-                $token,
-            ),
-            default => $this->keys->queryGroupWake($queryHash, $token),
-        };
-    }
-
-    private function release(BuildLease $lease, bool $wakeWaiters = true): void
-    {
-        if (!$lease->owner || $lease->token === null) {
-            return;
-        }
-
-        try {
-            $this->store->releaseBuilding(
-                $lease->buildingKey,
-                $wakeWaiters ? (string) $lease->wakeKey : '',
-                $lease->token,
-                $this->wakeTtl(),
-            );
-        } catch (\Throwable $exception) {
-            $this->fail($exception);
-        }
-    }
-
-    private function wakeTtl(): int
-    {
-        return $this->config->buildingLockTtl
-            + (int) ceil($this->config->stampedeWaitMs / 1000)
-            + 5;
     }
 
     /** @param list<string> $dependencyHashes */

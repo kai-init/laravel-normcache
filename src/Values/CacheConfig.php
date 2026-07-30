@@ -24,6 +24,11 @@ final readonly class CacheConfig
         public bool $debugbar,
     ) {}
 
+    public function wakeTtl(): int
+    {
+        return $this->buildingLockTtl + (int) ceil($this->stampedeWaitMs / 1000) + 5;
+    }
+
     /** @param array<string, mixed> $values */
     public static function fromArray(array $values): self
     {
