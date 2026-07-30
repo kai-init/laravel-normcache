@@ -11,7 +11,7 @@ use NormCache\Values\TableIdentity;
 final class QueryPlanner
 {
     /**
-     * @param  list<TableIdentity>  $dependencies
+     * @param  list<TableIdentity>  $dependencies  deduplicated and hash-sorted by DependencyAnalyzer
      * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey  invoked only for shapes that can use the metadata
      */
     public function plan(
@@ -22,8 +22,6 @@ final class QueryPlanner
         bool $forceQueryGroup = false,
         string $operation = 'select',
     ): QueryPlan {
-        $dependencies = $this->uniqueDependencies($dependencies);
-
         if (
             $forceQueryGroup
             || $query->joins !== null && $query->joins !== []
@@ -121,26 +119,6 @@ final class QueryPlanner
     private function canUseRowShape(QueryBuilder $query, string $operation): bool
     {
         return $operation === 'select' && $this->isSingleRowShape($query);
-    }
-
-    /** @param list<TableIdentity> $dependencies
-     * @return list<TableIdentity>
-     */
-    private function uniqueDependencies(array $dependencies): array
-    {
-        if (count($dependencies) <= 1) {
-            return $dependencies;
-        }
-
-        $unique = [];
-
-        foreach ($dependencies as $dependency) {
-            $unique[$dependency->hash] = $dependency;
-        }
-
-        ksort($unique, SORT_STRING);
-
-        return array_values($unique);
     }
 
     private function hasCrossTableUnion(

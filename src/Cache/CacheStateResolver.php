@@ -146,7 +146,9 @@ final readonly class CacheStateResolver
                 key: $this->keys->membership($plan->root, $version, $namespace, $queryHash),
                 epoch: $this->runtime->epoch(),
                 version: $version,
-                generation: $values[$keys['generation']] ?? '0',
+                generation: $keys['generation'] !== null
+                    ? ($values[$keys['generation']] ?? '0')
+                    : '0',
                 versions: $versions,
                 tag: $keys['tag'] !== null ? ($values[$keys['tag']] ?? '0') : null,
                 tagKey: $keys['tag'],
@@ -165,7 +167,8 @@ final readonly class CacheStateResolver
         if (
             $current((string) $keys['epoch']) !== $expected->epoch
             || $current($keys['version']) !== $expected->version
-            || $current($keys['generation']) !== $expected->generation
+            || $keys['generation'] !== null
+                && $current($keys['generation']) !== $expected->generation
         ) {
             return false;
         }
@@ -184,7 +187,7 @@ final readonly class CacheStateResolver
      * @return array{
      *     epoch: ?string,
      *     version: string,
-     *     generation: string,
+     *     generation: string|null,
      *     dependencies: array<string, string>,
      *     tag: ?string,
      *     all: list<string>
@@ -201,7 +204,10 @@ final readonly class CacheStateResolver
         }
 
         $versionKey = $this->keys->version($plan->root);
-        $generationKey = $this->keys->generation($plan->root);
+        $generationKey = match ($plan->route) {
+            QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
+            default => null,
+        };
 
         return [
             'epoch' => $epochKey,

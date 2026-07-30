@@ -15,6 +15,8 @@ final readonly class ResultOverlayPublisher
 {
     private const MAX_AUTO_OVERLAY_BYTES = 50 * 1024;
 
+    private const PAGINATION_LOOKAHEAD_ROWS = 1;
+
     public function __construct(
         private CacheConfig $config,
         private CacheRuntime $runtime,
@@ -38,7 +40,7 @@ final readonly class ResultOverlayPublisher
         try {
             if (
                 $this->config->maxAutoOverlayRows === 0
-                || count($rows) > $this->config->maxAutoOverlayRows + 1
+                || count($rows) > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
             ) {
                 return false;
             }

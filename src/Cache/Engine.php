@@ -172,9 +172,8 @@ final readonly class Engine
             return $database();
         }
 
-        $queryHash = $hash->value();
-
         try {
+            $queryHash = $hash->value();
             $lease = $this->leases->claim($plan, $cached->state, $namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->fail($exception);
@@ -878,21 +877,19 @@ final readonly class Engine
         QueryBuilder $query,
         Connection $connection,
     ): ?TableIdentity {
-        $resolved = [];
+        $lowest = null;
 
         foreach ($query->dependencies() as $declaration) {
             $identity = $declaration->isTable()
                 ? $this->tables->resolve($connection, $declaration->value)
                 : $this->dependencies->modelIdentity($connection, $declaration->value);
 
-            if ($identity !== null) {
-                $resolved[$identity->hash] = $identity;
+            if ($identity !== null && ($lowest === null || $identity->hash < $lowest->hash)) {
+                $lowest = $identity;
             }
         }
 
-        ksort($resolved, SORT_STRING);
-
-        return array_values($resolved)[0] ?? null;
+        return $lowest;
     }
 
     private function fail(\Throwable $exception): void

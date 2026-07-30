@@ -135,7 +135,6 @@ final class Reporter
         string $reason,
         QueryStatement $statement,
         ?QueryPlan $plan = null,
-        ?string $queryHash = null,
     ): void {
         if (!$this->enabled()) {
             return;
@@ -145,7 +144,7 @@ final class Reporter
             outcome: 'bypass',
             route: $plan === null ? null : $this->route($plan->route),
             tableHash: $plan?->root->hash,
-            queryHash: $queryHash,
+            queryHash: null,
             reason: $reason,
             sql: $statement->sql(),
             bindings: $statement->bindings(),
