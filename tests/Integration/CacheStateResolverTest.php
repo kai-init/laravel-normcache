@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheStateResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\TestCase;
+use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
@@ -52,7 +53,12 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $root = $this->table('posts');
         $dependency = $this->table('authors');
-        $plan = new QueryPlan(QueryPlan::CANONICAL, $root, [$root, $dependency]);
+        $plan = QueryPlan::canonical(
+            $root,
+            [$root, $dependency],
+            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            materializeResult: false,
+        );
 
         [$state] = $resolver->resolve($plan, 'n', 'hash');
         $this->assertTrue($resolver->isCurrent($plan, $state));
@@ -66,7 +72,12 @@ final class CacheStateResolverTest extends TestCase
     {
         $root = $this->table('posts');
 
-        return new QueryPlan(QueryPlan::CANONICAL, $root, [$root]);
+        return QueryPlan::canonical(
+            $root,
+            [$root],
+            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            materializeResult: false,
+        );
     }
 
     private function table(string $name): TableIdentity

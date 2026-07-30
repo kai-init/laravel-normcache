@@ -477,7 +477,7 @@ final readonly class Engine
         $version = is_string($head[1] ?? null) ? $head[1] : '0';
 
         if ($status === 'result') {
-            $resultPlan = $this->resultOverlayPlan($plan);
+            $resultPlan = $plan->asFullResultOverlay();
             [$state] = $this->states->resolve($resultPlan, $namespace, $queryHash, $version);
             $result = $this->results->read($state, $head[2] ?? null);
 
@@ -531,7 +531,7 @@ final readonly class Engine
         if ($result->served()) {
             $this->promoteResultPayload(
                 $query,
-                $this->resultOverlayPlan($plan),
+                $plan->asFullResultOverlay(),
                 $result->state,
                 $namespace,
                 $queryHash,
@@ -584,15 +584,9 @@ final readonly class Engine
 
         if ($status === 'membership' || $status === 'hit') {
             $generation = is_string($head[2] ?? null) ? $head[2] : '0';
-            $canonicalPlan = new QueryPlan(
-                QueryPlan::CANONICAL,
-                $plan->root,
-                $plan->dependencies,
-                $plan->primaryKey,
-            );
             $result = $this->readCanonicalHead(
                 $query,
-                $canonicalPlan,
+                $plan->asCanonicalProjectionFallback(),
                 $namespace,
                 $canonicalQueryHash,
                 ['hit', $version, $generation, $head[3] ?? null],
@@ -1158,7 +1152,7 @@ final readonly class Engine
         if ($plan->materializeResult) {
             $this->promoteResultPayload(
                 $query,
-                $this->resultOverlayPlan($plan),
+                $plan->asFullResultOverlay(),
                 $state,
                 $namespace,
                 $queryHash,
@@ -1166,16 +1160,6 @@ final readonly class Engine
                 wakeWaiters: false,
             );
         }
-    }
-
-    private function resultOverlayPlan(QueryPlan $plan): QueryPlan
-    {
-        return new QueryPlan(
-            QueryPlan::RESULT,
-            $plan->root,
-            $plan->dependencies,
-            $plan->primaryKey,
-        );
     }
 
     /** @param array<int, mixed> $rows */

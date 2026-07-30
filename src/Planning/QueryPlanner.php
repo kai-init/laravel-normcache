@@ -29,7 +29,7 @@ final class QueryPlanner
             || $query->joins !== null && $query->joins !== []
             || $this->hasCrossTableUnion($root, $dependencies, $query)
         ) {
-            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies);
+            return QueryPlan::queryGroup($root, $dependencies);
         }
 
         $wildcard = $this->isWildcard($query, $root);
@@ -38,10 +38,9 @@ final class QueryPlanner
             && ($wildcard || $plainColumns !== null)
                 ? $resolvePrimaryKey()
                 : null;
-        $canUseRowShape = $primaryKey !== null;
 
         if (
-            $canUseRowShape
+            $primaryKey !== null
             && count($dependencies) === 1
             && $this->allowsDirectControls($query)
         ) {
@@ -54,27 +53,25 @@ final class QueryPlanner
                     $deletedAtColumn = $query->deletedAtColumn();
 
                     if ($wildcard) {
-                        return new QueryPlan(
-                            QueryPlan::DIRECT_PK,
+                        return QueryPlan::directPrimaryKey(
                             $root,
                             $dependencies,
                             $primaryKey,
                             $directToken,
-                            softDeleteMode: $softDeleteMode,
-                            deletedAtColumn: $deletedAtColumn,
+                            $softDeleteMode,
+                            $deletedAtColumn,
                         );
                     }
 
                     if ($plainColumns !== null) {
-                        return new QueryPlan(
-                            QueryPlan::RESULT,
+                        return QueryPlan::projectedRow(
                             $root,
                             $dependencies,
                             $primaryKey,
                             $directToken,
-                            softDeleteMode: $softDeleteMode,
-                            deletedAtColumn: $deletedAtColumn,
-                            projectedColumns: $plainColumns,
+                            $plainColumns,
+                            $softDeleteMode,
+                            $deletedAtColumn,
                         );
                     }
                 }
@@ -82,12 +79,11 @@ final class QueryPlanner
         }
 
         if (
-            $canUseRowShape
+            $primaryKey !== null
             && $wildcard
             && (!$root->isView || !$this->hasExternalDependency($root, $dependencies))
         ) {
-            return new QueryPlan(
-                QueryPlan::CANONICAL,
+            return QueryPlan::canonical(
                 $root,
                 $dependencies,
                 $primaryKey,
@@ -95,17 +91,16 @@ final class QueryPlanner
             );
         }
 
-        if ($canUseRowShape && $plainColumns !== null) {
-            return new QueryPlan(
-                QueryPlan::RESULT,
+        if ($primaryKey !== null && $plainColumns !== null) {
+            return QueryPlan::projectedResult(
                 $root,
                 $dependencies,
                 $primaryKey,
-                projectedColumns: $plainColumns,
+                $plainColumns,
             );
         }
 
-        return new QueryPlan(QueryPlan::RESULT, $root, $dependencies, $primaryKey);
+        return QueryPlan::result($root, $dependencies, $primaryKey);
     }
 
     private function allowsDirectControls(QueryBuilder $query): bool

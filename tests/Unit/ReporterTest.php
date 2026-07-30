@@ -29,7 +29,7 @@ final class ReporterTest extends UnitTestCase
             null,
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
-        $plan = new QueryPlan(QueryPlan::QUERY_GROUP, $table, [$table]);
+        $plan = QueryPlan::queryGroup($table, [$table]);
         $query = DB::table('posts');
         $sql = 'select * from posts where id = ?';
         $bindings = [42];
@@ -77,7 +77,7 @@ final class ReporterTest extends UnitTestCase
             null,
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
-        $plan = new QueryPlan(QueryPlan::RESULT, $table, []);
+        $plan = QueryPlan::result($table, []);
         $query = DB::query()->from('posts');
         $statement = new QueryStatement(static fn(): array => ['select * from posts', []]);
 
