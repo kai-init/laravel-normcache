@@ -3,6 +3,7 @@
 namespace NormCache\Support;
 
 use NormCache\Database\QueryBuilder;
+use NormCache\Database\QueryStatement;
 use NormCache\Debug\DebugBarCollector;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Events\CacheInvalidated;
@@ -29,8 +30,7 @@ final class Reporter
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?string $reason = null,
     ): void {
         $this->reportQuery(
@@ -38,8 +38,7 @@ final class Reporter
             $query,
             $plan,
             $hash,
-            $sql,
-            $bindings,
+            $statement,
             $reason,
         );
     }
@@ -48,8 +47,7 @@ final class Reporter
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?string $reason = null,
     ): void {
         $this->reportQuery(
@@ -57,8 +55,7 @@ final class Reporter
             $query,
             $plan,
             $hash,
-            $sql,
-            $bindings,
+            $statement,
             $reason,
         );
     }
@@ -67,8 +64,7 @@ final class Reporter
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?string $reason = null,
     ): void {
         $this->reportQuery(
@@ -76,8 +72,7 @@ final class Reporter
             $query,
             $plan,
             $hash,
-            $sql,
-            $bindings,
+            $statement,
             $reason,
         );
     }
@@ -87,8 +82,7 @@ final class Reporter
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?string $reason,
     ): void {
         if (!$this->enabled()) {
@@ -109,8 +103,8 @@ final class Reporter
             tableHash: $plan->root->hash,
             queryHash: $hash,
             reason: $reason,
-            sql: $sql,
-            bindings: $bindings,
+            sql: $statement->sql(),
+            bindings: $statement->bindings(),
             modelClass: $query->modelClass(),
         );
         $this->sink?->record($record);
@@ -139,8 +133,7 @@ final class Reporter
     public function bypass(
         QueryBuilder $query,
         string $reason,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?QueryPlan $plan = null,
         ?string $queryHash = null,
     ): void {
@@ -154,8 +147,8 @@ final class Reporter
             tableHash: $plan?->root->hash,
             queryHash: $queryHash,
             reason: $reason,
-            sql: $sql,
-            bindings: $bindings,
+            sql: $statement->sql(),
+            bindings: $statement->bindings(),
             modelClass: $query->modelClass(),
         );
         $this->sink?->record($record);
@@ -191,6 +184,12 @@ final class Reporter
         if ($this->config->dispatchEvents) {
             event(new CacheInvalidated($table->hash, $mode, $tokens));
         }
+    }
+
+    /** Lets callers skip building report arguments nothing will consume. */
+    public function observing(): bool
+    {
+        return $this->enabled();
     }
 
     private function enabled(): bool

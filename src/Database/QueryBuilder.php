@@ -219,36 +219,37 @@ final class QueryBuilder extends Builder
 
     protected function runSelect()
     {
-        $sql = $this->toSql();
-        $bindings = $this->getBindings();
+        $this->applyBeforeQueryCallbacks();
+        $statement = new QueryStatement(fn(): array => [$this->toSql(), $this->getBindings()]);
 
         [$bypass, $reason] = $this->bypassDecision();
 
         if ($bypass) {
             if ($reason !== null) {
-                app(Reporter::class)->bypass($this, $reason, $sql, $bindings);
+                app(Reporter::class)->bypass($this, $reason, $statement);
             }
 
             return $this->connection->select(
-                $sql,
-                $bindings,
+                $statement->sql(),
+                $statement->bindings(),
                 !$this->useWritePdo,
                 $this->fetchUsing,
             );
         }
 
+        // Compiling SQL is deferred: a direct primary-key hit resolves its row
+        // from the plan alone and never reads the statement or its hash.
         return app(Engine::class)->select(
             $this,
-            $sql,
-            $bindings,
+            $statement,
             'select',
             fn() => $this->connection->select(
-                $sql,
-                $bindings,
+                $statement->sql(),
+                $statement->bindings(),
                 !$this->useWritePdo,
                 $this->fetchUsing,
             ),
-            fn() => $this->connection->select($sql, $bindings, false, []),
+            fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
         );
     }
 
@@ -257,17 +258,17 @@ final class QueryBuilder extends Builder
         $this->applyBeforeQueryCallbacks();
         $sql = $this->grammar->compileExists($this);
         $bindings = $this->getBindings();
+        $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
         [$bypass, $reason] = $this->bypassDecision();
         $results = $bypass
-            ? $this->runBypassedExists($sql, $bindings, $reason)
+            ? $this->runBypassedExists($statement, $reason)
             : app(Engine::class)->select(
                 $this,
-                $sql,
-                $bindings,
+                $statement,
                 'exists',
-                fn() => $this->connection->select($sql, $bindings, true),
-                fn() => $this->connection->select($sql, $bindings, false, []),
+                fn() => $this->connection->select($statement->sql(), $statement->bindings(), true),
+                fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
             );
 
         if (!isset($results[0])) {
@@ -469,15 +470,18 @@ final class QueryBuilder extends Builder
     }
 
     private function runBypassedExists(
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         ?string $reason,
     ): array {
         if ($reason !== null) {
-            app(Reporter::class)->bypass($this, $reason, $sql, $bindings);
+            app(Reporter::class)->bypass($this, $reason, $statement);
         }
 
-        return $this->connection->select($sql, $bindings, !$this->useWritePdo);
+        return $this->connection->select(
+            $statement->sql(),
+            $statement->bindings(),
+            !$this->useWritePdo,
+        );
     }
 
     private function writeWithInvalidation(

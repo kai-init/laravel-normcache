@@ -4,6 +4,7 @@ namespace NormCache\Cache;
 
 use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
+use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
@@ -42,14 +43,13 @@ final readonly class Engine
         private ResultRepository $results,
     ) {}
 
-    /** @param list<mixed> $bindings
+    /**
      * @param  callable(): array  $database
      * @param  callable(): array  $primaryDatabase
      */
     public function select(
         QueryBuilder $query,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         string $operation,
         callable $database,
         callable $primaryDatabase,
@@ -63,49 +63,41 @@ final readonly class Engine
         $table = $directRoot ?? $this->declaredRoot($query, $connection);
 
         if ($table === null) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'unidentifiable_dependency',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
-
-            return $database();
         }
 
         if ($table->isView && $query->dependencies() === []) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'view_dependencies_required',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
-
-            return $database();
         }
 
         $analysis = $this->dependencies->analyze($connection, $query, $table);
 
         if ($analysis->volatile) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'volatile_expression',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
-
-            return $database();
         }
 
         if ($analysis->opaque && !$analysis->explicit) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'unidentifiable_dependency',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
-
-            return $database();
         }
 
         $dependencies = $analysis->tables;
@@ -120,87 +112,65 @@ final readonly class Engine
         );
         $namespace = $this->identity->namespace($query->configuredTag());
         $canonicalQueryHash = null;
-        $preparedBindings = null;
-        $prepareBindings = function () use (&$preparedBindings, $connection, $bindings): array {
-            return $preparedBindings ??= $connection->prepareBindings($bindings);
-        };
+        $dependencyHashes = array_map(
+            static fn(TableIdentity $dependency): string => $dependency->hash,
+            $dependencies,
+        );
+        $hash = $this->queryHashResolver(
+            $query,
+            $plan,
+            $connection,
+            $dependencyHashes,
+            $namespace,
+            $operation,
+            $statement,
+        );
 
         try {
-            $dependencyHashes = array_map(
-                static fn(TableIdentity $dependency): string => $dependency->hash,
-                $dependencies,
-            );
-
-            if ($plan->route === QueryPlan::CANONICAL) {
-                $queryHash = $canonicalQueryHash = $this->canonicalQueryHash(
-                    $query,
-                    $plan,
-                    $connection,
-                    $dependencyHashes,
-                    $namespace,
-                    $sql,
-                    $bindings,
-                    $prepareBindings,
-                );
-            } else {
-                $queryHash = $this->identity->hash(
-                    route: $plan->route,
-                    rootHash: $table->hash,
-                    dependencyHashes: $dependencyHashes,
-                    sql: $sql,
-                    bindings: $prepareBindings(),
-                    namespace: $namespace,
-                    operation: $operation,
-                );
-            }
-
-            if (
-                $plan->route === QueryPlan::RESULT
-                    && $plan->projectedColumns !== null
-                    && $plan->primaryKeyToken === null
-            ) {
-                $canonicalQueryHash = $this->canonicalQueryHash(
-                    $query,
-                    $plan,
-                    $connection,
-                    $dependencyHashes,
-                    $namespace,
-                    $sql,
-                    $bindings,
-                    $prepareBindings,
-                );
-            }
-        } catch (\InvalidArgumentException) {
-            $this->reporter->bypass(
+            $canonicalQueryHash = $this->resultOverlayCanonicalHash(
                 $query,
-                'unsupported_query_shape',
-                $sql,
-                $bindings,
                 $plan,
+                $connection,
+                $dependencyHashes,
+                $namespace,
+                $statement,
             );
-
-            return $database();
-        }
-
-        try {
-            $cached = $this->read(
+            $cached = $this->readCache(
                 $query,
                 $plan,
                 $namespace,
-                $queryHash,
+                $hash,
                 $canonicalQueryHash,
             );
 
             if ($cached->served()) {
-                $this->reportRead($query, $plan, $queryHash, $sql, $bindings, $cached);
+                if ($this->reporter->observing()) {
+                    $this->reportRead(
+                        $query,
+                        $plan,
+                        $hash->value(),
+                        $statement,
+                        $cached,
+                    );
+                }
 
                 return $cached->rows;
             }
+        } catch (\InvalidArgumentException) {
+            return $this->bypass(
+                $query,
+                'unsupported_query_shape',
+                $statement,
+                $database,
+                $plan,
+            );
         } catch (\Throwable $exception) {
             $this->fail($exception);
 
             return $database();
         }
+
+        $queryHash = $hash->value();
 
         try {
             $lease = $this->claim($plan, $cached->state, $namespace, $queryHash);
@@ -214,8 +184,7 @@ final readonly class Engine
             $query,
             $plan,
             $queryHash,
-            $sql,
-            $bindings,
+            $statement,
             $cached->reason,
         );
 
@@ -235,7 +204,13 @@ final readonly class Engine
                     );
 
                     if ($retry->served()) {
-                        $this->reportRead($query, $plan, $queryHash, $sql, $bindings, $retry);
+                        $this->reportRead(
+                            $query,
+                            $plan,
+                            $queryHash,
+                            $statement,
+                            $retry,
+                        );
 
                         return $retry->rows;
                     }
@@ -281,21 +256,135 @@ final readonly class Engine
         return $rows;
     }
 
+    /**
+     * @param  callable(): array  $database
+     */
+    private function bypass(
+        QueryBuilder $query,
+        string $reason,
+        QueryStatement $statement,
+        callable $database,
+        ?QueryPlan $plan = null,
+    ): array {
+        $this->reporter->bypass($query, $reason, $statement, $plan);
+
+        return $database();
+    }
+
+    /** @param list<string> $dependencyHashes */
+    private function queryHashResolver(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
+        string $namespace,
+        string $operation,
+        QueryStatement $statement,
+    ): QueryHashResolver {
+        if ($plan->route === QueryPlan::CANONICAL) {
+            return new QueryHashResolver(fn(): string => $this->canonicalQueryHash(
+                $query,
+                $plan,
+                $connection,
+                $dependencyHashes,
+                $namespace,
+                $statement,
+            ));
+        }
+
+        return new QueryHashResolver(function () use (
+            $plan,
+            $dependencyHashes,
+            $namespace,
+            $operation,
+            $statement,
+            $connection,
+        ): string {
+            return $this->identity->hash(
+                route: $plan->route,
+                rootHash: $plan->root->hash,
+                dependencyHashes: $dependencyHashes,
+                sql: $statement->sql(),
+                bindings: $statement->preparedBindings($connection),
+                namespace: $namespace,
+                operation: $operation,
+            );
+        });
+    }
+
+    /** @param list<string> $dependencyHashes */
+    private function resultOverlayCanonicalHash(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
+        string $namespace,
+        QueryStatement $statement,
+    ): ?string {
+        if (
+            $plan->route !== QueryPlan::RESULT
+            || $plan->projectedColumns === null
+            || $plan->primaryKeyToken !== null
+        ) {
+            return null;
+        }
+
+        return $this->canonicalQueryHash(
+            $query,
+            $plan,
+            $connection,
+            $dependencyHashes,
+            $namespace,
+            $statement,
+        );
+    }
+
+    private function readCache(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        QueryHashResolver $hash,
+        ?string $canonicalQueryHash,
+    ): CacheRead {
+        if ($plan->route === QueryPlan::DIRECT_PK) {
+            return $this->readDirect($plan, $namespace, $hash);
+        }
+
+        return $this->read(
+            $query,
+            $plan,
+            $namespace,
+            $hash->value(),
+            $canonicalQueryHash,
+        );
+    }
+
     private function reportRead(
         QueryBuilder $query,
         QueryPlan $plan,
         string $queryHash,
-        string $sql,
-        array $bindings,
+        QueryStatement $statement,
         CacheRead $read,
     ): void {
         if ($read->outcome === ReadOutcome::REPAIRED) {
-            $this->reporter->repaired($query, $plan, $queryHash, $sql, $bindings, $read->reason);
+            $this->reporter->repaired(
+                $query,
+                $plan,
+                $queryHash,
+                $statement,
+                $read->reason,
+            );
 
             return;
         }
 
-        $this->reporter->hit($query, $plan, $queryHash, $sql, $bindings, $read->reason);
+        $this->reporter->hit(
+            $query,
+            $plan,
+            $queryHash,
+            $statement,
+            $read->reason,
+        );
     }
 
     private function read(
@@ -314,10 +403,6 @@ final readonly class Engine
                     $queryHash,
                 )
                 : $this->readCanonical($query, $plan, $namespace, $queryHash);
-        }
-
-        if ($plan->route === QueryPlan::DIRECT_PK) {
-            return $this->readDirect($plan, $namespace, $queryHash);
         }
 
         if ($plan->route === QueryPlan::QUERY_GROUP) {
@@ -575,14 +660,14 @@ final readonly class Engine
         return $projectedRows;
     }
 
-    private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): CacheRead
+    private function readDirect(QueryPlan $plan, string $namespace, QueryHashResolver $hash): CacheRead
     {
         $cached = $this->readCanonicalRow($plan);
 
         $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,
-            $queryHash,
+            $hash->value(),
             knownGeneration: $cached['generation'],
         )[0];
 
@@ -1260,17 +1345,15 @@ final readonly class Engine
         Connection $connection,
         array $dependencyHashes,
         string $namespace,
-        string $sql,
-        array $bindings,
-        callable $prepareBindings,
+        QueryStatement $statement,
     ): string {
         if ($query->columns === null || $query->columns === ['*']) {
             return $this->identity->hash(
                 route: QueryPlan::CANONICAL,
                 rootHash: $plan->root->hash,
                 dependencyHashes: $dependencyHashes,
-                sql: $sql,
-                bindings: $prepareBindings(),
+                sql: $statement->sql(),
+                bindings: $statement->preparedBindings($connection),
                 namespace: $namespace,
                 operation: 'select',
             );
@@ -1285,7 +1368,7 @@ final readonly class Engine
             dependencyHashes: $dependencyHashes,
             sql: $canonical->toSql(),
             bindings: $query->bindings['select'] === []
-                 ? $prepareBindings()
+                ? $statement->preparedBindings($connection)
                  : $connection->prepareBindings($canonical->getBindings()),
             namespace: $namespace,
             operation: 'select',

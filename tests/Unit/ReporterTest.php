@@ -4,6 +4,7 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use NormCache\Database\QueryStatement;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Events\QueryCacheRepaired;
@@ -32,10 +33,11 @@ final class ReporterTest extends UnitTestCase
         $query = DB::table('posts');
         $sql = 'select * from posts where id = ?';
         $bindings = [42];
+        $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        $reporter->hit($query, $plan, 'hit-hash', $sql, $bindings, 'row_cache_fallback');
-        $reporter->miss($query, $plan, 'miss-hash', $sql, $bindings);
-        $reporter->repaired($query, $plan, 'repair-hash', $sql, $bindings, 'row_repair');
+        $reporter->hit($query, $plan, 'hit-hash', $statement, 'row_cache_fallback');
+        $reporter->miss($query, $plan, 'miss-hash', $statement);
+        $reporter->repaired($query, $plan, 'repair-hash', $statement, 'row_repair');
 
         Event::assertDispatched(
             QueryCacheHit::class,
@@ -77,18 +79,19 @@ final class ReporterTest extends UnitTestCase
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = new QueryPlan(QueryPlan::RESULT, $table, []);
         $query = DB::query()->from('posts');
+        $statement = new QueryStatement(static fn(): array => ['select * from posts', []]);
 
         // Same corrupted key observed twice (e.g. a concurrent request racing the
         // same still-corrupt payload) must only be reported once.
-        $reporter->miss($query, $plan, 'hash-a', 'select * from posts', [], 'corrupt_payload');
-        $reporter->miss($query, $plan, 'hash-a', 'select * from posts', [], 'corrupt_payload');
+        $reporter->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
+        $reporter->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
 
         // A different corrupted key is a distinct occurrence and must still report.
-        $reporter->miss($query, $plan, 'hash-b', 'select * from posts', [], 'corrupt_payload');
+        $reporter->miss($query, $plan, 'hash-b', $statement, 'corrupt_payload');
 
         // Dedup is specific to corrupt_payload; ordinary misses are unaffected.
-        $reporter->miss($query, $plan, 'hash-c', 'select * from posts', [], null);
-        $reporter->miss($query, $plan, 'hash-c', 'select * from posts', [], null);
+        $reporter->miss($query, $plan, 'hash-c', $statement);
+        $reporter->miss($query, $plan, 'hash-c', $statement);
 
         Event::assertDispatchedTimes(QueryCacheMiss::class, 4);
     }

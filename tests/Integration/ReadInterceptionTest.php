@@ -2,11 +2,14 @@
 
 namespace NormCache\Tests\Integration;
 
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Grammars\SQLiteGrammar;
 use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CacheConfig;
 
 final class ReadInterceptionTest extends TestCase
 {
@@ -61,6 +64,44 @@ final class ReadInterceptionTest extends TestCase
 
         $this->assertSame(0, $afterCached);
         $this->assertCount(2, DB::getQueryLog());
+    }
+
+    public function test_unobserved_direct_primary_key_hit_does_not_compile_sql(): void
+    {
+        $connection = DB::connection();
+        $originalGrammar = $connection->getQueryGrammar();
+        $originalConfig = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['events'] = false;
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+        $grammar = new class($connection) extends SQLiteGrammar
+        {
+            public int $postSelectCompilations = 0;
+
+            public function compileSelect(Builder $query)
+            {
+                if ($query->from === 'posts') {
+                    $this->postSelectCompilations++;
+                }
+
+                return parent::compileSelect($query);
+            }
+        };
+        $connection->setQueryGrammar($grammar);
+
+        try {
+            DB::table('posts')->where('id', $this->postId)->first();
+            $grammar->postSelectCompilations = 0;
+
+            DB::table('posts')->where('id', $this->postId)->first();
+
+            $this->assertSame(0, $grammar->postSelectCompilations);
+        } finally {
+            $connection->setQueryGrammar($originalGrammar);
+            $this->app->instance(CacheConfig::class, $originalConfig);
+            $this->app->forgetScopedInstances();
+        }
     }
 
     public function test_before_callbacks_affect_identity_once_and_after_callbacks_see_hits(): void
