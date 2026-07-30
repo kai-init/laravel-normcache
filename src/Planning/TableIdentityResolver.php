@@ -212,7 +212,20 @@ final class TableIdentityResolver
 
     private function metadata(Connection $connection): ConnectionMetadata
     {
-        return $this->connections[$connection] ??= new ConnectionMetadata;
+        $database = (string) $connection->getDatabaseName();
+        $prefix = (string) $connection->getTablePrefix();
+        $metadata = $this->connections[$connection] ?? null;
+
+        if (
+            $metadata === null
+            || $metadata->database !== $database
+            || $metadata->prefix !== $prefix
+        ) {
+            $metadata = new ConnectionMetadata($database, $prefix);
+            $this->connections[$connection] = $metadata;
+        }
+
+        return $metadata;
     }
 
     private function unqualifiedTable(string $table): string
