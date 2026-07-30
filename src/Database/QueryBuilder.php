@@ -35,8 +35,6 @@ final class QueryBuilder extends Builder
 
     private ?string $tag = null;
 
-    private bool $useResultCache = false;
-
     /** @var array<string, DependencyDeclaration> */
     private array $dependencies = [];
 
@@ -137,18 +135,6 @@ final class QueryBuilder extends Builder
     public function configuredTag(): ?string
     {
         return $this->tag;
-    }
-
-    public function useResultCache(): static
-    {
-        $this->useResultCache = true;
-
-        return $this;
-    }
-
-    public function usesResultCache(): bool
-    {
-        return $this->useResultCache;
     }
 
     /** @param array<mixed> $dependencies */

@@ -11,6 +11,7 @@ final readonly class CacheConfig
         public string $keyPrefix,
         public int $rowTtl,
         public int $queryTtl,
+        public int $maxAutoOverlayRows,
         public array $primaryKeys,
         public int $maxPreciseInvalidationKeys,
         public int $buildingLockTtl,
@@ -32,6 +33,11 @@ final readonly class CacheConfig
 
         $rowTtl = self::positive($values, 'row_ttl', 604_800);
         $queryTtl = self::positive($values, 'query_ttl', 3_600);
+        $maxAutoOverlayRows = self::positive(
+            $values,
+            'auto_overlay_max_rows',
+            50,
+        );
         $maxPreciseInvalidationKeys = self::bounded(
             $values,
             'max_precise_invalidation_keys',
@@ -46,6 +52,7 @@ final readonly class CacheConfig
             keyPrefix: $keyPrefix,
             rowTtl: $rowTtl,
             queryTtl: $queryTtl,
+            maxAutoOverlayRows: $maxAutoOverlayRows,
             primaryKeys: self::primaryKeys($values['primary_keys'] ?? []),
             maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,
             buildingLockTtl: $buildingLockTtl,

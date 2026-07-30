@@ -9,31 +9,22 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CacheConfigTest extends UnitTestCase
 {
-    public function test_builds_configuration_contract(): void
+    public function test_populates_default_configuration_values(): void
     {
-        $config = CacheConfig::fromArray([
-            'connection' => 'normcache-test',
-            'key_prefix' => 'app:',
-            'row_ttl' => 600,
-            'query_ttl' => 60,
-            'primary_keys' => [],
-            'events' => true,
-        ]);
+        $config = CacheConfig::fromArray([]);
 
-        $this->assertSame('normcache-test', $config->connection);
-        $this->assertSame('app:', $config->keyPrefix);
-        $this->assertSame(600, $config->rowTtl);
-        $this->assertSame(60, $config->queryTtl);
+        $this->assertSame('cache', $config->connection);
+        $this->assertSame('', $config->keyPrefix);
+        $this->assertSame(604_800, $config->rowTtl);
+        $this->assertSame(3_600, $config->queryTtl);
+        $this->assertSame(50, $config->maxAutoOverlayRows);
         $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
-        $this->assertFalse(property_exists($config, 'maxMembershipRows'));
-        $this->assertFalse(property_exists($config, 'maxMembershipBytes'));
-        $this->assertFalse(property_exists($config, 'maxCanonicalBytes'));
-        $this->assertFalse(property_exists($config, 'maxResultBytes'));
-        $this->assertTrue($config->dispatchEvents);
-        $this->assertFalse(property_exists($config, 'cooldown'));
-        $this->assertFalse(property_exists($config, 'deploymentIds'));
-        $this->assertFalse(property_exists($config, 'publicationGuardMarginSeconds'));
-        $this->assertFalse(property_exists($config, 'fallbackEnabled'));
+        $this->assertSame(5, $config->buildingLockTtl);
+        $this->assertSame(200, $config->stampedeWaitMs);
+        $this->assertSame(64, $config->stampedeWakeTokens);
+        $this->assertTrue($config->enabled);
+        $this->assertFalse($config->dispatchEvents);
+        $this->assertFalse($config->debugbar);
     }
 
     public function test_rejects_hash_tag_characters_in_key_prefix(): void
@@ -60,6 +51,7 @@ final class CacheConfigTest extends UnitTestCase
             ['building_lock_ttl', 0],
             ['row_ttl', 0],
             ['query_ttl', 0],
+            ['auto_overlay_max_rows', 0],
         ];
     }
 

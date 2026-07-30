@@ -1187,6 +1187,10 @@ final readonly class Engine
         bool $wakeWaiters = true,
     ): bool {
         try {
+            if (count($rows) > $this->config->maxAutoOverlayRows) {
+                return false;
+            }
+
             $ttl = $query->configuredTtl() ?? $this->config->queryTtl;
             $encoded = $this->codec->encode(
                 $rows,

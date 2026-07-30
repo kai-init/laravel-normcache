@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [4.0.0] — 2026-07-29
+## [4.0.0] — 2026-07-20
 
 ### Added
 
 - **Query Builder caching:** supported `DB::table()` reads now participate in NormCache automatically, alongside Eloquent reads. Writes through those cache-aware builders invalidate affected tables automatically.
 - **Unified dependencies:** `dependsOn()` now accepts Eloquent model classes and raw table names in one declaration.
-- **Result overlays:** `useResultCache()` adds a complete-result payload on top of canonical row storage, letting warm reads avoid row-by-row assembly while retaining canonical fallback and repair.
+- **Automatic Result Overlays:** canonical queries returning up to `auto_overlay_max_rows` (default 50) automatically store a complete result payload in Redis, letting warm reads execute in a single Redis `GET` (~80–120 µs) while retaining canonical fallback and self-healing.
 - **Global tags:** use `tag('name')` to group cached query payloads and `NormCache::flushTag('name')` to invalidate that group.
 - **Unified manual invalidation:** `NormCache::invalidate()` accepts a model instance, model class, table name, or an array of those targets. A model target uses its model connection; table targets use Laravel's default connection unless `connection:` is supplied.
 - **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus `disableCache()`, `enableCache()`, and `cacheDisabled()`, pause caching across application nodes. Re-enabling advances the global epoch before serving cached data again.

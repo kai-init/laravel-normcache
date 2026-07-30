@@ -42,6 +42,21 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertFalse($plan->materializeResult);
     }
 
+    public function test_limited_root_wildcard_uses_an_automatic_result_overlay(): void
+    {
+        $query = DB::query()->from('posts')->limit(20);
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+        $this->assertTrue($plan->materializeResult);
+    }
+
     public function test_bare_alias_wildcard_uses_canonical_rows(): void
     {
         $query = DB::query()->from('posts p')->select('p.*');
@@ -79,9 +94,9 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_result_cache_override_materializes_wildcard_canonical_result(): void
+    public function test_limited_wildcard_query_materializes_result_overlay(): void
     {
-        $query = DB::query()->from('posts')->useResultCache();
+        $query = DB::query()->from('posts')->limit(20);
 
         $plan = $this->planner->plan(
             $query,
@@ -94,13 +109,12 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertTrue($plan->materializeResult);
     }
 
-    public function test_result_cache_override_keeps_primary_key_query_on_direct_row_route(): void
+    public function test_primary_key_query_uses_direct_row_route(): void
     {
         $query = DB::query()
             ->from('posts')
             ->where('id', 42)
-            ->limit(1)
-            ->useResultCache();
+            ->limit(1);
 
         $plan = $this->planner->plan(
             $query,
@@ -530,13 +544,12 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertNull($plan->primaryKeyToken);
     }
 
-    public function test_result_cache_override_does_not_collapse_query_group(): void
+    public function test_join_query_group_does_not_collapse(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
         $query = DB::query()
             ->from('posts')
-            ->join('comments', 'comments.post_id', '=', 'posts.id')
-            ->useResultCache();
+            ->join('comments', 'comments.post_id', '=', 'posts.id');
 
         $plan = $this->planner->plan(
             $query,

@@ -7,6 +7,7 @@ return [
 
     'row_ttl' => (int) env('NORMCACHE_ROW_TTL', 604800),
     'query_ttl' => (int) env('NORMCACHE_QUERY_TTL', 3600),
+    'auto_overlay_max_rows' => (int) env('NORMCACHE_AUTO_OVERLAY_MAX_ROWS', 50),
 
     // Each group requires connection, database, and table metadata. Add schema to
     // restrict a PostgreSQL or SQL Server match. Types are integer or string.

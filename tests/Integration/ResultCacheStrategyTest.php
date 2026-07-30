@@ -34,7 +34,7 @@ final class ResultCacheStrategyTest extends TestCase
         }
     }
 
-    public function test_use_result_cache_materializes_result_over_canonical_storage(): void
+    public function test_small_canonical_result_automatically_materializes_an_overlay(): void
     {
         $query = fn() => DB::table('posts')
             ->where('published', true)
@@ -48,7 +48,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->orderByDesc('views')
             ->orderBy('id')
             ->limit(4)
-            ->useResultCache()
             ->get();
 
         $cold = $query();
@@ -71,7 +70,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('published', true)
             ->orderByDesc('views')
             ->limit(3)
-            ->useResultCache()
             ->get();
 
         $cold = $query();
@@ -85,22 +83,34 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_large_result_is_published_without_an_admission_limit(): void
+    public function test_result_larger_than_the_row_limit_is_not_promoted(): void
     {
-        $title = str_repeat('x', 4_194_304 + 1_024);
-        $id = DB::table('posts')->insertGetId([
-            'title' => $title,
-            'views' => 0,
-            'published' => true,
-            'author_id' => $this->authorId,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        foreach (range(1, 50) as $index) {
+            DB::table('posts')->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
 
-        $row = DB::table('posts')->where('id', $id)->select('title')->first();
+        $query = fn() => DB::table('posts')
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(55)
+            ->get();
 
-        $this->assertSame(strlen($title), strlen((string) $row?->title));
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(55, $query());
+        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(55, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
     }
 
     public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void
@@ -109,7 +119,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
-            ->useResultCache()
             ->get();
 
         $expected = $query()->pluck('id')->all();
@@ -132,7 +141,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
-            ->useResultCache()
             ->get();
 
         $expected = $query()->pluck('id')->all();
@@ -162,7 +170,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
-            ->useResultCache()
             ->get();
 
         $before = $query();
@@ -185,7 +192,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->orderBy('id')
             ->limit(4)
             ->tag('homepage')
-            ->useResultCache()
             ->get();
 
         $query();
@@ -207,7 +213,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
-            ->useResultCache()
             ->get();
 
         $query();
@@ -229,7 +234,6 @@ final class ResultCacheStrategyTest extends TestCase
             ->orderBy('id')
             ->limit(4)
             ->ttl(30)
-            ->useResultCache()
             ->get();
 
         $connection = Redis::connection('normcache-test');

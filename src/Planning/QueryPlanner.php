@@ -91,7 +91,7 @@ final class QueryPlanner
                 $root,
                 $dependencies,
                 $primaryKey,
-                materializeResult: $query->usesResultCache(),
+                materializeResult: $query->limit !== null,
             );
         }
 
