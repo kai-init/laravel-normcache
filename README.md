@@ -84,8 +84,6 @@ $posts = Post::query()
 Any number of different queries can share the same tag, and flushing that tag invalidates all of their query-shaped payloads without affecting untagged queries or queries using another tag:
 
 ```php
-use NormCache\Facades\NormCache;
-
 NormCache::flushTag('homepage');
 ```
 
@@ -206,6 +204,17 @@ Direct database writes executed outside of Eloquent (such as raw SQL, triggers, 
 ## Redis Cluster
 
 All keys for one physical table share a Redis hash slot. Query-group entries use their own query hash slot. Global epoch, dependency versions, and tag versions are read separately and validated against payload state; Predis Cluster batches cross-slot state groups in one pipeline.
+
+## Recommended Redis Configuration
+
+Broad invalidation (generation bumps, tag flushes, epoch advances) retires entries by bumping a counter rather than deleting keys, so orphaned payloads stay in Redis until `row_ttl` / `query_ttl` expires them. Give Redis a memory ceiling and a `volatile-*` eviction policy:
+
+```ini
+maxmemory 4gb
+maxmemory-policy volatile-lru
+```
+
+`volatile-*` evicts only keys that carry a TTL. NormCache's payloads do; its version counters do not, so they survive eviction — which matters, because losing a counter would make already-retired payloads readable again.
 
 ## Observability
 
