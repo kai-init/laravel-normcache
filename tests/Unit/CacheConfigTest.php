@@ -52,7 +52,17 @@ final class CacheConfigTest extends UnitTestCase
             ['row_ttl', 0],
             ['query_ttl', 0],
             ['auto_overlay_max_rows', -1],
+            ['stampede_wake_tokens', 0],
+            ['stampede_wake_tokens', -1],
+            ['stampede_wake_tokens', 1001],
         ];
+    }
+
+    public function test_accepts_the_maximum_stampede_wake_token_count(): void
+    {
+        $config = CacheConfig::fromArray(['stampede_wake_tokens' => 1000]);
+
+        $this->assertSame(1000, $config->stampedeWakeTokens);
     }
 
     public function test_accepts_zero_as_the_automatic_overlay_disable_value(): void

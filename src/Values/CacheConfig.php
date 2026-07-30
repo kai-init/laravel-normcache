@@ -6,6 +6,8 @@ final readonly class CacheConfig
 {
     public const MAX_PRECISE_INVALIDATION_KEYS = 1000;
 
+    public const MAX_STAMPEDE_WAKE_TOKENS = 1000;
+
     public function __construct(
         public string $connection,
         public string $keyPrefix,
@@ -45,7 +47,12 @@ final readonly class CacheConfig
         );
         $buildingLockTtl = self::positive($values, 'building_lock_ttl', 5);
         $stampedeWaitMs = self::positive($values, 'stampede_wait_ms', 200);
-        $stampedeWakeTokens = self::positive($values, 'stampede_wake_tokens', 64);
+        $stampedeWakeTokens = self::bounded(
+            $values,
+            'stampede_wake_tokens',
+            self::MAX_STAMPEDE_WAKE_TOKENS,
+            64,
+        );
 
         return new self(
             connection: (string) ($values['connection'] ?? 'cache'),
@@ -89,9 +96,9 @@ final readonly class CacheConfig
     }
 
     /** @param array<string, mixed> $values */
-    private static function bounded(array $values, string $key, int $maximum): int
+    private static function bounded(array $values, string $key, int $maximum, ?int $default = null): int
     {
-        $value = self::positive($values, $key, $maximum);
+        $value = self::positive($values, $key, $default ?? $maximum);
 
         if ($value > $maximum) {
             throw new \InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
