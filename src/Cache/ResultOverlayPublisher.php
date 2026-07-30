@@ -100,7 +100,6 @@ final readonly class ResultOverlayPublisher
                 try {
                     $this->leases->release($lease, $wakeWaiters);
                 } catch (\Throwable) {
-                    // The original Redis failure is the useful diagnostic.
                 }
             }
 

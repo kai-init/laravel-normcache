@@ -27,10 +27,6 @@ use ReflectionProperty;
  */
 final class EloquentContractTest extends TestCase
 {
-    // Helpers
-
-    // contract() and normalize() are inherited from TestCase
-
     private function fixtures(): array
     {
         $country = Country::create(['name' => 'UK']);
@@ -64,8 +60,6 @@ final class EloquentContractTest extends TestCase
         unset($scopes[$modelClass][$name]);
         $prop->setValue(null, $scopes);
     }
-
-    // get() — collection shapes
 
     public function test_get_all_models(): void
     {
@@ -170,8 +164,6 @@ final class EloquentContractTest extends TestCase
             fn() => Post::withoutCache()->onlyTrashed()->get(),
         );
     }
-
-    // Single model (first, find, sole, soleValue, firstWhere, findOrFail, firstOrFail, first/firstWhere on relation instance)
 
     public function test_first_returns_first_model(): void
     {
@@ -288,8 +280,6 @@ final class EloquentContractTest extends TestCase
             fn() => Author::withoutCache()->find($alice->id)->posts()->firstWhere('published', true),
         );
     }
-
-    // withAggregate
 
     public function test_aggregate_blob_key_includes_selected_columns(): void
     {
@@ -666,8 +656,6 @@ final class EloquentContractTest extends TestCase
         $this->assertSame($nativeException, $normcacheException, 'NormCache must throw the same exception type as native Eloquent');
     }
 
-    // dependsOn — graph/value dependencies
-
     public function test_depends_on_get(): void
     {
         $this->fixtures();
@@ -737,8 +725,6 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    // Complex paths (join, groupBy, lockForUpdate)
-
     public function test_join_without_depends_on_falls_through(): void
     {
         $this->fixtures();
@@ -805,8 +791,6 @@ final class EloquentContractTest extends TestCase
             collect($result->items())->map->toArray()->values()->all(),
         );
     }
-
-    // whereHas variants
 
     public function test_doesnt_have_returns_correct_models(): void
     {
@@ -953,8 +937,6 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    // Global scopes
-
     public function test_global_scope_applies_consistently_cold_and_warm(): void
     {
         $this->fixtures();
@@ -1087,8 +1069,6 @@ final class EloquentContractTest extends TestCase
         }
     }
 
-    // Write operations (insert, update, delete, insertOrIgnore, upsert, forceDelete)
-
     public function test_insert_returns_bool(): void
     {
         $native = Author::withoutCache()->insert(['name' => 'Test1', 'created_at' => now(), 'updated_at' => now()]);
@@ -1158,7 +1138,6 @@ final class EloquentContractTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         $oldId = $author->id;
 
-        // Warm the canonical row cache for the old ID.
         Author::find($oldId);
 
         $connection = $this->app['db']->connection('testing');
@@ -1168,7 +1147,6 @@ final class EloquentContractTest extends TestCase
 
         $this->assertNotNull($this->cacheStore()->getRaw($oldRowKey), 'expected the old PK canonical row to be cached');
 
-        // Mutate the PK.
         $author->id = 9999;
         $author->save();
 
@@ -1235,20 +1213,15 @@ final class EloquentContractTest extends TestCase
         $this->assertSame($native, $cached, 'cursor on aggregate alias must match native Eloquent');
     }
 
-    // flushTag validation
-
     public function test_flush_tag_clears_aggregate_cache_for_tagged_query(): void
     {
         $alice = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $alice->id]);
 
-        // Prime the tagged aggregate cache
         Author::query()->tag('home')->withCount('posts')->get();
 
-        // External write that bypasses NormCache (versions unchanged, so aggregate is still "fresh")
         DB::table('posts')->insert(['title' => 'P2', 'author_id' => $alice->id, 'created_at' => now(), 'updated_at' => now()]);
 
-        // Explicit tag flush — must also clear the aggregate cache
         $this->cacheManager()->flushTag('home');
 
         $result = Author::query()->tag('home')->withCount('posts')->get();
@@ -1281,8 +1254,6 @@ final class EloquentContractTest extends TestCase
         $this->cacheManager()->flushTag(str_repeat('a', 129));
     }
 
-    // Scalar expression guard
-
     public function test_sum_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
     {
         $this->fixtures();
@@ -1303,8 +1274,6 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    // Expression primary key guard
-
     public function test_where_id_with_expression_falls_through_to_normal_query_cache(): void
     {
         ['alice' => $alice] = $this->fixtures();
@@ -1314,8 +1283,6 @@ final class EloquentContractTest extends TestCase
             fn() => Author::withoutCache()->where('id', DB::raw($alice->id))->get(),
         );
     }
-
-    // Pivot constraint hash — raw order bindings
 
     public function test_pivot_orderby_raw_with_different_bindings_returns_distinct_results(): void
     {

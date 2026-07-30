@@ -75,8 +75,6 @@ final readonly class PrimaryKeyMetadata
             return null;
         }
 
-        // Reject values outside the native 64-bit range: PHP's (int) cast saturates
-        // rather than erroring, so a mismatch here means the value overflowed.
         if ((string) (int) $value !== $value) {
             return null;
         }

@@ -22,7 +22,6 @@ final class EpochInvalidationTest extends TestCase
         $read = fn() => DB::table('posts')->where('id', 1)->value('title');
         $this->assertSame('Before', $read());
 
-        // Change the row behind NormCache's back so nothing invalidates.
         DB::connection()->getPdo()->exec("update posts set title = 'Changed' where id = 1");
 
         $this->assertTrue(NormCache::flushAll());

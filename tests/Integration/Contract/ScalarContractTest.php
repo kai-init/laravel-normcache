@@ -42,8 +42,6 @@ final class ScalarContractTest extends TestCase
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
 
-    // count
-
     public function test_count_all(): void
     {
         $this->fixtures();
@@ -87,8 +85,6 @@ final class ScalarContractTest extends TestCase
             fn() => Author::withoutCache()->count(['id']),
         );
     }
-
-    // sum, avg, min, max
 
     public function test_sum(): void
     {
@@ -135,8 +131,6 @@ final class ScalarContractTest extends TestCase
         );
     }
 
-    // exists, doesntExist
-
     public function test_exists_true(): void
     {
         $this->fixtures();
@@ -170,8 +164,6 @@ final class ScalarContractTest extends TestCase
             fn() => Author::withoutCache()->doesntExist(),
         );
     }
-
-    // value, pluck
 
     public function test_value(): void
     {

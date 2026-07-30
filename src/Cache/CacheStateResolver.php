@@ -157,7 +157,7 @@ final readonly class CacheStateResolver
         ];
     }
 
-    /** @phpstan-impure re-read on each call: callers check either side of a publish */
+    /** @phpstan-impure */
     public function isCurrent(QueryPlan $plan, CacheState $expected): bool
     {
         $keys = $this->stateKeys($plan, $expected->tagKey, $this->keys->epoch());

@@ -99,7 +99,6 @@ final class RuntimeKillSwitchTest extends TestCase
         $this->assertTrue(NormCache::disableCache());
         $this->newScope();
 
-        // Written while disabled, so nothing invalidated it.
         DB::table('posts')->where('id', 1)->update(['title' => 'Written while off']);
 
         $this->assertNotNull(NormCache::enableCache());
@@ -175,7 +174,6 @@ final class RuntimeKillSwitchTest extends TestCase
         return $table;
     }
 
-    /** The switch is memoized per scope, so a flip is observed by the next request or job. */
     private function newScope(): void
     {
         $this->app->forgetScopedInstances();

@@ -92,8 +92,6 @@ final class QueryIdentity
             $value = (string) $value;
         }
 
-        // Byte-identical to encodeFields([<tag>, <value>]); inlined because eager loads
-        // hash one binding per matched key.
         return match (true) {
             $value === null => '4:null0:',
             is_bool($value) => $value ? '4:bool1:1' : '4:bool1:0',

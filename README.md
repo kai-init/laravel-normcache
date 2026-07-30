@@ -7,7 +7,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-NormCache stores complete model rows once and lets many cached queries share them. Writes bump Redis counters instead of scanning and deleting every query that might contain a changed row.
+NormCache stores complete model rows once and lets many cached queries share them. Invalidation is `O(1)`: a write bumps Redis counters instead of scanning and deleting every query that might contain a changed row.
 
 Requirements: PHP 8.2+, Laravel 12/13, Redis 6.0+.
 
@@ -56,20 +56,19 @@ Post::query()->where('published', true)->tag('homepage')->get();
 
 ## Canonical & Normalized Row Caching
 
-At the core of NormCache is **normalized row storage**. Unlike traditional query caching—which stores duplicate, static copies of entire result sets for every unique SQL query—NormCache normalizes data in Redis:
+Unlike traditional query caching, which stores a full copy of every result set, NormCache stores each row once and caches queries as references to it:
 
-- **Single Storage for Model Rows**: Individual database rows are stored once under canonical primary key IDs (`table:r:<id>`).
-- **Lightweight Query Memberships**: Queries cache only a list of primary key IDs (`table:m:<query_hash>`), not full duplicate model attributes.
-- **$O(1)$ Invalidation Without Redis SCAN**: When a model is updated or deleted, NormCache invalidates only that specific row key (`table:r:<id>`) and advances the table version counter (`table:v`). There are no expensive `KEYS` or `SCAN` commands in Redis.
-- **Global Row Freshness**: While Redis is available for invalidation, every query reading Post #42 receives updated row data on its next fetch without clearing individual query keys.
+- **Rows stored once**: each database row lives under a single canonical key (`table:r:<id>`).
+- **Queries store only IDs**: a cached query is an ordered list of primary keys (`table:m:<query_hash>`), not a copy of the model attributes.
+- **No `KEYS` or `SCAN`**: updating a model deletes just that row key and bumps the table version counter (`table:v`). Invalidation cost does not grow with the number of cached queries.
+- **One update, every query**: because all queries share the same row key, updating Post #42 refreshes it everywhere on the next read — no per-query cleanup.
 
 ## Automatic Result & Projection Overlay
 
-NormCache automatically optimizes warm query performance by storing single-step result overlays in Redis for eligible canonical queries:
+For small result sets, NormCache also stores the assembled result alongside the canonical rows, so a warm read is a single Redis fetch instead of a membership lookup plus row assembly:
 
-- **Automatic Promotion**: Canonical queries returning up to `auto_overlay_max_rows + 1` rows automatically store a serialized result payload in Redis (`table:e:v1:...`) when its encoded size is less than 50 KiB. With the default configuration of `50`, payloads containing up to 51 rows are eligible. An explicit SQL `LIMIT` is not required.
-- **Pagination lookahead allowance**: Laravel's `simplePaginate()` and `cursorPaginate()` fetch one extra row to detect a next page. The one-row allowance avoids excluding a 50-item page solely because its SQL result contains 51 rows. The complete payload, including the lookahead row, must still fit within 50 KiB.
-- **Instant Synchronization & Self-Healing**: Updates to underlying models or dependency tables instantly invalidate the overlay alongside canonical storage. If an overlay key expires or misses, NormCache seamlessly falls back to canonical row assembly and repromotes automatically.
+- **Automatic promotion**: a canonical query is promoted when it returns at most `auto_overlay_max_rows + 1` rows (default `50`, so up to 51) and the encoded payload is under 50 KiB.
+- **Self-healing**: writes to the query's tables invalidate the overlay along with the canonical rows. If the overlay is missing or expired, the read falls back to canonical row assembly and re-promotes.
 
 ## Tags and selective flushing
 
@@ -82,7 +81,7 @@ $posts = Post::query()
     ->get();
 ```
 
-The tagged and untagged forms of the same query are cached separately. Any number of different queries can share the same tag, and flushing that tag invalidates all of their query-shaped payloads without affecting untagged queries or queries using another tag:
+Any number of different queries can share the same tag, and flushing that tag invalidates all of their query-shaped payloads without affecting untagged queries or queries using another tag:
 
 ```php
 use NormCache\Facades\NormCache;

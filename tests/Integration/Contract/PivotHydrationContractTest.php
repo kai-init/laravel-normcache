@@ -70,8 +70,6 @@ final class PivotHydrationContractTest extends TestCase
             $author->tags()->attach($tag->id, ['notes' => "note-{$i}"]);
         }
 
-        // Direct relation calls with an extra dependency remain live. This still
-        // verifies native pivot hydration without invoking a graph manifest.
         $query = fn() => $author->tags()->dependsOn([Post::class])->withPivot('notes')->get();
         $native = fn() => $author->tags()->withoutCache()->withPivot('notes')->get();
 

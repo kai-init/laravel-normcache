@@ -71,11 +71,11 @@ final class ModelHydrationContractTest extends TestCase
             $seen[] = $author->name;
         });
 
-        Author::query()->orderBy('id')->get();      // cold
+        Author::query()->orderBy('id')->get();
         $this->assertSame(['Nia', 'Omar'], $seen);
 
         $seen = [];
-        Author::query()->orderBy('id')->get();      // warm
+        Author::query()->orderBy('id')->get();
         $this->assertSame(['Nia', 'Omar'], $seen, 'retrieved must fire on a cache hit');
 
         $seen = [];

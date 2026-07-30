@@ -49,7 +49,6 @@ final class RelationCorrectnessContractTest extends TestCase
 
         $this->contract($query, $nativeQuery);
 
-        // Also verify the custom attribute is present and correct
         $warm = $query();
         $this->assertCount(1, $warm);
         $posts = $warm->first()->posts;

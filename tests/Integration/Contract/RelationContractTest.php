@@ -42,8 +42,6 @@ final class RelationContractTest extends TestCase
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
 
-    // Eager loading
-
     public function test_with_has_many(): void
     {
         $this->fixtures();
@@ -313,8 +311,6 @@ final class RelationContractTest extends TestCase
             fn() => Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get(),
         );
     }
-
-    // Collection loading (load, loadMissing, loadCount, loadSum, loadMax, loadMin)
 
     public function test_load_on_collection_returns_same_relations(): void
     {

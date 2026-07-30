@@ -185,7 +185,6 @@ final class Reporter
         }
     }
 
-    /** Lets callers skip building report arguments nothing will consume. */
     public function observing(): bool
     {
         return $this->enabled();

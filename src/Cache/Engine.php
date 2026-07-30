@@ -676,7 +676,6 @@ final readonly class Engine
         );
     }
 
-    /** Reads the current canonical row after a result miss without changing the result-entry protocol. */
     private function readResultRowFallback(QueryPlan $plan): ?CacheRead
     {
         $cached = $this->rows->read($plan);

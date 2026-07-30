@@ -83,7 +83,6 @@ trait Cacheable
             && (new \ReflectionMethod($this, 'newInstance'))->getDeclaringClass()->getName() === Model::class;
     }
 
-    /** Not memoised: observers and listeners can register at any point in a request. */
     private function hasRetrievedListener(): bool
     {
         $dispatcher = $this->getEventDispatcher();
