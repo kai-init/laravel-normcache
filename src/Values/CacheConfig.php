@@ -33,7 +33,7 @@ final readonly class CacheConfig
 
         $rowTtl = self::positive($values, 'row_ttl', 604_800);
         $queryTtl = self::positive($values, 'query_ttl', 3_600);
-        $maxAutoOverlayRows = self::positive(
+        $maxAutoOverlayRows = self::nonNegative(
             $values,
             'auto_overlay_max_rows',
             50,
@@ -71,6 +71,18 @@ final readonly class CacheConfig
 
         if ($value < 1) {
             throw new \InvalidArgumentException("NormCache {$key} must be at least 1.");
+        }
+
+        return $value;
+    }
+
+    /** @param array<string, mixed> $values */
+    private static function nonNegative(array $values, string $key, int $default): int
+    {
+        $value = (int) ($values[$key] ?? $default);
+
+        if ($value < 0) {
+            throw new \InvalidArgumentException("NormCache {$key} must be at least 0.");
         }
 
         return $value;

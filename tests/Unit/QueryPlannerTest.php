@@ -25,7 +25,7 @@ final class QueryPlannerTest extends UnitTestCase
         $this->posts = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
     }
 
-    public function test_root_wildcard_uses_canonical_rows(): void
+    public function test_root_wildcard_uses_canonical_rows_with_automatic_overlay_admission(): void
     {
         $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
         $query = DB::query()->from('posts');
@@ -39,7 +39,7 @@ final class QueryPlannerTest extends UnitTestCase
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
         $this->assertSame($primaryKey, $plan->primaryKey);
-        $this->assertFalse($plan->materializeResult);
+        $this->assertTrue($plan->materializeResult);
     }
 
     public function test_limited_root_wildcard_uses_an_automatic_result_overlay(): void

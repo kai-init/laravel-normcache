@@ -239,6 +239,7 @@ final class ProjectionFallbackTest extends TestCase
     public function test_canonical_row_repair_is_reported_separately_when_this_process_queries_database(): void
     {
         DB::table('posts')->orderBy('id')->get();
+        $this->deleteResultOverlays();
         $this->cacheStore()->delete($this->postRowKey());
 
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class, QueryCacheRepaired::class]);

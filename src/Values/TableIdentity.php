@@ -56,6 +56,9 @@ final readonly class TableIdentity
             'mysql', 'mariadb' => $this->database . '.' . $this->table,
             'pgsql' => $this->schema . '.' . $this->table,
             'sqlsrv' => $this->database . '.' . $this->schema . '.' . $this->table,
+            'sqlite' => $this->schema === ''
+                ? $this->table
+                : $this->schema . '.' . $this->table,
             default => $this->table,
         };
     }

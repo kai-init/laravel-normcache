@@ -96,7 +96,14 @@ final class TableIdentityResolver
             return null;
         }
 
-        $isView = $this->isView($connection, $schema, $table);
+        $resolvedTable = $this->unqualifiedTable($table);
+
+        if ($driver === 'sqlite') {
+            $schema = strtolower($schema === '' ? 'main' : $schema);
+            $resolvedTable = strtolower($resolvedTable);
+        }
+
+        $isView = $this->isView($connection, $schema, $resolvedTable);
 
         if ($isView === null) {
             return null;
@@ -108,7 +115,7 @@ final class TableIdentityResolver
             database: $database,
             schema: $schema,
             prefix: (string) $connection->getTablePrefix(),
-            table: $this->unqualifiedTable($table),
+            table: $resolvedTable,
             isView: $isView,
         );
     }

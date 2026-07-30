@@ -51,8 +51,15 @@ final class CacheConfigTest extends UnitTestCase
             ['building_lock_ttl', 0],
             ['row_ttl', 0],
             ['query_ttl', 0],
-            ['auto_overlay_max_rows', 0],
+            ['auto_overlay_max_rows', -1],
         ];
+    }
+
+    public function test_accepts_zero_as_the_automatic_overlay_disable_value(): void
+    {
+        $config = CacheConfig::fromArray(['auto_overlay_max_rows' => 0]);
+
+        $this->assertSame(0, $config->maxAutoOverlayRows);
     }
 
     public function test_expands_grouped_primary_key_overrides(): void

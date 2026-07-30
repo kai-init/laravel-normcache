@@ -67,7 +67,8 @@ At the core of NormCache is **normalized row storage**. Unlike traditional query
 
 NormCache automatically optimizes warm query performance by storing single-step result overlays in Redis for eligible canonical queries:
 
-- **Automatic Promotion**: Canonical queries returning up to `auto_overlay_max_rows` (default `50`) automatically store a serialized result payload in Redis (`table:e:v1:...`).
+- **Automatic Promotion**: Canonical queries returning up to `auto_overlay_max_rows + 1` rows automatically store a serialized result payload in Redis (`table:e:v1:...`) when its encoded size is less than 50 KiB. With the default configuration of `50`, payloads containing up to 51 rows are eligible. An explicit SQL `LIMIT` is not required.
+- **Pagination lookahead allowance**: Laravel's `simplePaginate()` and `cursorPaginate()` fetch one extra row to detect a next page. The one-row allowance avoids excluding a 50-item page solely because its SQL result contains 51 rows. The complete payload, including the lookahead row, must still fit within 50 KiB.
 - **Instant Synchronization & Self-Healing**: Updates to underlying models or dependency tables instantly invalidate the overlay alongside canonical storage. If an overlay key expires or misses, NormCache seamlessly falls back to canonical row assembly and repromotes automatically.
 
 ## Tags and selective flushing
@@ -102,7 +103,7 @@ Author::query()
     ->get();
 ```
 
-`dependsOn()` accepts Eloquent model classes and table names. It authorizes an otherwise opaque query only when NormCache can resolve all declared dependencies. Volatile expressions such as random, UUID, clock, connection-state, or sleep functions are never cached.
+`dependsOn()` accepts Eloquent model classes and table names. It authorizes an otherwise opaque query only when NormCache can resolve all declared dependencies. Recognized volatile expressions—including random, UUID, clock, connection-state, sequence-state, and sleep functions—are never cached.
 
 ## Invalidation
 
@@ -148,6 +149,7 @@ return [
 
     'row_ttl' => 604800,
     'query_ttl' => 3600,
+    // Set to 0 to disable automatic result overlays. Admission allows this value plus one row for pagination lookahead; encoded overlays are capped at 50 KiB.
     'auto_overlay_max_rows' => 50,
 
     'max_precise_invalidation_keys' => 1000,

@@ -69,6 +69,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
             ->where('published', true)
             ->orderBy('id');
         $wildcard->get();
+        $this->deleteResultOverlays();
 
         $projected = fn() => DB::table('posts')
             ->where('published', true)
@@ -107,6 +108,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
             ->where('published', true)
             ->orderBy('id')
             ->get();
+        $this->deleteResultOverlays();
 
         $projected = fn() => DB::table('posts')
             ->where('published', true)

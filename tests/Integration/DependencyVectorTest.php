@@ -325,6 +325,56 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
+    public function test_random_bytes_projection_is_never_cached(): void
+    {
+        $this->createSqliteFunction(
+            'random_bytes',
+            static fn(int $length): string => bin2hex(\random_bytes($length)),
+        );
+        $read = fn(): string => (string) DB::table('posts')
+            ->selectRaw('random_bytes(16) as value')
+            ->where('id', $this->postId)
+            ->value('value');
+
+        $first = $read();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $second = $read();
+        DB::disableQueryLog();
+
+        $this->assertNotSame($first, $second);
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    #[DataProvider('previouslyUncoveredVolatileExpressions')]
+    public function test_connection_and_random_state_expressions_are_volatile(string $expression): void
+    {
+        $connection = DB::connection();
+        $query = DB::table('posts')->selectRaw("{$expression} as observed_value");
+        $root = $this->app->make(TableIdentityResolver::class)
+            ->resolve($connection, 'posts');
+        $this->assertNotNull($root);
+
+        $analysis = $this->app->make(DependencyAnalyzer::class)
+            ->analyze($connection, $query, $root);
+
+        $this->assertTrue($analysis->volatile);
+    }
+
+    public static function previouslyUncoveredVolatileExpressions(): array
+    {
+        return [
+            ['RANDOM_BYTES(16)'],
+            ['GEN_RANDOM_BYTES(16)'],
+            ['CRYPT_GEN_RANDOM(16)'],
+            ['CURRENT_ROLE'],
+            ['USER()'],
+            ['DATABASE()'],
+            ['CURRENT_SCHEMA()'],
+        ];
+    }
+
     #[DataProvider('driverTimeExpressions')]
     public function test_driver_time_expressions_are_volatile(string $expression): void
     {
@@ -370,7 +420,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_eloquent_now_function_is_never_cached(): void
     {
-        DB::connection()->getPdo()->sqliteCreateFunction(
+        $this->createSqliteFunction(
             'now',
             static fn(): string => (string) hrtime(true),
         );
@@ -384,6 +434,18 @@ final class DependencyVectorTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertCount(1, DB::getQueryLog());
+    }
+
+    private function createSqliteFunction(string $name, callable $callback): void
+    {
+        $pdo = DB::connection()->getPdo();
+
+        if (method_exists($pdo, 'createFunction')) {
+            $pdo->createFunction($name, $callback);
+        } elseif (method_exists($pdo, 'sqliteCreateFunction')) {
+            /** @var PDO $pdo */
+            $pdo->sqliteCreateFunction($name, $callback);
+        }
     }
 
     public function test_raw_ordering_subquery_is_not_cached_without_declared_dependencies(): void

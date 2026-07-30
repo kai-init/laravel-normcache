@@ -99,6 +99,7 @@ final class CanonicalReadTest extends TestCase
     public function test_canonical_membership_tokens_must_match_the_primary_key_family(): void
     {
         $expected = DB::table('posts')->orderBy('id')->get();
+        $this->deleteResultOverlays();
         $query = DB::table('posts');
         $table = $this->app->make(TableIdentityResolver::class)
             ->resolve($query->getConnection(), $query->from);
@@ -138,6 +139,72 @@ final class CanonicalReadTest extends TestCase
             $actual->map(static fn(object $row): array => (array) $row)->all(),
         );
         $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_sqlite_attached_schema_repairs_rows_from_the_qualified_table(): void
+    {
+        $path = sys_get_temp_dir() . '/normcache-attached-' . bin2hex(random_bytes(8)) . '.sqlite';
+        touch($path);
+        DB::statement('ATTACH DATABASE ? AS tenant', [$path]);
+
+        try {
+            DB::statement(<<<'SQL'
+                CREATE TABLE tenant.posts (
+                    id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    views INTEGER NOT NULL DEFAULT 0,
+                    published INTEGER NOT NULL DEFAULT 1,
+                    metadata TEXT NULL,
+                    author_id INTEGER NOT NULL,
+                    created_at TEXT NULL,
+                    updated_at TEXT NULL,
+                    deleted_at TEXT NULL
+                )
+                SQL);
+            DB::table('tenant.posts')->insert([
+                'id' => 1,
+                'title' => 'Tenant',
+                'views' => 20,
+                'published' => true,
+                'author_id' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $read = fn() => DB::table('tenant.posts')->orderBy('id')->get();
+            $expected = $read();
+            $this->deleteResultOverlays();
+
+            $identity = $this->app->make(TableIdentityResolver::class)
+                ->resolve(DB::connection(), 'tenant.posts');
+            $this->assertNotNull($identity);
+            $generation = $this->cacheStore()->getRaw(
+                $this->cacheKeys()->generation($identity),
+            ) ?? '0';
+            $rowKey = $this->cacheKeys()->row($identity, $generation, 'i:1');
+            $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
+            $this->cacheStore()->delete($rowKey);
+
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $actual = $read();
+            DB::disableQueryLog();
+
+            $this->assertSame('Tenant', $expected->first()?->title);
+            $this->assertSame('Tenant', $actual->first()?->title);
+            $this->assertCount(1, DB::getQueryLog());
+            $this->assertStringContainsString(
+                '"tenant"."posts"',
+                strtolower(DB::getQueryLog()[0]['query']),
+            );
+        } finally {
+            $this->app->make(TableIdentityResolver::class)->clear('testing');
+            DB::statement('DETACH DATABASE tenant');
+
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
     }
 
     public function test_large_canonical_query_is_published_without_an_admission_limit(): void
@@ -188,6 +255,7 @@ final class CanonicalReadTest extends TestCase
     public function test_missing_canonical_rows_are_repaired_by_primary_key_batch(): void
     {
         $expected = DB::table('posts')->orderBy('id')->get();
+        $this->deleteResultOverlays();
         $rowKey = $this->cacheKeysMatching(':r:g')[0] ?? null;
 
         $this->assertIsString($rowKey);
@@ -212,6 +280,7 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertCount(1, $read());
         $this->assertCount(1, $read());
+        $this->deleteResultOverlays();
 
         $postId = $this->postId;
         $store = $this->cacheStore();

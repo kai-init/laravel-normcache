@@ -9,6 +9,7 @@ use NormCache\Events\QueryCacheRepaired;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
+use NormCache\Values\CacheConfig;
 
 final class ResultCacheStrategyTest extends TestCase
 {
@@ -64,6 +65,128 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_unlimited_small_canonical_result_automatically_materializes_an_overlay(): void
+    {
+        $query = fn() => DB::table('posts')
+            ->where('published', true)
+            ->orderBy('id')
+            ->get();
+
+        $cold = $query();
+
+        $this->assertCount(5, $cold);
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertSame(
+            $cold->map(static fn(object $row): array => (array) $row)->all(),
+            $warm->map(static fn(object $row): array => (array) $row)->all(),
+        );
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_one_row_allowance_applies_to_non_paginated_results(): void
+    {
+        foreach (range(1, 45) as $index) {
+            DB::table('posts')->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => DB::table('posts')
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(51, $query());
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(51, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_query_builder_simple_pagination_uses_the_one_row_lookahead_allowance(): void
+    {
+        foreach (range(1, 45) as $index) {
+            DB::table('posts')->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => DB::table('posts')
+            ->orderBy('id')
+            ->simplePaginate(50);
+
+        $cold = $query();
+
+        $this->assertCount(50, $cold->items());
+        $this->assertTrue($cold->hasMorePages());
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(50, $warm->items());
+        $this->assertTrue($warm->hasMorePages());
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_pagination_lookahead_row_still_counts_toward_the_payload_size_limit(): void
+    {
+        foreach (range(1, 45) as $index) {
+            DB::table('posts')->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'metadata' => $index === 45
+                    ? json_encode(['payload' => str_repeat('x', 64 * 1024)])
+                    : null,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => DB::table('posts')
+            ->orderBy('id')
+            ->simplePaginate(50);
+
+        $cold = $query();
+
+        $this->assertCount(50, $cold->items());
+        $this->assertTrue($cold->hasMorePages());
+        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(50, $warm->items());
+        $this->assertTrue($warm->hasMorePages());
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+    }
+
     public function test_eloquent_forwards_use_result_cache_to_the_query_builder(): void
     {
         $query = fn() => Post::query()
@@ -83,7 +206,38 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_result_larger_than_the_row_limit_is_not_promoted(): void
+    public function test_zero_row_limit_disables_automatic_result_overlays(): void
+    {
+        $originalConfig = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['auto_overlay_max_rows'] = 0;
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            $query = fn() => DB::table('posts')
+                ->where('published', true)
+                ->orderBy('id')
+                ->limit(4)
+                ->get();
+
+            $this->assertCount(4, $query());
+            $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->assertCount(4, $query());
+            DB::disableQueryLog();
+
+            $this->assertSame([], DB::getQueryLog());
+            $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        } finally {
+            $this->app->instance(CacheConfig::class, $originalConfig);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
+    public function test_result_larger_than_the_row_limit_plus_allowance_is_not_promoted(): void
     {
         foreach (range(1, 50) as $index) {
             DB::table('posts')->insert([
@@ -111,6 +265,34 @@ final class ResultCacheStrategyTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_result_larger_than_the_payload_limit_is_not_promoted(): void
+    {
+        DB::table('posts')
+            ->where('id', 1)
+            ->update([
+                'metadata' => json_encode([
+                    'payload' => str_repeat('x', 64 * 1024),
+                ]),
+            ]);
+
+        $query = fn() => DB::table('posts')
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $this->assertCount(4, $query());
+        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(4, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
     }
 
     public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void

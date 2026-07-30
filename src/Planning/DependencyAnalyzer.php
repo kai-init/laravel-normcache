@@ -283,11 +283,11 @@ final class DependencyAnalyzer
     private function isVolatileSql(string $sql): bool
     {
         return preg_match(
-            '/\b(?:rand|random|randomblob|uuid|uuid_short|newid|newsequentialid|gen_random_uuid|uuid_generate_v[0-9]+|nextval|currval|lastval|last_insert_id|last_insert_rowid|changes|total_changes|row_count|found_rows|connection_id|pg_backend_pid|now|sysdate|getdate|sysdatetime|sysutcdatetime|utc_timestamp|utc_date|utc_time|curdate|curtime|clock_timestamp|statement_timestamp|transaction_timestamp|timeofday|sleep|pg_sleep|benchmark)\s*\(/i',
+            '/\b(?:rand|random|randomblob|random_bytes|uuid|uuid_short|newid|newsequentialid|gen_random_uuid|gen_random_bytes|crypt_gen_random|uuid_generate_v[0-9]+|nextval|currval|lastval|setval|last_insert_id|last_insert_rowid|changes|total_changes|row_count|found_rows|connection_id|pg_backend_pid|txid_current|pg_current_xact_id|user|database|schema|current_schema|current_database|current_catalog|current_setting|inet_client_addr|inet_client_port|inet_server_addr|inet_server_port|suser_sname|original_login|host_name|app_name|session_context|context_info|current_request_id|now|sysdate|getdate|sysdatetime|sysutcdatetime|utc_timestamp|utc_date|utc_time|curdate|curtime|clock_timestamp|statement_timestamp|transaction_timestamp|timeofday|sleep|pg_sleep|pg_sleep_for|pg_sleep_until|benchmark)\s*\(/i',
             $sql,
         ) === 1
             || preg_match(
-                '/\b(?:current_timestamp|current_date|current_time|localtimestamp|localtime|current_user|session_user|system_user)\b/i',
+                '/\b(?:current_timestamp|current_date|current_time|localtimestamp|localtime|current_user|session_user|system_user|current_role|current_schema|current_database|current_catalog|current_path)\b/i',
                 $sql,
             ) === 1
             || preg_match(

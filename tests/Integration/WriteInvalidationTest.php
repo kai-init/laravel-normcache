@@ -49,6 +49,26 @@ final class WriteInvalidationTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
+    public function test_sqlite_identifier_case_variants_share_invalidation_state(): void
+    {
+        $read = fn() => DB::table('posts')
+            ->where('id', $this->postId)
+            ->value('title');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+
+        DB::table('POSTS')->where('id', $this->postId)->update(['title' => 'Case-safe']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = $read();
+        DB::disableQueryLog();
+
+        $this->assertSame('Case-safe', $actual);
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
     public function test_traitless_eloquent_writes_invalidate_opted_in_reads(): void
     {
         $this->assertSame('Before', Post::query()->findOrFail($this->postId)->title);

@@ -150,6 +150,11 @@ abstract class TestCase extends OrchestraTestCase
         ));
     }
 
+    protected function deleteResultOverlays(): void
+    {
+        $this->cacheStore()->delete($this->cacheKeysMatching(':e:v'));
+    }
+
     private function isClusterRun(): bool
     {
         return env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true;

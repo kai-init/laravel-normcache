@@ -120,6 +120,22 @@ final class TableIdentityResolverTest extends UnitTestCase
         $this->assertSame(realpath($path), $resolver->resolve($second, 'posts')?->database);
     }
 
+    public function test_sqlite_case_and_main_schema_variants_share_one_identity(): void
+    {
+        $resolver = app(TableIdentityResolver::class);
+        $connection = $this->sqliteConnection('case-identity');
+
+        $lower = $resolver->resolve($connection, 'posts');
+        $upper = $resolver->resolve($connection, 'POSTS');
+        $qualified = $resolver->resolve($connection, 'MAIN.Posts');
+
+        $this->assertNotNull($lower);
+        $this->assertSame('main', $lower->schema);
+        $this->assertSame('posts', $lower->table);
+        $this->assertSame($lower->hash, $upper?->hash);
+        $this->assertSame($lower->hash, $qualified?->hash);
+    }
+
     public function test_metadata_is_released_when_its_connection_is_discarded(): void
     {
         $resolver = app(TableIdentityResolver::class);

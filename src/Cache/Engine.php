@@ -26,6 +26,8 @@ use NormCache\Values\TableIdentity;
 
 final readonly class Engine
 {
+    private const MAX_AUTO_OVERLAY_BYTES = 50 * 1024;
+
     public function __construct(
         private CacheConfig $config,
         private CacheRuntime $runtime,
@@ -395,7 +397,7 @@ final readonly class Engine
         ?string $canonicalQueryHash = null,
     ): CacheRead {
         if ($plan->route === QueryPlan::CANONICAL) {
-            return $plan->materializeResult
+            return $plan->materializeResult && $this->config->maxAutoOverlayRows > 0
                 ? $this->readCanonicalWithResultOverlay(
                     $query,
                     $plan,
@@ -1187,7 +1189,10 @@ final readonly class Engine
         bool $wakeWaiters = true,
     ): bool {
         try {
-            if (count($rows) > $this->config->maxAutoOverlayRows) {
+            if (
+                $this->config->maxAutoOverlayRows === 0
+                || count($rows) > $this->config->maxAutoOverlayRows + 1
+            ) {
                 return false;
             }
 
@@ -1198,6 +1203,10 @@ final readonly class Engine
                 $sourceState->versions,
                 $sourceState->tag,
             );
+
+            if (strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES) {
+                return false;
+            }
 
             $resultState = new CacheState(
                 key: $this->keys->result(

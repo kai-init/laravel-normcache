@@ -36,6 +36,20 @@ final class TableIdentityTest extends UnitTestCase
         $this->assertSame($one->hash, $two->hash);
     }
 
+    public function test_sqlite_repair_source_keeps_attached_schema(): void
+    {
+        $identity = TableIdentity::fromParts(
+            'sqlite',
+            'testing',
+            '/tmp/testing.sqlite',
+            'tenant',
+            '',
+            'posts',
+        );
+
+        $this->assertSame('tenant.posts', $identity->qualifiedTable());
+    }
+
     public function test_sql_server_repair_source_keeps_database_and_schema(): void
     {
         $identity = TableIdentity::fromParts(
