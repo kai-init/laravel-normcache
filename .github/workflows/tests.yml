@@ -63,5 +63,8 @@ jobs:
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress
 
+      - name: Run Pint
+        run: composer lint
+
       - name: Run Larastan
         run: vendor/bin/phpstan analyse --memory-limit=512M --error-format=github

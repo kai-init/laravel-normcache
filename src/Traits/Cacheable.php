@@ -37,7 +37,7 @@ trait Cacheable
             Model::class,
         );
 
-        $connectionName = $connection ?: $this->getConnectionName();
+        $connectionName = $connection ?? $this->getConnectionName();
 
         if (
             $this->cachePrototype === null

@@ -86,12 +86,16 @@ final class ModelHydrationContractTest extends TestCase
     public function test_hydration_resolves_the_connection_exactly_as_eloquent_does(): void
     {
         $author = new Author;
-        $own = $author->getConnectionName();
+        $native = new class extends Model {};
+        $author->setConnection('testing');
+        $native->setConnection('testing');
 
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], null)->getConnectionName());
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], '')->getConnectionName());
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], $own)->getConnectionName());
-        $this->assertSame('other', $author->newFromBuilder(['id' => 1], 'other')->getConnectionName());
+        foreach ([null, '', 'testing', 'other'] as $connection) {
+            $expected = $native->newFromBuilder(['id' => 1], $connection)->getConnectionName();
+            $actual = $author->newFromBuilder(['id' => 1], $connection)->getConnectionName();
+
+            $this->assertSame($expected, $actual);
+        }
 
         $author->newFromBuilder(['id' => 1]);
         $author->setConnection('drifted');
