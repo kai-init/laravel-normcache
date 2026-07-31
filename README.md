@@ -199,7 +199,7 @@ NormCache bypasses reads when correctness cannot be established, including:
 
 Canonical storage requires a supported single-column integer or string primary key. Queries can still use `result` storage when canonical routing is unavailable.
 
-Direct database writes executed outside of Eloquent (such as raw SQL, triggers, or external services) bypass automatic cache interception. Use `NormCache::invalidate(...)` or `NormCache::flushAll()` to manually invalidate affected models or tables. If connection schemas or table definitions are modified at runtime, call `NormCache::clearSchemaMetadata($connection)` to reset cached schema metadata.
+Direct database writes executed outside of Eloquent (such as raw SQL, triggers, or external services) bypass automatic cache interception. Use `NormCache::invalidate(...)` or `NormCache::flushAll()` to manually invalidate affected models or tables. If connection schemas or table definitions are modified at runtime, call `NormCache::refreshSchemaMetadata($connection)`.
 
 ## Redis Cluster
 

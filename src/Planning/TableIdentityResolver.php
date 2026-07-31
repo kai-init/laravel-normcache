@@ -76,20 +76,6 @@ final class TableIdentityResolver
             $database = $parts[0];
         }
 
-        if ($driver === 'sqlite') {
-            if ($database === ':memory:' || $database === '') {
-                return null;
-            }
-
-            $real = realpath($database);
-
-            if ($real === false) {
-                return null;
-            }
-
-            $database = $real;
-        }
-
         $schema = $this->schema($connection, $driver, $database, $table);
 
         if ($schema === null) {
@@ -101,6 +87,22 @@ final class TableIdentityResolver
         if ($driver === 'sqlite') {
             $schema = strtolower($schema === '' ? 'main' : $schema);
             $resolvedTable = strtolower($resolvedTable);
+
+            if ($schema !== 'main') {
+                $database = (string) $this->sqliteAttachmentPath($connection, $schema);
+            }
+
+            if ($database === ':memory:' || $database === '') {
+                return null;
+            }
+
+            $real = realpath($database);
+
+            if ($real === false) {
+                return null;
+            }
+
+            $database = $real;
         }
 
         $isView = $this->isView($connection, $schema, $resolvedTable);
@@ -180,6 +182,31 @@ final class TableIdentityResolver
         }
 
         return $metadata->schema = $schema;
+    }
+
+    private function sqliteAttachmentPath(Connection $connection, string $schema): ?string
+    {
+        $metadata = $this->metadata($connection);
+
+        if (array_key_exists($schema, $metadata->attachments)) {
+            return $metadata->attachments[$schema];
+        }
+
+        try {
+            $path = null;
+
+            foreach ($connection->select('pragma database_list') as $attachment) {
+                if (strtolower((string) $attachment->name) === $schema) {
+                    $path = ((string) $attachment->file) ?: null;
+
+                    break;
+                }
+            }
+
+            return $metadata->attachments[$schema] = $path;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function isView(Connection $connection, string $schema, string $table): ?bool

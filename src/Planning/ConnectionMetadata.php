@@ -14,6 +14,9 @@ final class ConnectionMetadata
     /** @var array<string, array<string, true>> */
     public array $views = [];
 
+    /** @var array<string, string|null> */
+    public array $attachments = [];
+
     public function __construct(
         public readonly string $database,
         public readonly string $prefix,

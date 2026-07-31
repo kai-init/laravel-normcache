@@ -101,17 +101,11 @@ final class DependencyAnalyzer
         $this->resolveSource($connection, $query->from, $resolved, $opaque);
 
         foreach ($query->joins ?? [] as $join) {
-            $this->walkProjectionValues(
-                $query,
-                [$join->table ?? null],
-                $captured,
-                $opaque,
-                $volatile,
-            );
-            $this->resolveSource($connection, $join->table ?? null, $resolved, $opaque);
+            $this->walkProjectionValues($query, [$join->table], $captured, $opaque, $volatile);
+            $this->resolveSource($connection, $join->table, $resolved, $opaque);
             $this->walkNestedValues(
                 $connection,
-                $join->wheres ?? [],
+                $join->wheres,
                 $resolved,
                 $visited,
                 $opaque,

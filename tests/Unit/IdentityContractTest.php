@@ -48,7 +48,7 @@ final class IdentityContractTest extends UnitTestCase
             $identity->repairHash('roothash', '7', ['i:9', 'i:2']),
         );
         $this->assertSame(
-            '45485a5ec5cba05e1bd85f13cee0e669',
+            '988d6e8a8261bb73a4afae2cbbcf0195',
             TableIdentity::fromParts(
                 driver: 'mysql',
                 connection: 'conn',

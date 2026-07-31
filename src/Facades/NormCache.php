@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static int|null enableCache()
  * @method static bool cacheDisabled()
  * @method static void clearSchemaMetadata(?string $connection = null)
+ * @method static bool refreshSchemaMetadata(?string $connection = null)
  */
 final class NormCache extends Facade
 {

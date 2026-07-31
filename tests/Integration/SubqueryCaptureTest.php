@@ -127,6 +127,31 @@ final class SubqueryCaptureTest extends TestCase
         $this->assertSame(2, $read());
     }
 
+    public function test_a_nested_subquery_mutation_is_detected_at_any_depth(): void
+    {
+        $read = function (): int {
+            $inner = DB::table('authors');
+            $subquery = DB::table('comments')->selectRaw('count(*)')->whereExists($inner);
+            $query = DB::table('posts')->selectSub($subquery, 'comment_count');
+            $inner->from('tags');
+
+            return (int) $query->first()->comment_count;
+        };
+
+        $this->assertSame(0, $read());
+        $this->assertSame(0, $read());
+
+        DB::table('comments')->insert([
+            'body' => 'First',
+            'commentable_type' => 'post',
+            'commentable_id' => Post::query()->value('id'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->assertSame(1, $read());
+    }
+
     public function test_an_uncaptured_raw_select_still_bypasses(): void
     {
         $build = fn() => Author::withCount('posts')

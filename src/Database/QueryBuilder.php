@@ -40,7 +40,7 @@ final class QueryBuilder extends Builder
     /** @var array<string, DependencyDeclaration> */
     private array $dependencies = [];
 
-    /** @var \WeakMap<Expression, Builder>|null */
+    /** @var \WeakMap<Expression, array{builder: Builder, sql: string}>|null */
     private ?\WeakMap $capturedSubqueries = null;
 
     private int $writeDepth = 0;
@@ -68,7 +68,10 @@ final class QueryBuilder extends Builder
 
             if ($produced instanceof Expression) {
                 $this->capturedSubqueries ??= new \WeakMap;
-                $this->capturedSubqueries[$produced] = $subquery;
+                $this->capturedSubqueries[$produced] = [
+                    'builder' => $subquery,
+                    'sql' => $subquery->getGrammar()->compileSelect($subquery),
+                ];
             }
         }
 
@@ -77,9 +80,21 @@ final class QueryBuilder extends Builder
 
     public function capturedSubquery(Expression $expression): ?Builder
     {
-        return $this->capturedSubqueries === null
+        $captured = $this->capturedSubqueries === null
             ? null
             : ($this->capturedSubqueries[$expression] ?? null);
+
+        if ($captured === null) {
+            return null;
+        }
+
+        try {
+            $sql = $captured['builder']->getGrammar()->compileSelect($captured['builder']);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $sql === $captured['sql'] ? $captured['builder'] : null;
     }
 
     public function getConnection(): Connection

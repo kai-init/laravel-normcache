@@ -164,6 +164,13 @@ final readonly class CacheManager
         $this->primaryKeys->clear($connection);
     }
 
+    public function refreshSchemaMetadata(?string $connection = null): bool
+    {
+        $this->clearSchemaMetadata($connection);
+
+        return $this->flushAll();
+    }
+
     private function increment(string $key, bool $force = false): bool
     {
         if (!$force && !$this->config->enabled) {

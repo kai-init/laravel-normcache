@@ -112,4 +112,49 @@ final class PublicInvalidationTest extends TestCase
 
         $this->assertCount(1, DB::getQueryLog());
     }
+
+    public function test_clearing_schema_metadata_alone_keeps_payloads_reachable(): void
+    {
+        $read = $this->readReshapedTable();
+
+        $read();
+        $read();
+        DB::statement('alter table reshaped add column subtitle text');
+        NormCache::clearSchemaMetadata('testing');
+
+        $this->assertArrayNotHasKey('subtitle', $read());
+    }
+
+    public function test_refreshing_schema_metadata_retires_payloads_shaped_by_the_old_schema(): void
+    {
+        $read = $this->readReshapedTable();
+
+        $read();
+        $read();
+        DB::statement('alter table reshaped add column subtitle text');
+
+        $this->assertTrue(NormCache::refreshSchemaMetadata('testing'));
+        $this->assertArrayHasKey('subtitle', $read());
+    }
+
+    public function test_refreshing_schema_metadata_retires_a_dropped_column(): void
+    {
+        $read = $this->readReshapedTable();
+
+        $read();
+        $read();
+        DB::statement('alter table reshaped drop column removable');
+
+        $this->assertTrue(NormCache::refreshSchemaMetadata('testing'));
+        $this->assertArrayNotHasKey('removable', $read());
+    }
+
+    private function readReshapedTable(): \Closure
+    {
+        DB::statement('drop table if exists reshaped');
+        DB::statement('create table reshaped (id integer primary key, title text, removable text)');
+        DB::table('reshaped')->insert(['id' => 1, 'title' => 'Row', 'removable' => 'x']);
+
+        return static fn(): array => (array) DB::table('reshaped')->where('id', 1)->first();
+    }
 }

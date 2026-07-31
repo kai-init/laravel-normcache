@@ -30,7 +30,6 @@ final readonly class TableIdentity
         $encoded = self::encodeFields([
             self::FORMAT,
             $driver,
-            $connection,
             $database,
             $schema,
             $prefix,

@@ -20,7 +20,7 @@ final class TableIdentityTest extends UnitTestCase
 
         $encoded = implode('', array_map(
             static fn(string $value): string => strlen($value) . ':' . $value,
-            ['nc-table', 'pgsql', 'tenant', 'app', 'public', 'acme_', 'posts'],
+            ['nc-table', 'pgsql', 'app', 'public', 'acme_', 'posts'],
         ));
 
         $this->assertSame($encoded, $identity->encoded);
