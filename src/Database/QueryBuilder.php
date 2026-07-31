@@ -2,7 +2,9 @@
 
 namespace NormCache\Database;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\Grammar;
@@ -38,6 +40,9 @@ final class QueryBuilder extends Builder
     /** @var array<string, DependencyDeclaration> */
     private array $dependencies = [];
 
+    /** @var \WeakMap<Expression, Builder>|null */
+    private ?\WeakMap $capturedSubqueries = null;
+
     private int $writeDepth = 0;
 
     private bool $writeChanged = false;
@@ -51,6 +56,30 @@ final class QueryBuilder extends Builder
     ) {
         parent::__construct($connection, $grammar, $processor);
         $this->databaseConnection = $connection;
+    }
+
+    public function selectSub($query, $as)
+    {
+        $subquery = $query instanceof EloquentBuilder ? $query->toBase() : $query;
+        $result = parent::selectSub($query, $as);
+
+        if ($subquery instanceof Builder) {
+            $produced = end($this->columns);
+
+            if ($produced instanceof Expression) {
+                $this->capturedSubqueries ??= new \WeakMap;
+                $this->capturedSubqueries[$produced] = $subquery;
+            }
+        }
+
+        return $result;
+    }
+
+    public function capturedSubquery(Expression $expression): ?Builder
+    {
+        return $this->capturedSubqueries === null
+            ? null
+            : ($this->capturedSubqueries[$expression] ?? null);
     }
 
     public function getConnection(): Connection

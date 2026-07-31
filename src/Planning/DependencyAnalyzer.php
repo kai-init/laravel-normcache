@@ -96,13 +96,15 @@ final class DependencyAnalyzer
         }
 
         $visited[$id] = true;
-        $this->walkProjectionValues($query, [$query->from], $opaque, $volatile);
+        $captured = [];
+        $this->walkProjectionValues($query, [$query->from], $captured, $opaque, $volatile);
         $this->resolveSource($connection, $query->from, $resolved, $opaque);
 
         foreach ($query->joins ?? [] as $join) {
             $this->walkProjectionValues(
                 $query,
                 [$join->table ?? null],
+                $captured,
                 $opaque,
                 $volatile,
             );
@@ -133,7 +135,7 @@ final class DependencyAnalyzer
             $opaque,
             $volatile,
         );
-        $this->walkProjectionValues($query, $query->columns ?? [], $opaque, $volatile);
+        $this->walkProjectionValues($query, $query->columns ?? [], $captured, $opaque, $volatile);
         $this->walkOpaqueValues($query, $query->groups ?? [], $opaque, $volatile);
         $this->walkOpaqueValues($query, $query->orders ?? [], $opaque, $volatile);
         $this->walkOpaqueValues($query, $query->unionOrders ?? [], $opaque, $volatile);
@@ -153,6 +155,17 @@ final class DependencyAnalyzer
             } else {
                 $opaque = true;
             }
+        }
+
+        foreach ($captured as $subquery) {
+            $this->walk(
+                $connection,
+                $subquery,
+                $resolved,
+                $visited,
+                $opaque,
+                $volatile,
+            );
         }
     }
 
@@ -188,15 +201,30 @@ final class DependencyAnalyzer
         }
     }
 
-    /** @param array<mixed> $values */
+    /**
+     * @param  array<mixed>  $values
+     * @param  list<Builder>  $captured  Subqueries this projection stands in for,
+     *                                   drained by the caller once the walk completes.
+     */
     private function walkProjectionValues(
         Builder $query,
         array $values,
+        array &$captured,
         bool &$opaque,
         bool &$volatile,
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Expression) {
+                $subquery = $query instanceof QueryBuilder
+                    ? $query->capturedSubquery($value)
+                    : null;
+
+                if ($subquery !== null) {
+                    $captured[] = $subquery;
+
+                    continue;
+                }
+
                 $sql = (string) $value->getValue($query->getGrammar());
                 $volatile = $volatile || $this->isVolatileSql($sql);
 
@@ -208,7 +236,7 @@ final class DependencyAnalyzer
             }
 
             if (is_array($value)) {
-                $this->walkProjectionValues($query, $value, $opaque, $volatile);
+                $this->walkProjectionValues($query, $value, $captured, $opaque, $volatile);
             }
         }
     }

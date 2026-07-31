@@ -328,7 +328,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_lost_select_subquery_context_requires_explicit_dependencies(): void
+    public function test_select_subquery_context_is_captured_before_compilation(): void
     {
         $base = fn() => DB::table('posts')->selectSub(
             DB::table('comments')
@@ -337,12 +337,26 @@ final class DependencyVectorTest extends TestCase
             'comment_count',
         );
 
-        $base()->get();
+        $this->assertSame(1, (int) $base()->first()->comment_count);
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $base()->get();
+        $this->assertSame(1, (int) $base()->first()->comment_count);
         DB::disableQueryLog();
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertSame([], DB::getQueryLog());
+
+        DB::table('comments')->insert([
+            'body' => 'Second',
+            'commentable_type' => 'post',
+            'commentable_id' => $this->postId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->assertSame(
+            2,
+            (int) $base()->first()->comment_count,
+            'a captured select subquery must invalidate with its own table',
+        );
 
         $declared = fn() => $base()->dependsOn(['comments'])->get();
         $declared();
