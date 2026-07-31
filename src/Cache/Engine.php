@@ -93,6 +93,15 @@ final readonly class Engine
             );
         }
 
+        if ($analysis->unresolved) {
+            return $this->bypass(
+                $query,
+                'unresolvable_declared_dependency',
+                $statement,
+                $database,
+            );
+        }
+
         if ($analysis->opaque && !$analysis->explicit) {
             return $this->bypass(
                 $query,

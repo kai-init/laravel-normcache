@@ -10,5 +10,6 @@ final readonly class DependencyAnalysis
         public bool $opaque = false,
         public bool $explicit = false,
         public bool $volatile = false,
+        public bool $unresolved = false,
     ) {}
 }

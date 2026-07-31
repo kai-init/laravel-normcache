@@ -9,6 +9,7 @@ use InvalidArgumentException;
 use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\TableIdentityResolver;
+use NormCache\Tests\Fixtures\Models\AbstractComment;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
@@ -231,6 +232,68 @@ final class DependencyVectorTest extends TestCase
         $cached();
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_unresolvable_declaration_does_not_authorize_an_opaque_query(): void
+    {
+        $build = fn() => DB::table('posts')
+            ->whereRaw(
+                'exists (select 1 from comments where comments.commentable_id = posts.id)'
+            )
+            ->dependsOn([AbstractComment::class])
+            ->get();
+
+        $build();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $build();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_unresolvable_declaration_bypasses_an_otherwise_cacheable_query(): void
+    {
+        $build = fn() => DB::table('posts')
+            ->where('id', $this->postId)
+            ->dependsOn([Author::class, AbstractComment::class])
+            ->get();
+
+        $build();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $build();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_unresolvable_declaration_never_serves_stale_rows(): void
+    {
+        $build = fn() => DB::table('posts')
+            ->whereRaw('exists (select 1 from comments where comments.body = ?)', ['Before'])
+            ->dependsOn([AbstractComment::class])
+            ->get();
+
+        $this->assertCount(1, $build());
+        DB::table('comments')->where('commentable_id', $this->postId)->update(['body' => 'After']);
+
+        $this->assertCount(0, $build());
+    }
+
+    public function test_unresolvable_declaration_is_reported_as_incomplete(): void
+    {
+        $connection = DB::connection();
+        $query = DB::table('posts')->dependsOn(['comments', AbstractComment::class]);
+        $root = $this->app->make(TableIdentityResolver::class)
+            ->resolve($connection, 'posts');
+        $this->assertNotNull($root);
+
+        $analysis = $this->app->make(DependencyAnalyzer::class)
+            ->analyze($connection, $query, $root);
+
+        $this->assertTrue($analysis->explicit);
+        $this->assertTrue($analysis->unresolved);
     }
 
     public function test_explicit_dependencies_authorize_a_hashable_derived_result_as_query_group(): void

@@ -36,6 +36,7 @@ final class DependencyAnalyzer
 
         $declarations = $query->dependencies();
         $explicit = $declarations !== [];
+        $unresolved = false;
 
         foreach ($declarations as $declaration) {
             $identity = $declaration->isTable()
@@ -44,9 +45,12 @@ final class DependencyAnalyzer
 
             if ($identity === null) {
                 $opaque = true;
-            } else {
-                $resolved[$identity->hash] = $identity;
+                $unresolved = true;
+
+                continue;
             }
+
+            $resolved[$identity->hash] = $identity;
         }
 
         ksort($resolved, SORT_STRING);
@@ -56,6 +60,7 @@ final class DependencyAnalyzer
             $opaque,
             $explicit,
             $volatile,
+            $unresolved,
         );
     }
 
