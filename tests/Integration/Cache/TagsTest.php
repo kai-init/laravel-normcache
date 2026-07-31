@@ -3,23 +3,12 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
-use NormCache\Tests\Concerns\MakesTestModels;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
-use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
-/**
- * Tag namespacing and flushTag validation.
- *
- * Contract test: the native path (withoutCache), the cold-cache path
- * (miss -> DB) and the warm-cache path (hit) must all return the same thing.
- * A failure means NormCache's cached result diverges from native Eloquent.
- */
 final class TagsTest extends TestCase
 {
-    use MakesTestModels;
-
     public function test_flush_tag_clears_aggregate_cache_for_tagged_query(): void
     {
         $alice = Author::create(['name' => 'Alice']);
