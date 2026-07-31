@@ -232,7 +232,9 @@ final class RedisStore
 
     public function increment(string $key): int
     {
-        return (int) $this->connection()->incr($key);
+        return (int) $this->withConnection(
+            static fn(Connection $connection): mixed => $connection->incr($key),
+        );
     }
 
     /** @param list<string> $tokens */
@@ -279,7 +281,21 @@ final class RedisStore
      */
     private function script(string $script, array $keys, array $args = []): mixed
     {
-        $connection = $this->connection();
+        return $this->withConnection(
+            fn(Connection $connection): mixed => $this->evaluate($connection, $script, $keys, $args),
+        );
+    }
+
+    /**
+     * @param  list<string>  $keys
+     * @param  list<mixed>  $args
+     */
+    private function evaluate(
+        Connection $connection,
+        string $script,
+        array $keys,
+        array $args,
+    ): mixed {
         $keyCount = count($keys);
         $arguments = [...$keys, ...$args];
         $sha = self::$shas[$script] ??= sha1($script);
@@ -387,36 +403,48 @@ final class RedisStore
     /** @param list<string> $keys */
     private function del(array $keys): void
     {
-        $connection = $this->connection();
+        $this->withConnection(function (Connection $connection) use ($keys): void {
+            if ($connection instanceof PredisClusterConnection) {
+                foreach ($this->groupByHashTag($keys) as $group) {
+                    $connection->command('del', $group);
+                }
 
-        if ($connection instanceof PredisClusterConnection) {
-            foreach ($this->groupByHashTag($keys) as $group) {
-                $connection->command('del', $group);
+                return;
             }
 
-            return;
-        }
+            if ($connection instanceof PredisConnection) {
+                $connection->del($keys);
 
-        if ($connection instanceof PredisConnection) {
-            $connection->del($keys);
+                return;
+            }
 
-            return;
-        }
-
-        $connection->unlink($keys);
+            $connection->unlink($keys);
+        });
     }
 
     private function withRawValues(callable $callback): mixed
     {
-        $connection = $this->connection();
+        return $this->withConnection(static function (Connection $connection) use ($callback): mixed {
+            if ($connection instanceof PhpRedisConnection) {
+                return $connection->withoutSerializationOrCompression(
+                    static fn(): mixed => $callback($connection),
+                );
+            }
 
-        if ($connection instanceof PhpRedisConnection) {
-            return $connection->withoutSerializationOrCompression(
-                static fn(): mixed => $callback($connection),
-            );
+            return $callback($connection);
+        });
+    }
+
+    private function withConnection(callable $operation): mixed
+    {
+        try {
+            return $operation($this->connection());
+        } catch (\Throwable) {
+            $this->connection = null;
+            Redis::purge($this->redisConnection);
+
+            return $operation($this->connection());
         }
-
-        return $callback($connection);
     }
 
     private function connection(): Connection
