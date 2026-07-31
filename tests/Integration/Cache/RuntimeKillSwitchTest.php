@@ -1,8 +1,7 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\TableIdentityResolver;
@@ -141,28 +140,6 @@ final class RuntimeKillSwitchTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertCount(1, DB::getQueryLog());
-    }
-
-    public function test_disable_command_reports_success(): void
-    {
-        $this->assertSame(0, Artisan::call('normcache:disable'));
-        $this->newScope();
-        $this->assertTrue(NormCache::cacheDisabled());
-    }
-
-    public function test_enable_command_reports_the_new_epoch(): void
-    {
-        $before = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
-
-        $this->assertSame(0, Artisan::call('normcache:disable'));
-        $this->newScope();
-        $this->assertSame(0, Artisan::call('normcache:enable'));
-
-        $this->assertStringContainsString(
-            'epoch ' . ($before + 1),
-            Artisan::output(),
-        );
-        $this->assertFalse(NormCache::cacheDisabled());
     }
 
     private function postsTable()

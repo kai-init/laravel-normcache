@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -9,7 +9,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
-final class SubqueryCaptureTest extends TestCase
+final class SubqueryDependencyTest extends TestCase
 {
     private Author $author;
 

@@ -7,7 +7,7 @@ use NormCache\Tests\UnitTestCase;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
-final class IdentityContractTest extends UnitTestCase
+final class IdentityStabilityTest extends UnitTestCase
 {
     public function test_field_encoding_cannot_collide_across_different_field_sets(): void
     {

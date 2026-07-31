@@ -10,7 +10,7 @@ use Predis\Connection\NodeConnectionInterface;
 
 final class RedisStoreRecoveryTest extends UnitTestCase
 {
-    public function test_it_rebuilds_the_connection_after_the_server_went_away(): void
+    public function test_rebuilds_the_connection_after_the_server_went_away(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Redis server went away'),
@@ -24,7 +24,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         $this->assertSame(['normcache-test'], $manager->purged);
     }
 
-    public function test_it_rebuilds_the_connection_after_a_predis_connection_failure(): void
+    public function test_rebuilds_the_connection_after_a_predis_connection_failure(): void
     {
         $manager = $this->swapRedisManager([
             new ConnectionException(
@@ -40,7 +40,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         $this->assertSame(2, $manager->built);
     }
 
-    public function test_it_rebuilds_the_connection_for_lua_scripts(): void
+    public function test_rebuilds_the_connection_for_lua_scripts(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Connection lost'),
@@ -56,7 +56,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         $this->assertSame(2, $manager->built);
     }
 
-    public function test_it_rebuilds_the_connection_for_increments(): void
+    public function test_rebuilds_the_connection_for_increments(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Connection lost'),
@@ -69,7 +69,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         $this->assertSame(2, $manager->built);
     }
 
-    public function test_it_rebuilds_the_connection_for_deletes(): void
+    public function test_rebuilds_the_connection_for_deletes(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Connection lost'),
@@ -82,7 +82,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         $this->assertSame(2, $manager->built);
     }
 
-    public function test_it_surfaces_server_errors_after_a_single_retry(): void
+    public function test_surfaces_server_errors_after_a_single_retry(): void
     {
         // Server errors are retried too rather than pattern-matched away: one
         // wasted round trip is cheaper than misreading a lost socket as one.
@@ -100,7 +100,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         }
     }
 
-    public function test_it_gives_up_when_the_rebuilt_connection_also_fails(): void
+    public function test_gives_up_when_the_rebuilt_connection_also_fails(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Redis server went away'),

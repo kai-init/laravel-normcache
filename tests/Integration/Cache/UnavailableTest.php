@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Support\Facades\DB;
@@ -11,7 +11,7 @@ use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 use Psr\Log\LoggerInterface;
 
-final class CacheUnavailableTest extends TestCase
+final class UnavailableTest extends TestCase
 {
     public function test_first_read_fails_open_when_redis_is_not_configured(): void
     {

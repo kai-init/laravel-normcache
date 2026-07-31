@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
@@ -147,7 +147,7 @@ final class RedisProtocolTest extends TestCase
         }
     }
 
-    public function test_phpredis_lua_owner_comparison_works_with_shared_serializer_enabled(): void
+    public function test_phpredis_lua_owner_comparison_supports_shared_serializer(): void
     {
         $connection = Redis::connection('normcache-test');
 

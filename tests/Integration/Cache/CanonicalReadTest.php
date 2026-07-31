@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Closure;
 use Illuminate\Redis\Connections\PhpRedisConnection;

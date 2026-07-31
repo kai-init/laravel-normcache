@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Support\Facades\DB;

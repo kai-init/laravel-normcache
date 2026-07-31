@@ -16,7 +16,7 @@ use NormCache\Tests\TestCase;
  */
 final class PaginationContractTest extends TestCase
 {
-    public function test_paginate_contract(): void
+    public function test_paginate(): void
     {
         $this->createAuthors(5);
 
@@ -66,7 +66,7 @@ final class PaginationContractTest extends TestCase
         );
     }
 
-    public function test_simple_paginate_contract(): void
+    public function test_simple_paginate(): void
     {
         $this->createAuthors(5);
 
@@ -104,7 +104,7 @@ final class PaginationContractTest extends TestCase
         Event::assertDispatched(QueryCacheMiss::class);
     }
 
-    public function test_cursor_paginate_contract(): void
+    public function test_cursor_paginate(): void
     {
         $this->createAuthors(5);
 

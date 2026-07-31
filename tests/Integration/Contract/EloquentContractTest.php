@@ -61,6 +61,43 @@ final class EloquentContractTest extends TestCase
         $prop->setValue(null, $scopes);
     }
 
+    private function chunkedNames($query): array
+    {
+        $names = [];
+
+        $query->chunk(2, function ($authors) use (&$names): void {
+            foreach ($authors as $author) {
+                $names[] = $author->name;
+            }
+        });
+
+        return $names;
+    }
+
+    private function chunkedByIdNames($query): array
+    {
+        $names = [];
+
+        $query->chunkById(2, function ($authors) use (&$names): void {
+            foreach ($authors as $author) {
+                $names[] = $author->name;
+            }
+        });
+
+        return $names;
+    }
+
+    private function eachNames($query): array
+    {
+        $names = [];
+
+        $query->each(function ($author) use (&$names): void {
+            $names[] = $author->name;
+        }, 2);
+
+        return $names;
+    }
+
     public function test_get_all_models(): void
     {
         $this->fixtures();
@@ -779,7 +816,7 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_cursor_paginate_falls_through_correctly(): void
+    public function test_cursor_paginate_falls_through(): void
     {
         $this->fixtures();
 
@@ -789,6 +826,46 @@ final class EloquentContractTest extends TestCase
         $this->assertSame(
             collect($native->items())->map->toArray()->values()->all(),
             collect($result->items())->map->toArray()->values()->all(),
+        );
+    }
+
+    public function test_chunk_returns_native_results(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn(): array => $this->chunkedNames(Author::orderBy('id')),
+            fn(): array => $this->chunkedNames(Author::withoutCache()->orderBy('id')),
+        );
+    }
+
+    public function test_lazy_returns_native_results(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn(): array => Author::orderBy('id')->lazy(2)->pluck('name')->all(),
+            fn(): array => Author::withoutCache()->orderBy('id')->lazy(2)->pluck('name')->all(),
+        );
+    }
+
+    public function test_chunk_by_id_returns_native_results(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn(): array => $this->chunkedByIdNames(Author::query()),
+            fn(): array => $this->chunkedByIdNames(Author::withoutCache()),
+        );
+    }
+
+    public function test_each_returns_native_results(): void
+    {
+        $this->fixtures();
+
+        $this->contract(
+            fn(): array => $this->eachNames(Author::orderBy('id')),
+            fn(): array => $this->eachNames(Author::withoutCache()->orderBy('id')),
         );
     }
 

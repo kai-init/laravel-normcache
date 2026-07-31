@@ -1,6 +1,6 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Database;
 
 use Illuminate\Support\Facades\DB;
 use NormCache\Planning\TableIdentityResolver;

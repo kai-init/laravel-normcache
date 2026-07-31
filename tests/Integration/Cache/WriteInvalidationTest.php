@@ -1,13 +1,18 @@
 <?php
 
-namespace NormCache\Tests\Integration;
+namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Database\Query\Builder as LaravelQueryBuilder;
+use Illuminate\Database\Query\Grammars\PostgresGrammar;
 use Illuminate\Database\Query\Processors\Processor;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use NormCache\Database\QueryBuilder;
+use NormCache\Events\CacheInvalidated;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
@@ -290,6 +295,108 @@ final class WriteInvalidationTest extends TestCase
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
         DB::table('posts')->where('id', $this->postId)->update(['title' => 'Current generation']);
         $this->assertNull($this->cacheStore()->getRaw($rowKey));
+    }
+
+    public function test_truncate_broadly_invalidates_all_cached_rows(): void
+    {
+        $first = Tag::create(['name' => 'First']);
+        $second = Tag::create(['name' => 'Second']);
+
+        $this->assertCount(2, Tag::orderBy('id')->get());
+        $this->assertNotNull(Tag::find($first->getKey()));
+        $this->assertNotNull(Tag::find($second->getKey()));
+        Event::fake([CacheInvalidated::class]);
+
+        DB::table('tags')->truncate();
+
+        $this->assertSame([], Tag::orderBy('id')->get()->all());
+        $this->assertNull(Tag::find($first->getKey()));
+        $this->assertNull(Tag::find($second->getKey()));
+        Event::assertDispatched(
+            CacheInvalidated::class,
+            fn(CacheInvalidated $event): bool => $event->mode === 'generation',
+        );
+    }
+
+    public function test_insert_using_invalidates_the_target_table(): void
+    {
+        $source = Author::create(['name' => 'Copied']);
+        $read = fn(): array => Tag::orderBy('name')->pluck('name')->all();
+
+        $this->assertSame([], $read());
+        $this->assertSame([], $read());
+
+        $affected = DB::table('tags')->insertUsing(
+            ['name', 'created_at', 'updated_at'],
+            DB::table('authors')
+                ->where('id', $source->getKey())
+                ->select(['name', 'created_at', 'updated_at']),
+        );
+
+        $this->assertSame(1, $affected);
+        $this->assertSame(['Copied'], $read());
+    }
+
+    public function test_insert_or_ignore_using_invalidates_the_target_table(): void
+    {
+        $source = Author::create(['name' => 'Copied']);
+        $read = fn(): array => UuidItem::orderBy('id')->pluck('name', 'id')->all();
+
+        $this->assertSame([], $read());
+        $this->assertSame([], $read());
+
+        $affected = DB::table('uuid_items')->insertOrIgnoreUsing(
+            ['id', 'name'],
+            DB::table('authors')
+                ->where('id', $source->getKey())
+                ->select(['id', 'name']),
+        );
+
+        $this->assertSame(1, $affected);
+        $this->assertSame([$source->getKey() => 'Copied'], $read());
+    }
+
+    public function test_insert_or_ignore_returning_invalidates_the_target_table(): void
+    {
+        if (!method_exists(LaravelQueryBuilder::class, 'insertOrIgnoreReturning')) {
+            $this->markTestSkipped('insertOrIgnoreReturning requires this Laravel version.');
+        }
+
+        $read = fn(): array => Tag::orderBy('id')->pluck('name', 'id')->all();
+
+        $this->assertSame([], $read());
+        $this->assertSame([], $read());
+
+        $returned = DB::table('tags')->insertOrIgnoreReturning([
+            'id' => 10,
+            'name' => 'Returned',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], ['id', 'name']);
+
+        $this->assertCount(1, $returned);
+        $this->assertSame(10, $returned->first()->id);
+        $this->assertSame([10 => 'Returned'], $read());
+    }
+
+    public function test_update_from_invalidates_the_target_table(): void
+    {
+        $author = Author::create(['name' => 'Before']);
+        $read = fn(): string => Author::whereKey($author->getKey())->value('name');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+
+        $connection = DB::connection();
+        $builder = new QueryBuilder(
+            $connection,
+            new PostgresGrammar($connection),
+            $connection->getPostProcessor(),
+        );
+        $builder->from('authors')->where('id', $author->getKey());
+
+        $this->assertSame(1, $builder->updateFrom(['name' => 'After']));
+        $this->assertSame('After', $read());
     }
 
     private function tableVersion(): string
