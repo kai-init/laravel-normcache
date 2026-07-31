@@ -7,6 +7,7 @@
 -- KEYS[4..3+n] = row keys
 -- KEYS[4+n] = build lease
 -- KEYS[5+n] = token-scoped wake list
+-- KEYS[6+n] = result overlay key (optional)
 -- ARGV[1] = row count
 -- ARGV[2] = expected version
 -- ARGV[3] = expected generation
@@ -17,10 +18,11 @@
 -- ARGV[7+n] = owner token
 -- ARGV[8+n] = wake token count
 -- ARGV[9+n] = wake TTL
-
+-- ARGV[10+n] = result overlay payload (required when KEYS[6+n] is present)
 local n = tonumber(ARGV[1])
 local lease_index = 4 + n
 local wake_index = 5 + n
+local overlay_index = 6 + n
 local token = ARGV[7 + n]
 local wake_count = tonumber(ARGV[8 + n])
 local wake_tokens = {}
@@ -55,5 +57,10 @@ for i = 1, n do
 end
 
 redis.call('SETEX', KEYS[3], tonumber(ARGV[4]), ARGV[6])
+
+if #KEYS >= overlay_index then
+    redis.call('SETEX', KEYS[overlay_index], tonumber(ARGV[4]), ARGV[10 + n])
+end
+
 release()
 return 1

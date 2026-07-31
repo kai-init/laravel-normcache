@@ -204,30 +204,36 @@ final class RedisStore
         string $wakeKey,
         string $token,
         int $wakeTtl,
+        ?string $resultKey = null,
+        ?string $resultPayload = null,
     ): bool {
-        return (bool) $this->script(
-            RedisScripts::get('publish_canonical'),
-            [
-                $versionKey,
-                $generationKey,
-                $membershipKey,
-                ...array_keys($rows),
-                $buildingKey,
-                $wakeKey,
-            ],
-            [
-                (string) count($rows),
-                $expectedVersion,
-                $expectedGeneration,
-                (string) $membershipTtl,
-                (string) $rowTtl,
-                $membershipPayload,
-                ...array_values($rows),
-                $token,
-                (string) $this->wakeTokenCount,
-                (string) $wakeTtl,
-            ],
-        );
+        $keys = [
+            $versionKey,
+            $generationKey,
+            $membershipKey,
+            ...array_keys($rows),
+            $buildingKey,
+            $wakeKey,
+        ];
+        $args = [
+            (string) count($rows),
+            $expectedVersion,
+            $expectedGeneration,
+            (string) $membershipTtl,
+            (string) $rowTtl,
+            $membershipPayload,
+            ...array_values($rows),
+            $token,
+            (string) $this->wakeTokenCount,
+            (string) $wakeTtl,
+        ];
+
+        if ($resultKey !== null && $resultPayload !== null) {
+            $keys[] = $resultKey;
+            $args[] = $resultPayload;
+        }
+
+        return (bool) $this->script(RedisScripts::get('publish_canonical'), $keys, $args);
     }
 
     public function increment(string $key): int

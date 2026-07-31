@@ -293,6 +293,103 @@ final class RedisProtocolTest extends TestCase
         )[0]);
     }
 
+    public function test_canonical_publication_carries_the_result_overlay_under_the_same_guard(): void
+    {
+        $store = app(RedisStore::class);
+        $keys = app(CacheKeyBuilder::class);
+        $table = app(TableIdentityResolver::class)
+            ->resolve($this->app['db']->connection(), 'posts');
+        $versionKey = $keys->version($table);
+        $generationKey = $keys->generation($table);
+        $membershipKey = $keys->membership($table, '0', 'u', 'query');
+        $buildKey = $keys->membershipBuild($table, '0', 'u', 'query');
+        $token = str_repeat('e', 32);
+        $wakeKey = $keys->wake($table, 'm', 'query', $token);
+        $rowKey = $keys->row($table, '0', 'i:1');
+        $overlayKey = $keys->result($table, '0', 'u', 'query');
+
+        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $this->assertTrue($store->publishCanonical(
+            versionKey: $versionKey,
+            generationKey: $generationKey,
+            membershipKey: $membershipKey,
+            rows: [$rowKey => 'row-payload'],
+            expectedVersion: '0',
+            expectedGeneration: '0',
+            membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
+            membershipTtl: 60,
+            rowTtl: 3600,
+            buildingKey: $buildKey,
+            wakeKey: $wakeKey,
+            token: $token,
+            wakeTtl: 11,
+            resultKey: $overlayKey,
+            resultPayload: 'overlay-payload',
+        ));
+
+        // One publication, so readers find the overlay ahead of the membership it was built from.
+        $this->assertSame(
+            ['result', '0', 'overlay-payload'],
+            array_slice((array) $store->fetchResultOrCanonical(
+                versionKey: $versionKey,
+                generationKey: $generationKey,
+                tablePrefix: $keys->tablePrefix($table),
+                namespace: 'u',
+                resultQueryHash: 'query',
+                canonicalQueryHash: 'query',
+            ), 0, 3),
+        );
+        $this->assertSame('hit', $store->fetchCanonical(
+            $versionKey,
+            $generationKey,
+            $keys->tablePrefix($table),
+            'u',
+            'query',
+        )[0]);
+        $this->assertSame(60, Redis::connection('normcache-test')->ttl($overlayKey));
+    }
+
+    public function test_canonical_publication_rejects_the_result_overlay_after_state_changes(): void
+    {
+        $store = app(RedisStore::class);
+        $keys = app(CacheKeyBuilder::class);
+        $table = app(TableIdentityResolver::class)
+            ->resolve($this->app['db']->connection(), 'posts');
+        $versionKey = $keys->version($table);
+        $generationKey = $keys->generation($table);
+        $membershipKey = $keys->membership($table, '0', 'u', 'guarded');
+        $buildKey = $keys->membershipBuild($table, '0', 'u', 'guarded');
+        $token = str_repeat('f', 32);
+        $wakeKey = $keys->wake($table, 'm', 'guarded', $token);
+        $rowKey = $keys->row($table, '0', 'i:1');
+        $overlayKey = $keys->result($table, '0', 'u', 'guarded');
+
+        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $store->increment($generationKey);
+
+        $this->assertFalse($store->publishCanonical(
+            versionKey: $versionKey,
+            generationKey: $generationKey,
+            membershipKey: $membershipKey,
+            rows: [$rowKey => 'row-payload'],
+            expectedVersion: '0',
+            expectedGeneration: '0',
+            membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
+            membershipTtl: 60,
+            rowTtl: 3600,
+            buildingKey: $buildKey,
+            wakeKey: $wakeKey,
+            token: $token,
+            wakeTtl: 11,
+            resultKey: $overlayKey,
+            resultPayload: 'overlay-payload',
+        ));
+
+        $this->assertNull($store->getRaw($membershipKey));
+        $this->assertNull($store->getRaw($rowKey));
+        $this->assertNull($store->getRaw($overlayKey));
+    }
+
     public function test_canonical_publication_rejects_membership_after_state_changes(): void
     {
         $store = app(RedisStore::class);

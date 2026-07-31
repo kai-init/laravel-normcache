@@ -10,6 +10,7 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
+use NormCache\Values\TableIdentity;
 
 final readonly class ResultOverlayPublisher
 {
@@ -38,25 +39,13 @@ final readonly class ResultOverlayPublisher
         bool $wakeWaiters = true,
     ): bool {
         try {
-            if (
-                $this->config->maxAutoOverlayRows === 0
-                || count($rows) > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
-            ) {
+            $encoded = $this->encodeWithinLimits($rows, $sourceState);
+
+            if ($encoded === null) {
                 return false;
             }
 
             $ttl = $query->configuredTtl() ?? $this->config->queryTtl;
-            $encoded = $this->codec->encode(
-                $rows,
-                $sourceState->epoch,
-                $sourceState->versions,
-                $sourceState->tag,
-            );
-
-            if (strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES) {
-                return false;
-            }
-
             $resultState = new CacheState(
                 key: $this->keys->result(
                     $resultPlan->root,
@@ -109,10 +98,76 @@ final readonly class ResultOverlayPublisher
         }
     }
 
+    public function inlineEntry(
+        TableIdentity $root,
+        CacheState $sourceState,
+        string $namespace,
+        string $queryHash,
+        array $rows,
+    ): ?array {
+        try {
+            $encoded = $this->encodeWithinLimits($rows, $sourceState);
+        } catch (\Throwable $exception) {
+            $this->runtime->fail($exception);
+
+            return null;
+        }
+
+        if ($encoded === null) {
+            return null;
+        }
+
+        return [
+            $this->keys->result($root, $sourceState->version, $namespace, $queryHash),
+            $encoded,
+        ];
+    }
+
     public function rebuildOutcome(CacheRead $read, bool $promoted): CacheRead
     {
         return $promoted
             ? $read->asRepaired('result_overlay_rebuilt')
             : $read->withReason('corrupt_result_overlay_fallback');
+    }
+
+    /**
+     * @param  array<int, mixed>  $rows
+     * @return string|null null when the overlay exceeds the configured row or byte budget
+     */
+    private function encodeWithinLimits(array $rows, CacheState $state): ?string
+    {
+        $count = count($rows);
+
+        if (
+            $this->config->maxAutoOverlayRows === 0
+            || $count > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
+        ) {
+            return null;
+        }
+
+        if ($this->exceedsEstimate($rows, $state, $count)) {
+            return null;
+        }
+
+        $encoded = $this->codec->encode(
+            $rows,
+            $state->epoch,
+            $state->versions,
+            $state->tag,
+        );
+
+        return strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES ? null : $encoded;
+    }
+
+    private function exceedsEstimate(array $rows, CacheState $state, int $count): bool
+    {
+        $firstRow = strlen($this->codec->encode(
+            array_slice($rows, 0, 1),
+            $state->epoch,
+            $state->versions,
+            $state->tag,
+        ));
+
+        return $firstRow * $count > self::MAX_AUTO_OVERLAY_BYTES;
     }
 }

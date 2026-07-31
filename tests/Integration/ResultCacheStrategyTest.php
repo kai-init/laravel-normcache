@@ -237,6 +237,36 @@ final class ResultCacheStrategyTest extends TestCase
         }
     }
 
+    public function test_zero_row_limit_disables_overlays_for_results_inside_the_lookahead_allowance(): void
+    {
+        $originalConfig = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['auto_overlay_max_rows'] = 0;
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            foreach ([1, 0] as $expected) {
+                Redis::connection('normcache-test')->flushdb();
+
+                $query = fn() => DB::table('posts')
+                    ->where('published', true)
+                    ->where('views', $expected === 1 ? '=' : '>', $expected === 1 ? 10 : 10_000)
+                    ->orderBy('id')
+                    ->get();
+
+                $this->assertCount($expected, $query());
+                $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+
+                $this->assertCount($expected, $query());
+                $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+            }
+        } finally {
+            $this->app->instance(CacheConfig::class, $originalConfig);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
     public function test_result_larger_than_the_row_limit_plus_allowance_is_not_promoted(): void
     {
         foreach (range(1, 50) as $index) {
@@ -293,6 +323,38 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertSame([], DB::getQueryLog());
         $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+    }
+
+    public function test_many_mid_sized_rows_under_the_payload_limit_are_still_promoted(): void
+    {
+        foreach (range(1, 45) as $index) {
+            DB::table('posts')->insert([
+                'title' => "Wide {$index}",
+                'views' => $index,
+                'published' => true,
+                'metadata' => json_encode(['blob' => bin2hex(random_bytes(150))]),
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => DB::table('posts')
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(45)
+            ->get();
+
+        $this->assertCount(45, $query());
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(45, $warm);
+        $this->assertSame([], DB::getQueryLog());
     }
 
     public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void

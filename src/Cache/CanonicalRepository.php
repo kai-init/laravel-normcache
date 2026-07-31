@@ -153,7 +153,11 @@ final readonly class CanonicalRepository
         );
     }
 
-    /** @param array<int, mixed> $rows */
+    /**
+     * @param  array<int, mixed>  $rows
+     * @param  array{0: string, 1: string}|null  $resultOverlay  [key, payload] published
+     *                                                           under this operation's guard
+     */
     public function publish(
         QueryBuilder $query,
         QueryPlan $plan,
@@ -161,6 +165,7 @@ final readonly class CanonicalRepository
         array $rows,
         BuildLease $lease,
         int $wakeTtl,
+        ?array $resultOverlay = null,
     ): bool {
         $ids = [];
         $encodedRows = [];
@@ -203,6 +208,8 @@ final readonly class CanonicalRepository
             wakeKey: (string) $lease->wakeKey,
             token: (string) $lease->token,
             wakeTtl: $wakeTtl,
+            resultKey: $resultOverlay[0] ?? null,
+            resultPayload: $resultOverlay[1] ?? null,
         );
     }
 }

@@ -29,6 +29,23 @@ final class ResultOverlayStalenessTest extends TestCase
         }
     }
 
+    public function test_a_single_cold_execution_publishes_the_overlay_alongside_the_membership(): void
+    {
+        $this->overlayQuery()();
+
+        $this->assertCount(1, $this->cacheKeysMatching(':m:v'));
+        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $rows = $this->overlayQuery()();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame([], $queries);
+        $this->assertCount(3, $rows);
+    }
+
     public function test_an_overlay_is_not_served_after_its_root_table_is_invalidated(): void
     {
         $this->warmOverlay();

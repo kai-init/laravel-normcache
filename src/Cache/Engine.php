@@ -813,6 +813,16 @@ final readonly class Engine
         string $namespace,
         string $queryHash,
     ): void {
+        $overlay = $plan->materializeResult
+            ? $this->overlays->inlineEntry(
+                $plan->root,
+                $state,
+                $namespace,
+                $queryHash,
+                $rows,
+            )
+            : null;
+
         if (!$this->canonical->publish(
             $query,
             $plan,
@@ -820,22 +830,9 @@ final readonly class Engine
             $rows,
             $lease,
             $this->config->wakeTtl(),
+            $overlay,
         )) {
             $this->leases->release($lease);
-
-            return;
-        }
-
-        if ($plan->materializeResult) {
-            $this->overlays->promote(
-                $query,
-                $plan->asFullResultOverlay(),
-                $state,
-                $namespace,
-                $queryHash,
-                $rows,
-                wakeWaiters: false,
-            );
         }
     }
 
