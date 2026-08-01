@@ -445,7 +445,7 @@ final class RedisStore
     {
         try {
             return $operation($this->connection());
-        } catch (\Throwable) {
+        } catch (\Exception) {
             $this->connection = null;
             Redis::purge($this->redisConnection);
 

@@ -36,9 +36,10 @@ use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheSerializer;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
+use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
-use NormCache\Support\Reporter;
 use NormCache\Values\CacheConfig;
 use Psr\Log\LoggerInterface;
 
@@ -68,7 +69,7 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->singleton(DependencyAnalyzer::class);
         $this->app->singleton(PrimaryKeyResolver::class);
         $this->app->singleton(MutationKeyExtractor::class);
-        $this->app->scoped(Reporter::class, function ($app): Reporter {
+        $this->app->scoped(QueryObserver::class, function ($app): QueryObserver {
             $config = $app->make(CacheConfig::class);
             $collector = null;
 
@@ -81,9 +82,10 @@ final class CacheServiceProvider extends ServiceProvider
                 }
             }
 
-            return new Reporter($config, $collector);
+            return new QueryObserver($config, $collector);
         });
 
+        $this->app->scoped(FailureReporter::class);
         $this->app->scoped(CacheRuntime::class);
         $this->app->scoped(CacheStateResolver::class);
         $this->app->scoped(BuildLeaseCoordinator::class);

@@ -163,6 +163,38 @@ final class ConcurrencyTest extends TestCase
         $this->assertLessThan(1000, $elapsedMs);
     }
 
+    public function test_an_empty_lease_token_neither_publishes_nor_releases(): void
+    {
+        $table = $this->table();
+        $keys = $this->cacheKeys();
+        $buildKey = $keys->membershipBuild($table, '1', 'n', 'hash');
+        $entryKey = $keys->membership($table, '1', 'n', 'hash');
+        $owner = str_repeat('a', 32);
+        $this->cacheStore()->setNxEx($buildKey, $owner, 30);
+
+        $published = $this->cacheStore()->publishVersionedEntries(
+            entries: [$entryKey => 'payload'],
+            ttl: 30,
+            versionKeys: [],
+            expectedVersions: [],
+            buildingKey: $buildKey,
+            wakeKey: null,
+            token: null,
+            wakeTtl: 10,
+        );
+
+        $this->assertFalse($published);
+        $this->assertSame(
+            $owner,
+            $this->cacheStore()->getRaw($buildKey),
+            'an empty token owns nothing, so another claimant\'s lease must survive',
+        );
+        $this->assertNull(
+            $this->cacheStore()->getRaw($entryKey),
+            'nothing may be published while another claimant holds the lease',
+        );
+    }
+
     private function plan(): QueryPlan
     {
         $root = $this->table();

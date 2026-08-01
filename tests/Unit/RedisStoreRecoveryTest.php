@@ -100,6 +100,25 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         }
     }
 
+    public function test_does_not_retry_or_purge_for_programming_errors(): void
+    {
+        $manager = $this->swapRedisManager([
+            new \TypeError('Argument #1 ($key) must be of type string, array given'),
+            'cached-value',
+        ]);
+
+        $store = new RedisStore('normcache-test');
+
+        $this->expectException(\TypeError::class);
+
+        try {
+            $store->getRaw('key');
+        } finally {
+            $this->assertSame(1, $manager->built);
+            $this->assertSame([], $manager->purged);
+        }
+    }
+
     public function test_gives_up_when_the_rebuilt_connection_also_fails(): void
     {
         $manager = $this->swapRedisManager([

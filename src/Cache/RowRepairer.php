@@ -6,6 +6,7 @@ use NormCache\Database\QueryBuilder;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
@@ -24,6 +25,7 @@ final readonly class RowRepairer
         private RawResultCodec $codec,
         private CacheStateResolver $states,
         private BuildLeaseCoordinator $leases,
+        private FailureReporter $failures,
     ) {}
 
     /** @param list<string> $tokens */
@@ -132,7 +134,10 @@ final readonly class RowRepairer
                     $rowsByToken[$token] = $row;
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            // Records without disabling: a database fault is not a cache fault.
+            $this->failures->repairUnreachable($exception, $plan->root, count($tokens));
+
             return null;
         }
 

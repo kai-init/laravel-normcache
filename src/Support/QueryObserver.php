@@ -16,10 +16,10 @@ use NormCache\Values\ObservationRecord;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
-final class Reporter
+final class QueryObserver
 {
     /** @var array<string, true> */
-    private array $reportedCorruptions = [];
+    private array $observedCorruptions = [];
 
     public function __construct(
         private readonly CacheConfig $config,
@@ -33,7 +33,7 @@ final class Reporter
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->reportQuery(
+        $this->observe(
             ReadOutcome::HIT,
             $query,
             $plan,
@@ -50,7 +50,7 @@ final class Reporter
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->reportQuery(
+        $this->observe(
             ReadOutcome::REPAIRED,
             $query,
             $plan,
@@ -67,7 +67,7 @@ final class Reporter
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->reportQuery(
+        $this->observe(
             ReadOutcome::MISS,
             $query,
             $plan,
@@ -77,7 +77,7 @@ final class Reporter
         );
     }
 
-    private function reportQuery(
+    private function observe(
         ReadOutcome $outcome,
         QueryBuilder $query,
         QueryPlan $plan,
@@ -202,11 +202,11 @@ final class Reporter
 
     private function firstCorruption(string $keyHash): bool
     {
-        if (isset($this->reportedCorruptions[$keyHash])) {
+        if (isset($this->observedCorruptions[$keyHash])) {
             return false;
         }
 
-        $this->reportedCorruptions[$keyHash] = true;
+        $this->observedCorruptions[$keyHash] = true;
 
         return true;
     }

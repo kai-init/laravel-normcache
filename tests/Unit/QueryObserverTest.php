@@ -8,13 +8,13 @@ use NormCache\Database\QueryStatement;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Events\QueryCacheRepaired;
-use NormCache\Support\Reporter;
+use NormCache\Support\QueryObserver;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
-final class ReporterTest extends UnitTestCase
+final class QueryObserverTest extends UnitTestCase
 {
     public function test_query_outcomes_emit_their_full_event_payloads(): void
     {
@@ -24,7 +24,7 @@ final class ReporterTest extends UnitTestCase
             QueryCacheRepaired::class,
         ]);
 
-        $reporter = new Reporter(
+        $observer = new QueryObserver(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
         );
@@ -35,9 +35,9 @@ final class ReporterTest extends UnitTestCase
         $bindings = [42];
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        $reporter->hit($query, $plan, 'hit-hash', $statement, 'row_cache_fallback');
-        $reporter->miss($query, $plan, 'miss-hash', $statement);
-        $reporter->repaired($query, $plan, 'repair-hash', $statement, 'row_repair');
+        $observer->hit($query, $plan, 'hit-hash', $statement, 'row_cache_fallback');
+        $observer->miss($query, $plan, 'miss-hash', $statement);
+        $observer->repaired($query, $plan, 'repair-hash', $statement, 'row_repair');
 
         Event::assertDispatched(
             QueryCacheHit::class,
@@ -72,7 +72,7 @@ final class ReporterTest extends UnitTestCase
     {
         Event::fake([QueryCacheMiss::class]);
 
-        $reporter = new Reporter(
+        $observer = new QueryObserver(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
         );
@@ -83,15 +83,15 @@ final class ReporterTest extends UnitTestCase
 
         // Same corrupted key observed twice (e.g. a concurrent request racing the
         // same still-corrupt payload) must only be reported once.
-        $reporter->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
-        $reporter->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
+        $observer->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
+        $observer->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
 
         // A different corrupted key is a distinct occurrence and must still report.
-        $reporter->miss($query, $plan, 'hash-b', $statement, 'corrupt_payload');
+        $observer->miss($query, $plan, 'hash-b', $statement, 'corrupt_payload');
 
         // Dedup is specific to corrupt_payload; ordinary misses are unaffected.
-        $reporter->miss($query, $plan, 'hash-c', $statement);
-        $reporter->miss($query, $plan, 'hash-c', $statement);
+        $observer->miss($query, $plan, 'hash-c', $statement);
+        $observer->miss($query, $plan, 'hash-c', $statement);
 
         Event::assertDispatchedTimes(QueryCacheMiss::class, 4);
     }

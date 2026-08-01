@@ -3,6 +3,7 @@
 namespace NormCache\Cache;
 
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 
@@ -14,13 +15,11 @@ final class CacheRuntime
 
     private ?bool $runtimeDisabled = null;
 
-    /** @var array<string, true> */
-    private array $reportedFailures = [];
-
     public function __construct(
         private readonly CacheConfig $config,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
+        private readonly FailureReporter $failures,
     ) {}
 
     public function readable(): bool
@@ -89,15 +88,7 @@ final class CacheRuntime
     public function fail(\Throwable $exception): void
     {
         $this->disable();
-
-        $fingerprint = $exception::class . ':' . $exception->getMessage();
-
-        if (isset($this->reportedFailures[$fingerprint])) {
-            return;
-        }
-
-        $this->reportedFailures[$fingerprint] = true;
-        report($exception);
+        $this->failures->cacheUnavailable($exception);
     }
 
     /** @return array{0: string, 1: bool} */

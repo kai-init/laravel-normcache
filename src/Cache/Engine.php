@@ -12,8 +12,8 @@ use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
+use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
-use NormCache\Support\Reporter;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
@@ -35,7 +35,7 @@ final readonly class Engine
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private DependencyAnalyzer $dependencies,
-        private Reporter $reporter,
+        private QueryObserver $observer,
         private CacheStateResolver $states,
         private CanonicalRepository $canonical,
         private ResultRepository $results,
@@ -155,7 +155,7 @@ final readonly class Engine
             );
 
             if ($cached->served()) {
-                if ($this->reporter->observing()) {
+                if ($this->observer->observing()) {
                     $this->reportRead(
                         $query,
                         $plan,
@@ -190,7 +190,7 @@ final readonly class Engine
             return $database();
         }
 
-        $this->reporter->miss(
+        $this->observer->miss(
             $query,
             $plan,
             $queryHash,
@@ -276,7 +276,7 @@ final readonly class Engine
         callable $database,
         ?QueryPlan $plan = null,
     ): array {
-        $this->reporter->bypass($query, $reason, $statement, $plan);
+        $this->observer->bypass($query, $reason, $statement, $plan);
 
         return $database();
     }
@@ -377,7 +377,7 @@ final readonly class Engine
         CacheRead $read,
     ): void {
         if ($read->outcome === ReadOutcome::REPAIRED) {
-            $this->reporter->repaired(
+            $this->observer->repaired(
                 $query,
                 $plan,
                 $queryHash,
@@ -388,7 +388,7 @@ final readonly class Engine
             return;
         }
 
-        $this->reporter->hit(
+        $this->observer->hit(
             $query,
             $plan,
             $queryHash,

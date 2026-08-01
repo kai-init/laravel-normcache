@@ -8,12 +8,12 @@ use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FailureReporter;
+use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
-use NormCache\Support\Reporter;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\TableIdentity;
-use Psr\Log\LoggerInterface;
 
 final class Invalidator
 {
@@ -28,8 +28,8 @@ final class Invalidator
         private readonly TableIdentityResolver $tables,
         private readonly PrimaryKeyResolver $primaryKeys,
         private readonly MutationKeyExtractor $mutationKeys,
-        private readonly Reporter $reporter,
-        private readonly LoggerInterface $logger,
+        private readonly QueryObserver $observer,
+        private readonly FailureReporter $failures,
     ) {}
 
     /** @param array<string, mixed>|null $assigned */
@@ -142,20 +142,12 @@ final class Invalidator
                 tokens: $tokens,
                 rowPrefix: $this->keys->tablePrefix($table) . ':r:g',
             );
-            $this->reporter->invalidated($table, $mode, $tokens);
+            $this->observer->invalidated($table, $mode, $tokens);
 
             return true;
         } catch (\Throwable $exception) {
-            $this->logger->critical(
-                'NormCache invalidation failed; cached reads may be stale.',
-                [
-                    'exception' => $exception,
-                    'table' => $table->connection . ':' . $table->qualifiedTable(),
-                    'mode' => $mode,
-                    'tokens' => $tokens,
-                ],
-            );
-            $this->runtime->fail($exception);
+            $this->runtime->disable();
+            $this->failures->invalidationFailed($exception, $table, $mode, $tokens);
 
             return false;
         }

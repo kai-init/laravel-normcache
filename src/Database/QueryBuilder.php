@@ -12,7 +12,7 @@ use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
 use NormCache\Invalidator;
 use NormCache\Support\QueryIdentity;
-use NormCache\Support\Reporter;
+use NormCache\Support\QueryObserver;
 use NormCache\Values\DependencyDeclaration;
 use NormCache\Values\PrimaryKeyMetadata;
 
@@ -256,7 +256,7 @@ final class QueryBuilder extends Builder
 
         if ($bypass) {
             if ($reason !== null) {
-                app(Reporter::class)->bypass($this, $reason, $statement);
+                app(QueryObserver::class)->bypass($this, $reason, $statement);
             }
 
             return $this->connection->select(
@@ -504,7 +504,7 @@ final class QueryBuilder extends Builder
         ?string $reason,
     ): array {
         if ($reason !== null) {
-            app(Reporter::class)->bypass($this, $reason, $statement);
+            app(QueryObserver::class)->bypass($this, $reason, $statement);
         }
 
         return $this->connection->select(

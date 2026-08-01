@@ -11,7 +11,8 @@
 -- ARGV[3]          = entry TTL in seconds
 -- ARGV[4..n+3]     = expected validation values
 -- ARGV[n+4..n+m+3] = serialized entry payloads
--- ARGV[n+m+4]      = build lease token (optional)
+-- ARGV[n+m+4]      = build lease token; an empty token owns nothing, so a lease
+--                    key present with one publishes nothing and releases nothing
 -- ARGV[n+m+5]      = wake token count (optional; defaults to 1)
 -- ARGV[n+m+6]      = wake TTL (optional; defaults to 10)
 
@@ -35,7 +36,7 @@ end
 
 local function release_building()
     if not has_lease then return end
-    if token ~= '' and redis.call('GET', KEYS[n + m + 1]) ~= token then return end
+    if token == '' or redis.call('GET', KEYS[n + m + 1]) ~= token then return end
     redis.call('DEL', KEYS[n + m + 1])
     if has_wake then
         wake()
@@ -43,7 +44,7 @@ local function release_building()
     end
 end
 
-if has_lease and token ~= '' and redis.call('GET', KEYS[n + m + 1]) ~= token then
+if has_lease and (token == '' or redis.call('GET', KEYS[n + m + 1]) ~= token) then
     return 0
 end
 
