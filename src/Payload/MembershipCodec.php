@@ -7,6 +7,8 @@ use NormCache\Values\MembershipPayload;
 
 final class MembershipCodec
 {
+    private const FORMAT = 4;
+
     /**
      * @param  list<string>  $ids
      * @param  array<string, string>  $versions
@@ -21,10 +23,10 @@ final class MembershipCodec
         ksort($versions, SORT_STRING);
 
         $envelope = [
-            'f' => 4,
+            'f' => self::FORMAT,
             'ep' => $epoch,
             'g' => $generation,
-            'ids' => $ids,
+            'ids' => implode(',', $ids),
             'vec' => $versions,
         ];
 
@@ -45,24 +47,18 @@ final class MembershipCodec
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_string($envelope['g'] ?? null)
-            || !is_array($envelope['ids'] ?? null)
+            || !is_string($envelope['ids'] ?? null)
             || !is_array($envelope['vec'] ?? null)
             || (array_key_exists('tv', $envelope) && !is_string($envelope['tv']))
         ) {
             return MembershipPayload::corrupt();
         }
 
-        $ids = array_values($envelope['ids']);
+        $ids = $envelope['ids'] === '' ? [] : explode(',', $envelope['ids']);
         $versions = [];
-
-        foreach ($ids as $id) {
-            if (!is_string($id)) {
-                return MembershipPayload::corrupt();
-            }
-        }
 
         foreach ($envelope['vec'] as $key => $value) {
             if (!is_string($key) || !is_string($value)) {

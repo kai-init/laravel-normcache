@@ -161,13 +161,19 @@ final readonly class ResultOverlayPublisher
 
     private function exceedsEstimate(array $rows, CacheState $state, int $count): bool
     {
-        $firstRow = strlen($this->codec->encode(
-            array_slice($rows, 0, 1),
+        $first = $this->encodedLength($rows, $state, 1);
+        $marginal = $count < 2 ? 0 : $this->encodedLength($rows, $state, 2) - $first;
+
+        return $first + $marginal * ($count - 1) > self::MAX_AUTO_OVERLAY_BYTES;
+    }
+
+    private function encodedLength(array $rows, CacheState $state, int $take): int
+    {
+        return strlen($this->codec->encode(
+            array_slice($rows, 0, $take),
             $state->epoch,
             $state->versions,
             $state->tag,
         ));
-
-        return $firstRow * $count > self::MAX_AUTO_OVERLAY_BYTES;
     }
 }

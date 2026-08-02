@@ -269,7 +269,11 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_result_larger_than_the_row_limit_plus_allowance_is_not_promoted(): void
     {
-        foreach (range(1, 50) as $index) {
+        // One row past the lookahead allowance, so the row cap rejects regardless of size.
+        $rows = $this->app->make(CacheConfig::class)->maxAutoOverlayRows + 2;
+        $existing = DB::table('posts')->where('published', true)->count();
+
+        foreach (range($existing + 1, $rows) as $index) {
             DB::table('posts')->insert([
                 'title' => "Extra {$index}",
                 'views' => $index,
@@ -280,18 +284,21 @@ final class ResultCacheStrategyTest extends TestCase
             ]);
         }
 
+        // The seeding count above is an aggregate, so it leaves a result entry of its own.
+        Redis::connection('normcache-test')->flushdb();
+
         $query = fn() => DB::table('posts')
             ->where('published', true)
             ->orderBy('id')
-            ->limit(55)
+            ->limit($rows)
             ->get();
 
-        $this->assertCount(55, $query());
+        $this->assertCount($rows, $query());
         $this->assertSame([], $this->cacheKeysMatching(':e:v'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $this->assertCount(55, $query());
+        $this->assertCount($rows, $query());
         DB::disableQueryLog();
 
         $this->assertSame([], DB::getQueryLog());

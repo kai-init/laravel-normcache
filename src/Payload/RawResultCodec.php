@@ -8,6 +8,8 @@ use NormCache\Values\RawResultPayload;
 
 final readonly class RawResultCodec
 {
+    private const FORMAT = 4;
+
     public function __construct(
         private CacheSerializer $serializer,
     ) {}
@@ -31,7 +33,7 @@ final readonly class RawResultCodec
         }
 
         $envelope = [
-            'f' => 4,
+            'f' => self::FORMAT,
             'ep' => $epoch,
             'vec' => $versions,
             'rows' => $nativeRows,
@@ -50,7 +52,7 @@ final readonly class RawResultCodec
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['vec'] ?? null)
             || !is_array($envelope['rows'] ?? null)
@@ -78,7 +80,7 @@ final readonly class RawResultCodec
     public function encodeRow(\stdClass $row, string $epoch): string
     {
         return $this->serializer->encode([
-            'f' => 4,
+            'f' => self::FORMAT,
             'ep' => $epoch,
             'row' => (array) $row,
         ]);
@@ -93,7 +95,7 @@ final readonly class RawResultCodec
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['row'] ?? null)
             || !$this->matchesToken($envelope['row'], $primaryKey, $expectedToken)
@@ -118,7 +120,7 @@ final readonly class RawResultCodec
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || ($envelope['ep'] ?? null) !== $expectedEpoch
             || !is_array($envelope['row'] ?? null)
         ) {

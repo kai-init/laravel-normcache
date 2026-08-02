@@ -98,10 +98,31 @@ final class PayloadCodecTest extends UnitTestCase
             'f' => 4,
             'ep' => '0',
             'g' => '0',
-            'ids' => ['i:1'],
+            'ids' => 'i:1',
             'vec' => ['dependency' => 1],
         ], JSON_THROW_ON_ERROR);
 
         $this->assertFalse($codec->decode($integerVersion)->valid);
+    }
+
+    public function test_membership_codec_round_trips_an_empty_membership(): void
+    {
+        $codec = new MembershipCodec;
+
+        $this->assertSame([], $codec->decode($codec->encode('7', '4', []))->ids);
+    }
+
+    public function test_membership_codec_rejects_the_previous_array_id_layout(): void
+    {
+        $codec = new MembershipCodec;
+        $previous = json_encode([
+            'f' => 4,
+            'ep' => '7',
+            'g' => '4',
+            'ids' => ['i:42', 'i:7'],
+            'vec' => [],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->assertFalse($codec->decode($previous)->valid);
     }
 }

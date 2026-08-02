@@ -17,7 +17,7 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertSame('', $config->keyPrefix);
         $this->assertSame(604_800, $config->rowTtl);
         $this->assertSame(3_600, $config->queryTtl);
-        $this->assertSame(50, $config->maxAutoOverlayRows);
+        $this->assertSame(100, $config->maxAutoOverlayRows);
         $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
         $this->assertSame(5, $config->buildingLockTtl);
         $this->assertSame(200, $config->stampedeWaitMs);

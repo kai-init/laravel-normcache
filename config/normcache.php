@@ -9,7 +9,7 @@ return [
     'query_ttl' => (int) env('NORMCACHE_QUERY_TTL', 3600),
 
     // Set to 0 to disable automatic result overlays. Admission allows one extra row for pagination lookahead; encoded overlays are capped at 50 KiB.
-    'auto_overlay_max_rows' => (int) env('NORMCACHE_AUTO_OVERLAY_MAX_ROWS', 50),
+    'auto_overlay_max_rows' => (int) env('NORMCACHE_AUTO_OVERLAY_MAX_ROWS', 100),
 
     // Each group requires connection, database, and table metadata. Add schema to
     // restrict a PostgreSQL or SQL Server match. Types are integer or string.
