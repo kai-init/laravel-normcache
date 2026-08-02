@@ -14,7 +14,7 @@ use NormCache\Values\TableIdentity;
 
 final readonly class ResultOverlayPublisher
 {
-    private const MAX_AUTO_OVERLAY_BYTES = 50 * 1024;
+    private const MAX_AUTO_OVERLAY_BYTES = 128 * 1024;
 
     private const PAGINATION_LOOKAHEAD_ROWS = 1;
 

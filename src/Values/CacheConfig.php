@@ -43,7 +43,7 @@ final readonly class CacheConfig
         $maxAutoOverlayRows = self::nonNegative(
             $values,
             'auto_overlay_max_rows',
-            100,
+            1000,
         );
         $maxPreciseInvalidationKeys = self::bounded(
             $values,

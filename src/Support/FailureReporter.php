@@ -12,7 +12,6 @@ final class FailureReporter
 
     public function __construct(private readonly LoggerInterface $logger) {}
 
-    /** A cache dependency failed; reads fall through to the database. */
     public function cacheUnavailable(\Throwable $exception): void
     {
         if ($this->claim($exception)) {
@@ -20,11 +19,7 @@ final class FailureReporter
         }
     }
 
-    /**
-     * A write committed but its invalidation did not, so reads may now be stale.
-     *
-     * @param  list<string>  $tokens
-     */
+    /** @param  list<string>  $tokens */
     public function invalidationFailed(
         \Throwable $exception,
         TableIdentity $table,
@@ -43,7 +38,6 @@ final class FailureReporter
         ]);
     }
 
-    /** Repair could not reload rows from the database; the read falls through instead. */
     public function repairUnreachable(
         \Throwable $exception,
         TableIdentity $table,

@@ -158,7 +158,7 @@ final class ResultCacheStrategyTest extends TestCase
                 'views' => $index,
                 'published' => true,
                 'metadata' => $index === 45
-                    ? json_encode(['payload' => str_repeat('x', 64 * 1024)])
+                    ? json_encode(['payload' => str_repeat('x', 192 * 1024)])
                     : null,
                 'author_id' => $this->authorId,
                 'created_at' => now(),
@@ -310,7 +310,7 @@ final class ResultCacheStrategyTest extends TestCase
             ->where('id', 1)
             ->update([
                 'metadata' => json_encode([
-                    'payload' => str_repeat('x', 64 * 1024),
+                    'payload' => str_repeat('x', 192 * 1024),
                 ]),
             ]);
 

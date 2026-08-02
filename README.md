@@ -67,7 +67,8 @@ Unlike traditional query caching, which stores a full copy of every result set, 
 
 For small result sets, NormCache also stores the assembled result alongside the canonical rows, so a warm read is a single Redis fetch instead of a membership lookup plus row assembly:
 
-- **Automatic promotion**: a canonical query is promoted when it returns at most `auto_overlay_max_rows + 1` rows (default `100`, so up to 101) and the encoded payload is under 50 KiB.
+- **Automatic promotion**: a canonical query is promoted when it returns at most `auto_overlay_max_rows + 1` rows (default `1000`, so up to 1001) and the encoded payload is at most 128 KiB — a fixed cap that keeps wide rows out.
+- **Sizing the row cap**: the payload is rebuilt on every invalidation, and Redis is single-threaded, so each publish blocks the instance while it runs (~5ms at 1,000 rows, ~32ms at 5,000). Size against how often the table is _written_, not how large its reads are.
 - **Self-healing**: writes to the query's tables invalidate the overlay along with the canonical rows. If the overlay is missing or expired, the read falls back to canonical row assembly and re-promotes.
 
 ## Tags and selective flushing
@@ -156,8 +157,8 @@ return [
 
     'row_ttl' => 604800,
     'query_ttl' => 3600,
-    // Set to 0 to disable automatic result overlays. Admission allows this value plus one row for pagination lookahead; encoded overlays are capped at 50 KiB.
-    'auto_overlay_max_rows' => 100,
+    // Set to 0 to disable automatic result overlays.
+    'auto_overlay_max_rows' => 1000,
 
     'max_precise_invalidation_keys' => 1000,
     'building_lock_ttl' => 5,
