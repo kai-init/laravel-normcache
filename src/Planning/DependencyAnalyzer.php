@@ -69,9 +69,11 @@ final class DependencyAnalyzer
     {
         try {
             $model = new $modelClass;
-            $model->setConnection($fallbackConnection->getName());
+            $connection = $model->getConnectionName() === null
+                ? $fallbackConnection
+                : $model->getConnection();
 
-            return $this->tables->resolve($fallbackConnection, $model->getTable());
+            return $this->tables->resolve($connection, $model->getTable());
         } catch (\Throwable) {
             return null;
         }

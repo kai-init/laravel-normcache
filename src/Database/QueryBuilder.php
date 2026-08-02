@@ -78,6 +78,7 @@ final class QueryBuilder extends Builder
         return $result;
     }
 
+    /** @internal */
     public function capturedSubquery(Expression $expression): ?Builder
     {
         $captured = $this->capturedSubqueries === null
@@ -102,6 +103,7 @@ final class QueryBuilder extends Builder
         return $this->databaseConnection;
     }
 
+    /** @internal */
     public function enableCachingForTable(): static
     {
         $this->eligible = true;
@@ -109,7 +111,11 @@ final class QueryBuilder extends Builder
         return $this;
     }
 
-    /** @param class-string $modelClass */
+    /**
+     * @internal
+     *
+     * @param  class-string  $modelClass
+     */
     public function enableCachingForModel(
         string $modelClass,
         string $keyName,
@@ -129,17 +135,23 @@ final class QueryBuilder extends Builder
         return $this;
     }
 
-    /** @return class-string|null */
+    /**
+     * @internal
+     *
+     * @return class-string|null
+     */
     public function modelClass(): ?string
     {
         return $this->modelClass;
     }
 
+    /** @internal */
     public function primaryKey(): ?PrimaryKeyMetadata
     {
         return $this->primaryKey;
     }
 
+    /** @internal */
     public function deletedAtColumn(): ?string
     {
         return $this->deletedAtColumn;
@@ -163,6 +175,7 @@ final class QueryBuilder extends Builder
         return $this;
     }
 
+    /** @internal */
     public function configuredTtl(): ?int
     {
         return $this->ttl;
@@ -176,6 +189,7 @@ final class QueryBuilder extends Builder
         return $this;
     }
 
+    /** @internal */
     public function configuredTag(): ?string
     {
         return $this->tag;
@@ -241,7 +255,11 @@ final class QueryBuilder extends Builder
             || enum_exists($type);
     }
 
-    /** @return list<DependencyDeclaration> */
+    /**
+     * @internal
+     *
+     * @return list<DependencyDeclaration>
+     */
     public function dependencies(): array
     {
         return array_values($this->dependencies);

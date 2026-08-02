@@ -45,6 +45,9 @@ use Psr\Log\LoggerInterface;
 
 final class CacheServiceProvider extends ServiceProvider
 {
+    /** @var list<string> */
+    private array $unreplacedDrivers = [];
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
@@ -102,6 +105,13 @@ final class CacheServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        foreach ($this->unreplacedDrivers as $driver) {
+            $this->app->make(LoggerInterface::class)->warning(
+                'NormCache did not replace an existing database connection resolver.',
+                ['driver' => $driver],
+            );
+        }
+
         Event::listen(TransactionCommitted::class, function (TransactionCommitted $event): void {
             if ($event->connection->transactionLevel() === 0) {
                 $this->app->make(Invalidator::class)->commit((string) $event->connection->getName());
@@ -146,10 +156,7 @@ final class CacheServiceProvider extends ServiceProvider
                 $reflection = new \ReflectionFunction($existing);
 
                 if ($reflection->getFileName() !== __FILE__) {
-                    $this->app->make(LoggerInterface::class)->warning(
-                        'NormCache did not replace an existing database connection resolver.',
-                        ['driver' => $driver],
-                    );
+                    $this->unreplacedDrivers[] = $driver;
                 }
 
                 continue;

@@ -760,8 +760,6 @@ final readonly class Engine
         );
     }
 
-    /** @phpstan-impure */
-
     /** @param array<int, mixed> $rows */
     private function publish(
         QueryBuilder $query,

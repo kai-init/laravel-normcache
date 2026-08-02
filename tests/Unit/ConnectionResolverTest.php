@@ -29,6 +29,7 @@ final class ConnectionResolverTest extends UnitTestCase
 
             $provider = new CacheServiceProvider($this->app);
             $provider->register();
+            $provider->boot();
 
             $this->assertSame($customResolver, Connection::getResolver('mysql'));
         } finally {

@@ -23,10 +23,16 @@ final class TableIdentityResolver
             return;
         }
 
+        $bindings = [];
+
         foreach ($this->connections as $bound => $_) {
             if ((string) $bound->getName() === $connection) {
-                unset($this->connections[$bound]);
+                $bindings[] = $bound;
             }
+        }
+
+        foreach ($bindings as $bound) {
+            unset($this->connections[$bound]);
         }
     }
 
