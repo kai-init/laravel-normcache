@@ -3,8 +3,10 @@
 namespace NormCache\Tests\Integration\Database;
 
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Redis\Connections\Connection as RedisConnection;
+use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Mockery;
@@ -14,10 +16,30 @@ use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\TableIdentity;
 use Psr\Log\LoggerInterface;
+
+final class MisconfiguredSchemaPost extends Post
+{
+    protected $table = 'posts';
+
+    protected $primaryKey = 'missing_id';
+}
+
+final class CompositeAuthorTag extends Model
+{
+    use Cacheable;
+
+    protected $table = 'author_tag';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+}
 
 final class SchemaPersistenceTest extends TestCase
 {
@@ -74,6 +96,120 @@ final class SchemaPersistenceTest extends TestCase
         ))->resolve($this->normCacheQuery(), $coldConnection, $coldTable);
 
         $this->assertSame('id', $coldPrimaryKey?->column);
+    }
+
+    public function test_fresh_sqlite_schema_resolution_batches_metadata_reads(): void
+    {
+        $connection = DB::connection();
+        $query = DB::table('posts');
+        $warmRepository = $this->repository();
+        $table = (new TableIdentityResolver($warmRepository))->resolve($connection, 'posts');
+
+        $this->assertNotNull($table);
+        $this->assertNotNull((new PrimaryKeyResolver(
+            $this->app->make(CacheConfig::class),
+            $this->app->make(LoggerInterface::class),
+            $warmRepository,
+        ))->resolve($query, $connection, $table));
+
+        $commands = [];
+        $redis = Redis::connection('normcache-test');
+        $redis->setEventDispatcher($this->app->make('events'));
+        $redis->listen(static function (CommandExecuted $event) use (&$commands): void {
+            $commands[] = strtolower((string) $event->command);
+        });
+
+        $freshRepository = $this->repository();
+        $freshTable = (new TableIdentityResolver($freshRepository))->resolve($connection, 'posts');
+
+        $this->assertNotNull($freshTable);
+        $this->assertNotNull((new PrimaryKeyResolver(
+            $this->app->make(CacheConfig::class),
+            $this->app->make(LoggerInterface::class),
+            $freshRepository,
+        ))->resolve($query, $connection, $freshTable));
+
+        $metadataCommands = array_values(array_filter(
+            $commands,
+            static fn(string $command): bool => in_array(
+                $command,
+                ['get', 'mget', 'hget', 'hmget'],
+                true,
+            ),
+        ));
+
+        if ((bool) env('REDIS_CLUSTER', false)) {
+            $this->assertNotContains('get', $metadataCommands);
+            $this->assertNotContains('hget', $metadataCommands);
+            $this->assertContains('hmget', $metadataCommands);
+
+            return;
+        }
+
+        $this->assertSame(['mget', 'hmget'], $metadataCommands);
+    }
+
+    public function test_verified_schema_rejects_model_primary_key_assumptions(): void
+    {
+        $connection = DB::connection();
+        $resolver = $this->app->make(PrimaryKeyResolver::class);
+        $tables = $this->app->make(TableIdentityResolver::class);
+        $posts = $tables->resolve($connection, 'posts');
+        $pivot = $tables->resolve($connection, 'author_tag');
+
+        $this->assertNotNull($posts);
+        $this->assertNotNull($pivot);
+        $this->assertSame(
+            'missing_id',
+            MisconfiguredSchemaPost::query()->toBase()->primaryKey()?->column,
+        );
+        $this->assertNull($resolver->resolve(
+            MisconfiguredSchemaPost::query()->toBase(),
+            $connection,
+            $posts,
+        ));
+        $this->assertSame('id', CompositeAuthorTag::query()->toBase()->primaryKey()?->column);
+        $this->assertNull($resolver->resolve(
+            CompositeAuthorTag::query()->toBase(),
+            $connection,
+            $pivot,
+        ));
+    }
+
+    public function test_explicit_primary_key_override_can_authorize_an_unsupported_schema_key(): void
+    {
+        $original = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['primary_keys'] = [[
+            'connection' => 'testing',
+            'database' => (string) realpath((string) DB::connection()->getDatabaseName()),
+            'tables' => [
+                'author_tag' => ['column' => 'author_id', 'type' => 'integer'],
+            ],
+        ]];
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            $connection = DB::connection();
+            $query = DB::table('author_tag');
+            $table = $this->app->make(TableIdentityResolver::class)
+                ->resolve($connection, 'author_tag');
+
+            $this->assertNotNull($table);
+            $metadata = $this->app->make(PrimaryKeyResolver::class)->resolve(
+                $query,
+                $connection,
+                $table,
+            );
+
+            $this->assertNotNull($metadata);
+            $this->assertSame('author_id', $metadata->column);
+            $this->assertSame('integer', $metadata->family);
+        } finally {
+            $this->app->instance(CacheConfig::class, $original);
+            $this->app->forgetScopedInstances();
+        }
     }
 
     public function test_clearing_every_connection_retires_persisted_metadata(): void
@@ -197,6 +333,8 @@ final class SchemaPersistenceTest extends TestCase
         $connection->shouldReceive('getName')->andReturn('testing');
         $connection->shouldReceive('getDatabaseName')->andReturn('app');
         $connection->shouldReceive('getTablePrefix')->andReturn('');
+        $connection->shouldReceive('getConfig')
+            ->andReturn(['name' => 'testing']);
         $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
 
         return $connection;
@@ -231,10 +369,15 @@ final class SchemaPersistenceTest extends TestCase
                             throw new \RuntimeException('Redis unavailable');
                         }
 
-                        if ($method === 'get') {
-                            return str_contains((string) ($arguments[0] ?? ''), '{ncm}:schema-epoch')
-                                ? '1'
-                                : null;
+                        if ($method === 'mget') {
+                            $keys = (array) ($arguments[0] ?? []);
+
+                            return array_map(
+                                static fn(string $key): ?string => str_contains($key, '{ncm}:schema-epoch')
+                                    ? '1'
+                                    : null,
+                                $keys,
+                            );
                         }
 
                         if ($method === 'hget') {

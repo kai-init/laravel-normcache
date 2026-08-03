@@ -5,8 +5,10 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Database\Query\Builder as LaravelQueryBuilder;
 use Illuminate\Database\Query\Grammars\PostgresGrammar;
 use Illuminate\Database\Query\Processors\Processor;
+use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Database\QueryBuilder;
 use NormCache\Events\CacheInvalidated;
 use NormCache\Planning\TableIdentityResolver;
@@ -16,6 +18,26 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
+
+final class AppliedThenThrowsConnection extends SQLiteConnection
+{
+    use BuildsCachingQueries;
+
+    public bool $throwAfterNextAffectingStatement = false;
+
+    public function affectingStatement($query, $bindings = [])
+    {
+        $affected = parent::affectingStatement($query, $bindings);
+
+        if ($this->throwAfterNextAffectingStatement) {
+            $this->throwAfterNextAffectingStatement = false;
+
+            throw new \RuntimeException('The database applied the write but the response was lost.');
+        }
+
+        return $affected;
+    }
+}
 
 final class WriteInvalidationTest extends TestCase
 {
@@ -52,6 +74,153 @@ final class WriteInvalidationTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_simple_raw_write_target_invalidates_warm_results(): void
+    {
+        $read = fn() => DB::table('posts')->where('id', $this->postId)->value('title');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+
+        DB::table(DB::raw('posts'))
+            ->where('id', $this->postId)
+            ->update(['title' => 'Raw target']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Raw target', $read());
+        $this->assertSame('Raw target', $read());
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_opaque_write_target_advances_the_global_epoch(): void
+    {
+        DB::table('posts')->where('id', $this->postId)->first();
+        $before = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
+
+        DB::table(DB::raw('posts NOT INDEXED'))
+            ->where('id', $this->postId)
+            ->update(['title' => 'Opaque target']);
+
+        $this->assertSame(
+            $before + 1,
+            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
+        );
+        $this->assertSame(
+            'Opaque target',
+            DB::table('posts')->where('id', $this->postId)->value('title'),
+        );
+    }
+
+    public function test_opaque_write_global_invalidation_waits_for_commit(): void
+    {
+        $before = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
+
+        DB::beginTransaction();
+        DB::table(DB::raw('posts NOT INDEXED'))
+            ->where('id', $this->postId)
+            ->update(['title' => 'Committed opaque']);
+        $this->assertSame(
+            $before,
+            (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0'),
+        );
+        DB::commit();
+
+        $this->assertSame(
+            $before + 1,
+            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
+        );
+    }
+
+    public function test_opaque_write_global_invalidation_is_discarded_on_rollback(): void
+    {
+        $before = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
+
+        DB::beginTransaction();
+        DB::table(DB::raw('posts NOT INDEXED'))
+            ->where('id', $this->postId)
+            ->update(['title' => 'Rolled back opaque']);
+        DB::rollBack();
+
+        $this->assertSame(
+            $before,
+            $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0',
+        );
+    }
+
+    public function test_applied_write_that_throws_invalidates_before_rethrowing(): void
+    {
+        $name = 'uncertain-write';
+        $database = (string) DB::connection()->getDatabaseName();
+
+        config()->set("database.connections.{$name}", [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+            'name' => $name,
+            'normcache_scope' => $name,
+        ]);
+        DB::extend($name, static fn(array $config) => new AppliedThenThrowsConnection(
+            new \PDO('sqlite:' . $database),
+            $database,
+            '',
+            $config,
+        ));
+        DB::purge($name);
+
+        try {
+            $connection = DB::connection($name);
+            $this->assertInstanceOf(AppliedThenThrowsConnection::class, $connection);
+            $postId = $this->postId;
+            $read = static fn() => $connection
+                ->table('posts')
+                ->where('id', $postId)
+                ->value('title');
+
+            $this->assertSame('Before', $read());
+            $this->assertSame('Before', $read());
+            $connection->throwAfterNextAffectingStatement = true;
+
+            try {
+                $connection
+                    ->table('posts')
+                    ->where('id', $this->postId)
+                    ->update(['title' => 'Applied then thrown']);
+                $this->fail('The simulated lost response was not thrown.');
+            } catch (\RuntimeException $exception) {
+                $this->assertSame(
+                    'The database applied the write but the response was lost.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $this->assertSame('Applied then thrown', $read());
+            $connection->throwAfterNextAffectingStatement = true;
+
+            try {
+                $connection
+                    ->table('posts')
+                    ->updateOrInsert(
+                        ['id' => $postId],
+                        ['title' => 'Nested applied then thrown'],
+                    );
+                $this->fail('The nested simulated lost response was not thrown.');
+            } catch (\RuntimeException $exception) {
+                $this->assertSame(
+                    'The database applied the write but the response was lost.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $this->assertSame('Nested applied then thrown', $read());
+        } finally {
+            DB::disconnect($name);
+            DB::purge($name);
+            DB::forgetExtension($name);
+        }
     }
 
     public function test_sqlite_identifier_case_variants_share_invalidation_state(): void

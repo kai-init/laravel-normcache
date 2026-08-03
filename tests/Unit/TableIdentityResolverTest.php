@@ -136,6 +136,24 @@ final class TableIdentityResolverTest extends UnitTestCase
         $this->assertSame($lower->hash, $qualified?->hash);
     }
 
+    public function test_source_scope_changes_retire_memoized_identities(): void
+    {
+        $resolver = app(TableIdentityResolver::class);
+        $connection = $this->sqliteConnection('source-scope');
+        $config = (array) (new \ReflectionProperty(Connection::class, 'config'))->getValue($connection);
+        $property = new \ReflectionProperty(Connection::class, 'config');
+
+        $property->setValue($connection, [...$config, 'normcache_scope' => 'tenant-a']);
+        $first = $resolver->resolve($connection, 'posts');
+
+        $property->setValue($connection, [...$config, 'normcache_scope' => 'tenant-b']);
+        $second = $resolver->resolve($connection, 'posts');
+
+        $this->assertSame('tenant-a', $first?->sourceScope);
+        $this->assertSame('tenant-b', $second?->sourceScope);
+        $this->assertNotSame($first?->hash, $second?->hash);
+    }
+
     public function test_metadata_is_released_when_its_connection_is_discarded(): void
     {
         $resolver = app(TableIdentityResolver::class);
@@ -219,7 +237,8 @@ final class TableIdentityResolverTest extends UnitTestCase
         $connection->shouldReceive('getName')->andReturn('testing');
         $connection->shouldReceive('getDatabaseName')->andReturn('app');
         $connection->shouldReceive('getTablePrefix')->andReturn('');
-        $connection->shouldNotReceive('getConfig');
+        $connection->shouldReceive('getConfig')
+            ->andReturn(['name' => 'testing']);
         $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
 
         return $connection;

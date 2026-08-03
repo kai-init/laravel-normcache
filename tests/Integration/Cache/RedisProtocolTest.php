@@ -258,7 +258,8 @@ final class RedisProtocolTest extends TestCase
             versionKey: $versionKey,
             generationKey: $generationKey,
             membershipKey: $membershipKey,
-            rows: [$rowKey => 'row-payload'],
+            rowKeys: [$rowKey],
+            rowPayloads: ['row-payload'],
             expectedVersion: '0',
             expectedGeneration: '0',
             membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
@@ -313,7 +314,8 @@ final class RedisProtocolTest extends TestCase
             versionKey: $versionKey,
             generationKey: $generationKey,
             membershipKey: $membershipKey,
-            rows: [$rowKey => 'row-payload'],
+            rowKeys: [$rowKey],
+            rowPayloads: ['row-payload'],
             expectedVersion: '0',
             expectedGeneration: '0',
             membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
@@ -371,7 +373,8 @@ final class RedisProtocolTest extends TestCase
             versionKey: $versionKey,
             generationKey: $generationKey,
             membershipKey: $membershipKey,
-            rows: [$rowKey => 'row-payload'],
+            rowKeys: [$rowKey],
+            rowPayloads: ['row-payload'],
             expectedVersion: '0',
             expectedGeneration: '0',
             membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
@@ -411,7 +414,8 @@ final class RedisProtocolTest extends TestCase
             $versionKey,
             $generationKey,
             $membershipKey,
-            [$rowKey => 'row-payload'],
+            [$rowKey],
+            ['row-payload'],
             '0',
             '0',
             '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
@@ -489,7 +493,8 @@ final class RedisProtocolTest extends TestCase
         $store->setRawForever($build, str_repeat('b', 32));
 
         $this->assertFalse($store->publishVersionedEntries(
-            [$key => 'stale'],
+            [$key],
+            ['stale'],
             60,
             [],
             [],
@@ -515,7 +520,8 @@ final class RedisProtocolTest extends TestCase
 
         $this->assertTrue($store->setNxEx($repair, $token, 5));
         $this->assertTrue($store->publishVersionedEntries(
-            entries: [$row => 'repaired'],
+            entryKeys: [$row],
+            entryPayloads: ['repaired'],
             ttl: 3600,
             versionKeys: [$keys->version($table), $keys->generation($table)],
             expectedVersions: ['0', '0'],
@@ -535,7 +541,8 @@ final class RedisProtocolTest extends TestCase
 
         $this->assertTrue($store->setNxEx($mismatchRepair, $mismatchToken, 5));
         $this->assertFalse($store->publishVersionedEntries(
-            entries: [$mismatchRow => 'stale'],
+            entryKeys: [$mismatchRow],
+            entryPayloads: ['stale'],
             ttl: 3600,
             versionKeys: [$keys->version($table), $keys->generation($table)],
             expectedVersions: ['0', '0'],

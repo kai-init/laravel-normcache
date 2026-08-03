@@ -18,6 +18,7 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
+use NormCache\Values\OverlayAdmission;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RowRepair;
@@ -503,7 +504,7 @@ final readonly class Engine
                 $queryHash,
             );
 
-            if ($canonicalResult->served()) {
+            if ($canonicalResult->promotable()) {
                 $promoted = $this->overlays->promote(
                     $query,
                     $resultPlan,
@@ -538,7 +539,7 @@ final readonly class Engine
             true,
         );
 
-        if ($result->served()) {
+        if ($result->promotable()) {
             $this->overlays->promote(
                 $query,
                 $plan->asFullResultOverlay(),
@@ -821,7 +822,7 @@ final readonly class Engine
                 $queryHash,
                 $rows,
             )
-            : null;
+            : OverlayAdmission::notAttempted();
 
         if (!$this->canonical->publish(
             $query,
@@ -830,7 +831,8 @@ final readonly class Engine
             $rows,
             $lease,
             $this->config->wakeTtl(),
-            $overlay,
+            $overlay->entry,
+            $overlay->rejected,
         )) {
             $this->leases->release($lease);
         }

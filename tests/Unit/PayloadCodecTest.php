@@ -79,6 +79,7 @@ final class PayloadCodecTest extends UnitTestCase
             ids: ['i:42', 'i:7', 'i:42'],
             versions: ['b' => '2', 'a' => '1'],
             tagVersion: '3',
+            overlayRejected: true,
         );
         $decoded = $codec->decode($encoded);
 
@@ -88,6 +89,7 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertSame('7', $decoded->epoch);
         $this->assertSame('4', $decoded->generation);
         $this->assertSame('3', $decoded->tagVersion);
+        $this->assertTrue($decoded->overlayRejected);
         $this->assertFalse($codec->decode('{"f":3}')->valid);
     }
 
@@ -109,7 +111,10 @@ final class PayloadCodecTest extends UnitTestCase
     {
         $codec = new MembershipCodec;
 
-        $this->assertSame([], $codec->decode($codec->encode('7', '4', []))->ids);
+        $decoded = $codec->decode($codec->encode('7', '4', []));
+
+        $this->assertSame([], $decoded->ids);
+        $this->assertFalse($decoded->overlayRejected);
     }
 
     public function test_membership_codec_rejects_the_previous_array_id_layout(): void

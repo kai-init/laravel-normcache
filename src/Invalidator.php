@@ -2,6 +2,7 @@
 
 namespace NormCache;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Database\QueryBuilder;
 use NormCache\Planning\MutationKeyExtractor;
@@ -19,6 +20,9 @@ final class Invalidator
 {
     /** @var array<string, array<string, array{table: TableIdentity, broad: bool, tokens: array<string, true>}>> */
     private array $pendingInvalidations = [];
+
+    /** @var array<string, true> */
+    private array $pendingGlobalInvalidations = [];
 
     public function __construct(
         private readonly CacheConfig $config,
@@ -44,9 +48,26 @@ final class Invalidator
         }
 
         $connection = $query->getConnection();
-        $table = $this->tables->resolve($connection, $query->from);
+        $connectionName = (string) $connection->getName();
+        $from = $query->from;
+
+        if ($from instanceof Expression) {
+            $from = $from->getValue($query->getGrammar());
+        }
+
+        $table = $this->tables->resolve($connection, $from);
 
         if ($table === null) {
+            $this->failures->opaqueWriteGlobalInvalidation($connectionName);
+
+            if ($connection->transactionLevel() > 0) {
+                $this->pendingGlobalInvalidations[$connectionName] = true;
+
+                return;
+            }
+
+            $this->applyGlobal('opaque_write');
+
             return;
         }
 
@@ -81,6 +102,14 @@ final class Invalidator
 
     public function commit(string $connection): void
     {
+        if (isset($this->pendingGlobalInvalidations[$connection])) {
+            unset($this->pendingGlobalInvalidations[$connection]);
+            $this->pullInvalidations($connection);
+            $this->applyGlobal('transaction_opaque_write');
+
+            return;
+        }
+
         foreach ($this->pullInvalidations($connection) as $pending) {
             $tokens = array_keys($pending['tokens']);
             $broad = $pending['broad']
@@ -91,7 +120,10 @@ final class Invalidator
 
     public function rollback(string $connection): void
     {
-        unset($this->pendingInvalidations[$connection]);
+        unset(
+            $this->pendingInvalidations[$connection],
+            $this->pendingGlobalInvalidations[$connection],
+        );
     }
 
     public function invalidateTable(TableIdentity $table): bool
@@ -127,6 +159,22 @@ final class Invalidator
         unset($this->pendingInvalidations[$connection]);
 
         return $pending;
+    }
+
+    private function applyGlobal(string $reason): bool
+    {
+        $this->runtime->forgetEpoch();
+
+        try {
+            $this->store->increment($this->keys->epoch());
+
+            return true;
+        } catch (\Throwable $exception) {
+            $this->runtime->disable();
+            $this->failures->globalInvalidationFailed($exception, $reason);
+
+            return false;
+        }
     }
 
     /** @param list<string> $tokens */

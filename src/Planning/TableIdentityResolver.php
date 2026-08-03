@@ -43,13 +43,19 @@ final class TableIdentityResolver
             return null;
         }
 
-        $metadata = $this->metadata($connection);
+        $sourceScope = ConnectionSourceResolver::resolve($connection);
+
+        if ($sourceScope === null) {
+            return null;
+        }
+
+        $metadata = $this->metadata($connection, $sourceScope);
 
         if (array_key_exists($from, $metadata->identities)) {
             return $metadata->identities[$from];
         }
 
-        $identity = $this->doResolve($connection, $from);
+        $identity = $this->doResolve($connection, $from, $sourceScope);
 
         if ($identity !== null) {
             $metadata->identities[$from] = $identity;
@@ -58,8 +64,11 @@ final class TableIdentityResolver
         return $identity;
     }
 
-    private function doResolve(Connection $connection, string $from): ?TableIdentity
-    {
+    private function doResolve(
+        Connection $connection,
+        string $from,
+        string $sourceScope,
+    ): ?TableIdentity {
         $table = $this->physicalTable($from);
 
         if ($table === null) {
@@ -83,7 +92,13 @@ final class TableIdentityResolver
             $database = $parts[0];
         }
 
-        $schema = $this->schema($connection, $driver, $database, $table);
+        $schema = $this->schema(
+            $connection,
+            $driver,
+            $database,
+            $table,
+            $sourceScope,
+        );
 
         if ($schema === null) {
             return null;
@@ -96,7 +111,11 @@ final class TableIdentityResolver
             $resolvedTable = strtolower($resolvedTable);
 
             if ($schema !== 'main') {
-                $database = (string) $this->sqliteAttachmentPath($connection, $schema);
+                $database = (string) $this->sqliteAttachmentPath(
+                    $connection,
+                    $schema,
+                    $sourceScope,
+                );
             }
 
             if ($database === ':memory:' || $database === '') {
@@ -112,21 +131,29 @@ final class TableIdentityResolver
             $database = $real;
         }
 
-        $isView = $this->isView($connection, $schema, $resolvedTable);
+        $prefix = (string) $connection->getTablePrefix();
+        $identity = TableIdentity::fromParts(
+            driver: $driver,
+            connection: $connectionName,
+            database: $database,
+            schema: $schema,
+            prefix: $prefix,
+            table: $resolvedTable,
+            sourceScope: $sourceScope,
+        );
+        $this->persistent->prime($connection, $schema, $identity);
+        $isView = $this->isView(
+            $connection,
+            $schema,
+            $resolvedTable,
+            $sourceScope,
+        );
 
         if ($isView === null) {
             return null;
         }
 
-        return TableIdentity::fromParts(
-            driver: $driver,
-            connection: $connectionName,
-            database: $database,
-            schema: $schema,
-            prefix: (string) $connection->getTablePrefix(),
-            table: $resolvedTable,
-            isView: $isView,
-        );
+        return $isView ? $identity->asView() : $identity;
     }
 
     private function physicalTable(string $from): ?string
@@ -147,6 +174,7 @@ final class TableIdentityResolver
         string $driver,
         string $database,
         string $table,
+        string $sourceScope,
     ): ?string {
         if ($driver === 'mysql' || $driver === 'mariadb') {
             return $database;
@@ -164,14 +192,16 @@ final class TableIdentityResolver
         }
 
         return match ($driver) {
-            'pgsql', 'sqlsrv' => $this->effectiveSchema($connection),
+            'pgsql', 'sqlsrv' => $this->effectiveSchema($connection, $sourceScope),
             default => '',
         };
     }
 
-    private function effectiveSchema(Connection $connection): ?string
-    {
-        $metadata = $this->metadata($connection);
+    private function effectiveSchema(
+        Connection $connection,
+        string $sourceScope,
+    ): ?string {
+        $metadata = $this->metadata($connection, $sourceScope);
 
         // The flag separates "answered with no schema name" from "never asked":
         // a lookup that throws is transient and must stay unmemoized.
@@ -207,9 +237,12 @@ final class TableIdentityResolver
         return $metadata->schema = $schema;
     }
 
-    private function sqliteAttachmentPath(Connection $connection, string $schema): ?string
-    {
-        $metadata = $this->metadata($connection);
+    private function sqliteAttachmentPath(
+        Connection $connection,
+        string $schema,
+        string $sourceScope,
+    ): ?string {
+        $metadata = $this->metadata($connection, $sourceScope);
 
         if (array_key_exists($schema, $metadata->attachments)) {
             return $metadata->attachments[$schema];
@@ -232,9 +265,13 @@ final class TableIdentityResolver
         }
     }
 
-    private function isView(Connection $connection, string $schema, string $table): ?bool
-    {
-        $metadata = $this->metadata($connection);
+    private function isView(
+        Connection $connection,
+        string $schema,
+        string $table,
+        string $sourceScope,
+    ): ?bool {
+        $metadata = $this->metadata($connection, $sourceScope);
         $name = strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table));
 
         if (isset($metadata->views[$schema])) {
@@ -269,18 +306,21 @@ final class TableIdentityResolver
         }
     }
 
-    private function metadata(Connection $connection): ConnectionMetadata
-    {
+    private function metadata(
+        Connection $connection,
+        string $sourceScope,
+    ): ConnectionMetadata {
         $database = (string) $connection->getDatabaseName();
         $prefix = (string) $connection->getTablePrefix();
         $metadata = $this->connections[$connection] ?? null;
 
         if (
             $metadata === null
+            || $metadata->sourceScope !== $sourceScope
             || $metadata->database !== $database
             || $metadata->prefix !== $prefix
         ) {
-            $metadata = new ConnectionMetadata($database, $prefix);
+            $metadata = new ConnectionMetadata($sourceScope, $database, $prefix);
             $this->connections[$connection] = $metadata;
         }
 

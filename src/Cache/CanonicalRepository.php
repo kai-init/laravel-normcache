@@ -59,7 +59,7 @@ final readonly class CanonicalRepository
             return $miss('corrupt_payload');
         }
 
-        $rowPrefix = $this->keys->tablePrefix($plan->root) . ':r:g' . $generation . ':';
+        $rowPrefix = $this->keys->rowPrefix($plan->root, $generation);
         $unique = [];
 
         // Memberships may repeat a token, so index the reply by key, not position.
@@ -86,7 +86,11 @@ final readonly class CanonicalRepository
         }
 
         if ($membership->ids === []) {
-            return new CacheRead($state, ReadOutcome::HIT);
+            return new CacheRead(
+                $state,
+                ReadOutcome::HIT,
+                overlayRejected: $membership->overlayRejected,
+            );
         }
 
         $rows = [];
@@ -150,6 +154,7 @@ final readonly class CanonicalRepository
             $corrupt
                 ? 'corrupt_payload'
                 : ($outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
+            $membership->overlayRejected,
         );
     }
 
@@ -166,9 +171,13 @@ final readonly class CanonicalRepository
         BuildLease $lease,
         int $wakeTtl,
         ?array $resultOverlay = null,
+        bool $overlayRejected = false,
     ): bool {
         $ids = [];
-        $encodedRows = [];
+        $rowKeys = [];
+        $rowPayloads = [];
+        $positions = [];
+        $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
 
         foreach ($rows as $row) {
             if (!$row instanceof \stdClass || !property_exists($row, $plan->primaryKey->column)) {
@@ -183,7 +192,18 @@ final readonly class CanonicalRepository
 
             $encoded = $this->codec->encodeRow($row, $state->epoch);
             $ids[] = $token;
-            $encodedRows[$this->keys->row($plan->root, $state->generation, $token)] = $encoded;
+
+            if (array_key_exists($token, $positions)) {
+                if ($rowPayloads[$positions[$token]] !== $encoded) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            $positions[$token] = count($rowKeys);
+            $rowKeys[] = $rowPrefix . $token;
+            $rowPayloads[] = $encoded;
         }
 
         $membership = $this->memberships->encode(
@@ -192,13 +212,15 @@ final readonly class CanonicalRepository
             ids: $ids,
             versions: $state->versions,
             tagVersion: $state->tag,
+            overlayRejected: $overlayRejected,
         );
 
         return $this->store->publishCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
             membershipKey: $state->key,
-            rows: $encodedRows,
+            rowKeys: $rowKeys,
+            rowPayloads: $rowPayloads,
             expectedVersion: $state->version,
             expectedGeneration: $state->generation,
             membershipPayload: $membership,

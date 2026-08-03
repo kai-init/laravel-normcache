@@ -20,6 +20,7 @@ final class ConnectionMetadata
     public array $attachments = [];
 
     public function __construct(
+        public readonly string $sourceScope,
         public readonly string $database,
         public readonly string $prefix,
     ) {}

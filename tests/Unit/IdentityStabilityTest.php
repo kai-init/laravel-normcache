@@ -48,7 +48,7 @@ final class IdentityStabilityTest extends UnitTestCase
             $identity->repairHash('roothash', '7', ['i:9', 'i:2']),
         );
         $this->assertSame(
-            '988d6e8a8261bb73a4afae2cbbcf0195',
+            '06a3bba515102093afe9de576d942169',
             TableIdentity::fromParts(
                 driver: 'mysql',
                 connection: 'conn',

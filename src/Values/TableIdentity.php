@@ -9,6 +9,7 @@ final readonly class TableIdentity
     public function __construct(
         public string $driver,
         public string $connection,
+        public string $sourceScope,
         public string $database,
         public string $schema,
         public string $prefix,
@@ -26,9 +27,17 @@ final readonly class TableIdentity
         string $prefix,
         string $table,
         bool $isView = false,
+        ?string $sourceScope = null,
     ): self {
+        $sourceScope ??= $connection;
+
+        if ($sourceScope === '') {
+            throw new \InvalidArgumentException('NormCache table source scope must be non-empty.');
+        }
+
         $encoded = self::encodeFields([
             self::FORMAT,
+            $sourceScope,
             $driver,
             $database,
             $schema,
@@ -39,6 +48,7 @@ final readonly class TableIdentity
         return new self(
             driver: $driver,
             connection: $connection,
+            sourceScope: $sourceScope,
             database: $database,
             schema: $schema,
             prefix: $prefix,
@@ -46,6 +56,22 @@ final readonly class TableIdentity
             encoded: $encoded,
             hash: hash('xxh128', $encoded),
             isView: $isView,
+        );
+    }
+
+    public function asView(): self
+    {
+        return new self(
+            driver: $this->driver,
+            connection: $this->connection,
+            sourceScope: $this->sourceScope,
+            database: $this->database,
+            schema: $this->schema,
+            prefix: $this->prefix,
+            table: $this->table,
+            encoded: $this->encoded,
+            hash: $this->hash,
+            isView: true,
         );
     }
 

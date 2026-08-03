@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheRepaired;
+use NormCache\Payload\MembershipCodec;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -230,6 +231,11 @@ final class ResultCacheStrategyTest extends TestCase
 
             $this->assertCount(4, $query());
             $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+            $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+            $this->assertIsString($membershipKey);
+            $membership = $this->cacheStore()->getRaw($membershipKey);
+            $this->assertIsString($membership);
+            $this->assertFalse(app(MembershipCodec::class)->decode($membership)->overlayRejected);
 
             DB::flushQueryLog();
             DB::enableQueryLog();

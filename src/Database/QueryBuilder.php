@@ -11,6 +11,7 @@ use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
 use NormCache\Invalidator;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
 use NormCache\Values\DependencyDeclaration;
@@ -547,11 +548,32 @@ final class QueryBuilder extends Builder
         }
 
         $this->writeDepth++;
+        $failure = null;
+        $result = null;
 
         try {
             $result = $operation();
+        } catch (\Throwable $exception) {
+            $failure = $exception;
         } finally {
             $this->writeDepth--;
+        }
+
+        if ($failure !== null) {
+            if ($owner) {
+                try {
+                    app(Invalidator::class)->afterWrite(
+                        $this,
+                        $mayAffectExistingRows,
+                        forceBroadInvalidation: true,
+                        assigned: $assigned,
+                    );
+                } catch (\Throwable $exception) {
+                    app(FailureReporter::class)->cacheUnavailable($exception);
+                }
+            }
+
+            throw $failure;
         }
 
         if ($owner) {

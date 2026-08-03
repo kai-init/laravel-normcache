@@ -551,6 +551,8 @@ final class DependencyVectorTest extends TestCase
             'driver' => 'sqlite',
             'database' => $database,
             'prefix' => '',
+            'name' => $name,
+            'normcache_scope' => $name,
         ]);
         DB::extend($name, static fn(array $config) => new class(new PDO('sqlite:' . $database), $database, '', $config) extends SQLiteConnection
         {
@@ -566,6 +568,39 @@ final class DependencyVectorTest extends TestCase
                     }
                 };
             }
+        });
+        DB::purge($name);
+
+        try {
+            $read = fn() => Post::on($name)->whereKey($this->postId)->firstOrFail();
+            $this->assertSame('Post', $read()->title);
+
+            $connection = DB::connection($name);
+            $connection->flushQueryLog();
+            $connection->enableQueryLog();
+            $this->assertSame('Post', $read()->title);
+            $connection->disableQueryLog();
+
+            $this->assertCount(1, $connection->getQueryLog());
+        } finally {
+            DB::disconnect($name);
+            DB::purge($name);
+            DB::forgetExtension($name);
+        }
+    }
+
+    public function test_unnamed_custom_connection_bypasses_without_a_source_scope(): void
+    {
+        $name = 'unnamed-source';
+        $database = (string) DB::connection()->getDatabaseName();
+        config()->set("database.connections.{$name}", [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+        ]);
+        DB::extend($name, static fn(array $config) => new class(new PDO('sqlite:' . $database), $database, '', $config) extends SQLiteConnection
+        {
+            use BuildsCachingQueries;
         });
         DB::purge($name);
 

@@ -4,6 +4,7 @@ namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
+use NormCache\Payload\MembershipCodec;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
@@ -44,6 +45,53 @@ final class ResultOverlayStalenessTest extends TestCase
 
         $this->assertSame([], $queries);
         $this->assertCount(3, $rows);
+    }
+
+    public function test_rejected_overlay_admission_is_recorded_in_the_membership(): void
+    {
+        DB::table('posts')->delete();
+        $authorId = (int) DB::table('authors')->value('id');
+        $rows = [];
+
+        for ($index = 0; $index < 40; $index++) {
+            $rows[] = [
+                'title' => 'Post ' . $index,
+                'views' => $index,
+                'published' => true,
+                // igbinary interns identical strings: 38 repeats of one 4 KiB blob
+                // encode to 4 KiB, not 152 KiB, and the overlay would be admitted.
+                'metadata' => json_encode([
+                    'blob' => $index < 2 ? 'small' : str_pad((string) $index, 4000, 'x'),
+                ], JSON_THROW_ON_ERROR),
+                'author_id' => $authorId,
+                'created_at' => '2026-07-30 00:00:00',
+                'updated_at' => '2026-07-30 00:00:00',
+            ];
+        }
+
+        DB::table('posts')->insert($rows);
+        $query = static fn() => DB::table('posts')->orderBy('id')->get();
+        $this->assertCount(40, $query());
+        $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+        $postsPrefix = $this->cacheKeys()->tablePrefix($this->postsIdentity());
+        $postResults = fn(): array => array_values(array_filter(
+            $this->cacheKeysMatching(':e:v'),
+            static fn(string $key): bool => str_starts_with($key, $postsPrefix),
+        ));
+
+        $this->assertIsString($membershipKey);
+        $raw = $this->cacheStore()->getRaw($membershipKey);
+        $this->assertIsString($raw);
+        $this->assertTrue(app(MembershipCodec::class)->decode($raw)->overlayRejected);
+        $this->assertSame([], $postResults());
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(40, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $postResults());
     }
 
     public function test_an_overlay_is_not_served_after_its_root_table_is_invalidated(): void

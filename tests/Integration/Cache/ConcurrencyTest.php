@@ -39,6 +39,27 @@ final class ConcurrencyTest extends TestCase
         $this->assertSame($owner->token, $waiter->token);
     }
 
+    public function test_claiming_with_the_same_token_is_idempotent(): void
+    {
+        $key = 'test:{claim-build}:lease';
+        $token = str_repeat('a', 32);
+
+        [$firstOwner, $firstToken] = $this->cacheStore()->claimBuild($key, $token, 30);
+        [$retryOwner, $retryToken] = $this->cacheStore()->claimBuild($key, $token, 30);
+        [$otherOwner, $observedToken] = $this->cacheStore()->claimBuild(
+            $key,
+            str_repeat('b', 32),
+            30,
+        );
+
+        $this->assertTrue($firstOwner);
+        $this->assertSame($token, $firstToken);
+        $this->assertTrue($retryOwner);
+        $this->assertSame($token, $retryToken);
+        $this->assertFalse($otherOwner);
+        $this->assertSame($token, $observedToken);
+    }
+
     public function test_releasing_a_lease_lets_the_next_caller_claim_it(): void
     {
         $leases = $this->app->make(BuildLeaseCoordinator::class);
@@ -173,7 +194,8 @@ final class ConcurrencyTest extends TestCase
         $this->cacheStore()->setNxEx($buildKey, $owner, 30);
 
         $published = $this->cacheStore()->publishVersionedEntries(
-            entries: [$entryKey => 'payload'],
+            entryKeys: [$entryKey],
+            entryPayloads: ['payload'],
             ttl: 30,
             versionKeys: [],
             expectedVersions: [],

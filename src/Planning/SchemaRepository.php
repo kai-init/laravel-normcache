@@ -18,11 +18,45 @@ final class SchemaRepository
     /** @var array<string, string> */
     private array $connectionEpochs = [];
 
+    /** @var array<string, array<string, ?string>> */
+    private array $fields = [];
+
     public function __construct(
         private readonly CacheConfig $config,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
     ) {}
+
+    public function prime(Connection $connection, string $schema, TableIdentity $table): void
+    {
+        if ($this->config->schemaTtl === 0) {
+            return;
+        }
+
+        try {
+            $key = $this->metadataKey((string) $connection->getName());
+            $requested = [
+                $this->viewsField($connection, $schema),
+                'primary-key:' . $table->hash,
+            ];
+            $missing = array_values(array_filter(
+                $requested,
+                fn(string $field): bool => !array_key_exists($field, $this->fields[$key] ?? []),
+            ));
+
+            if ($missing === []) {
+                return;
+            }
+
+            $values = $this->store->readSchemaFields($key, $missing);
+
+            foreach ($missing as $index => $field) {
+                $this->fields[$key][$field] = $values[$index] ?? null;
+            }
+        } catch (\Throwable) {
+            // Individual metadata reads and database introspection remain available.
+        }
+    }
 
     /** @return array<string, true>|null */
     public function views(Connection $connection, string $schema): ?array
@@ -162,6 +196,8 @@ final class SchemaRepository
             }
 
             return false;
+        } finally {
+            $this->fields = [];
         }
     }
 
@@ -177,7 +213,13 @@ final class SchemaRepository
         }
 
         try {
-            return $this->store->readSchemaField($this->metadataKey($connection), $field);
+            $key = $this->metadataKey($connection);
+
+            if (array_key_exists($field, $this->fields[$key] ?? [])) {
+                return $this->fields[$key][$field];
+            }
+
+            return $this->fields[$key][$field] = $this->store->readSchemaField($key, $field);
         } catch (\Throwable) {
             return null;
         }
@@ -195,12 +237,14 @@ final class SchemaRepository
         }
 
         try {
+            $key = $this->metadataKey($connection);
             $this->store->writeSchemaField(
-                $this->metadataKey($connection),
+                $key,
                 $field,
                 $value,
                 $this->config->schemaTtl,
             );
+            $this->fields[$key][$field] = $value;
         } catch (\Throwable) {
             // Schema introspection remains the fail-open source of truth.
         }
@@ -208,29 +252,36 @@ final class SchemaRepository
 
     private function metadataKey(string $connection): string
     {
+        $this->resolveEpochs($connection);
+
         return $this->keys->schema(
             $connection,
-            $this->currentEpoch(),
-            $this->currentConnectionEpoch($connection),
+            (string) $this->epoch,
+            $this->connectionEpochs[$connection],
         );
     }
 
-    private function currentEpoch(): string
+    private function resolveEpochs(string $connection): void
     {
-        if ($this->epoch !== null) {
-            return $this->epoch;
+        if ($this->epoch !== null && array_key_exists($connection, $this->connectionEpochs)) {
+            return;
         }
 
-        return $this->epoch = $this->store->getRaw(
-            $this->keys->schemaEpoch(),
-        ) ?? '0';
-    }
+        $epochKey = $this->keys->schemaEpoch();
+        $connectionKey = $this->keys->connectionSchemaEpoch($connection);
+        $keys = [];
 
-    private function currentConnectionEpoch(string $connection): string
-    {
-        return $this->connectionEpochs[$connection] ??= $this->store->getRaw(
-            $this->keys->connectionSchemaEpoch($connection),
-        ) ?? '0';
+        if ($this->epoch === null) {
+            $keys[] = $epochKey;
+        }
+
+        if (!array_key_exists($connection, $this->connectionEpochs)) {
+            $keys[] = $connectionKey;
+        }
+
+        $values = $this->store->mget($keys);
+        $this->epoch ??= $values[$epochKey] ?? '0';
+        $this->connectionEpochs[$connection] ??= $values[$connectionKey] ?? '0';
     }
 
     private function schemaField(Connection $connection): string
@@ -246,6 +297,7 @@ final class SchemaRepository
     private function connectionScope(Connection $connection): string
     {
         return implode("\0", [
+            ConnectionSourceResolver::resolve($connection),
             (string) $connection->getDriverName(),
             (string) $connection->getDatabaseName(),
             (string) $connection->getTablePrefix(),
