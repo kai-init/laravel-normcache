@@ -4,6 +4,7 @@ return [
     'enabled' => env('NORMCACHE_ENABLED', true),
     'connection' => env('NORMCACHE_CONNECTION', 'cache'),
     'key_prefix' => env('NORMCACHE_KEY_PREFIX', ''),
+    'serializer' => env('NORMCACHE_SERIALIZER', 'auto'),
 
     'row_ttl' => (int) env('NORMCACHE_ROW_TTL', 604800),
     'query_ttl' => (int) env('NORMCACHE_QUERY_TTL', 3600),

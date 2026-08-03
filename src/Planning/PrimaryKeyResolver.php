@@ -45,17 +45,8 @@ final class PrimaryKeyResolver
             return $known;
         }
 
-        $candidates = [];
+        $configured = $this->configured($table);
         $supplied = $query->primaryKey();
-
-        if ($supplied !== null) {
-            $candidates[] = $supplied;
-        }
-
-        foreach ($this->configured($table) as $configured) {
-            $candidates[] = $configured;
-        }
-
         $schema = $this->persistent->primaryKey($table);
 
         if ($schema === false) {
@@ -66,26 +57,27 @@ final class PrimaryKeyResolver
             }
         }
 
-        if ($schema instanceof PrimaryKeyMetadata) {
-            $candidates[] = $schema;
-        }
-
-        $metadata = $candidates[0] ?? null;
-
-        foreach (array_slice($candidates, 1) as $candidate) {
-            if (!$this->same($metadata, $candidate)) {
-                $this->conflict($table, $metadata, $candidate);
-                $metadata = null;
-                break;
-            }
-        }
-
-        if ($schema !== false || $metadata !== null) {
+        if ($schema instanceof PrimaryKeyMetadata || $configured !== []) {
+            $metadata = $this->consistent($table, [
+                ...$configured,
+                ...($schema instanceof PrimaryKeyMetadata ? [$schema] : []),
+                ...($supplied === null ? [] : [$supplied]),
+            ]);
             $metadata = $metadata === null ? null : $this->intern($metadata);
             $this->memo[$table->connection][$table->hash] = $metadata;
+
+            return $metadata;
         }
 
-        return $metadata;
+        if ($schema === null) {
+            if ($supplied !== null) {
+                $this->conflict($table, null, $supplied);
+            }
+
+            $this->memo[$table->connection][$table->hash] = null;
+        }
+
+        return null;
     }
 
     public function clear(?string $connection = null): void
@@ -129,6 +121,22 @@ final class PrimaryKeyResolver
         }
 
         return $matches;
+    }
+
+    /** @param non-empty-list<PrimaryKeyMetadata> $candidates */
+    private function consistent(TableIdentity $table, array $candidates): ?PrimaryKeyMetadata
+    {
+        $metadata = $candidates[0];
+
+        foreach (array_slice($candidates, 1) as $candidate) {
+            if (!$this->same($metadata, $candidate)) {
+                $this->conflict($table, $metadata, $candidate);
+
+                return null;
+            }
+        }
+
+        return $metadata;
     }
 
     private function same(

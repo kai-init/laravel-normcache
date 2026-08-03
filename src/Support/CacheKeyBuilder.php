@@ -62,7 +62,12 @@ final class CacheKeyBuilder
 
     public function row(TableIdentity $table, string $generation, string $pkToken): string
     {
-        return $this->tablePrefix($table) . ":r:g{$generation}:{$pkToken}";
+        return $this->rowPrefix($table, $generation) . $pkToken;
+    }
+
+    public function rowPrefix(TableIdentity $table, string $generation): string
+    {
+        return $this->tablePrefix($table) . ":r:g{$generation}:";
     }
 
     public function rowBuild(TableIdentity $table, string $generation, string $pkToken): string

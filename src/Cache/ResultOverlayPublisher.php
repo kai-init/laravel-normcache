@@ -9,6 +9,7 @@ use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
+use NormCache\Values\OverlayAdmission;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
@@ -75,7 +76,8 @@ final readonly class ResultOverlayPublisher
             }
 
             return $this->store->publishVersionedEntries(
-                entries: [$resultState->key => $encoded],
+                entryKeys: [$resultState->key],
+                entryPayloads: [$encoded],
                 ttl: $ttl,
                 versionKeys: [$this->keys->version($resultPlan->root)],
                 expectedVersions: [$resultState->version],
@@ -104,23 +106,27 @@ final readonly class ResultOverlayPublisher
         string $namespace,
         string $queryHash,
         array $rows,
-    ): ?array {
+    ): OverlayAdmission {
+        if ($this->config->maxAutoOverlayRows === 0) {
+            return OverlayAdmission::notAttempted();
+        }
+
         try {
             $encoded = $this->encodeWithinLimits($rows, $sourceState);
         } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
-            return null;
+            return OverlayAdmission::notAttempted();
         }
 
         if ($encoded === null) {
-            return null;
+            return OverlayAdmission::rejected();
         }
 
-        return [
+        return OverlayAdmission::accepted(
             $this->keys->result($root, $sourceState->version, $namespace, $queryHash),
             $encoded,
-        ];
+        );
     }
 
     public function rebuildOutcome(CacheRead $read, bool $promoted): CacheRead

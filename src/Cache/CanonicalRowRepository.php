@@ -113,7 +113,8 @@ final readonly class CanonicalRowRepository
         $encoded = $this->codec->encodeRow($rows[0], $state->epoch);
 
         $this->store->publishVersionedEntries(
-            entries: [$state->key => $encoded],
+            entryKeys: [$state->key],
+            entryPayloads: [$encoded],
             ttl: $this->config->rowTtl,
             versionKeys: [
                 $this->keys->version($plan->root),

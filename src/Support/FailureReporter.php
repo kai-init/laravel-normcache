@@ -38,6 +38,30 @@ final class FailureReporter
         ]);
     }
 
+    public function opaqueWriteGlobalInvalidation(string $connection): void
+    {
+        if (!$this->claim('opaque-write', null, $connection)) {
+            return;
+        }
+
+        $this->logger->warning(
+            'NormCache globally invalidated after an intercepted write target could not be resolved.',
+            ['connection' => $connection],
+        );
+    }
+
+    public function globalInvalidationFailed(\Throwable $exception, string $reason): void
+    {
+        if (!$this->claim('global-invalidation', $exception, $reason)) {
+            return;
+        }
+
+        $this->logger->critical('NormCache global invalidation failed; cached reads may be stale.', [
+            'exception' => $exception,
+            'reason' => $reason,
+        ]);
+    }
+
     public function repairUnreachable(
         \Throwable $exception,
         TableIdentity $table,
@@ -57,12 +81,11 @@ final class FailureReporter
         );
     }
 
-    private function claim(string $category, \Throwable $exception, string ...$context): bool
+    private function claim(string $category, ?\Throwable $exception, string ...$context): bool
     {
         $fingerprint = implode('|', [
             $category,
-            $exception::class,
-            $exception->getMessage(),
+            ...($exception === null ? [] : [$exception::class, $exception->getMessage()]),
             ...$context,
         ]);
 

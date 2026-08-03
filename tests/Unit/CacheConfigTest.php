@@ -15,6 +15,7 @@ final class CacheConfigTest extends UnitTestCase
 
         $this->assertSame('cache', $config->connection);
         $this->assertSame('', $config->keyPrefix);
+        $this->assertSame('auto', $config->serializer);
         $this->assertSame(604_800, $config->rowTtl);
         $this->assertSame(3_600, $config->queryTtl);
         $this->assertSame(86_400, $config->schemaTtl);
@@ -26,6 +27,14 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertTrue($config->enabled);
         $this->assertFalse($config->dispatchEvents);
         $this->assertFalse($config->debugbar);
+    }
+
+    public function test_rejects_invalid_serializer(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('serializer');
+
+        CacheConfig::fromArray(['serializer' => 'json']);
     }
 
     public function test_rejects_hash_tag_characters_in_key_prefix(): void

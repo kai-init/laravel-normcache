@@ -64,7 +64,9 @@ final class CacheServiceProvider extends ServiceProvider
             $app->make(CacheConfig::class)->connection,
             $app->make(CacheConfig::class)->stampedeWakeTokens,
         ));
-        $this->app->singleton(CacheSerializer::class, fn() => CacheSerializer::native());
+        $this->app->singleton(CacheSerializer::class, fn($app) => new CacheSerializer(
+            $app->make(CacheConfig::class)->serializer,
+        ));
         $this->app->singleton(RawResultCodec::class);
         $this->app->singleton(MembershipCodec::class);
         $this->app->singleton(QueryIdentity::class);

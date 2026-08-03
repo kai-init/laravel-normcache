@@ -32,7 +32,7 @@
     },
     "suggest": {
         "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)",
-        "ext-igbinary": "Faster, smaller serialization for cached row and query payloads — detected automatically when available"
+        "ext-igbinary": "Faster, smaller serialization when normcache.serializer is auto or igbinary"
     },
     "autoload": {
         "psr-4": {

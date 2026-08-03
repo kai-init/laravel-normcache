@@ -20,7 +20,7 @@ final class TableIdentityTest extends UnitTestCase
 
         $encoded = implode('', array_map(
             static fn(string $value): string => strlen($value) . ':' . $value,
-            ['nc-table', 'pgsql', 'app', 'public', 'acme_', 'posts'],
+            ['nc-table', 'tenant', 'pgsql', 'app', 'public', 'acme_', 'posts'],
         ));
 
         $this->assertSame($encoded, $identity->encoded);
@@ -34,6 +34,24 @@ final class TableIdentityTest extends UnitTestCase
         $two = TableIdentity::fromParts('mysql', 'main', 'app', 'app', '', 'posts');
 
         $this->assertSame($one->hash, $two->hash);
+    }
+
+    public function test_database_sources_are_part_of_physical_identity(): void
+    {
+        $one = TableIdentity::fromParts('mysql', 'shard-a', 'app', 'app', '', 'posts');
+        $two = TableIdentity::fromParts('mysql', 'shard-b', 'app', 'app', '', 'posts');
+        $alias = TableIdentity::fromParts(
+            'mysql',
+            'shard-b',
+            'app',
+            'app',
+            '',
+            'posts',
+            sourceScope: 'shard-a',
+        );
+
+        $this->assertNotSame($one->hash, $two->hash);
+        $this->assertSame($one->hash, $alias->hash);
     }
 
     public function test_sqlite_repair_source_keeps_attached_schema(): void

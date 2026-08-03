@@ -145,20 +145,22 @@ final readonly class RowRepairer
             return null;
         }
 
-        $rows = [];
+        $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
+        $rowKeys = [];
+        $rowPayloads = [];
 
         foreach ($tokens as $token) {
             if (!isset($rowsByToken[$token])) {
                 return null;
             }
 
-            $rowKey = $this->keys->row($plan->root, $state->generation, $token);
-            $encoded = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
-            $rows[$rowKey] = $encoded;
+            $rowKeys[] = $rowPrefix . $token;
+            $rowPayloads[] = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
         }
 
         if (!$this->store->publishVersionedEntries(
-            entries: $rows,
+            entryKeys: $rowKeys,
+            entryPayloads: $rowPayloads,
             ttl: $this->config->rowTtl,
             versionKeys: [
                 $this->keys->version($plan->root),

@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\UnitTestCase;
 use Predis\Connection\ConnectionException;
@@ -67,6 +68,153 @@ final class RedisStoreRecoveryTest extends UnitTestCase
 
         $this->assertSame(7, $store->increment('key'));
         $this->assertSame(2, $manager->built);
+    }
+
+    public function test_claim_retry_recognizes_a_token_applied_before_connection_loss(): void
+    {
+        $original = $this->app->make('redis');
+        $manager = new class
+        {
+            public int $built = 0;
+
+            public ?string $owner = null;
+
+            /** @var list<string> */
+            public array $purged = [];
+
+            public function connection($name = null): Connection
+            {
+                $attempt = $this->built++;
+                $manager = $this;
+                $client = new class($manager, $attempt)
+                {
+                    public function __construct(
+                        private object $manager,
+                        private int $attempt,
+                    ) {}
+
+                    /** @param list<mixed> $arguments */
+                    public function __call(string $method, array $arguments): mixed
+                    {
+                        if (strtolower($method) !== 'evalsha') {
+                            return null;
+                        }
+
+                        $token = (string) ($arguments[3] ?? '');
+                        $this->manager->owner ??= $token;
+
+                        if ($this->attempt === 0) {
+                            throw new \RuntimeException('Connection lost after the lease was claimed.');
+                        }
+
+                        return [1, $this->manager->owner];
+                    }
+                };
+
+                return new class($client) extends Connection
+                {
+                    public function __construct(mixed $client)
+                    {
+                        $this->client = $client;
+                    }
+
+                    public function createSubscription($channels, \Closure $callback, $method = 'subscribe'): void {}
+                };
+            }
+
+            public function purge(string $name): void
+            {
+                $this->purged[] = $name;
+            }
+        };
+
+        try {
+            $this->app->instance('redis', $manager);
+            Redis::clearResolvedInstance('redis');
+            $token = str_repeat('a', 32);
+
+            $this->assertSame(
+                [true, $token],
+                (new RedisStore('normcache-test'))->claimBuild('build-key', $token, 30),
+            );
+            $this->assertSame($token, $manager->owner);
+            $this->assertSame(2, $manager->built);
+            $this->assertSame(['normcache-test'], $manager->purged);
+        } finally {
+            $this->app->instance('redis', $original);
+            Redis::clearResolvedInstance('redis');
+        }
+    }
+
+    public function test_monotonic_increment_retry_may_advance_more_than_once(): void
+    {
+        $original = $this->app->make('redis');
+        $manager = new class
+        {
+            public int $built = 0;
+
+            public int $value = 0;
+
+            /** @var list<string> */
+            public array $purged = [];
+
+            public function connection($name = null): Connection
+            {
+                $attempt = $this->built++;
+                $manager = $this;
+                $client = new class($manager, $attempt)
+                {
+                    public function __construct(
+                        private object $manager,
+                        private int $attempt,
+                    ) {}
+
+                    /** @param list<mixed> $arguments */
+                    public function __call(string $method, array $arguments): mixed
+                    {
+                        if (strtolower($method) !== 'incr') {
+                            return null;
+                        }
+
+                        $this->manager->value++;
+
+                        if ($this->attempt === 0) {
+                            throw new \RuntimeException('Connection lost after Redis applied INCR.');
+                        }
+
+                        return $this->manager->value;
+                    }
+                };
+
+                return new class($client) extends Connection
+                {
+                    public function __construct(mixed $client)
+                    {
+                        $this->client = $client;
+                    }
+
+                    public function createSubscription($channels, \Closure $callback, $method = 'subscribe'): void {}
+                };
+            }
+
+            public function purge(string $name): void
+            {
+                $this->purged[] = $name;
+            }
+        };
+
+        try {
+            $this->app->instance('redis', $manager);
+            Redis::clearResolvedInstance('redis');
+
+            $this->assertSame(2, (new RedisStore('normcache-test'))->increment('counter'));
+            $this->assertSame(2, $manager->value);
+            $this->assertSame(2, $manager->built);
+            $this->assertSame(['normcache-test'], $manager->purged);
+        } finally {
+            $this->app->instance('redis', $original);
+            Redis::clearResolvedInstance('redis');
+        }
     }
 
     public function test_rebuilds_the_connection_for_deletes(): void

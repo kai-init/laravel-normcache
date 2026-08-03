@@ -11,6 +11,7 @@ final readonly class CacheConfig
     public function __construct(
         public string $connection,
         public string $keyPrefix,
+        public string $serializer,
         public int $rowTtl,
         public int $queryTtl,
         public int $schemaTtl,
@@ -68,6 +69,7 @@ final readonly class CacheConfig
         return new self(
             connection: (string) ($values['connection'] ?? 'cache'),
             keyPrefix: $keyPrefix,
+            serializer: self::serializer($values['serializer'] ?? 'auto'),
             rowTtl: $rowTtl,
             queryTtl: $queryTtl,
             schemaTtl: $schemaTtl,
@@ -81,6 +83,17 @@ final readonly class CacheConfig
             dispatchEvents: (bool) ($values['events'] ?? false),
             debugbar: (bool) ($values['debugbar'] ?? false),
         );
+    }
+
+    private static function serializer(mixed $value): string
+    {
+        if (!is_string($value) || !in_array($value, ['auto', 'php', 'igbinary'], true)) {
+            throw new \InvalidArgumentException(
+                'NormCache serializer must be auto, php, or igbinary.',
+            );
+        }
+
+        return $value;
     }
 
     /** @param array<string, mixed> $values */

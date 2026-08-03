@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Database source scopes:** table identity now includes `database.connections.<name>.normcache_scope`, falling back to the Laravel connection name. Independent shards or tenants no longer share table-local cache state merely because their database and table names match, while intentional aliases can share one explicit scope.
+- **Serializer policy:** `serializer` / `NORMCACHE_SERIALIZER` accepts `auto`, `php`, or `igbinary`. Explicit igbinary configuration fails fast when the extension is unavailable.
+- **Tagged payload serialization:** serialized payloads carry a PHP or igbinary marker while retaining temporary support for legacy unmarked payloads.
+
+### Changed
+
+- **BREAKING cache-key transition:** table identity now includes the database source scope. Old and new package versions must not serve cache traffic together because they invalidate different table-key families. Run `normcache:disable`, deploy every web and worker node, then run `normcache:enable`; enabling advances the global epoch before cache traffic resumes.
+- Fresh persisted schema resolution batches global and connection epochs with `MGET` and batches view and primary-key fields with `HMGET`.
+- Build-lease claiming now uses one token-idempotent Lua operation. A retry after a lost response recognizes the original claimant rather than treating it as an unrelated waiter.
+- Canonical, row-repair, direct-row, and result publication use parallel packed key and payload lists instead of associative full-key maps.
+- Rejected automatic overlay admission is recorded in the canonical membership, preventing repeated encoding and rejection for the same membership version.
+- Redis reconnect retries are explicit: replay-safe operations retain one retry, while the unguarded `SET NX` helper and blocking wake read are not blindly replayed.
+
+### Fixed
+
+- Intercepted writes with unresolved targets now conservatively advance the global epoch instead of silently leaving reachable stale data.
+- A write that may have reached the database before throwing is conservatively invalidated before the original exception is rethrown.
+- A verified composite or missing database primary key can no longer be overridden by Eloquent's default `id` assumption. Explicit NormCache primary-key configuration remains available for trusted overrides.
+- Unnamed custom Laravel connections bypass caching when no stable source scope can be established instead of throwing during read planning.
+
 ## [4.0.0] — 2026-07-20
 
 ### Added

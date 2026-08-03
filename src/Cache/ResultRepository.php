@@ -65,7 +65,8 @@ final readonly class ResultRepository
             : [];
 
         return $this->store->publishVersionedEntries(
-            entries: [$state->key => $encoded],
+            entryKeys: [$state->key],
+            entryPayloads: [$encoded],
             ttl: $query->configuredTtl() ?? $this->config->queryTtl,
             versionKeys: $versionKeys,
             expectedVersions: $expected,

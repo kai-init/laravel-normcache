@@ -82,18 +82,17 @@ final readonly class BuildLeaseCoordinator
     private function acquire(string $buildingKey, callable $wakeKey): BuildLease
     {
         $token = bin2hex(random_bytes(16));
-
-        if ($this->store->setNxEx($buildingKey, $token, $this->config->buildingLockTtl)) {
-            return new BuildLease(true, $buildingKey, $wakeKey($token), $token);
-        }
-
-        $owner = $this->store->getRaw($buildingKey);
+        [$owner, $ownerToken] = $this->store->claimBuild(
+            $buildingKey,
+            $token,
+            $this->config->buildingLockTtl,
+        );
 
         return new BuildLease(
-            false,
-            $buildingKey,
-            is_string($owner) ? $wakeKey($owner) : null,
             $owner,
+            $buildingKey,
+            $ownerToken === null ? null : $wakeKey($ownerToken),
+            $ownerToken,
         );
     }
 

@@ -47,6 +47,37 @@ final class RedisStore
         });
     }
 
+    /**
+     * @param  list<string>  $fields
+     * @return list<?string>
+     */
+    public function readSchemaFields(string $key, array $fields): array
+    {
+        if ($fields === []) {
+            return [];
+        }
+
+        return $this->withRawValues(static function (Connection $connection) use ($key, $fields): array {
+            $raw = $connection->hmget($key, $fields);
+
+            if (!is_array($raw)) {
+                throw new \UnexpectedValueException('Redis HMGET must return an array.');
+            }
+
+            $values = [];
+            $positionValues = array_values($raw);
+
+            foreach ($fields as $index => $field) {
+                $value = array_key_exists($field, $raw)
+                    ? $raw[$field]
+                    : ($positionValues[$index] ?? null);
+                $values[] = is_string($value) ? $value : null;
+            }
+
+            return $values;
+        });
+    }
+
     public function writeSchemaField(string $key, string $field, string $value, int $ttl): void
     {
         // Raw like readSchemaField(): a serializing connection would otherwise
@@ -69,7 +100,22 @@ final class RedisStore
             $result = $connection->command('set', [$key, $value, 'EX', $ttl, 'NX']);
 
             return $result !== null && $result !== false;
-        });
+        }, retry: false);
+    }
+
+    /** @return array{0: bool, 1: ?string} */
+    public function claimBuild(string $key, string $token, int $ttl): array
+    {
+        $result = (array) $this->script(
+            RedisScripts::get('claim_build'),
+            [$key],
+            [$token, (string) $ttl],
+        );
+        $owner = is_string($result[1] ?? null) && $result[1] !== ''
+            ? $result[1]
+            : null;
+
+        return [(int) ($result[0] ?? 0) === 1, $owner];
     }
 
     public function delete(string|array $keys): void
@@ -93,7 +139,8 @@ final class RedisStore
         int $wakeTtl = 10,
     ): bool {
         return $this->publishVersionedEntries(
-            entries: [],
+            entryKeys: [],
+            entryPayloads: [],
             ttl: 1,
             versionKeys: [],
             expectedVersions: [],
@@ -105,12 +152,14 @@ final class RedisStore
     }
 
     /**
-     * @param  array<string, string>  $entries
+     * @param  list<string>  $entryKeys
+     * @param  list<string>  $entryPayloads
      * @param  list<string>  $versionKeys
      * @param  list<string>  $expectedVersions
      */
     public function publishVersionedEntries(
-        array $entries,
+        array $entryKeys,
+        array $entryPayloads,
         int $ttl,
         array $versionKeys,
         array $expectedVersions,
@@ -119,7 +168,13 @@ final class RedisStore
         ?string $token = null,
         int $wakeTtl = 10,
     ): bool {
-        $keys = [...$versionKeys, ...array_keys($entries)];
+        if (count($entryKeys) !== count($entryPayloads)) {
+            throw new \InvalidArgumentException(
+                'NormCache versioned entry keys and payloads must have the same length.',
+            );
+        }
+
+        $keys = [...$versionKeys, ...$entryKeys];
 
         if ($buildingKey !== null) {
             $keys[] = $buildingKey;
@@ -134,10 +189,10 @@ final class RedisStore
             $keys,
             [
                 (string) count($versionKeys),
-                (string) count($entries),
+                (string) count($entryKeys),
                 (string) $ttl,
                 ...$expectedVersions,
-                ...array_values($entries),
+                ...$entryPayloads,
                 $token ?? '',
                 (string) $this->wakeTokenCount,
                 (string) $wakeTtl,
@@ -203,12 +258,16 @@ final class RedisStore
         );
     }
 
-    /** @param array<string, string> $rows */
+    /**
+     * @param  list<string>  $rowKeys
+     * @param  list<string>  $rowPayloads
+     */
     public function publishCanonical(
         string $versionKey,
         string $generationKey,
         string $membershipKey,
-        array $rows,
+        array $rowKeys,
+        array $rowPayloads,
         string $expectedVersion,
         string $expectedGeneration,
         string $membershipPayload,
@@ -221,22 +280,28 @@ final class RedisStore
         ?string $resultKey = null,
         ?string $resultPayload = null,
     ): bool {
+        if (count($rowKeys) !== count($rowPayloads)) {
+            throw new \InvalidArgumentException(
+                'NormCache canonical row keys and payloads must have the same length.',
+            );
+        }
+
         $keys = [
             $versionKey,
             $generationKey,
             $membershipKey,
-            ...array_keys($rows),
+            ...$rowKeys,
             $buildingKey,
             $wakeKey,
         ];
         $args = [
-            (string) count($rows),
+            (string) count($rowKeys),
             $expectedVersion,
             $expectedGeneration,
             (string) $membershipTtl,
             (string) $rowTtl,
             $membershipPayload,
-            ...array_values($rows),
+            ...$rowPayloads,
             $token,
             (string) $this->wakeTokenCount,
             (string) $wakeTtl,
@@ -252,7 +317,7 @@ final class RedisStore
 
     public function increment(string $key): int
     {
-        return (int) $this->withConnection(
+        return (int) $this->withRetryingConnection(
             static fn(Connection $connection): mixed => $connection->incr($key),
         );
     }
@@ -289,7 +354,7 @@ final class RedisStore
             $result = $connection->brpop($key, $timeoutSeconds);
 
             return $result !== null && $result !== false;
-        });
+        }, retry: false);
     }
 
     /**
@@ -300,7 +365,7 @@ final class RedisStore
      */
     private function script(string $script, array $keys, array $args = []): mixed
     {
-        return $this->withConnection(
+        return $this->withRetryingConnection(
             fn(Connection $connection): mixed => $this->evaluate($connection, $script, $keys, $args),
         );
     }
@@ -422,7 +487,7 @@ final class RedisStore
     /** @param list<string> $keys */
     private function del(array $keys): void
     {
-        $this->withConnection(function (Connection $connection) use ($keys): void {
+        $this->withRetryingConnection(function (Connection $connection) use ($keys): void {
             if ($connection instanceof PredisClusterConnection) {
                 foreach ($this->groupByHashTag($keys) as $group) {
                     $connection->command('del', $group);
@@ -441,9 +506,9 @@ final class RedisStore
         });
     }
 
-    private function withRawValues(callable $callback): mixed
+    private function withRawValues(callable $callback, bool $retry = true): mixed
     {
-        return $this->withConnection(static function (Connection $connection) use ($callback): mixed {
+        $operation = static function (Connection $connection) use ($callback): mixed {
             if ($connection instanceof PhpRedisConnection) {
                 return $connection->withoutSerializationOrCompression(
                     static fn(): mixed => $callback($connection),
@@ -451,10 +516,14 @@ final class RedisStore
             }
 
             return $callback($connection);
-        });
+        };
+
+        return $retry
+            ? $this->withRetryingConnection($operation)
+            : $operation($this->connection());
     }
 
-    private function withConnection(callable $operation): mixed
+    private function withRetryingConnection(callable $operation): mixed
     {
         try {
             return $operation($this->connection());
