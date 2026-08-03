@@ -14,7 +14,7 @@ final class FailureReporter
 
     public function cacheUnavailable(\Throwable $exception): void
     {
-        if ($this->claim($exception)) {
+        if ($this->claim('cache', $exception)) {
             report($exception);
         }
     }
@@ -26,7 +26,7 @@ final class FailureReporter
         string $mode,
         array $tokens,
     ): void {
-        if (!$this->claim($exception)) {
+        if (!$this->claim('invalidation', $exception, $table->hash, $mode)) {
             return;
         }
 
@@ -43,7 +43,7 @@ final class FailureReporter
         TableIdentity $table,
         int $tokens,
     ): void {
-        if (!$this->claim($exception)) {
+        if (!$this->claim('repair', $exception, $table->hash)) {
             return;
         }
 
@@ -57,9 +57,14 @@ final class FailureReporter
         );
     }
 
-    private function claim(\Throwable $exception): bool
+    private function claim(string $category, \Throwable $exception, string ...$context): bool
     {
-        $fingerprint = $exception::class . ':' . $exception->getMessage();
+        $fingerprint = implode('|', [
+            $category,
+            $exception::class,
+            $exception->getMessage(),
+            ...$context,
+        ]);
 
         if (isset($this->recorded[$fingerprint])) {
             return false;

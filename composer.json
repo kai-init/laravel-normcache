@@ -17,8 +17,7 @@
         "normcache",
         "normalized-cache",
         "query-cache",
-        "redis-cluster",
-        "normalized-cache"
+        "redis-cluster"
     ],
     "require": {
         "php": "^8.2",
