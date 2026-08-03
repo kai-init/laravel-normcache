@@ -3,6 +3,7 @@
 namespace NormCache;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\PrimaryKeyResolver;
@@ -34,7 +35,7 @@ final readonly class CacheManager
         $identities = [];
         $success = true;
 
-        foreach ((array) $targets as $target) {
+        foreach (Arr::wrap($targets) as $target) {
             $identity = $this->invalidationIdentity($target, $connection);
 
             if ($identity === null) {

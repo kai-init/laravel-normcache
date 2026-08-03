@@ -2,12 +2,14 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class PublicInvalidationTest extends TestCase
 {
@@ -102,6 +104,43 @@ final class PublicInvalidationTest extends TestCase
             Post::class,
             new Post,
         ]));
+        $this->assertSame($version + 1, (int) $this->cacheStore()->getRaw($versionKey));
+        $this->assertSame($generation + 1, (int) $this->cacheStore()->getRaw($generationKey));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        Post::query()->get();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    /**
+     * @return list<array{0: callable(): (Model|string)}>
+     */
+    public static function scalarInvalidationTargets(): array
+    {
+        return [
+            'table name' => [fn() => 'posts'],
+            'model class' => [fn() => Post::class],
+            'model instance' => [fn() => new Post],
+            'hydrated model' => [fn() => Post::query()->firstOrFail()],
+        ];
+    }
+
+    #[DataProvider('scalarInvalidationTargets')]
+    public function test_invalidate_accepts_a_single_unwrapped_target(callable $target): void
+    {
+        Post::query()->get();
+        $identity = app(TableIdentityResolver::class)
+            ->resolve(DB::connection(), 'posts');
+        $this->assertNotNull($identity);
+        $versionKey = $this->cacheKeys()->version($identity);
+        $generationKey = $this->cacheKeys()->generation($identity);
+        $version = (int) ($this->cacheStore()->getRaw($versionKey) ?? '0');
+        $generation = (int) ($this->cacheStore()->getRaw($generationKey) ?? '0');
+
+        $this->assertTrue(NormCache::invalidate($target()));
         $this->assertSame($version + 1, (int) $this->cacheStore()->getRaw($versionKey));
         $this->assertSame($generation + 1, (int) $this->cacheStore()->getRaw($generationKey));
 
