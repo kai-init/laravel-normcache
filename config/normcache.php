@@ -7,6 +7,7 @@ return [
 
     'row_ttl' => (int) env('NORMCACHE_ROW_TTL', 604800),
     'query_ttl' => (int) env('NORMCACHE_QUERY_TTL', 3600),
+    'schema_ttl' => (int) env('NORMCACHE_SCHEMA_TTL', 86400),
 
     // Set to 0 to disable automatic result overlays.
     'auto_overlay_max_rows' => (int) env('NORMCACHE_AUTO_OVERLAY_MAX_ROWS', 1000),

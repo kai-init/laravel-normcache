@@ -61,17 +61,15 @@ final class QueryPlanner
                         );
                     }
 
-                    if ($plainColumns !== null) {
-                        return QueryPlan::projectedRow(
-                            $root,
-                            $dependencies,
-                            $primaryKey,
-                            $directToken,
-                            $plainColumns,
-                            $softDeleteMode,
-                            $deletedAtColumn,
-                        );
-                    }
+                    return QueryPlan::projectedRow(
+                        $root,
+                        $dependencies,
+                        $primaryKey,
+                        $directToken,
+                        $plainColumns,
+                        $softDeleteMode,
+                        $deletedAtColumn,
+                    );
                 }
             }
         }

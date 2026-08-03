@@ -60,6 +60,8 @@ final readonly class Engine
             return $database();
         }
 
+        $this->observer->begin();
+
         $connection = $query->getConnection();
         $directRoot = $this->tables->resolve($connection, $query->from);
         $table = $directRoot ?? $this->declaredRoot($query, $connection);
@@ -490,7 +492,7 @@ final readonly class Engine
             $result = $this->results->read($state, $head[2] ?? null);
 
             if ($result->served()) {
-                return $result;
+                return $result->withReason('result_overlay');
             }
 
             $overlayReason = $result->reason;
@@ -575,7 +577,7 @@ final readonly class Engine
             $result = $this->results->read($state, $head[2] ?? null);
 
             if ($result->served()) {
-                return $result;
+                return $result->withReason('result_overlay');
             }
 
             $fallbackReason = $result->reason;

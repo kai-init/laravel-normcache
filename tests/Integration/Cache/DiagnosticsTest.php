@@ -132,7 +132,7 @@ final class DiagnosticsTest extends TestCase
         $key = $this->cacheKeysMatching(':e:v')[0] ?? null;
 
         $this->assertIsString($key);
-        $this->cacheStore()->setRaw($key, 'corrupt', 60);
+        $this->cacheStore()->setRawForever($key, 'corrupt');
         Event::fake([QueryCacheMiss::class]);
 
         $query();

@@ -21,10 +21,26 @@ final class QueryObserver
     /** @var array<string, true> */
     private array $observedCorruptions = [];
 
+    private ?float $startedAt = null;
+
     public function __construct(
         private readonly CacheConfig $config,
         private readonly ?DebugBarCollector $sink,
     ) {}
+
+    public function begin(): void
+    {
+        if ($this->enabled()) {
+            $this->startedAt = microtime(true);
+        }
+    }
+
+    private function elapsed(): array
+    {
+        $endedAt = microtime(true);
+
+        return [$this->startedAt ?? $endedAt, $endedAt];
+    }
 
     public function hit(
         QueryBuilder $query,
@@ -89,6 +105,8 @@ final class QueryObserver
             return;
         }
 
+        [$startedAt, $endedAt] = $this->elapsed();
+
         if (
             $outcome === ReadOutcome::MISS
             && $reason === 'corrupt_payload'
@@ -106,6 +124,8 @@ final class QueryObserver
             sql: $statement->sql(),
             bindings: $statement->bindings(),
             modelClass: $query->modelClass(),
+            startedAt: $startedAt,
+            endedAt: $endedAt,
         );
         $this->sink?->record($record);
 
@@ -140,6 +160,8 @@ final class QueryObserver
             return;
         }
 
+        [$startedAt, $endedAt] = $this->elapsed();
+
         $record = new ObservationRecord(
             outcome: 'bypass',
             route: $plan === null ? null : $this->route($plan->route),
@@ -149,6 +171,8 @@ final class QueryObserver
             sql: $statement->sql(),
             bindings: $statement->bindings(),
             modelClass: $query->modelClass(),
+            startedAt: $startedAt,
+            endedAt: $endedAt,
         );
         $this->sink?->record($record);
 
@@ -172,11 +196,15 @@ final class QueryObserver
             return;
         }
 
+        [$startedAt, $endedAt] = $this->elapsed();
+
         $record = new ObservationRecord(
             outcome: 'invalidation',
             tableHash: $table->hash,
             invalidationMode: $mode,
             primaryKeyTokens: $tokens,
+            startedAt: $startedAt,
+            endedAt: $endedAt,
         );
         $this->sink?->record($record);
 

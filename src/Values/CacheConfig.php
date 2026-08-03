@@ -13,6 +13,7 @@ final readonly class CacheConfig
         public string $keyPrefix,
         public int $rowTtl,
         public int $queryTtl,
+        public int $schemaTtl,
         public int $maxAutoOverlayRows,
         public array $primaryKeys,
         public int $maxPreciseInvalidationKeys,
@@ -40,6 +41,11 @@ final readonly class CacheConfig
 
         $rowTtl = self::positive($values, 'row_ttl', 604_800);
         $queryTtl = self::positive($values, 'query_ttl', 3_600);
+        $schemaTtl = self::nonNegative(
+            $values,
+            'schema_ttl',
+            86_400,
+        );
         $maxAutoOverlayRows = self::nonNegative(
             $values,
             'auto_overlay_max_rows',
@@ -64,6 +70,7 @@ final readonly class CacheConfig
             keyPrefix: $keyPrefix,
             rowTtl: $rowTtl,
             queryTtl: $queryTtl,
+            schemaTtl: $schemaTtl,
             maxAutoOverlayRows: $maxAutoOverlayRows,
             primaryKeys: self::primaryKeys($values['primary_keys'] ?? []),
             maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,

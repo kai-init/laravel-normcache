@@ -152,19 +152,19 @@ final class PublicInvalidationTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    public function test_clearing_schema_metadata_alone_keeps_payloads_reachable(): void
+    public function test_clearing_schema_alone_keeps_payloads_reachable(): void
     {
         $read = $this->readReshapedTable();
 
         $read();
         $read();
         DB::statement('alter table reshaped add column subtitle text');
-        NormCache::clearSchemaMetadata('testing');
+        $this->assertTrue(NormCache::clearSchema('testing'));
 
         $this->assertArrayNotHasKey('subtitle', $read());
     }
 
-    public function test_refreshing_schema_metadata_retires_payloads_shaped_by_the_old_schema(): void
+    public function test_refreshing_schema_retires_payloads_shaped_by_the_old_schema(): void
     {
         $read = $this->readReshapedTable();
 
@@ -172,11 +172,11 @@ final class PublicInvalidationTest extends TestCase
         $read();
         DB::statement('alter table reshaped add column subtitle text');
 
-        $this->assertTrue(NormCache::refreshSchemaMetadata('testing'));
+        $this->assertTrue(NormCache::refreshSchema('testing'));
         $this->assertArrayHasKey('subtitle', $read());
     }
 
-    public function test_refreshing_schema_metadata_retires_a_dropped_column(): void
+    public function test_refreshing_schema_retires_a_dropped_column(): void
     {
         $read = $this->readReshapedTable();
 
@@ -184,7 +184,7 @@ final class PublicInvalidationTest extends TestCase
         $read();
         DB::statement('alter table reshaped drop column removable');
 
-        $this->assertTrue(NormCache::refreshSchemaMetadata('testing'));
+        $this->assertTrue(NormCache::refreshSchema('testing'));
         $this->assertArrayNotHasKey('removable', $read());
     }
 

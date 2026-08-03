@@ -9,11 +9,18 @@ final class DebugBarCollector extends TimeDataCollector
 {
     public function record(ObservationRecord $record): void
     {
-        $now = microtime(true);
-        $label = '[normcache ' . $record->outcome . '] '
-            . ($record->route ?? $record->invalidationMode ?? $record->reason ?? '');
+        $detail = $record->reason ?? $record->route ?? $record->invalidationMode;
+        $label = '[' . $record->outcome . ']';
 
-        $this->addMeasure($label, $now, $now, [
+        if ($record->modelClass !== null) {
+            $label .= ' ' . class_basename($record->modelClass);
+        }
+
+        if ($detail !== null) {
+            $label .= ($record->modelClass === null ? ' ' : ': ') . $detail;
+        }
+
+        $parameters = [
             'route' => $record->route,
             'table_hash' => $record->tableHash,
             'query_hash' => $record->queryHash,
@@ -21,9 +28,14 @@ final class DebugBarCollector extends TimeDataCollector
             'sql' => $record->sql,
             'bindings' => $record->bindings,
             'model_class' => $record->modelClass,
-            'invalidation_mode' => $record->invalidationMode,
-            'primary_key_tokens' => $record->primaryKeyTokens,
-        ]);
+        ];
+
+        if ($record->outcome === 'invalidation') {
+            $parameters['invalidation_mode'] = $record->invalidationMode;
+            $parameters['primary_key_tokens'] = $record->primaryKeyTokens;
+        }
+
+        $this->addMeasure($label, $record->startedAt, $record->endedAt, $parameters);
     }
 
     public function getName(): string
@@ -34,10 +46,21 @@ final class DebugBarCollector extends TimeDataCollector
     public function collect(): array
     {
         $data = parent::collect();
-        $measures = $data['measures'] ?? [];
-        $data['summary'] = count($measures) . ' operations';
+        $measures = is_array($data['measures'] ?? null) ? $data['measures'] : [];
+        $elapsed = 0.0;
+
+        foreach ($measures as $measure) {
+            $elapsed += (float) ($measure['duration'] ?? 0.0);
+        }
+
+        $data['summary'] = self::summary(count($measures), $elapsed * 1000);
 
         return $data;
+    }
+
+    private static function summary(int $operations, float $milliseconds): string
+    {
+        return $operations . ' ops / ' . number_format($milliseconds, 1) . ' ms';
     }
 
     public function getWidgets(): array
@@ -51,7 +74,8 @@ final class DebugBarCollector extends TimeDataCollector
             ],
             'NormCache:badge' => [
                 'map' => 'normcache.summary',
-                'default' => '0 operations',
+                // Quoted twice: Debugbar injects defaults into JavaScript verbatim.
+                'default' => "'0 ops / 0.0 ms'",
             ],
         ];
     }

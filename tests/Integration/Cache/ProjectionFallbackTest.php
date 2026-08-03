@@ -158,7 +158,7 @@ final class ProjectionFallbackTest extends TestCase
 
         $incomplete = (object) ['id' => $this->postId];
         $observed = $codec->encodeRow($incomplete, $epoch);
-        $this->cacheStore()->setRaw($rowKey, $observed, 3600);
+        $this->cacheStore()->setRawForever($rowKey, $observed);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -262,7 +262,7 @@ final class ProjectionFallbackTest extends TestCase
     {
         DB::table('posts')->orderBy('id')->get();
         $rowKey = $this->postRowKey();
-        $this->cacheStore()->setRaw($rowKey, 'not-a-valid-row-payload', 3600);
+        $this->cacheStore()->setRawForever($rowKey, 'not-a-valid-row-payload');
 
         DB::flushQueryLog();
         DB::enableQueryLog();

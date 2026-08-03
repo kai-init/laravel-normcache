@@ -17,6 +17,7 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertSame('', $config->keyPrefix);
         $this->assertSame(604_800, $config->rowTtl);
         $this->assertSame(3_600, $config->queryTtl);
+        $this->assertSame(86_400, $config->schemaTtl);
         $this->assertSame(1000, $config->maxAutoOverlayRows);
         $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
         $this->assertSame(5, $config->buildingLockTtl);
@@ -52,6 +53,7 @@ final class CacheConfigTest extends UnitTestCase
             ['row_ttl', 0],
             ['query_ttl', 0],
             ['auto_overlay_max_rows', -1],
+            ['schema_ttl', -1],
             ['stampede_wake_tokens', 0],
             ['stampede_wake_tokens', -1],
             ['stampede_wake_tokens', 1001],
@@ -70,6 +72,13 @@ final class CacheConfigTest extends UnitTestCase
         $config = CacheConfig::fromArray(['auto_overlay_max_rows' => 0]);
 
         $this->assertSame(0, $config->maxAutoOverlayRows);
+    }
+
+    public function test_accepts_zero_as_the_schema_cache_disable_value(): void
+    {
+        $config = CacheConfig::fromArray(['schema_ttl' => 0]);
+
+        $this->assertSame(0, $config->schemaTtl);
     }
 
     public function test_expands_grouped_primary_key_overrides(): void

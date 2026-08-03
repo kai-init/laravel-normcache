@@ -134,6 +134,8 @@ final class Invalidator
     {
         $mode = $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise');
 
+        $this->observer->begin();
+
         try {
             $this->store->invalidateTableState(
                 versionKey: $this->keys->version($table),

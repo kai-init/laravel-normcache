@@ -84,10 +84,9 @@ final class CanonicalReadTest extends TestCase
         $rowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->postId);
         $second = DB::table('posts')->withoutCache()->where('id', $secondId)->first();
         $this->assertNotNull($second);
-        $this->cacheStore()->setRaw(
+        $this->cacheStore()->setRawForever(
             $rowKey,
             $this->app->make(RawResultCodec::class)->encodeRow($second, $epoch),
-            60,
         );
 
         $row = DB::table('posts')->where('id', $this->postId)->first();
@@ -116,8 +115,8 @@ final class CanonicalReadTest extends TestCase
         $invalidRowKey = $this->cacheKeys()->row($table, $generation, 's:' . $this->postId);
         $validRow = $this->cacheStore()->getRaw($validRowKey);
         $this->assertNotNull($validRow);
-        $this->cacheStore()->setRaw($invalidRowKey, $validRow, 60);
-        $this->cacheStore()->setRaw(
+        $this->cacheStore()->setRawForever($invalidRowKey, $validRow);
+        $this->cacheStore()->setRawForever(
             $membershipKey,
             $this->app->make(MembershipCodec::class)->encode(
                 $membership->epoch,
@@ -126,7 +125,6 @@ final class CanonicalReadTest extends TestCase
                 $membership->versions,
                 $membership->tagVersion,
             ),
-            60,
         );
 
         DB::flushQueryLog();

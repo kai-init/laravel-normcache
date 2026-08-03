@@ -8,6 +8,8 @@ final class ConnectionMetadata
 {
     public ?string $schema = null;
 
+    public bool $schemaResolved = false;
+
     /** @var array<string, TableIdentity> */
     public array $identities = [];
 

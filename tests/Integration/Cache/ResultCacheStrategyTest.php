@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheRepaired;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -77,6 +78,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertCount(5, $cold);
         $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
 
+        Event::fake([QueryCacheHit::class]);
         DB::flushQueryLog();
         DB::enableQueryLog();
         $warm = $query();
@@ -87,6 +89,11 @@ final class ResultCacheStrategyTest extends TestCase
             $warm->map(static fn(object $row): array => (array) $row)->all(),
         );
         $this->assertSame([], DB::getQueryLog());
+        Event::assertDispatched(
+            QueryCacheHit::class,
+            static fn(QueryCacheHit $event): bool => $event->route === 'canonical'
+                && $event->reason === 'result_overlay',
+        );
     }
 
     public function test_one_row_allowance_applies_to_non_paginated_results(): void
@@ -396,7 +403,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $expected = $query()->pluck('id')->all();
         $resultKey = $this->cacheKeysMatching(':e:v')[0];
-        $this->cacheStore()->setRaw($resultKey, 'corrupt', 60);
+        $this->cacheStore()->setRawForever($resultKey, 'corrupt');
         Event::fake([QueryCacheRepaired::class]);
 
         DB::flushQueryLog();

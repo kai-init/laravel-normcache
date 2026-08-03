@@ -23,6 +23,7 @@ final class PrimaryKeyResolver
     public function __construct(
         private readonly CacheConfig $config,
         private readonly LoggerInterface $logger,
+        private readonly SchemaRepository $persistent,
     ) {}
 
     public function resolve(
@@ -55,7 +56,15 @@ final class PrimaryKeyResolver
             $candidates[] = $configured;
         }
 
-        $schema = $this->introspect($connection, $table);
+        $schema = $this->persistent->primaryKey($table);
+
+        if ($schema === false) {
+            $schema = $this->introspect($connection, $table);
+
+            if ($schema !== false) {
+                $this->persistent->putPrimaryKey($table, $schema);
+            }
+        }
 
         if ($schema instanceof PrimaryKeyMetadata) {
             $candidates[] = $schema;

@@ -157,6 +157,7 @@ return [
 
     'row_ttl' => 604800,
     'query_ttl' => 3600,
+    'schema_ttl' => 86400,
     // Set to 0 to disable automatic result overlays.
     'auto_overlay_max_rows' => 1000,
 
@@ -170,7 +171,7 @@ return [
 ];
 ```
 
-`row_ttl` applies to shared canonical rows. `query_ttl` applies to memberships and result payloads. Per-query `ttl()` changes only query-shaped payloads.
+`row_ttl` applies to shared canonical rows. `query_ttl` applies to memberships and result payloads. Per-query `ttl()` changes only query-shaped payloads. `schema_ttl` persists view and primary-key discovery in Redis across application requests; set it to `0` to disable persistence. Migration completion clears this metadata automatically, and runtime schema changes should call `NormCache::refreshSchema($connection)`.
 
 For tables whose primary key cannot be discovered reliably, configure grouped overrides:
 
@@ -200,7 +201,7 @@ NormCache bypasses reads when correctness cannot be established, including:
 
 Canonical storage requires a supported single-column integer or string primary key. Queries can still use `result` storage when canonical routing is unavailable.
 
-Direct database writes executed outside of Eloquent (such as raw SQL, triggers, or external services) bypass automatic cache interception. Use `NormCache::invalidate(...)` or `NormCache::flushAll()` to manually invalidate affected models or tables. If connection schemas or table definitions are modified at runtime, call `NormCache::refreshSchemaMetadata($connection)`.
+Direct database writes executed outside of Eloquent (such as raw SQL, triggers, or external services) bypass automatic cache interception. Use `NormCache::invalidate(...)` or `NormCache::flushAll()` to manually invalidate affected models or tables. If connection schemas or table definitions are modified at runtime, call `NormCache::refreshSchema($connection)`.
 
 ## Redis Cluster
 

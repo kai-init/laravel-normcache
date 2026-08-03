@@ -7,6 +7,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\PrimaryKeyResolver;
+use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
@@ -22,6 +23,7 @@ final readonly class CacheManager
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,
+        private SchemaRepository $schema,
         private TableIdentityResolver $tables,
         private PrimaryKeyResolver $primaryKeys,
         private QueryIdentity $identity,
@@ -159,17 +161,19 @@ final readonly class CacheManager
         }
     }
 
-    public function clearSchemaMetadata(?string $connection = null): void
+    public function clearSchema(?string $connection = null): bool
     {
         $this->tables->clear($connection);
         $this->primaryKeys->clear($connection);
+
+        return $this->schema->clear($connection);
     }
 
-    public function refreshSchemaMetadata(?string $connection = null): bool
+    public function refreshSchema(?string $connection = null): bool
     {
-        $this->clearSchemaMetadata($connection);
+        $cleared = $this->clearSchema($connection);
 
-        return $this->flushAll();
+        return $this->flushAll() && $cleared;
     }
 
     private function increment(string $key, bool $force = false): bool

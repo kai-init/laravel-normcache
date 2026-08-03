@@ -118,7 +118,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         $expected = $projected()->pluck('id')->all();
         $resultKey = $this->cacheKeysMatching(':e:v')[0];
-        $this->cacheStore()->setRaw($resultKey, 'corrupt', 60);
+        $this->cacheStore()->setRawForever($resultKey, 'corrupt');
         Event::fake([QueryCacheRepaired::class]);
 
         DB::flushQueryLog();

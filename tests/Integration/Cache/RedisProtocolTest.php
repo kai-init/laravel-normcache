@@ -97,7 +97,7 @@ final class RedisProtocolTest extends TestCase
     {
         $store = app(RedisStore::class);
         $key = 'test:{nc:x:corrupt-read}:payload';
-        $store->setRaw($key, 'corrupt', 60);
+        $store->setRawForever($key, 'corrupt');
         $state = new CacheState(
             key: $key,
             epoch: '0',
@@ -132,7 +132,7 @@ final class RedisProtocolTest extends TestCase
             $connection->set($sharedKey, ['value' => 123]);
 
             $store = app(RedisStore::class);
-            $store->setRaw($rawKey, 'raw-value', 60);
+            $store->setRawForever($rawKey, 'raw-value');
 
             $this->assertSame('raw-value', $store->getRaw($rawKey));
             $this->assertSame(['value' => 123], $connection->get($sharedKey));
@@ -224,7 +224,7 @@ final class RedisProtocolTest extends TestCase
         try {
             $property->setValue($connection, $replacement);
 
-            $store->setRaw($key, 'replacement-raw-value', 60);
+            $store->setRawForever($key, 'replacement-raw-value');
 
             $this->assertSame('replacement-raw-value', $store->getRaw($key));
             $this->assertSame(
@@ -439,8 +439,8 @@ final class RedisProtocolTest extends TestCase
         $membershipKey = $keys->membership($table, '0', 'u', 'canonical-query');
         $membership = '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}';
 
-        $store->setRaw($membershipKey, $membership, 60);
-        $store->setRaw($resultKey, 'result-payload', 60);
+        $store->setRawForever($membershipKey, $membership);
+        $store->setRawForever($resultKey, 'result-payload');
 
         $result = $store->fetchResultOrCanonical(
             $versionKey,
@@ -486,7 +486,7 @@ final class RedisProtocolTest extends TestCase
         $build = 'test:{nc:x:lease}:build';
         $wake = 'test:{nc:x:lease}:wake:' . str_repeat('a', 32);
 
-        $store->setRaw($build, str_repeat('b', 32), 10);
+        $store->setRawForever($build, str_repeat('b', 32));
 
         $this->assertFalse($store->publishVersionedEntries(
             [$key => 'stale'],

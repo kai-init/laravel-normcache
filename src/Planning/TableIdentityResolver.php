@@ -10,8 +10,9 @@ final class TableIdentityResolver
     /** @var \WeakMap<Connection, ConnectionMetadata> */
     private \WeakMap $connections;
 
-    public function __construct()
-    {
+    public function __construct(
+        private readonly SchemaRepository $persistent,
+    ) {
         $this->connections = new \WeakMap;
     }
 
@@ -172,8 +173,18 @@ final class TableIdentityResolver
     {
         $metadata = $this->metadata($connection);
 
-        if ($metadata->schema !== null) {
+        // The flag separates "answered with no schema name" from "never asked":
+        // a lookup that throws is transient and must stay unmemoized.
+        if ($metadata->schemaResolved) {
             return $metadata->schema;
+        }
+
+        $persistent = $this->persistent->effectiveSchema($connection);
+
+        if (is_string($persistent)) {
+            $metadata->schemaResolved = true;
+
+            return $metadata->schema = $persistent;
         }
 
         try {
@@ -183,9 +194,15 @@ final class TableIdentityResolver
             if ($schema === '') {
                 $schema = null;
             }
+
+            if ($schema !== null) {
+                $this->persistent->putEffectiveSchema($connection, $schema);
+            }
         } catch (\Throwable) {
-            $schema = null;
+            return null;
         }
+
+        $metadata->schemaResolved = true;
 
         return $metadata->schema = $schema;
     }
@@ -224,6 +241,14 @@ final class TableIdentityResolver
             return isset($metadata->views[$schema][$name]);
         }
 
+        $persistent = $this->persistent->views($connection, $schema);
+
+        if ($persistent !== null) {
+            $metadata->views[$schema] = $persistent;
+
+            return isset($persistent[$name]);
+        }
+
         try {
             $views = [];
 
@@ -236,6 +261,7 @@ final class TableIdentityResolver
             }
 
             $metadata->views[$schema] = $views;
+            $this->persistent->putViews($connection, $schema, $views);
 
             return isset($views[$name]);
         } catch (\Throwable) {

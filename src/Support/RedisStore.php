@@ -38,11 +38,25 @@ final class RedisStore
         });
     }
 
-    public function setRaw(string $key, string $value, int $ttl): void
+    public function readSchemaField(string $key, string $field): ?string
     {
-        $this->withRawValues(static function (Connection $connection) use ($key, $value, $ttl): void {
-            $connection->setex($key, $ttl, $value);
+        return $this->withRawValues(static function (Connection $connection) use ($key, $field): ?string {
+            $value = $connection->hget($key, $field);
+
+            return is_string($value) ? $value : null;
         });
+    }
+
+    public function writeSchemaField(string $key, string $field, string $value, int $ttl): void
+    {
+        // Raw like readSchemaField(): a serializing connection would otherwise
+        // store bytes the raw read cannot parse.
+        $this->withRawValues(fn(Connection $connection): mixed => $this->evaluate(
+            $connection,
+            RedisScripts::get('write_schema_field'),
+            [$key],
+            [$field, $value, (string) $ttl],
+        ));
     }
 
     public function setNxEx(string $key, string $value, int $ttl): bool

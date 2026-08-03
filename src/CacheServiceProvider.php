@@ -33,6 +33,7 @@ use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
+use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheSerializer;
@@ -68,9 +69,6 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->singleton(MembershipCodec::class);
         $this->app->singleton(QueryIdentity::class);
         $this->app->singleton(QueryPlanner::class);
-        $this->app->singleton(TableIdentityResolver::class);
-        $this->app->singleton(DependencyAnalyzer::class);
-        $this->app->singleton(PrimaryKeyResolver::class);
         $this->app->singleton(MutationKeyExtractor::class);
         $this->app->scoped(QueryObserver::class, function ($app): QueryObserver {
             $config = $app->make(CacheConfig::class);
@@ -87,6 +85,13 @@ final class CacheServiceProvider extends ServiceProvider
 
             return new QueryObserver($config, $collector);
         });
+
+        // Scoped, not shared: these memoize the schema epoch they were read
+        // under, so an instance kept for a worker's lifetime pins a retired one.
+        $this->app->scoped(SchemaRepository::class);
+        $this->app->scoped(TableIdentityResolver::class);
+        $this->app->scoped(DependencyAnalyzer::class);
+        $this->app->scoped(PrimaryKeyResolver::class);
 
         $this->app->scoped(FailureReporter::class);
         $this->app->scoped(CacheRuntime::class);
@@ -123,7 +128,7 @@ final class CacheServiceProvider extends ServiceProvider
             }
         });
         Event::listen(MigrationsEnded::class, function (): void {
-            if (!$this->app->make(CacheManager::class)->refreshSchemaMetadata()) {
+            if (!$this->app->make(CacheManager::class)->refreshSchema()) {
                 $this->app->make(LoggerInterface::class)->warning(
                     'NormCache invalidation failed. Run normcache:flush before enabling cache traffic.',
                 );

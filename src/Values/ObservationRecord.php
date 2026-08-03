@@ -19,5 +19,7 @@ final readonly class ObservationRecord
         public ?string $modelClass = null,
         public ?string $invalidationMode = null,
         public array $primaryKeyTokens = [],
+        public float $startedAt = 0.0,
+        public float $endedAt = 0.0,
     ) {}
 }
