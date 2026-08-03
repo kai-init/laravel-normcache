@@ -39,6 +39,10 @@ abstract class TestCase extends OrchestraTestCase
         } else {
             $redis->flushdb();
         }
+
+        // Migrations resolve scoped schema/runtime services before this flush.
+        // Rebuild them so their memoized epochs match the now-empty Redis database.
+        $this->app->forgetScopedInstances();
     }
 
     protected function getPackageProviders($app): array
