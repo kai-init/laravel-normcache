@@ -2,9 +2,9 @@
 --
 -- KEYS[1] = version key
 -- KEYS[2] = generation key
+-- KEYS[3] = row key prefix ending in ":r:g"
 -- ARGV[1] = mode: version | precise | generation
--- ARGV[2] = row key prefix ending in ":r:g"
--- ARGV[3..] = PK tokens for precise mode
+-- ARGV[2..] = PK tokens for precise mode
 
 local mode = ARGV[1]
 local version = redis.call('INCR', KEYS[1])
@@ -17,8 +17,8 @@ end
 if mode == 'precise' then
     local generation = redis.call('GET', KEYS[2]) or '0'
 
-    for i = 3, #ARGV do
-        redis.call('DEL', ARGV[2] .. generation .. ':' .. ARGV[i])
+    for i = 2, #ARGV do
+        redis.call('DEL', KEYS[3] .. generation .. ':' .. ARGV[i])
     end
 end
 

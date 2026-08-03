@@ -267,10 +267,9 @@ final class RedisStore
     ): void {
         $this->script(
             RedisScripts::get('invalidate_table'),
-            [$versionKey, $generationKey],
+            [$versionKey, $generationKey, $rowPrefix],
             [
                 $mode,
-                $rowPrefix,
                 ...$tokens,
             ],
         );
