@@ -6,7 +6,7 @@ use NormCache\Tests\Fixtures\Models\CustomPostCollection;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 
-class CustomBehaviorContractTest extends TestCase
+final class CustomBehaviorContractTest extends TestCase
 {
     public function test_hidden_and_appends_visibility_is_respected(): void
     {

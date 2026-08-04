@@ -13,7 +13,7 @@ use NormCache\Tests\TestCase;
  * Final contract verification: complex relation queries with raw expressions
  * and custom selects must maintain perfect hydration parity.
  */
-class RelationCorrectnessContractTest extends TestCase
+final class RelationCorrectnessContractTest extends TestCase
 {
     private function fixtures(): void
     {
@@ -49,7 +49,6 @@ class RelationCorrectnessContractTest extends TestCase
 
         $this->contract($query, $nativeQuery);
 
-        // Also verify the custom attribute is present and correct
         $warm = $query();
         $this->assertCount(1, $warm);
         $posts = $warm->first()->posts;

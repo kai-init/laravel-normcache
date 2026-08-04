@@ -3,7 +3,7 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\PrimaryKeyMetadata;
 
 final class MutationKeyExtractor
@@ -13,7 +13,7 @@ final class MutationKeyExtractor
      * @return list<string>|null
      */
     public function extractMutation(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         PrimaryKeyMetadata $primaryKey,
         ?array $assigned,
     ): ?array {
@@ -50,9 +50,13 @@ final class MutationKeyExtractor
 
     /** @return list<string>|null */
     public function extract(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         PrimaryKeyMetadata $primaryKey,
     ): ?array {
+        if (!empty($query->joins)) {
+            return null;
+        }
+
         $tokens = [];
         $found = false;
 

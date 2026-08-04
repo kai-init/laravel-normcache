@@ -2,16 +2,53 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
+use Illuminate\Database\Eloquent\Model;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
+
+final class CustomHydrationModel extends Model
+{
+    use Cacheable;
+
+    public static int $newInstanceCalls = 0;
+
+    public \stdClass $marker;
+
+    public function __construct(array $attributes = [])
+    {
+        $this->marker = new \stdClass;
+
+        parent::__construct($attributes);
+    }
+
+    public function newInstance($attributes = [], $exists = false)
+    {
+        self::$newInstanceCalls++;
+
+        return parent::newInstance($attributes, $exists);
+    }
+}
 
 /**
  * Contract tests for model hydration after a cached query has been resolved.
  */
-class ModelHydrationContractTest extends TestCase
+final class ModelHydrationContractTest extends TestCase
 {
+    public function test_custom_model_lifecycle_uses_fresh_laravel_instances(): void
+    {
+        $source = new CustomHydrationModel;
+        CustomHydrationModel::$newInstanceCalls = 0;
+
+        $first = $source->newFromBuilder(['id' => 1]);
+        $second = $source->newFromBuilder(['id' => 2]);
+
+        $this->assertSame(2, CustomHydrationModel::$newInstanceCalls);
+        $this->assertNotSame($first->marker, $second->marker);
+    }
+
     public function test_eager_loaded_models_match_native_eloquent(): void
     {
         $author = Author::create(['name' => 'Ivy']);
@@ -34,11 +71,11 @@ class ModelHydrationContractTest extends TestCase
             $seen[] = $author->name;
         });
 
-        Author::query()->orderBy('id')->get();      // cold
+        Author::query()->orderBy('id')->get();
         $this->assertSame(['Nia', 'Omar'], $seen);
 
         $seen = [];
-        Author::query()->orderBy('id')->get();      // warm
+        Author::query()->orderBy('id')->get();
         $this->assertSame(['Nia', 'Omar'], $seen, 'retrieved must fire on a cache hit');
 
         $seen = [];
@@ -49,12 +86,16 @@ class ModelHydrationContractTest extends TestCase
     public function test_hydration_resolves_the_connection_exactly_as_eloquent_does(): void
     {
         $author = new Author;
-        $own = $author->getConnectionName();
+        $native = new class extends Model {};
+        $author->setConnection('testing');
+        $native->setConnection('testing');
 
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], null)->getConnectionName());
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], '')->getConnectionName());
-        $this->assertSame($own, $author->newFromBuilder(['id' => 1], $own)->getConnectionName());
-        $this->assertSame('other', $author->newFromBuilder(['id' => 1], 'other')->getConnectionName());
+        foreach ([null, '', 'testing', 'other'] as $connection) {
+            $expected = $native->newFromBuilder(['id' => 1], $connection)->getConnectionName();
+            $actual = $author->newFromBuilder(['id' => 1], $connection)->getConnectionName();
+
+            $this->assertSame($expected, $actual);
+        }
 
         $author->newFromBuilder(['id' => 1]);
         $author->setConnection('drifted');

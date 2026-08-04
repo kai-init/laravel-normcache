@@ -5,93 +5,73 @@ namespace NormCache\Planning;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\DependencyAnalysis;
 use NormCache\Values\TableIdentity;
 
 final class DependencyAnalyzer
 {
-    /** @var array<string, ?TableIdentity> */
-    private array $modelIdentities = [];
-
     public function __construct(
         private TableIdentityResolver $tables,
     ) {}
 
-    public function clear(?string $connection = null): void
-    {
-        if ($connection === null) {
-            $this->modelIdentities = [];
-
-            return;
-        }
-
-        $this->modelIdentities = array_filter(
-            $this->modelIdentities,
-            static fn(?TableIdentity $id, string $key): bool => !str_starts_with($key, $connection . ':'),
-            ARRAY_FILTER_USE_BOTH,
-        );
-    }
-
     public function analyze(
         Connection $connection,
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         TableIdentity $root,
     ): DependencyAnalysis {
         $resolved = [$root->hash => $root];
         $visited = [];
         $opaque = false;
 
-        $this->walk($connection, $query, $resolved, $visited, $opaque);
+        $this->walk(
+            $connection,
+            $query,
+            $resolved,
+            $visited,
+            $opaque,
+        );
 
-        $explicit = $query->normCacheDeclaredTables() !== []
-            || $query->normCacheDeclaredModels() !== [];
+        $declarations = $query->dependencies();
+        $explicit = $declarations !== [];
+        $unresolved = false;
 
-        foreach ($query->normCacheDeclaredTables() as $table) {
-            $identity = $this->tables->resolve($connection, $table);
+        foreach ($declarations as $declaration) {
+            $identity = $declaration->isTable()
+                ? $this->tables->resolve($connection, $declaration->value)
+                : $this->modelIdentity($connection, $declaration->value);
 
             if ($identity === null) {
                 $opaque = true;
-            } else {
-                $resolved[$identity->hash] = $identity;
-            }
-        }
+                $unresolved = true;
 
-        foreach ($query->normCacheDeclaredModels() as $modelClass) {
-            $identity = $this->modelIdentity($connection, $modelClass);
-
-            if ($identity === null) {
-                $opaque = true;
-            } else {
-                $resolved[$identity->hash] = $identity;
+                continue;
             }
+
+            $resolved[$identity->hash] = $identity;
         }
 
         ksort($resolved, SORT_STRING);
 
-        return new DependencyAnalysis(array_values($resolved), $opaque, $explicit);
+        return new DependencyAnalysis(
+            array_values($resolved),
+            $opaque,
+            $explicit,
+            $unresolved,
+        );
     }
 
     /** @param class-string $modelClass */
-    public function modelIdentity(Connection $fallbackConnection, string $modelClass): ?TableIdentity
+    public function modelIdentity(Connection $activeConnection, string $modelClass): ?TableIdentity
     {
-        $cacheKey = $fallbackConnection->getName() . ':' . spl_object_id($fallbackConnection) . ':' . $modelClass;
-
-        if (array_key_exists($cacheKey, $this->modelIdentities)) {
-            return $this->modelIdentities[$cacheKey];
-        }
-
         try {
             $model = new $modelClass;
-            $connection = $model->getConnection();
-            $identity = $this->tables->resolve($connection, $model->getTable());
+            $model->setConnection($activeConnection->getName());
+
+            return $this->tables->resolve($activeConnection, $model->getTable());
         } catch (\Throwable) {
-            $identity = null;
+            return null;
         }
-
-        $this->modelIdentities[$cacheKey] = $identity;
-
-        return $identity;
     }
 
     /**
@@ -112,16 +92,43 @@ final class DependencyAnalyzer
         }
 
         $visited[$id] = true;
+        $captured = [];
+        $this->walkProjectionValues($query, [$query->from], $captured, $opaque);
         $this->resolveSource($connection, $query->from, $resolved, $opaque);
 
         foreach ($query->joins ?? [] as $join) {
-            $this->resolveSource($connection, $join->table ?? null, $resolved, $opaque);
-            $this->walkNestedValues($connection, $join->wheres ?? [], $resolved, $visited, $opaque);
+            $this->walkProjectionValues($query, [$join->table], $captured, $opaque);
+            $this->resolveSource($connection, $join->table, $resolved, $opaque);
+            $this->walkNestedValues(
+                $connection,
+                $join->wheres,
+                $resolved,
+                $visited,
+                $opaque,
+            );
         }
 
-        $this->walkNestedValues($connection, $query->wheres, $resolved, $visited, $opaque);
-        $this->walkNestedValues($connection, $query->havings ?? [], $resolved, $visited, $opaque);
-        $this->walkProjectionValues($query, $query->columns ?? [], $opaque);
+        $this->walkNestedValues(
+            $connection,
+            $query->wheres,
+            $resolved,
+            $visited,
+            $opaque,
+        );
+        $this->walkNestedValues(
+            $connection,
+            $query->havings ?? [],
+            $resolved,
+            $visited,
+            $opaque,
+        );
+        $this->walkProjectionValues($query, $query->columns ?? [], $captured, $opaque);
+        $this->walkProjectionValues(
+            $query,
+            (array) ($query->aggregate['columns'] ?? []),
+            $captured,
+            $opaque,
+        );
         $this->walkOpaqueValues($query->groups ?? [], $opaque);
         $this->walkOpaqueValues($query->orders ?? [], $opaque);
         $this->walkOpaqueValues($query->unionOrders ?? [], $opaque);
@@ -130,16 +137,34 @@ final class DependencyAnalyzer
             $nested = $union['query'] ?? null;
 
             if ($nested instanceof Builder) {
-                $this->walk($connection, $nested, $resolved, $visited, $opaque);
+                $this->walk(
+                    $connection,
+                    $nested,
+                    $resolved,
+                    $visited,
+                    $opaque,
+                );
             } else {
                 $opaque = true;
             }
         }
+
+        foreach ($captured as $subquery) {
+            $this->walk(
+                $connection,
+                $subquery,
+                $resolved,
+                $visited,
+                $opaque,
+            );
+        }
     }
 
     /** @param array<mixed> $values */
-    private function walkOpaqueValues(array $values, bool &$opaque): void
-    {
+    private function walkOpaqueValues(
+        array $values,
+        bool &$opaque,
+    ): void {
         foreach ($values as $value) {
             if ($value instanceof Expression) {
                 $opaque = true;
@@ -148,11 +173,7 @@ final class DependencyAnalyzer
             }
 
             if (is_array($value)) {
-                if (in_array(
-                    strtolower((string) ($value['type'] ?? '')),
-                    ['raw', 'expression'],
-                    true,
-                )) {
+                if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
                     $opaque = true;
                 }
 
@@ -161,17 +182,32 @@ final class DependencyAnalyzer
         }
     }
 
-    /** @param array<mixed> $values */
+    /**
+     * @param  array<mixed>  $values
+     * @param  list<Builder>  $captured  Subqueries this projection stands in for,
+     *                                   drained by the caller once the walk completes.
+     */
     private function walkProjectionValues(
         Builder $query,
         array $values,
+        array &$captured,
         bool &$opaque,
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Expression) {
-                $sql = strtolower((string) $value->getValue($query->getGrammar()));
+                $subquery = $query instanceof QueryBuilder
+                    ? $query->capturedSubquery($value)
+                    : null;
 
-                if (preg_match('/\\b(?:select|from|join)\\b/', $sql) === 1) {
+                if ($subquery !== null) {
+                    $captured[] = $subquery;
+
+                    continue;
+                }
+
+                $sql = (string) $value->getValue($query->getGrammar());
+
+                if (preg_match('/\b(?:select|from|join)\b/i', $sql) === 1) {
                     $opaque = true;
                 }
 
@@ -179,7 +215,7 @@ final class DependencyAnalyzer
             }
 
             if (is_array($value)) {
-                $this->walkProjectionValues($query, $value, $opaque);
+                $this->walkProjectionValues($query, $value, $captured, $opaque);
             }
         }
     }
@@ -198,7 +234,13 @@ final class DependencyAnalyzer
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Builder) {
-                $this->walk($connection, $value, $resolved, $visited, $opaque);
+                $this->walk(
+                    $connection,
+                    $value,
+                    $resolved,
+                    $visited,
+                    $opaque,
+                );
 
                 continue;
             }
@@ -213,11 +255,7 @@ final class DependencyAnalyzer
                 continue;
             }
 
-            if (in_array(
-                strtolower((string) ($value['type'] ?? '')),
-                ['raw', 'expression'],
-                true,
-            )) {
+            if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
                 $opaque = true;
             }
 

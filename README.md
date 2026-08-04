@@ -1,27 +1,15 @@
-# Laravel Normcache
+# Laravel NormCache
 
-**Graph-backed, self-invalidating Redis caching for Laravel Eloquent.**
+**Redis-backed normalized query caching for Laravel Eloquent and Query Builder.**
 
 [![Tests](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml/badge.svg)](https://github.com/kai-init/laravel-normcache/actions/workflows/tests.yml)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%205-brightgreen.svg)](phpstan.neon)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/kai-init/laravel-normcache.svg)](https://packagist.org/packages/kai-init/laravel-normcache)
 [![License](https://img.shields.io/github/license/kai-init/laravel-normcache.svg)](LICENSE)
 
-Normcache stores canonical model attributes in versioned model keys and caches model reads as compact graph manifests: ordered root IDs plus relationship edges. When a model changes, Normcache bumps a version key instead of scanning and deleting every graph that may contain it.
+NormCache stores complete model rows once and lets many cached queries share them. Invalidation is `O(1)`: a write bumps Redis counters instead of scanning and deleting every query that might contain a changed row.
 
-**Requirements:** PHP 8.2+, Laravel 12/13, Redis 6.0+
-
-## Table of Contents
-
-- [Installation](#installation)
-- [What's new in 3.0](#whats-new-in-30)
-- [Usage](#usage)
-- [Invalidation](#invalidation)
-- [Cache spaces](#cache-spaces)
-- [Configuration](#configuration)
-- [Bypasses and limitations](#bypasses-and-limitations)
-- [Observability](#observability)
-- [License](#license)
+Requirements: PHP 8.2+, Laravel 12/13, Redis 6.0+.
 
 ## Installation
 
@@ -29,218 +17,267 @@ Normcache stores canonical model attributes in versioned model keys and caches m
 composer require kai-init/laravel-normcache
 ```
 
-Add `Cacheable` to models you want Normcache to manage:
-
-```php
-use Illuminate\Database\Eloquent\Model;
-use NormCache\Traits\Cacheable;
-
-class Post extends Model
-{
-    use Cacheable;
-}
-```
-
-## What's new in 3.0
-
-Redis Cluster sharding is now fully atomic within each cache space. Normcache keeps the keys for a cached operation and its valid dependencies in one hash slot, so cache reads, rebuilds, and invalidation coordination remain atomic.
-
-- **Cache spaces:** declare `$normCacheSpaces` on a model and select a declared space with `->space()` when needed.
-- **Space-targeted flushing:** use `NormCache::flushAll('space')` or `php artisan normcache:flush --space=...`.
-- **Named table dependencies:** `dependsOnTables()` works in named spaces and is invalidated with `invalidateTableVersion()`.
-- **Upgrade from 2.4:** run `php artisan normcache:flush` before deploying v3 to clear legacy cache keys.
-
-## Usage
-
-Normal Eloquent reads are cached automatically for cacheable models:
-
-```php
-Post::all();
-Post::where('active', true)->get();
-Post::find(1);
-Post::paginate(20);
-```
-
-Use `withoutCache()` or `ttl()` per query:
-
-```php
-Post::withoutCache()->get();
-Post::where('active', true)->ttl(600)->get();
-```
-
-### Cross-table queries
-
-Simple `whereHas` / `whereDoesntHave` constraints on cacheable relations are inferred automatically:
-
-```php
-Author::whereHas('posts', fn($q) => $q->where('published', true))->get();
-
-```
-
-Joined, grouped, distinct, calculated, and raw model reads remain live even when dependencies are declared. Use a scalar/aggregate operation when a versioned value payload is appropriate:
-
-```php
-Author::join('legacy_stats', 'legacy_stats.author_id', '=', 'authors.id')
-    ->dependsOnTables(['legacy_stats'])
-    ->count();
-```
-
-`dependsOnTables()` declares a read dependency only. If that table is changed outside Eloquent, call `NormCache::invalidateTableVersion($connection, $table)` after the write.
-
-### Aggregates and relationships
-
-`count`, `exists`, `value`, `pluck`, `sum`, `avg`, `min`, `max`, and pagination totals use versioned value payloads when their dependencies are safe. Model-returning aggregate projections such as `withCount` stay live.
-
-An eligible model read uses either exact model caching for a primary-key lookup or a graph manifest. Graphs support roots, `belongsTo`, `hasOne`, `hasMany`, morph-one/many, pivot edges, through edges, nested trees, ordering, empty relations, and deterministic relation constraints. Dynamic `morphTo`, one-of-many, calculated/projection relation loads, relation query callbacks, and cross-space graphs stay live. Pivot mutations (`attach`, `detach`, `sync`, and `updateExistingPivot`) invalidate the pivot-table version used by eligible graph manifests.
-
-## Invalidation
-
-Eloquent writes on cacheable models invalidate automatically. For manual invalidation:
-
-```php
-use NormCache\Facades\NormCache;
-
-NormCache::flushModel(Post::class);
-NormCache::flushAll();
-NormCache::flushAll('content');
-```
-
-```bash
-php artisan normcache:flush --model="App\Models\Post"
-php artisan normcache:flush
-php artisan normcache:flush --space=content
-```
-
-If you mutate cacheable tables outside Eloquent, flush the affected model or table version yourself:
-
-```php
-DB::table('posts')->update(['published' => true]);
-NormCache::flushModel(Post::class);
-```
-
-Tags can group query entries for manual flushing:
-
-```php
-Author::whereHas('posts')
-    ->dependsOn([Post::class])
-    ->tag('homepage')
-    ->get();
-
-NormCache::flushTag(Author::class, 'homepage');
-NormCache::flushTagAcrossModels('homepage');
-```
-
-## Cache spaces
-
-Cache spaces are Normcache's Redis Cluster sharding boundary. Each space has a Redis hash tag, so a cached operation stays within one Cluster slot.
-
-Models without a declaration use the default space (`{nc}`). Declare named spaces with `$normCacheSpaces`:
-
-```php
-use Illuminate\Database\Eloquent\Model;
-use NormCache\Traits\Cacheable;
-
-class Post extends Model
-{
-    use Cacheable;
-
-    protected static array $normCacheSpaces = ['content'];
-}
-```
-
-How space resolution works:
-
-- If no `space()` is selected, a model uses its first declared space as its home space.
-- `Post::query()->space('content')` explicitly selects a space.
-- `space()` must select a space declared by the model, otherwise Normcache throws an `InvalidArgumentException`.
-- A model may declare multiple spaces, up to `spaces.max_per_model`.
-- Writes bump the model version in every declared space.
-
-Dependencies must belong to the active space:
-
-```php
-class Author extends Model
-{
-    use Cacheable;
-
-    protected static array $normCacheSpaces = ['content'];
-}
-
-Post::query()
-    ->space('content')
-    ->dependsOn([Author::class])
-    ->get();
-```
-
-If a model dependency is not valid in the active space, Normcache bypasses the cache by default. Set `spaces.cross_space_behavior` to `throw` to fail loudly during development. Raw table dependencies from `dependsOnTables()` can be used in any active space and are invalidated with `invalidateTableVersion()`.
-
-Configure placement when you need to control Redis Cluster hash tags:
-
-```php
-'spaces' => [
-    'max_per_model' => 16,
-    'cross_space_behavior' => env('NORMCACHE_CROSS_SPACE_BEHAVIOR', 'bypass'),
-    'placement' => [
-        'catalog' => ['hash_tag' => 'nc:catalog'],
-    ],
-],
-```
-
-## Configuration
-
-Publish `config/normcache.php` if you need to customize runtime behavior:
+Publish the configuration:
 
 ```bash
 php artisan vendor:publish --tag=normcache-config
 ```
 
-Common options:
+Add `Cacheable` to Eloquent models whose writes and reads NormCache should observe:
 
-| Option                 | Purpose                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| `connection`           | Redis connection name. Default: `cache`.                        |
-| `enabled`              | Master on/off switch.                                           |
-| `ttl`                  | Model attribute key lifetime.                                   |
-| `query_ttl`            | Graph-manifest and versioned-value-payload key lifetime.         |
-| `key_prefix`           | Prefix for all Normcache Redis keys.                            |
-| `cooldown`             | Debounce version bumps for write-heavy models.                  |
-| `building_lock_ttl`    | Cache rebuild lock lifetime.                                    |
-| `stampede_wait_ms`     | How long waiters block for a rebuild wake signal.               |
-| `stampede_wake_tokens` | Number of waiters to wake after a rebuild.                      |
-| `fallback`             | Fail open to the database on Redis errors when `true`.          |
-| `events`               | Dispatch cache hit/miss events when `true`.                     |
-| `fire_retrieved`       | Fire Eloquent `retrieved` for cached models when `true`.        |
-| `debugbar`             | Enable Laravel Debugbar integration when installed.             |
-| `spaces.*`             | Cache-space limits, cross-space policy, and hash-tag placement. |
+```php
+use NormCache\Traits\Cacheable;
+
+class Post extends Model
+{
+    use Cacheable;
+}
+```
+
+The service provider also installs cache-aware Laravel database connections, so supported `DB::table()` reads are cached automatically. `DB::select()` and other raw connection calls are not intercepted.
+
+## Usage
+
+Ordinary reads need no cache-specific call:
+
+```php
+Post::where('published', true)->get();
+Post::find(1);
+DB::table('posts')->where('published', true)->orderBy('id')->get();
+```
+
+Cache controls are available on Eloquent and Query Builder:
+
+```php
+Post::query()->withoutCache()->get();
+Post::query()->where('published', true)->ttl(600)->get();
+Post::query()->where('published', true)->tag('homepage')->get();
+```
+
+## Canonical & Normalized Row Caching
+
+Unlike traditional query caching, which stores a full copy of every result set, NormCache stores each row once and caches queries as references to it:
+
+- **Rows stored once**: each database row lives under a single canonical key (`table:r:<id>`).
+- **Queries store only IDs**: a cached query is an ordered list of primary keys (`table:m:<query_hash>`), not a copy of the model attributes.
+- **No `KEYS` or `SCAN`**: updating a model deletes just that row key and bumps the table version counter (`table:v`). Invalidation cost does not grow with the number of cached queries.
+- **One update, every query**: because all queries share the same row key, updating Post #42 refreshes it everywhere on the next read — no per-query cleanup.
+
+## Automatic Result & Projection Overlay
+
+For small result sets, NormCache also stores the assembled result alongside the canonical rows, so a warm read is a single Redis fetch instead of a membership lookup plus row assembly:
+
+- **Automatic promotion**: a canonical query is promoted when it returns at most `auto_overlay_max_rows + 1` rows (default `1000`, so up to 1001) and the encoded payload is at most 128 KiB — a fixed cap that keeps wide rows out.
+- **Self-healing**: writes to the query's tables invalidate the overlay along with the canonical rows. If the overlay is missing or expired, the read falls back to canonical row assembly and re-promotes.
+
+## Tags and selective flushing
+
+Use `tag()` to group related cached queries under a named invalidation namespace:
+
+```php
+$posts = Post::query()
+    ->where('published', true)
+    ->tag('homepage')
+    ->get();
+```
+
+Any number of different queries can share the same tag, and flushing that tag invalidates all of their query-shaped payloads without affecting untagged queries or queries using another tag:
+
+```php
+NormCache::flushTag('homepage');
+```
+
+`flushTag()` advances a Redis version counter; it does not scan for or delete matching keys. The affected queries miss and rebuild on their next read, while old payloads expire naturally. Tags are an additional manual invalidation boundary and do not replace automatic dependency invalidation when an underlying table changes.
+
+## Dependencies
+
+NormCache infers identifiable tables from ordinary joins, unions, subqueries, and relationship queries. If a query contains an opaque expression or source, declare every table it reads:
+
+```php
+Author::query()
+    ->whereRaw('exists (select 1 from legacy_stats where legacy_stats.author_id = authors.id)')
+    ->dependsOn([Post::class, 'legacy_stats'])
+    ->get();
+```
+
+`dependsOn()` accepts Eloquent model classes and table names. It authorizes an otherwise opaque query only when NormCache can resolve all declared dependencies.
+
+## Invalidation
+
+Writes through cache-aware Eloquent or Query Builder paths invalidate automatically:
+
+- inside a transaction, invalidation is applied only after the outer transaction commits;
+- if a write's target cannot be resolved safely, NormCache advances the global epoch rather than leave reachable stale data;
+- if a write throws a database exception, its outcome is uncertain, so its tables are invalidated broadly before the original exception is rethrown.
+
+Use the facade after writes performed elsewhere:
+
+```php
+NormCache::invalidate([Post::class, Comment::class], connection: 'mysql');
+NormCache::invalidate(['posts', 'comments'], connection: 'mysql');
+NormCache::flushTag('homepage');
+NormCache::flushAll();
+```
+
+The global CLI flush takes no options:
+
+```bash
+php artisan normcache:flush
+```
+
+`flushAll()` and the command advance a global epoch. Old payloads expire naturally; NormCache does not scan Redis keys.
+
+## Redis invalidation outages
+
+NormCache fails open when Redis is unavailable: the database write succeeds and that request bypasses the cache. If only the writer loses Redis while other nodes can still read it, those nodes can serve stale data until the entry expires or a later invalidation succeeds. The condition is logged at `critical` with the affected table and invalidation mode.
+
+After Redis connectivity is restored, run the global flush to advance the epoch and make any payloads from the outage unreachable:
+
+```bash
+php artisan normcache:flush
+```
+
+## Temporarily disabling the cache
+
+Use the runtime commands when NormCache needs to be paused across all application nodes without changing configuration or redeploying:
+
+```bash
+php artisan normcache:disable
+php artisan normcache:enable
+```
+
+While disabled, reads bypass NormCache and go directly to the database, and writes do not perform cache invalidation. The switch is stored in Redis and is observed by new requests and jobs across every node.
+
+`normcache:enable` atomically advances the global epoch before clearing the disabled flag. This prevents payloads cached before the pause from being served after writes occurred while invalidation was disabled.
+
+### Required rollout for table-identity changes
+
+The source-scoped table identity uses different table version and generation keys from earlier releases. Do not run old and new application versions together while NormCache is active: each version would invalidate only its own table-key family.
+
+Use this deployment sequence:
+
+```bash
+php artisan normcache:disable
+# Deploy the new package version to every web and worker node.
+php artisan normcache:enable
+```
+
+While disabled, reads bypass Redis and writes intentionally perform no cache invalidation. After every node runs the new code, `normcache:enable` advances the global epoch before clearing the disabled flag, making all payloads from before or during the transition unreachable.
+
+## Configuration
+
+```php
+return [
+    'enabled' => true,
+    'connection' => 'cache',
+    'key_prefix' => '',
+    'serializer' => 'auto', // auto, php, or igbinary
+
+    'row_ttl' => 604800,
+    'query_ttl' => 3600,
+    'schema_ttl' => 86400,
+    // Set to 0 to disable automatic result overlays.
+    'auto_overlay_max_rows' => 1000,
+
+    'max_precise_invalidation_keys' => 1000,
+    'building_lock_ttl' => 5,
+    'stampede_wait_ms' => 200,
+    'stampede_wake_tokens' => 64,
+
+    'events' => false,
+    'debugbar' => false,
+];
+```
+
+`row_ttl` applies to shared canonical rows. `query_ttl` applies to memberships and result payloads. Per-query `ttl()` changes only query-shaped payloads. `schema_ttl` persists view, primary-key, and referential-action discovery in Redis across application requests; set it to `0` to disable persistence.
+
+For tables whose primary key cannot be discovered reliably, configure grouped overrides:
+
+```php
+'primary_keys' => [[
+    'connection' => 'pgsql',
+    'database' => 'app',
+    'schema' => 'public',
+    'tables' => [
+        'events' => ['column' => 'event_id', 'type' => 'string'],
+        'orders' => ['column' => 'order_id', 'type' => 'integer'],
+    ],
+]],
+```
+
+### Database source scopes
+
+Table cache identity includes a logical database source scope. By default NormCache uses the Laravel connection name, which keeps connections such as `shard-a` and `shard-b` isolated even when both servers use the same database and table names.
+
+Set `normcache_scope` inside a Laravel database connection when aliases intentionally represent the same physical data source:
+
+```php
+'connections' => [
+    'mysql-primary' => [
+        'driver' => 'mysql',
+        'normcache_scope' => 'commerce-primary',
+        // ...
+    ],
+
+    'mysql-read' => [
+        'driver' => 'mysql',
+        'normcache_scope' => 'commerce-primary',
+        // ...
+    ],
+],
+```
+
+When an application mutates a connection in place for tenant or shard switching, update `normcache_scope` together with the database endpoint. Connections with neither a name nor an explicit scope bypass caching because a stable source identity cannot be established.
 
 ## Bypasses and limitations
 
-Normcache bypasses caching for unsafe reads rather than risking stale or incorrect data.
+NormCache bypasses reads when correctness cannot be established, including:
 
-Always bypassed:
+- open database transactions;
+- `lockForUpdate()` and `sharedLock()`;
+- `useWritePdo()`;
+- custom fetch modes, `pretend()`, cursors, and `explain()`;
+- explicit `withoutCache()`;
+- raw or opaque dependencies not fully authorized with `dependsOn()`;
+- volatile SQL expressions.
 
-- pessimistic locks (`lockForUpdate`, `sharedLock`)
-- reads inside a database transaction
-- `DB::table(...)`, `DB::select()`, and raw SQL
+Canonical storage keys each row by one primary-key value, so it requires a single-column primary key. When a table has a promary key column that introspection cannot discover, name it with a `primary_keys` override to restore canonical storage.
 
-Always live for model-returning reads:
+For intercepted deletes, NormCache discovers `CASCADE`, `SET NULL`, and `SET DEFAULT` foreign-key actions through Laravel's schema API and broadly invalidates affected child tables, including multi-level cascades. The graph is rebuilt during schema refresh and persisted with the other schema metadata. A delete encountering a cold graph conservatively advances the global epoch before warming it for subsequent deletes.
 
-- raw predicates and opaque subqueries
-- joins, `GROUP BY`, `DISTINCT`, and calculated columns
-- dynamic `morphTo`, one-of-many, relation projections, and relation callbacks
-- cross-space model graphs
+Direct database writes executed outside of Eloquent or the cache-aware Query Builder, such as raw connection SQL or writes from external services, are not intercepted. Trigger side effects and `ON UPDATE` referential actions are not inferred. Declare the affected tables with `dependsOn()` on every cached read whose result can change, or call `NormCache::invalidate(...)` / `NormCache::flushAll()` after the write.
 
-Other limitations:
+If connection schemas or table definitions change at runtime, call `NormCache::refreshSchema($connection)`.
 
-- Models should use standard single-column primary keys.
-- Writes outside Eloquent are invisible unless you manually flush or invalidate.
-- Packages that replace Eloquent builders, relation classes, or hydration behavior may bypass parts of Normcache.
-- Normcache caches model connection/table metadata. Call `CacheKeyBuilder::reset()` after switching tenants dynamically.
+## Redis Cluster
+
+All keys for one physical table share a Redis hash slot. Query-group entries use their own query hash slot. Global epoch, dependency versions, and tag versions are read separately and validated against payload state; Predis Cluster batches cross-slot state groups in one pipeline.
+
+## Recommended Redis Configuration
+
+Broad invalidation (generation bumps, tag flushes, epoch advances) retires entries by bumping a counter rather than deleting keys, so orphaned payloads stay in Redis until `row_ttl` / `query_ttl` expires them. Give Redis a memory ceiling and a `volatile-*` eviction policy:
+
+```ini
+maxmemory 4gb
+maxmemory-policy volatile-lru
+```
+
+`volatile-*` evicts only keys that carry a TTL. NormCache's payloads do; its version counters do not, so they survive eviction — which matters, because losing a counter would make already-retired payloads readable again.
 
 ## Observability
 
-When events are enabled, Normcache dispatches query/model hit and miss events. When `fruitcake/laravel-debugbar` is installed and `normcache.debugbar` is enabled, cache hits, misses, bypasses, and model fetches appear in Debugbar.
+When `events` is enabled, NormCache dispatches cache hit, miss, bypass, repair, and invalidation events. When `fruitcake/laravel-debugbar` is installed and `debugbar` is enabled, cache activity appears in Laravel Debugbar.
+
+## Serializer configuration
+
+Choose the payload serializer with `serializer` / `NORMCACHE_SERIALIZER`:
+
+- `auto` preserves automatic extension detection;
+- `php` always uses PHP serialization and is the safest choice for heterogeneous fleets;
+- `igbinary` requires `ext-igbinary` on the node and fails application boot when it is unavailable.
+
+New payloads carry a one-byte serializer marker, so an igbinary-enabled node can read both PHP and igbinary payloads during a rolling deployment. A node without igbinary treats an igbinary payload as a cache miss instead of attempting the wrong decoder.
 
 ## License
 
-MIT
+**MIT**

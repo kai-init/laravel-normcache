@@ -3,113 +3,145 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
 
 final class QueryPlanner
 {
-    /** @param list<TableIdentity> $dependencies */
+    /**
+     * @param  list<TableIdentity>  $dependencies  deduplicated and hash-sorted by DependencyAnalyzer
+     * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey  invoked only for shapes that can use the metadata
+     */
     public function plan(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         TableIdentity $root,
-        ?PrimaryKeyMetadata $primaryKey,
+        callable $resolvePrimaryKey,
         array $dependencies,
         bool $forceQueryGroup = false,
         string $operation = 'select',
     ): QueryPlan {
-        $dependencies = $this->uniqueDependencies($dependencies);
-
-        if ($forceQueryGroup || $query->joins !== null && $query->joins !== []) {
-            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies, $primaryKey);
+        if (
+            $forceQueryGroup
+            || $query->joins !== null && $query->joins !== []
+            || $this->hasCrossTableUnion($root, $dependencies, $query)
+        ) {
+            return QueryPlan::queryGroup($root, $dependencies);
         }
 
-        if ($this->hasCrossTableUnion($root, $dependencies, $query)) {
-            return new QueryPlan(QueryPlan::QUERY_GROUP, $root, $dependencies, $primaryKey);
-        }
+        $wildcard = $this->isWildcard($query, $root);
+        $plainColumns = $wildcard ? null : $this->plainColumns($query, $root);
+        $primaryKey = $this->canUseRowShape($query, $operation)
+            && ($wildcard || $plainColumns !== null)
+                ? $resolvePrimaryKey()
+                : null;
 
         if (
-            $operation === 'select'
-            && $primaryKey !== null
+            $primaryKey !== null
+            && !$root->isView
             && count($dependencies) === 1
-            && $this->isCanonicalRowShape($query, $root)
             && $this->allowsDirectControls($query)
         ) {
-            $directToken = $this->directPrimaryKeyToken($query, $primaryKey);
+            $directToken = $this->directPrimaryKeyToken($query, $root, $primaryKey);
 
             if ($directToken !== null) {
-                return new QueryPlan(
-                    QueryPlan::DIRECT_PK,
-                    $root,
-                    $dependencies,
-                    $primaryKey,
-                    $directToken,
-                    softDeleteMode: $this->softDeleteMode($query),
-                    deletedAtColumn: $query->normCacheDeletedAtColumn(),
-                );
+                [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query);
+
+                if ($softDeleteSafe) {
+                    $deletedAtColumn = $query->deletedAtColumn();
+
+                    if ($wildcard) {
+                        return QueryPlan::directPrimaryKey(
+                            $root,
+                            $dependencies,
+                            $primaryKey,
+                            $directToken,
+                            $softDeleteMode,
+                            $deletedAtColumn,
+                        );
+                    }
+
+                    return QueryPlan::projectedRow(
+                        $root,
+                        $dependencies,
+                        $primaryKey,
+                        $directToken,
+                        $plainColumns,
+                        $softDeleteMode,
+                        $deletedAtColumn,
+                    );
+                }
             }
         }
 
         if (
-            $operation === 'select'
-            && $primaryKey !== null
-            && $this->isCanonicalRowShape($query, $root)
+            $primaryKey !== null
+            && $wildcard
+            && !$root->isView
         ) {
-            return new QueryPlan(QueryPlan::CANONICAL, $root, $dependencies, $primaryKey);
+            return QueryPlan::canonical(
+                $root,
+                $dependencies,
+                $primaryKey,
+                materializeResult: true,
+            );
         }
 
-        return new QueryPlan(QueryPlan::EXACT, $root, $dependencies, $primaryKey);
+        if ($primaryKey !== null && $plainColumns !== null) {
+            return QueryPlan::projectedResult(
+                $root,
+                $dependencies,
+                $primaryKey,
+                $plainColumns,
+            );
+        }
+
+        return QueryPlan::result($root, $dependencies, $primaryKey);
     }
 
-    private function allowsDirectControls(CachingQueryBuilder $query): bool
+    private function allowsDirectControls(QueryBuilder $query): bool
     {
-        return $query->normCacheTag() === null && $query->normCacheTtl() === null;
+        return $query->configuredTag() === null && $query->configuredTtl() === null;
     }
 
-    private function isCanonicalRowShape(CachingQueryBuilder $query, TableIdentity $root): bool
+    private function isSingleRowShape(QueryBuilder $query): bool
     {
-        return $this->isWildcard($query, $root)
-            && !$query->distinct
+        return !$query->distinct
             && $query->aggregate === null
+            && $query->groupLimit === null
             && empty($query->groups)
             && empty($query->havings)
             && empty($query->unions);
     }
 
-    /** @param list<TableIdentity> $dependencies
-     * @return list<TableIdentity>
-     */
-    private function uniqueDependencies(array $dependencies): array
+    private function canUseRowShape(QueryBuilder $query, string $operation): bool
     {
-        if (count($dependencies) <= 1) {
-            return $dependencies;
-        }
-
-        $unique = [];
-
-        foreach ($dependencies as $dependency) {
-            $unique[$dependency->hash] = $dependency;
-        }
-
-        ksort($unique, SORT_STRING);
-
-        return array_values($unique);
+        return $operation === 'select' && $this->isSingleRowShape($query);
     }
 
     private function hasCrossTableUnion(
         TableIdentity $root,
         array $dependencies,
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
     ): bool {
         return !empty($query->unions)
-            && count(array_filter(
-                $dependencies,
-                static fn(TableIdentity $dependency): bool => $dependency->hash !== $root->hash,
-            )) > 0;
+            && $this->hasExternalDependency($root, $dependencies);
     }
 
-    private function isWildcard(CachingQueryBuilder $query, TableIdentity $root): bool
+    /** @param list<TableIdentity> $dependencies */
+    private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
+    {
+        foreach ($dependencies as $dependency) {
+            if ($dependency->hash !== $root->hash) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isWildcard(QueryBuilder $query, TableIdentity $root): bool
     {
         if ($query->columns === null || $query->columns === ['*']) {
             return true;
@@ -121,23 +153,68 @@ final class QueryPlanner
 
         $column = strtolower(trim($query->columns[0]));
 
-        if ($column === strtolower($root->table) . '.*') {
-            return true;
+        $alias = $this->fromAlias($query);
+
+        return $alias !== null
+            ? $column === $alias . '.*'
+            : $column === strtolower($root->table) . '.*';
+    }
+
+    private function fromAlias(QueryBuilder $query): ?string
+    {
+        if (
+            is_string($query->from)
+            && preg_match('/\\s+(?:as\\s+)?([^\\s]+)$/i', trim($query->from), $matches) === 1
+        ) {
+            return strtolower($matches[1]);
         }
 
-        if (!is_string($query->from)) {
-            return false;
+        return null;
+    }
+
+    /** @return list<string>|null */
+    private function plainColumns(QueryBuilder $query, TableIdentity $root): ?array
+    {
+        if ($query->columns === null || $query->columns === ['*']) {
+            return null;
         }
 
-        if (preg_match('/\\s+as\\s+([^\\s]+)$/i', trim($query->from), $matches) === 1) {
-            return $column === strtolower($matches[1]) . '.*';
+        $table = strtolower($root->table);
+        $alias = $this->fromAlias($query);
+        $columns = [];
+
+        foreach ($query->columns as $column) {
+            if (!is_string($column)) {
+                return null;
+            }
+
+            $normalized = trim($column);
+
+            if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $normalized) === 1) {
+                $columns[] = $normalized;
+
+                continue;
+            }
+
+            if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)$/', $normalized, $matches) !== 1) {
+                return null;
+            }
+
+            $qualifier = strtolower($matches[1]);
+
+            if (!$this->isValidQualifier($qualifier, $table, $alias)) {
+                return null;
+            }
+
+            $columns[] = $matches[2];
         }
 
-        return false;
+        return $columns === [] ? null : $columns;
     }
 
     private function directPrimaryKeyToken(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
+        TableIdentity $root,
         PrimaryKeyMetadata $primaryKey,
     ): ?string {
         if (
@@ -178,57 +255,78 @@ final class QueryPlanner
             return null;
         }
 
-        $column = (string) $where['column'];
-        $unqualified = $column;
+        $column = trim((string) $where['column']);
+        $parts = explode('.', $column);
+        $unqualified = trim((string) array_pop($parts), '`"[]');
 
-        if (str_contains($column, '.')) {
-            $unqualified = substr($column, strrpos($column, '.') + 1);
+        if (strtolower($unqualified) !== strtolower($primaryKey->column)) {
+            return null;
         }
 
-        if (
-            strtolower(trim($unqualified, '`"[]'))
-            !== strtolower($primaryKey->column)
-        ) {
-            return null;
+        if ($parts !== []) {
+            $qualifier = strtolower(trim((string) array_pop($parts), '`"[]'));
+            $table = strtolower($root->table);
+            $alias = $this->fromAlias($query);
+
+            if ($parts !== [] || !$this->isValidQualifier($qualifier, $table, $alias)) {
+                return null;
+            }
         }
 
         return $primaryKey->token($where['value'] ?? null);
     }
 
-    private function softDeleteMode(CachingQueryBuilder $query): ?string
+    /** @return array{0: bool, 1: ?string} */
+    private function softDeleteMode(QueryBuilder $query): array
     {
-        if ($query->normCacheDeletedAtColumn() === null) {
-            return null;
+        if ($query->deletedAtColumn() === null) {
+            return [true, null];
         }
+
+        $modes = [];
 
         foreach ($query->wheres as $where) {
             if (!$this->isDeletedAtColumn($query, $where['column'] ?? null)) {
                 continue;
             }
 
-            return strtolower((string) ($where['type'] ?? '')) === 'notnull'
-                ? 'only'
-                : 'default';
+            $type = $where['type'] ?? null;
+
+            if (
+                !in_array($type, ['Null', 'NotNull'], true)
+                || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
+            ) {
+                return [false, null];
+            }
+
+            $modes[] = $type === 'NotNull' ? 'only' : 'default';
         }
 
-        return 'with';
+        if (count($modes) > 1) {
+            return [false, null];
+        }
+
+        return [true, $modes[0] ?? 'with'];
     }
 
     /** @param array<string, mixed> $where */
-    private function isSoftDeleteWhere(CachingQueryBuilder $query, array $where): bool
+    private function isSoftDeleteWhere(QueryBuilder $query, array $where): bool
     {
-        return in_array(
-            strtolower((string) ($where['type'] ?? '')),
-            ['null', 'notnull'],
-            true,
-        )
+        return in_array($where['type'] ?? null, ['Null', 'NotNull'], true)
             && strtolower((string) ($where['boolean'] ?? 'and')) === 'and'
             && $this->isDeletedAtColumn($query, $where['column'] ?? null);
     }
 
-    private function isDeletedAtColumn(CachingQueryBuilder $query, mixed $column): bool
+    private function isValidQualifier(string $qualifier, string $table, ?string $alias): bool
     {
-        if (!is_string($column) || !is_string($query->normCacheDeletedAtColumn())) {
+        return $alias !== null
+            ? $qualifier === $alias
+            : $qualifier === $table;
+    }
+
+    private function isDeletedAtColumn(QueryBuilder $query, mixed $column): bool
+    {
+        if (!is_string($column) || !is_string($query->deletedAtColumn())) {
             return false;
         }
 
@@ -236,6 +334,6 @@ final class QueryPlanner
             $column = substr($column, strrpos($column, '.') + 1);
         }
 
-        return strtolower($column) === strtolower($query->normCacheDeletedAtColumn());
+        return strtolower($column) === strtolower($query->deletedAtColumn());
     }
 }

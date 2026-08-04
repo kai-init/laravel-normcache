@@ -6,7 +6,7 @@ final readonly class ObservationRecord
 {
     /**
      * @param  list<mixed>  $bindings
-     * @param  list<string>  $primaryKeys
+     * @param  list<string>  $primaryKeyTokens
      */
     public function __construct(
         public string $outcome,
@@ -17,7 +17,9 @@ final readonly class ObservationRecord
         public ?string $sql = null,
         public array $bindings = [],
         public ?string $modelClass = null,
-        public ?string $rowAction = null,
-        public array $primaryKeys = [],
+        public ?string $invalidationMode = null,
+        public array $primaryKeyTokens = [],
+        public float $startedAt = 0.0,
+        public float $endedAt = 0.0,
     ) {}
 }

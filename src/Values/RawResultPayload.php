@@ -2,11 +2,9 @@
 
 namespace NormCache\Values;
 
-use stdClass;
-
 final readonly class RawResultPayload
 {
-    /** @param list<stdClass> $rows
+    /** @param list<\stdClass> $rows
      * @param  array<string, string>  $versions
      */
     public function __construct(

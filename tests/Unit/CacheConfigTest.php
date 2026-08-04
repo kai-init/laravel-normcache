@@ -9,34 +9,35 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CacheConfigTest extends UnitTestCase
 {
-    public function test_it_builds_the_v4_configuration_contract(): void
+    public function test_populates_default_configuration_values(): void
     {
-        $config = CacheConfig::fromArray([
-            'connection' => 'normcache-test',
-            'key_prefix' => 'app:',
-            'ttl' => 600,
-            'query_ttl' => 60,
-            'primary_keys' => [],
-            'deployment_ids' => ['testing' => 'test'],
-            'events' => true,
-        ]);
+        $config = CacheConfig::fromArray([]);
 
-        $this->assertSame('normcache-test', $config->connection);
-        $this->assertSame('app:', $config->keyPrefix);
-        $this->assertSame(600, $config->ttl);
-        $this->assertSame(60, $config->queryTtl);
-        $this->assertSame(1000, $config->maxMembershipRows);
-        $this->assertSame(1_048_576, $config->maxMembershipBytes);
-        $this->assertSame(16_777_216, $config->maxCanonicalBytes);
-        $this->assertSame(4_194_304, $config->maxResultBytes);
-        $this->assertSame(1000, $config->maxPreciseInvalidationPks);
-        $this->assertSame(10, $config->publicationGuardMarginSeconds);
-        $this->assertTrue($config->dispatchEvents);
-        $this->assertFalse(property_exists($config, 'cooldown'));
-        $this->assertFalse(property_exists($config, 'fallbackEnabled'));
+        $this->assertSame('cache', $config->connection);
+        $this->assertSame('', $config->keyPrefix);
+        $this->assertSame('auto', $config->serializer);
+        $this->assertSame(604_800, $config->rowTtl);
+        $this->assertSame(3_600, $config->queryTtl);
+        $this->assertSame(86_400, $config->schemaTtl);
+        $this->assertSame(1000, $config->maxAutoOverlayRows);
+        $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
+        $this->assertSame(5, $config->buildingLockTtl);
+        $this->assertSame(200, $config->stampedeWaitMs);
+        $this->assertSame(64, $config->stampedeWakeTokens);
+        $this->assertTrue($config->enabled);
+        $this->assertFalse($config->dispatchEvents);
+        $this->assertFalse($config->debugbar);
     }
 
-    public function test_it_rejects_hash_tag_characters_in_the_key_prefix(): void
+    public function test_rejects_invalid_serializer(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('serializer');
+
+        CacheConfig::fromArray(['serializer' => 'json']);
+    }
+
+    public function test_rejects_hash_tag_characters_in_key_prefix(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('key_prefix');
@@ -45,7 +46,7 @@ final class CacheConfigTest extends UnitTestCase
     }
 
     #[DataProvider('invalidSafetyValues')]
-    public function test_it_rejects_invalid_safety_values(string $key, int $value): void
+    public function test_rejects_invalid_safety_values(string $key, int $value): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage($key);
@@ -56,19 +57,74 @@ final class CacheConfigTest extends UnitTestCase
     public static function invalidSafetyValues(): array
     {
         return [
-            ['max_membership_rows', 1001],
-            ['max_membership_bytes', 1_048_577],
-            ['max_canonical_bytes', 16_777_217],
-            ['max_result_bytes', 4_194_305],
-            ['max_precise_invalidation_pks', 1001],
+            ['max_precise_invalidation_keys', 1001],
             ['building_lock_ttl', 0],
-            ['publication_guard_margin_seconds', 9],
-            ['ttl', 0],
+            ['row_ttl', 0],
             ['query_ttl', 0],
+            ['auto_overlay_max_rows', -1],
+            ['schema_ttl', -1],
+            ['stampede_wake_tokens', 0],
+            ['stampede_wake_tokens', -1],
+            ['stampede_wake_tokens', 1001],
         ];
     }
 
-    public function test_it_validates_structured_primary_key_overrides(): void
+    public function test_accepts_the_maximum_stampede_wake_token_count(): void
+    {
+        $config = CacheConfig::fromArray(['stampede_wake_tokens' => 1000]);
+
+        $this->assertSame(1000, $config->stampedeWakeTokens);
+    }
+
+    public function test_accepts_zero_as_the_automatic_overlay_disable_value(): void
+    {
+        $config = CacheConfig::fromArray(['auto_overlay_max_rows' => 0]);
+
+        $this->assertSame(0, $config->maxAutoOverlayRows);
+    }
+
+    public function test_accepts_zero_as_the_schema_cache_disable_value(): void
+    {
+        $config = CacheConfig::fromArray(['schema_ttl' => 0]);
+
+        $this->assertSame(0, $config->schemaTtl);
+    }
+
+    public function test_expands_grouped_primary_key_overrides(): void
+    {
+        $config = CacheConfig::fromArray([
+            'primary_keys' => [[
+                'connection' => 'pgsql',
+                'database' => 'app',
+                'schema' => 'public',
+                'tables' => [
+                    'events' => ['column' => 'event_id', 'type' => 'string'],
+                    'orders' => ['column' => 'order_id', 'type' => 'integer'],
+                ],
+            ]],
+        ]);
+
+        $this->assertSame([
+            [
+                'connection' => 'pgsql',
+                'database' => 'app',
+                'table' => 'events',
+                'column' => 'event_id',
+                'type' => 'string',
+                'schema' => 'public',
+            ],
+            [
+                'connection' => 'pgsql',
+                'database' => 'app',
+                'table' => 'orders',
+                'column' => 'order_id',
+                'type' => 'integer',
+                'schema' => 'public',
+            ],
+        ], $config->primaryKeys);
+    }
+
+    public function test_validates_grouped_primary_key_overrides(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('type must be integer or string');
@@ -77,9 +133,25 @@ final class CacheConfigTest extends UnitTestCase
             'primary_keys' => [[
                 'connection' => 'tenant',
                 'database' => 'app',
+                'tables' => [
+                    'events' => ['column' => 'event_id', 'type' => 'uuid'],
+                ],
+            ]],
+        ]);
+    }
+
+    public function test_rejects_ungrouped_primary_key_overrides(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('groups require a non-empty tables array');
+
+        CacheConfig::fromArray([
+            'primary_keys' => [[
+                'connection' => 'pgsql',
+                'database' => 'app',
                 'table' => 'events',
                 'column' => 'event_id',
-                'type' => 'uuid',
+                'type' => 'string',
             ]],
         ]);
     }

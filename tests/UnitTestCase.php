@@ -34,7 +34,8 @@ abstract class UnitTestCase extends OrchestraTestCase
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
-        $app['config']->set('normcache.ttl', 3600);
+        $app['config']->set('normcache.row_ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
+        $app['config']->set('normcache.schema_ttl', 0);
     }
 }

@@ -7,11 +7,10 @@ use NormCache\Values\TableIdentity;
 
 final class TableIdentityTest extends UnitTestCase
 {
-    public function test_it_hashes_the_exact_length_prefixed_identity(): void
+    public function test_hashes_exact_length_prefixed_identity(): void
     {
         $identity = TableIdentity::fromParts(
             driver: 'pgsql',
-            deployment: 'production',
             connection: 'tenant',
             database: 'app',
             schema: 'public',
@@ -21,7 +20,7 @@ final class TableIdentityTest extends UnitTestCase
 
         $encoded = implode('', array_map(
             static fn(string $value): string => strlen($value) . ':' . $value,
-            ['nc4-table-v1', 'pgsql', 'production', 'tenant', 'app', 'public', 'acme_', 'posts'],
+            ['nc-table', 'tenant', 'pgsql', 'app', 'public', 'acme_', 'posts'],
         ));
 
         $this->assertSame($encoded, $identity->encoded);
@@ -31,9 +30,55 @@ final class TableIdentityTest extends UnitTestCase
 
     public function test_aliases_are_not_part_of_physical_identity(): void
     {
-        $one = TableIdentity::fromParts('mysql', 'prod', 'main', 'app', 'app', '', 'posts');
-        $two = TableIdentity::fromParts('mysql', 'prod', 'main', 'app', 'app', '', 'posts');
+        $one = TableIdentity::fromParts('mysql', 'main', 'app', 'app', '', 'posts');
+        $two = TableIdentity::fromParts('mysql', 'main', 'app', 'app', '', 'posts');
 
         $this->assertSame($one->hash, $two->hash);
+    }
+
+    public function test_database_sources_are_part_of_physical_identity(): void
+    {
+        $one = TableIdentity::fromParts('mysql', 'shard-a', 'app', 'app', '', 'posts');
+        $two = TableIdentity::fromParts('mysql', 'shard-b', 'app', 'app', '', 'posts');
+        $alias = TableIdentity::fromParts(
+            'mysql',
+            'shard-b',
+            'app',
+            'app',
+            '',
+            'posts',
+            sourceScope: 'shard-a',
+        );
+
+        $this->assertNotSame($one->hash, $two->hash);
+        $this->assertSame($one->hash, $alias->hash);
+    }
+
+    public function test_sqlite_repair_source_keeps_attached_schema(): void
+    {
+        $identity = TableIdentity::fromParts(
+            'sqlite',
+            'testing',
+            '/tmp/testing.sqlite',
+            'tenant',
+            '',
+            'posts',
+        );
+
+        $this->assertSame('tenant.posts', $identity->qualifiedTable());
+    }
+
+    public function test_sql_server_repair_source_keeps_database_and_schema(): void
+    {
+        $identity = TableIdentity::fromParts(
+            'sqlsrv',
+            'tenant',
+            'catalog',
+            'dbo',
+            '',
+            'posts',
+        );
+
+        $this->assertSame('catalog.dbo.posts', $identity->qualifiedTable());
     }
 }

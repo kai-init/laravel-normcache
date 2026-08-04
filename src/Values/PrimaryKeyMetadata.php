@@ -2,8 +2,6 @@
 
 namespace NormCache\Values;
 
-use InvalidArgumentException;
-
 final readonly class PrimaryKeyMetadata
 {
     public const INTEGER = 'integer';
@@ -15,11 +13,11 @@ final readonly class PrimaryKeyMetadata
         public string $family,
     ) {
         if ($column === '') {
-            throw new InvalidArgumentException('Primary-key column must not be empty.');
+            throw new \InvalidArgumentException('Primary-key column must not be empty.');
         }
 
         if (!in_array($family, [self::INTEGER, self::STRING], true)) {
-            throw new InvalidArgumentException('Primary-key family must be integer or string.');
+            throw new \InvalidArgumentException('Primary-key family must be integer or string.');
         }
     }
 
@@ -28,6 +26,11 @@ final readonly class PrimaryKeyMetadata
         return $this->family === self::INTEGER
             ? $this->integerToken($value)
             : $this->stringToken($value);
+    }
+
+    public function matchesToken(mixed $value, string $token): bool
+    {
+        return $this->token($value) === $token;
     }
 
     public function valueFromToken(string $token): int|string|null
@@ -72,8 +75,6 @@ final readonly class PrimaryKeyMetadata
             return null;
         }
 
-        // Reject values outside the native 64-bit range: PHP's (int) cast saturates
-        // rather than erroring, so a mismatch here means the value overflowed.
         if ((string) (int) $value !== $value) {
             return null;
         }

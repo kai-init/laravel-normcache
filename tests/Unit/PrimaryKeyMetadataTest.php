@@ -44,4 +44,17 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
         $this->assertSame('42', $metadata->valueFromToken('s:NDI'));
         $this->assertSame("\x00\xffa:{}", $metadata->valueFromToken('s:AP9hOnt9'));
     }
+
+    public function test_tokens_must_match_the_canonical_value_representation(): void
+    {
+        $integer = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+        $string = new PrimaryKeyMetadata('uuid', PrimaryKeyMetadata::STRING);
+
+        $this->assertTrue($integer->matchesToken(42, 'i:42'));
+        $this->assertTrue($integer->matchesToken('42', 'i:42'));
+        $this->assertFalse($integer->matchesToken('42', 's:42'));
+        $this->assertFalse($integer->matchesToken('42', 'i:0042'));
+        $this->assertTrue($string->matchesToken('42', 's:NDI'));
+        $this->assertFalse($string->matchesToken('42', 'i:42'));
+    }
 }

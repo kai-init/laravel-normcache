@@ -11,7 +11,7 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
-class QueryCallbackContractTest extends TestCase
+final class QueryCallbackContractTest extends TestCase
 {
     public function test_before_query_callback_affects_graph_key_and_results(): void
     {

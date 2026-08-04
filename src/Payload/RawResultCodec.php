@@ -3,18 +3,19 @@
 namespace NormCache\Payload;
 
 use NormCache\Support\CacheSerializer;
+use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\RawResultPayload;
-use stdClass;
 
 final readonly class RawResultCodec
 {
+    private const FORMAT = 4;
+
     public function __construct(
         private CacheSerializer $serializer,
-        private NativeRowAdapter $rows,
     ) {}
 
     /**
-     * @param  list<stdClass>  $rows
+     * @param  list<\stdClass>  $rows
      * @param  array<string, string>  $versions
      */
     public function encode(
@@ -25,11 +26,17 @@ final readonly class RawResultCodec
     ): string {
         ksort($versions, SORT_STRING);
 
+        $nativeRows = [];
+
+        foreach ($rows as $row) {
+            $nativeRows[] = (array) $row;
+        }
+
         $envelope = [
-            'f' => 4,
+            'f' => self::FORMAT,
             'ep' => $epoch,
             'vec' => $versions,
-            'rows' => array_map($this->rows->toArray(...), $rows),
+            'rows' => $nativeRows,
         ];
 
         if ($tagVersion !== null) {
@@ -45,7 +52,7 @@ final readonly class RawResultCodec
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['vec'] ?? null)
             || !is_array($envelope['rows'] ?? null)
@@ -70,49 +77,81 @@ final readonly class RawResultCodec
         );
     }
 
-    public function encodeRow(stdClass $row, string $epoch): string
+    public function encodeRow(\stdClass $row, string $epoch): string
     {
         return $this->serializer->encode([
-            'f' => 4,
+            'f' => self::FORMAT,
             'ep' => $epoch,
-            'row' => $this->rows->toArray($row),
+            'row' => (array) $row,
         ]);
     }
 
-    public function decodeRow(string $payload): RawResultPayload
-    {
+    public function decodeRow(
+        string $payload,
+        ?PrimaryKeyMetadata $primaryKey = null,
+        ?string $expectedToken = null,
+    ): RawResultPayload {
         $envelope = $this->serializer->decode($payload);
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['row'] ?? null)
+            || !$this->matchesToken($envelope['row'], $primaryKey, $expectedToken)
         ) {
             return RawResultPayload::corrupt();
         }
 
         return new RawResultPayload(
             valid: true,
-            rows: [$this->rows->toObject($envelope['row'])],
+            rows: [(object) $envelope['row']],
             epoch: $envelope['ep'],
         );
     }
 
-    public function decodeRowObject(string $payload, string $expectedEpoch): ?stdClass
-    {
+    public function decodeRowObject(
+        string $payload,
+        string $expectedEpoch,
+        ?PrimaryKeyMetadata $primaryKey = null,
+        ?string $expectedToken = null,
+    ): ?\stdClass {
         $envelope = $this->serializer->decode($payload);
 
         if (
             !is_array($envelope)
-            || ($envelope['f'] ?? null) !== 4
+            || ($envelope['f'] ?? null) !== self::FORMAT
             || ($envelope['ep'] ?? null) !== $expectedEpoch
             || !is_array($envelope['row'] ?? null)
         ) {
             return null;
         }
 
+        if ($primaryKey !== null && $expectedToken !== null) {
+            $value = $envelope['row'][$primaryKey->column] ?? null;
+
+            if (!$primaryKey->matchesToken($value, $expectedToken)) {
+                return null;
+            }
+        }
+
         return (object) $envelope['row'];
+    }
+
+    private function matchesToken(
+        array $row,
+        ?PrimaryKeyMetadata $primaryKey,
+        ?string $expectedToken,
+    ): bool {
+        if ($primaryKey === null || $expectedToken === null) {
+            return true;
+        }
+
+        if (!array_key_exists($primaryKey->column, $row)) {
+            return false;
+        }
+
+        return $primaryKey->matchesToken($row[$primaryKey->column], $expectedToken);
     }
 
     /** @return array<string, string>|null */
@@ -133,7 +172,7 @@ final readonly class RawResultCodec
         return $result;
     }
 
-    /** @return list<stdClass>|null */
+    /** @return list<\stdClass>|null */
     private function rowList(array $rows): ?array
     {
         $result = [];
@@ -143,7 +182,7 @@ final readonly class RawResultCodec
                 return null;
             }
 
-            $result[] = $this->rows->toObject($row);
+            $result[] = (object) $row;
         }
 
         return $result;

@@ -3,62 +3,70 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
-use NormCache\Values\CacheConfig;
 use NormCache\Values\TableIdentity;
 
 final class TableIdentityResolver
 {
-    /** @var array<string, array{connection: string, schema: ?string}> */
-    private array $effectiveSchemas = [];
-
-    /** @var array<string, ?TableIdentity> */
-    private array $resolvedIdentities = [];
+    /** @var \WeakMap<Connection, ConnectionMetadata> */
+    private \WeakMap $connections;
 
     public function __construct(
-        private readonly CacheConfig $config,
-    ) {}
+        private readonly SchemaRepository $persistent,
+    ) {
+        $this->connections = new \WeakMap;
+    }
 
-    public function clear(?string $connection = null): void
+    public function clear(): void
     {
-        if ($connection === null) {
-            $this->effectiveSchemas = [];
-            $this->resolvedIdentities = [];
-
-            return;
-        }
-
-        $this->effectiveSchemas = array_filter(
-            $this->effectiveSchemas,
-            static fn(array $entry): bool => $entry['connection'] !== $connection,
-        );
-        $this->resolvedIdentities = array_filter(
-            $this->resolvedIdentities,
-            static fn(?TableIdentity $id, string $key): bool => !str_starts_with($key, $connection . ':'),
-            ARRAY_FILTER_USE_BOTH,
-        );
+        $this->connections = new \WeakMap;
     }
 
     public function resolve(Connection $connection, mixed $from): ?TableIdentity
     {
+        return $this->resolveIdentity($connection, $from, verifyView: true);
+    }
+
+    public function resolveBaseTable(Connection $connection, mixed $from): ?TableIdentity
+    {
+        return $this->resolveIdentity($connection, $from, verifyView: false);
+    }
+
+    private function resolveIdentity(
+        Connection $connection,
+        mixed $from,
+        bool $verifyView,
+    ): ?TableIdentity {
         if (!is_string($from)) {
             return null;
         }
 
-        $cacheKey = $connection->getName() . ':' . spl_object_id($connection) . ':' . $from;
+        $sourceScope = ConnectionSourceResolver::resolve($connection);
 
-        if (array_key_exists($cacheKey, $this->resolvedIdentities)) {
-            return $this->resolvedIdentities[$cacheKey];
+        if ($sourceScope === null) {
+            return null;
         }
 
-        $identity = $this->doResolve($connection, $from);
-        $this->resolvedIdentities[$cacheKey] = $identity;
+        $metadata = $this->metadata($connection, $sourceScope);
+
+        if (array_key_exists($from, $metadata->identities)) {
+            return $metadata->identities[$from];
+        }
+
+        $identity = $this->doResolve($connection, $from, $sourceScope, $verifyView);
+
+        if ($identity !== null) {
+            $metadata->identities[$from] = $identity;
+        }
 
         return $identity;
     }
 
-    private function doResolve(Connection $connection, string $from): ?TableIdentity
-    {
-
+    private function doResolve(
+        Connection $connection,
+        string $from,
+        string $sourceScope,
+        bool $verifyView,
+    ): ?TableIdentity {
         $table = $this->physicalTable($from);
 
         if ($table === null) {
@@ -74,6 +82,17 @@ final class TableIdentityResolver
         );
 
         if (
+            in_array('', $parts, true)
+            || count($parts) > match ($driver) {
+                'mysql', 'mariadb', 'pgsql', 'sqlite' => 2,
+                'sqlsrv' => 3,
+                default => 1,
+            }
+        ) {
+            return null;
+        }
+
+        if (
             in_array($driver, ['mysql', 'mariadb'], true)
             && count($parts) === 2
         ) {
@@ -82,7 +101,32 @@ final class TableIdentityResolver
             $database = $parts[0];
         }
 
+        $schema = $this->schema(
+            $connection,
+            $driver,
+            $database,
+            $table,
+            $sourceScope,
+        );
+
+        if ($schema === null) {
+            return null;
+        }
+
+        $resolvedTable = $this->unqualifiedTable($table);
+
         if ($driver === 'sqlite') {
+            $schema = strtolower($schema === '' ? 'main' : $schema);
+            $resolvedTable = strtolower($resolvedTable);
+
+            if ($schema !== 'main') {
+                $database = (string) $this->sqliteAttachmentPath(
+                    $connection,
+                    $schema,
+                    $sourceScope,
+                );
+            }
+
             if ($database === ':memory:' || $database === '') {
                 return null;
             }
@@ -96,36 +140,45 @@ final class TableIdentityResolver
             $database = $real;
         }
 
-        $schema = $this->schema($connection, $driver, $database, $table);
-
-        if ($schema === null) {
-            return null;
-        }
-        $deployment = (string) ($this->config->deploymentIds[$connectionName]
-            ?? hash('xxh128', TableIdentity::encodeFields([
-                'nc4-deployment-v1',
-                $driver,
-                $connectionName,
-                $database,
-                $schema,
-            ])));
-
-        return TableIdentity::fromParts(
+        $prefix = (string) $connection->getTablePrefix();
+        $identity = TableIdentity::fromParts(
             driver: $driver,
-            deployment: $deployment,
             connection: $connectionName,
             database: $database,
             schema: $schema,
-            prefix: (string) $connection->getTablePrefix(),
-            table: $this->unqualifiedTable($table),
+            prefix: $prefix,
+            table: $resolvedTable,
+            sourceScope: $sourceScope,
         );
+
+        if (!$verifyView) {
+            return $identity;
+        }
+
+        $this->persistent->prime($connection, $schema, $identity);
+        $isView = $this->isView(
+            $connection,
+            $schema,
+            $resolvedTable,
+            $sourceScope,
+        );
+
+        if ($isView === null) {
+            return null;
+        }
+
+        return $isView ? $identity->asView() : $identity;
     }
 
     private function physicalTable(string $from): ?string
     {
         $from = trim($from);
 
-        if (preg_match('/^([^\\s]+)(?:\\s+(?:as\\s+)?[^\\s]+)?$/i', $from, $matches) !== 1) {
+        if (preg_match('/(?:`[^`]*\s[^`]*`|"[^"]*\s[^"]*"|\[[^]]*\s[^]]*\])/u', $from) === 1) {
+            return null;
+        }
+
+        if (preg_match('/^([^\s]+)(?:\s+(?:as\s+)?[^\s]+)?$/i', $from, $matches) !== 1) {
             return null;
         }
 
@@ -139,6 +192,7 @@ final class TableIdentityResolver
         string $driver,
         string $database,
         string $table,
+        string $sourceScope,
     ): ?string {
         if ($driver === 'mysql' || $driver === 'mariadb') {
             return $database;
@@ -156,17 +210,29 @@ final class TableIdentityResolver
         }
 
         return match ($driver) {
-            'pgsql', 'sqlsrv' => $this->effectiveSchema($connection),
+            'pgsql', 'sqlsrv' => $this->effectiveSchema($connection, $sourceScope),
             default => '',
         };
     }
 
-    private function effectiveSchema(Connection $connection): ?string
-    {
-        $key = spl_object_id($connection) . ':' . $connection->getDriverName();
+    private function effectiveSchema(
+        Connection $connection,
+        string $sourceScope,
+    ): ?string {
+        $metadata = $this->metadata($connection, $sourceScope);
 
-        if (array_key_exists($key, $this->effectiveSchemas)) {
-            return $this->effectiveSchemas[$key]['schema'];
+        // The flag separates "answered with no schema name" from "never asked":
+        // a lookup that throws is transient and must stay unmemoized.
+        if ($metadata->schemaResolved) {
+            return $metadata->schema;
+        }
+
+        $persistent = $this->persistent->effectiveSchema($connection);
+
+        if (is_string($persistent)) {
+            $metadata->schemaResolved = true;
+
+            return $metadata->schema = $persistent;
         }
 
         try {
@@ -176,16 +242,107 @@ final class TableIdentityResolver
             if ($schema === '') {
                 $schema = null;
             }
+
+            if ($schema !== null) {
+                $this->persistent->putEffectiveSchema($connection, $schema);
+            }
         } catch (\Throwable) {
-            $schema = null;
+            return null;
         }
 
-        $this->effectiveSchemas[$key] = [
-            'connection' => (string) $connection->getName(),
-            'schema' => $schema,
-        ];
+        $metadata->schemaResolved = true;
 
-        return $schema;
+        return $metadata->schema = $schema;
+    }
+
+    private function sqliteAttachmentPath(
+        Connection $connection,
+        string $schema,
+        string $sourceScope,
+    ): ?string {
+        $metadata = $this->metadata($connection, $sourceScope);
+
+        if (array_key_exists($schema, $metadata->attachments)) {
+            return $metadata->attachments[$schema];
+        }
+
+        try {
+            $path = null;
+
+            foreach ($connection->select('pragma database_list') as $attachment) {
+                if (strtolower((string) $attachment->name) === $schema) {
+                    $path = ((string) $attachment->file) ?: null;
+
+                    break;
+                }
+            }
+
+            return $metadata->attachments[$schema] = $path;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function isView(
+        Connection $connection,
+        string $schema,
+        string $table,
+        string $sourceScope,
+    ): ?bool {
+        $metadata = $this->metadata($connection, $sourceScope);
+        $name = strtolower((string) $connection->getTablePrefix() . $this->unqualifiedTable($table));
+
+        if (isset($metadata->views[$schema])) {
+            return isset($metadata->views[$schema][$name]);
+        }
+
+        $persistent = $this->persistent->views($connection, $schema);
+
+        if ($persistent !== null) {
+            $metadata->views[$schema] = $persistent;
+
+            return isset($persistent[$name]);
+        }
+
+        try {
+            $views = [];
+
+            $viewSchema = $schema === '' && $connection->getDriverName() === 'sqlite'
+                ? 'main'
+                : ($schema === '' ? null : $schema);
+
+            foreach ($connection->getSchemaBuilder()->getViews($viewSchema) as $view) {
+                $views[strtolower($view['name'])] = true;
+            }
+
+            $metadata->views[$schema] = $views;
+            $this->persistent->putViews($connection, $schema, $views);
+
+            return isset($views[$name]);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function metadata(
+        Connection $connection,
+        string $sourceScope,
+    ): ConnectionMetadata {
+        $database = (string) $connection->getDatabaseName();
+        $prefix = (string) $connection->getTablePrefix();
+        $metadata = $this->connections[$connection] ?? null;
+
+        if (
+            $metadata === null
+            || $metadata->sourceScope !== $sourceScope
+            || $metadata->database !== $database
+            || $metadata->prefix !== $prefix
+        ) {
+            $metadata = new ConnectionMetadata($sourceScope, $database, $prefix);
+            $this->connections[$connection] = $metadata;
+        }
+
+        return $metadata;
     }
 
     private function unqualifiedTable(string $table): string

@@ -3,169 +3,218 @@
 namespace NormCache\Cache;
 
 use Illuminate\Database\Connection;
-use InvalidArgumentException;
-use NormCache\Database\CachingQueryBuilder;
-use NormCache\Payload\MembershipCodec;
-use NormCache\Payload\RawResultCodec;
+use NormCache\Database\QueryBuilder;
+use NormCache\Database\QueryStatement;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
+use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
+use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
-use NormCache\Support\Reporter;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
+use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
+use NormCache\Values\OverlayAdmission;
+use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RuntimeState;
+use NormCache\Values\RowRepair;
 use NormCache\Values\TableIdentity;
-use stdClass;
-use Throwable;
 
 final readonly class Engine
 {
     public function __construct(
         private CacheConfig $config,
-        private RuntimeState $runtime,
+        private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private TableIdentityResolver $tables,
         private PrimaryKeyResolver $primaryKeys,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
-        private RawResultCodec $codec,
-        private MembershipCodec $memberships,
         private DependencyAnalyzer $dependencies,
-        private Reporter $reporter,
+        private SqlVolatilityScanner $volatility,
+        private QueryObserver $observer,
+        private CacheStateResolver $states,
+        private CanonicalRepository $canonical,
+        private ResultRepository $results,
+        private BuildLeaseCoordinator $leases,
+        private RowRepairer $repairer,
+        private ResultOverlayPublisher $overlays,
+        private CanonicalRowRepository $rows,
     ) {}
 
-    /** @param list<mixed> $bindings
+    /**
      * @param  callable(): array  $database
      * @param  callable(): array  $primaryDatabase
      */
     public function select(
-        CachingQueryBuilder $query,
-        string $sql,
-        array $bindings,
+        QueryBuilder $query,
+        QueryStatement $statement,
         string $operation,
         callable $database,
         callable $primaryDatabase,
     ): array {
-        if (!$this->config->enabled || !$this->runtime->available()) {
+        if (!$this->runtime->readable()) {
             return $database();
         }
+
+        $this->observer->begin();
 
         $connection = $query->getConnection();
-
-        if (!$connection instanceof Connection) {
-            return $database();
-        }
-
         $directRoot = $this->tables->resolve($connection, $query->from);
         $table = $directRoot ?? $this->declaredRoot($query, $connection);
 
         if ($table === null) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'unidentifiable_dependency',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
+        }
 
-            return $database();
+        if ($table->isView && $query->dependencies() === []) {
+            return $this->bypass(
+                $query,
+                'view_dependencies_required',
+                $statement,
+                $database,
+            );
         }
 
         $analysis = $this->dependencies->analyze($connection, $query, $table);
 
+        if ($table->isView && !$this->hasExternalDependency($table, $analysis->tables)) {
+            return $this->bypass(
+                $query,
+                'view_dependencies_required',
+                $statement,
+                $database,
+            );
+        }
+
+        if ($analysis->unresolved) {
+            return $this->bypass(
+                $query,
+                'unresolvable_declared_dependency',
+                $statement,
+                $database,
+            );
+        }
+
         if ($analysis->opaque && !$analysis->explicit) {
-            $this->reporter->bypass(
+            return $this->bypass(
                 $query,
                 'unidentifiable_dependency',
-                $sql,
-                $bindings,
+                $statement,
+                $database,
             );
-
-            return $database();
         }
 
         $dependencies = $analysis->tables;
-        $primaryKey = $this->primaryKeys->resolve($query, $connection, $table);
+        $forceQueryGroup = $analysis->opaque && $directRoot === null;
         $plan = $this->planner->plan(
             $query,
             $table,
-            $primaryKey,
+            fn(): ?PrimaryKeyMetadata => $this->primaryKeys->resolve($query, $connection, $table),
             $dependencies,
-            $analysis->opaque && $directRoot === null,
+            $forceQueryGroup,
             $operation,
         );
-        $namespace = $this->identity->namespace($query->normCacheTag());
-        try {
-            $queryHash = $this->identity->hash(
-                route: $plan->route,
-                rootHash: $table->hash,
-                dependencyHashes: array_map(
-                    static fn(TableIdentity $dependency): string => $dependency->hash,
-                    $dependencies,
-                ),
-                sql: $sql,
-                bindings: $connection->prepareBindings($bindings),
-                namespace: $namespace,
-                operation: $operation,
-            );
-        } catch (InvalidArgumentException) {
-            $this->reporter->bypass(
+
+        if (
+            $plan->route !== QueryPlan::DIRECT_PK
+            && $this->volatility->isVolatile($statement->sql())
+        ) {
+            return $this->bypass(
                 $query,
-                'unsupported_query_shape',
-                $sql,
-                $bindings,
+                'volatile_expression',
+                $statement,
+                $database,
                 $plan,
             );
-
-            return $database();
         }
 
-        try {
-            [$state, $cached] = $this->read($query, $plan, $namespace, $queryHash);
+        $namespace = $this->identity->namespace($query->configuredTag());
+        $canonicalQueryHash = null;
+        $dependencyHashes = array_map(
+            static fn(TableIdentity $dependency): string => $dependency->hash,
+            $dependencies,
+        );
+        $hash = $this->queryHashResolver(
+            $query,
+            $plan,
+            $connection,
+            $dependencyHashes,
+            $namespace,
+            $operation,
+            $statement,
+        );
 
-            if ($cached['hit']) {
-                if (($cached['reason'] ?? null) !== null) {
-                    $this->reporter->miss(
+        try {
+            $canonicalQueryHash = $this->resultOverlayCanonicalHash(
+                $query,
+                $plan,
+                $connection,
+                $dependencyHashes,
+                $namespace,
+                $statement,
+            );
+            $cached = $this->readCache(
+                $query,
+                $plan,
+                $namespace,
+                $hash,
+                $canonicalQueryHash,
+            );
+
+            if ($cached->served()) {
+                if ($this->observer->observing()) {
+                    $this->reportRead(
                         $query,
                         $plan,
-                        $queryHash,
-                        $sql,
-                        $bindings,
-                        $cached['reason'],
+                        $hash->value(),
+                        $statement,
+                        $cached,
                     );
-                } else {
-                    $this->reporter->hit($query, $plan, $queryHash, $sql, $bindings);
                 }
 
-                return $cached['rows'];
+                return $cached->rows;
             }
-        } catch (Throwable $exception) {
+        } catch (\InvalidArgumentException) {
+            return $this->bypass(
+                $query,
+                'unsupported_query_shape',
+                $statement,
+                $database,
+                $plan,
+            );
+        } catch (\Throwable $exception) {
             $this->fail($exception);
 
             return $database();
         }
 
         try {
-            $lease = $this->claim($plan, $state, $namespace, $queryHash);
-        } catch (Throwable $exception) {
+            $queryHash = $hash->value();
+            $lease = $this->leases->claim($plan, $cached->state, $namespace, $queryHash);
+        } catch (\Throwable $exception) {
             $this->fail($exception);
 
             return $database();
         }
 
-        $this->reporter->miss(
+        $this->observer->miss(
             $query,
             $plan,
             $queryHash,
-            $sql,
-            $bindings,
-            $cached['reason'] ?? null,
+            $statement,
+            $cached->reason,
         );
 
         if (!$lease->owner) {
@@ -175,14 +224,26 @@ final readonly class Engine
                         $lease->wakeKey,
                         $this->config->stampedeWaitMs / 1000,
                     );
-                    [, $retry] = $this->read($query, $plan, $namespace, $queryHash);
+                    $retry = $this->read(
+                        $query,
+                        $plan,
+                        $namespace,
+                        $queryHash,
+                        $canonicalQueryHash,
+                    );
 
-                    if ($retry['hit']) {
-                        $this->reporter->hit($query, $plan, $queryHash, $sql, $bindings);
+                    if ($retry->served()) {
+                        $this->reportRead(
+                            $query,
+                            $plan,
+                            $queryHash,
+                            $statement,
+                            $retry,
+                        );
 
-                        return $retry['rows'];
+                        return $retry->rows;
                     }
-                } catch (Throwable $exception) {
+                } catch (\Throwable $exception) {
                     $this->fail($exception);
 
                     return $database();
@@ -194,8 +255,8 @@ final readonly class Engine
 
         try {
             $rows = $primaryDatabase();
-        } catch (Throwable $exception) {
-            $this->release($lease);
+        } catch (\Throwable $exception) {
+            $this->leases->release($lease);
 
             throw $exception;
         }
@@ -203,974 +264,669 @@ final readonly class Engine
         try {
             $after = $this->state($plan, $namespace, $queryHash);
 
-            if ($after->equals($state)) {
-                $this->publish($query, $plan, $state, $rows, $lease);
+            if ($after->equals($cached->state)) {
+                $this->publish(
+                    $query,
+                    $plan,
+                    $cached->state,
+                    $rows,
+                    $lease,
+                    $namespace,
+                    $queryHash,
+                );
             } else {
-                $this->release($lease);
+                $this->leases->release($lease);
             }
-        } catch (Throwable $exception) {
-            $this->release($lease);
+        } catch (\Throwable $exception) {
+            $this->leases->release($lease);
             $this->fail($exception);
         }
 
         return $rows;
     }
 
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string}} */
+    /**
+     * @param  callable(): array  $database
+     */
+    private function bypass(
+        QueryBuilder $query,
+        string $reason,
+        QueryStatement $statement,
+        callable $database,
+        ?QueryPlan $plan = null,
+    ): array {
+        $this->observer->bypass($query, $reason, $statement, $plan);
+
+        return $database();
+    }
+
+    /** @param list<string> $dependencyHashes */
+    private function queryHashResolver(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
+        string $namespace,
+        string $operation,
+        QueryStatement $statement,
+    ): QueryHashResolver {
+        if ($plan->route === QueryPlan::CANONICAL) {
+            return new QueryHashResolver(fn(): string => $this->canonicalQueryHash(
+                $query,
+                $plan,
+                $connection,
+                $dependencyHashes,
+                $namespace,
+                $statement,
+            ));
+        }
+
+        return new QueryHashResolver(function () use (
+            $plan,
+            $dependencyHashes,
+            $namespace,
+            $operation,
+            $statement,
+            $connection,
+        ): string {
+            return $this->identity->hash(
+                route: $plan->route,
+                rootHash: $plan->root->hash,
+                dependencyHashes: $dependencyHashes,
+                sql: $statement->sql(),
+                bindings: $statement->preparedBindings($connection),
+                namespace: $namespace,
+                operation: $operation,
+            );
+        });
+    }
+
+    /** @param list<string> $dependencyHashes */
+    private function resultOverlayCanonicalHash(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
+        string $namespace,
+        QueryStatement $statement,
+    ): ?string {
+        if (
+            $plan->route !== QueryPlan::RESULT
+            || $plan->projectedColumns === null
+            || $plan->primaryKeyToken !== null
+        ) {
+            return null;
+        }
+
+        return $this->canonicalQueryHash(
+            $query,
+            $plan,
+            $connection,
+            $dependencyHashes,
+            $namespace,
+            $statement,
+        );
+    }
+
+    private function readCache(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        QueryHashResolver $hash,
+        ?string $canonicalQueryHash,
+    ): CacheRead {
+        if ($plan->route === QueryPlan::DIRECT_PK) {
+            return $this->readDirect($plan, $namespace, $hash);
+        }
+
+        return $this->read(
+            $query,
+            $plan,
+            $namespace,
+            $hash->value(),
+            $canonicalQueryHash,
+        );
+    }
+
+    private function reportRead(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $queryHash,
+        QueryStatement $statement,
+        CacheRead $read,
+    ): void {
+        if ($read->outcome === ReadOutcome::REPAIRED) {
+            $this->observer->repaired(
+                $query,
+                $plan,
+                $queryHash,
+                $statement,
+                $read->reason,
+            );
+
+            return;
+        }
+
+        $this->observer->hit(
+            $query,
+            $plan,
+            $queryHash,
+            $statement,
+            $read->reason,
+        );
+    }
+
     private function read(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-    ): array {
+        ?string $canonicalQueryHash = null,
+    ): CacheRead {
         if ($plan->route === QueryPlan::CANONICAL) {
-            return $this->readCanonical($query, $plan, $namespace, $queryHash);
-        }
-
-        if ($plan->route === QueryPlan::DIRECT_PK) {
-            return $this->readDirect($plan, $namespace, $queryHash);
+            return $plan->materializeResult && $this->config->maxAutoOverlayRows > 0
+                ? $this->readCanonicalWithResultOverlay(
+                    $query,
+                    $plan,
+                    $namespace,
+                    $queryHash,
+                )
+                : $this->readCanonical($query, $plan, $namespace, $queryHash);
         }
 
         if ($plan->route === QueryPlan::QUERY_GROUP) {
             $entryKey = $this->keys->queryGroupResult($queryHash, $namespace);
-            [$state, $values] = $this->resolveState(
+            [$state, $values] = $this->states->resolve(
                 $plan,
                 $namespace,
                 $queryHash,
                 alsoFetch: [$entryKey],
             );
 
-            return [$state, $this->decodeResult($plan, $state, $values[$entryKey] ?? null)];
+            return $this->results->read($state, $values[$entryKey] ?? null);
         }
 
-        $entry = $this->store->fetchExact(
+        if (
+            $canonicalQueryHash !== null
+            && $plan->projectedColumns !== null
+            && $plan->primaryKeyToken === null
+        ) {
+            return $this->readResultOrCanonicalProjection(
+                $query,
+                $plan,
+                $namespace,
+                $queryHash,
+                $canonicalQueryHash,
+            );
+        }
+
+        $entry = $this->store->fetchResult(
             $this->keys->version($plan->root),
             $this->keys->tablePrefix($plan->root),
             $namespace,
             $queryHash,
         );
         $version = is_string($entry[0] ?? null) ? $entry[0] : '0';
-        [$state] = $this->resolveState($plan, $namespace, $queryHash, $version);
-
-        return [$state, $this->decodeResult($plan, $state, $entry[1] ?? null)];
-    }
-
-    /** @return array{hit: bool, rows: array, reason: ?string} */
-    private function decodeResult(QueryPlan $plan, CacheState $state, mixed $raw): array
-    {
-        if (!is_string($raw)) {
-            return ['hit' => false, 'rows' => [], 'reason' => null];
-        }
-
-        $payload = $this->codec->decode($raw);
-
-        if (!$payload->valid) {
-            $this->store->delete($state->key);
-
-            return ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload'];
-        }
-
-        $hit = $payload->epoch === $state->epoch
-            && $payload->versions === $state->versions
-            && $payload->tagVersion === $state->tag;
-
-        return ['hit' => $hit, 'rows' => $hit ? $payload->rows : [], 'reason' => null];
-    }
-
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string}} */
-    private function readDirect(QueryPlan $plan, string $namespace, string $queryHash): array
-    {
-        $result = $this->store->fetchRow(
-            $this->keys->generation($plan->root),
-            $this->keys->tablePrefix($plan->root),
-            (string) $plan->primaryKeyToken,
-        );
-        $generation = is_string($result[0] ?? null) ? $result[0] : '0';
-        $raw = $result[1] ?? null;
-
-        $resolve = fn(): CacheState => $this->resolveState(
-            $plan,
-            $namespace,
-            $queryHash,
-            knownGeneration: $generation,
-        )[0];
-
-        if (!is_string($raw)) {
-            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => null]];
-        }
-
-        $payload = $this->codec->decodeRow($raw);
-
-        if (!$payload->valid) {
-            $this->store->delete(
-                $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-            );
-
-            return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
-        }
-
-        $epoch = $this->epoch();
-        $hit = $payload->epoch === $epoch;
-        $rows = $hit ? $payload->rows : [];
+        $raw = $entry[1] ?? null;
 
         if (
-            $hit
-            && $rows !== []
-            && $plan->softDeleteMode !== null
-            && $plan->deletedAtColumn !== null
+            !is_string($raw)
+            && $plan->projectedColumns !== null
+            && $plan->primaryKeyToken !== null
         ) {
-            $row = $rows[0];
+            $fallback = $this->readResultRowFallback($plan);
 
-            if (!property_exists($row, $plan->deletedAtColumn)) {
-                $this->store->delete(
-                    $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                );
-
-                return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => 'corrupt_payload']];
-            }
-
-            $deleted = $row->{$plan->deletedAtColumn} !== null;
-
-            if (
-                $plan->softDeleteMode === 'default' && $deleted
-                || $plan->softDeleteMode === 'only' && !$deleted
-            ) {
-                $rows = [];
+            if ($fallback !== null) {
+                return $fallback;
             }
         }
 
-        if ($hit) {
-            // version/versions/guard are placeholders: select() returns on a hit and
-            // never reads the state. Resolving them truthfully costs a round trip.
-            return [
-                new CacheState(
-                    key: $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-                    epoch: $epoch,
-                    version: '0',
-                    generation: $generation,
-                    versions: [],
-                    tag: null,
-                    tagKey: null,
-                    guard: '0',
-                ),
-                ['hit' => true, 'rows' => $rows, 'reason' => null],
-            ];
-        }
+        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
-        return [$resolve(), ['hit' => false, 'rows' => [], 'reason' => null]];
+        return $this->results->read($state, $raw);
     }
 
-    private function epoch(): string
-    {
-        return $this->runtime->epoch(fn(): string => $this->store->getRaw($this->keys->epoch()) ?? '0');
-    }
-
-    /** @return array{0: CacheState, 1: array{hit: bool, rows: array, reason: ?string}} */
-    private function readCanonical(
-        CachingQueryBuilder $query,
+    private function readCanonicalWithResultOverlay(
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-    ): array {
+    ): CacheRead {
+        $head = $this->store->fetchResultOrCanonical(
+            versionKey: $this->keys->version($plan->root),
+            generationKey: $this->keys->generation($plan->root),
+            tablePrefix: $this->keys->tablePrefix($plan->root),
+            namespace: $namespace,
+            resultQueryHash: $queryHash,
+            canonicalQueryHash: $queryHash,
+        );
+        $status = $head[0] ?? null;
+        $version = is_string($head[1] ?? null) ? $head[1] : '0';
+
+        if ($status === 'result') {
+            $resultPlan = $plan->asFullResultOverlay();
+            [$state] = $this->states->resolve($resultPlan, $namespace, $queryHash, $version);
+            $result = $this->results->read($state, $head[2] ?? null);
+
+            if ($result->served()) {
+                return $result->withReason('result_overlay');
+            }
+
+            $overlayReason = $result->reason;
+            $canonicalResult = $this->readCanonical(
+                $query,
+                $plan,
+                $namespace,
+                $queryHash,
+            );
+
+            if ($canonicalResult->promotable()) {
+                $promoted = $this->overlays->promote(
+                    $query,
+                    $resultPlan,
+                    $canonicalResult->state,
+                    $namespace,
+                    $queryHash,
+                    $canonicalResult->rows,
+                    wakeWaiters: false,
+                );
+
+                if ($overlayReason === 'corrupt_payload') {
+                    $canonicalResult = $this->overlays->rebuildOutcome(
+                        $canonicalResult,
+                        $promoted,
+                    );
+                }
+            }
+
+            return $canonicalResult;
+        }
+
+        $generation = is_string($head[2] ?? null) ? $head[2] : '0';
+        $canonicalHead = $status === 'membership'
+            ? ['hit', $version, $generation, $head[3] ?? null]
+            : [$status, $version, $generation];
+        $result = $this->readCanonicalHead(
+            $query,
+            $plan,
+            $namespace,
+            $queryHash,
+            $canonicalHead,
+            true,
+        );
+
+        if ($result->promotable()) {
+            $this->overlays->promote(
+                $query,
+                $plan->asFullResultOverlay(),
+                $result->state,
+                $namespace,
+                $queryHash,
+                $result->rows,
+                wakeWaiters: false,
+            );
+        }
+
+        return $result;
+    }
+
+    private function readResultOrCanonicalProjection(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+        string $canonicalQueryHash,
+    ): CacheRead {
+        $head = $this->store->fetchResultOrCanonical(
+            versionKey: $this->keys->version($plan->root),
+            generationKey: $this->keys->generation($plan->root),
+            tablePrefix: $this->keys->tablePrefix($plan->root),
+            namespace: $namespace,
+            resultQueryHash: $queryHash,
+            canonicalQueryHash: $canonicalQueryHash,
+        );
+        $status = $head[0] ?? null;
+        $version = is_string($head[1] ?? null) ? $head[1] : '0';
+        $fallbackReason = $status === 'corrupt' ? 'corrupt_payload' : null;
+
+        if ($status === 'result') {
+            [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
+            $result = $this->results->read($state, $head[2] ?? null);
+
+            if ($result->served()) {
+                return $result->withReason('result_overlay');
+            }
+
+            $fallbackReason = $result->reason;
+            $head = $this->store->fetchCanonical(
+                versionKey: $this->keys->version($plan->root),
+                generationKey: $this->keys->generation($plan->root),
+                tablePrefix: $this->keys->tablePrefix($plan->root),
+                namespace: $namespace,
+                queryHash: $canonicalQueryHash,
+            );
+            $status = $head[0] ?? null;
+            $version = is_string($head[1] ?? null) ? $head[1] : '0';
+        }
+
+        if ($status === 'membership' || $status === 'hit') {
+            $generation = is_string($head[2] ?? null) ? $head[2] : '0';
+            $result = $this->readCanonicalHead(
+                $query,
+                $plan->asCanonicalProjectionFallback(),
+                $namespace,
+                $canonicalQueryHash,
+                ['hit', $version, $generation, $head[3] ?? null],
+                false,
+            );
+
+            if ($result->served()) {
+                $projected = $this->projectRows(
+                    $result->rows,
+                    (array) $plan->projectedColumns,
+                );
+
+                if ($projected !== null) {
+                    $result = $result->withRows($projected);
+                    $promoted = $this->overlays->promote(
+                        $query,
+                        $plan,
+                        $result->state,
+                        $namespace,
+                        $queryHash,
+                        $projected,
+                    );
+
+                    return $fallbackReason === 'corrupt_payload'
+                        ? $this->overlays->rebuildOutcome($result, $promoted)
+                        : $result->withReason('canonical_projection_fallback');
+                }
+            }
+
+            $fallbackReason = $result->reason ?? $fallbackReason;
+        }
+
+        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
+
+        return new CacheRead($state, ReadOutcome::MISS, [], $fallbackReason);
+    }
+
+    /** @param list<mixed> $rows
+     * @param  list<string>  $columns
+     * @return list<\stdClass>|null
+     */
+    private function projectRows(array $rows, array $columns): ?array
+    {
+        $projectedRows = [];
+
+        foreach ($rows as $row) {
+            $projected = new \stdClass;
+
+            foreach ($columns as $column) {
+                if (!property_exists($row, $column)) {
+                    return null;
+                }
+
+                $projected->{$column} = $row->{$column};
+            }
+
+            $projectedRows[] = $projected;
+        }
+
+        return $projectedRows;
+    }
+
+    private function readDirect(QueryPlan $plan, string $namespace, QueryHashResolver $hash): CacheRead
+    {
+        $cached = $this->rows->read($plan);
+
+        $resolve = fn(): CacheState => $this->states->resolve(
+            $plan,
+            $namespace,
+            $hash->value(),
+            knownGeneration: $cached->generation,
+        )[0];
+
+        if ($cached->row === null) {
+            return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached->reason);
+        }
+
+        $rows = $this->rows->visibleRows($plan, $cached->row);
+
+        if ($rows === null) {
+            return new CacheRead($resolve(), ReadOutcome::MISS, [], 'corrupt_payload');
+        }
+
+        return new CacheRead(
+            $this->rows->state($plan, $cached->generation, (string) $cached->epoch),
+            ReadOutcome::HIT,
+            $rows,
+        );
+    }
+
+    private function readResultRowFallback(QueryPlan $plan): ?CacheRead
+    {
+        $cached = $this->rows->read($plan);
+
+        if ($cached->row === null) {
+            return null;
+        }
+
+        $rows = $this->rows->visibleRows($plan, $cached->row);
+
+        if ($rows === null) {
+            return null;
+        }
+
+        $rows = $this->projectRows($rows, (array) $plan->projectedColumns);
+
+        if ($rows === null) {
+            return null;
+        }
+
+        return new CacheRead(
+            $this->rows->state($plan, $cached->generation, (string) $cached->epoch),
+            ReadOutcome::HIT,
+            $rows,
+            'row_cache_fallback',
+        );
+    }
+
+    private function readCanonical(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+    ): CacheRead {
         $head = $this->store->fetchCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
             tablePrefix: $this->keys->tablePrefix($plan->root),
             namespace: $namespace,
             queryHash: $queryHash,
-            maxMembershipBytes: $this->config->maxMembershipBytes,
-            maxMembershipRows: $this->config->maxMembershipRows,
         );
-        $status = $head[0] ?? null;
-        $version = is_string($head[1] ?? null) ? $head[1] : '0';
-        $generation = is_string($head[2] ?? null) ? $head[2] : '0';
-        $rawMembership = $status === 'hit' ? ($head[3] ?? null) : null;
 
-        $miss = fn(?string $reason): array => [
-            $this->resolveState($plan, $namespace, $queryHash, $version, $generation)[0],
-            ['hit' => false, 'rows' => [], 'reason' => $reason],
-        ];
-
-        if (!is_string($rawMembership)) {
-            return $miss($status === 'corrupt' ? 'corrupt_payload' : null);
-        }
-
-        $membership = $this->memberships->decode($rawMembership);
-
-        if (!$membership->valid) {
-            $this->store->delete(
-                $this->keys->membership($plan->root, $version, $namespace, $queryHash),
-            );
-
-            return $miss('corrupt_payload');
-        }
-
-        $rowPrefix = $this->keys->tablePrefix($plan->root) . ':r:g' . $generation . ':';
-        $unique = [];
-
-        // §12 memberships may repeat a token, so index the reply by key, not position.
-        foreach ($membership->ids as $token) {
-            $unique[$rowPrefix . $token] = true;
-        }
-
-        [$state, $fetched] = $this->resolveState(
+        return $this->readCanonicalHead(
+            $query,
             $plan,
             $namespace,
             $queryHash,
-            $version,
-            $generation,
-            array_keys($unique),
+            $head,
+            true,
         );
-
-        if (
-            $membership->epoch !== $state->epoch
-            || $membership->generation !== $state->generation
-            || $membership->versions !== $state->versions
-            || $membership->tagVersion !== $state->tag
-            || count($membership->ids) > $this->config->maxMembershipRows
-        ) {
-            return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-        }
-
-        if ($membership->ids === []) {
-            return [$state, ['hit' => true, 'rows' => [], 'reason' => null]];
-        }
-
-        $rows = [];
-        $missingAt = [];
-        $corrupt = [];
-        $bytes = 0;
-
-        foreach ($membership->ids as $index => $token) {
-            $rowKey = $rowPrefix . $token;
-            $rawRow = $fetched[$rowKey] ?? null;
-
-            if ($rawRow === null) {
-                $missingAt[$index] = $token;
-
-                continue;
-            }
-
-            $bytes += strlen($rawRow);
-
-            if ($bytes > $this->config->maxCanonicalBytes) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-            }
-
-            $rowObj = $this->codec->decodeRowObject($rawRow, $state->epoch);
-
-            if ($rowObj === null) {
-                $corrupt[] = $rowKey;
-                $missingAt[$index] = $token;
-
-                continue;
-            }
-
-            $rows[$index] = $rowObj;
-        }
-
-        if ($corrupt !== []) {
-            $this->store->delete($corrupt);
-        }
-
-        if ($missingAt !== []) {
-            $repaired = $this->repairRows($query, $plan, $state, array_values($missingAt));
-
-            if ($repaired === null) {
-                return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-            }
-
-            foreach ($missingAt as $index => $token) {
-                if (!isset($repaired[$token])) {
-                    return [$state, ['hit' => false, 'rows' => [], 'reason' => null]];
-                }
-
-                $rows[$index] = $repaired[$token];
-            }
-
-            ksort($rows);
-            $rows = array_values($rows);
-        }
-
-        return [$state, [
-            'hit' => true,
-            'rows' => $rows,
-            'reason' => $corrupt !== [] ? 'corrupt_payload' : null,
-        ]];
     }
 
-    /**
-     * @param  list<string>  $tokens
-     * @return array<string, stdClass>|null
-     */
-    private function repairRows(
-        CachingQueryBuilder $query,
+    private function readCanonicalHead(
+        QueryBuilder $query,
         QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-    ): ?array {
-        if ($plan->primaryKey === null) {
-            return null;
-        }
-
-        $tokens = array_values(array_unique($tokens));
-        sort($tokens, SORT_STRING);
-
-        $repairHash = $this->identity->repairHash(
-            $plan->root->hash,
-            $state->generation,
-            $tokens,
-        );
-        $buildingKey = $this->keys->repairBuild($plan->root, $repairHash);
-        $leaseToken = bin2hex(random_bytes(16));
-        $wakeKey = $this->keys->repairWake($plan->root, $repairHash, $leaseToken);
-
-        if (!$this->store->setNxEx(
-            $buildingKey,
-            $leaseToken,
-            $this->config->buildingLockTtl,
-        )) {
-            $owner = $this->store->getRaw($buildingKey);
-
-            if (is_string($owner)) {
-                $this->store->brpop(
-                    $this->keys->repairWake($plan->root, $repairHash, $owner),
-                    $this->config->stampedeWaitMs / 1000,
-                );
-            }
-
-            return $this->readRepairedRows($plan, $state, $tokens);
-        }
-
-        try {
-            $rows = $this->buildRepairedRows(
+        string $namespace,
+        string $queryHash,
+        array $head,
+        bool $repairMissing,
+    ): CacheRead {
+        return $this->canonical->read(
+            $plan,
+            $namespace,
+            $queryHash,
+            $head,
+            $repairMissing,
+            fn(CacheState $state, array $tokens): ?RowRepair => $this->repairer->repair(
                 $query,
                 $plan,
                 $state,
                 $tokens,
-                $buildingKey,
-                $wakeKey,
-                $leaseToken,
-            );
-        } catch (Throwable $exception) {
-            $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
-
-            throw $exception;
-        }
-
-        // publish_repair.lua releases the lease itself on success; other exits still own it.
-        if ($rows === null) {
-            $this->releaseRepair($buildingKey, $wakeKey, $leaseToken);
-        }
-
-        return $rows;
-    }
-
-    private function releaseRepair(string $buildingKey, string $wakeKey, string $token): void
-    {
-        $this->store->releaseBuilding($buildingKey, $wakeKey, $token, $this->wakeTtl());
-    }
-
-    /**
-     * @param  list<string>  $tokens
-     * @return array<string, stdClass>|null
-     */
-    private function buildRepairedRows(
-        CachingQueryBuilder $query,
-        QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-        string $buildingKey,
-        string $wakeKey,
-        string $leaseToken,
-    ): ?array {
-        $connection = $query->getConnection();
-
-        if ($plan->primaryKey === null || !$connection instanceof Connection) {
-            return null;
-        }
-
-        $guardKeys = [];
-        $values = [];
-
-        foreach ($tokens as $token) {
-            $value = $plan->primaryKey->valueFromToken($token);
-
-            if ($value === null) {
-                return null;
-            }
-
-            $guardKeys[] = $this->keys->guard($plan->root, $token);
-            $values[] = $value;
-        }
-
-        $guards = [];
-
-        foreach ($this->store->mget($guardKeys) as $guardKey => $guard) {
-            $guards[$guardKey] = $guard ?? '0';
-        }
-
-        $limit = match ($plan->root->driver) {
-            'sqlite' => 900,
-            'sqlsrv' => 2000,
-            default => 1000,
-        };
-        $rowsByToken = [];
-
-        try {
-            foreach (array_chunk($values, $limit) as $batch) {
-                $rows = $connection
-                    ->query()
-                    ->from($plan->root->qualifiedTable())
-                    ->whereIn($plan->primaryKey->column, $batch)
-                    ->useWritePdo()
-                    ->get();
-
-                foreach ($rows as $row) {
-                    if (!property_exists($row, $plan->primaryKey->column)) {
-                        return null;
-                    }
-
-                    $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
-
-                    if ($token === null) {
-                        return null;
-                    }
-
-                    $rowsByToken[$token] = $row;
-                }
-            }
-        } catch (Throwable) {
-            return null;
-        }
-
-        $encodedRows = [];
-
-        foreach ($tokens as $token) {
-            if (!isset($rowsByToken[$token])) {
-                return null;
-            }
-
-            $encodedRows[$this->keys->row($plan->root, $state->generation, $token)] =
-                $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
-        }
-
-        if (
-            !$this->stateStillCurrent($plan, $state)
-            || !$this->store->publishRepair(
-                versionKey: $this->keys->version($plan->root),
-                generationKey: $this->keys->generation($plan->root),
-                guards: $guards,
-                rows: $encodedRows,
-                expectedVersion: $state->version,
-                expectedGeneration: $state->generation,
-                rowTtl: $this->config->ttl,
-                buildingKey: $buildingKey,
-                wakeKey: $wakeKey,
-                token: $leaseToken,
-                wakeTtl: $this->wakeTtl(),
-            )
-        ) {
-            return null;
-        }
-
-        return $rowsByToken;
-    }
-
-    /**
-     * @param  list<string>  $tokens
-     * @return array<string, stdClass>|null
-     */
-    private function readRepairedRows(
-        QueryPlan $plan,
-        CacheState $state,
-        array $tokens,
-    ): ?array {
-        $rowKeys = [];
-
-        foreach ($tokens as $token) {
-            $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
-        }
-
-        $raw = $this->store->mget(array_values($rowKeys));
-        $rows = [];
-
-        foreach ($rowKeys as $token => $rowKey) {
-            $payload = $raw[$rowKey] ?? null;
-            $row = $payload === null
-                ? null
-                : $this->codec->decodeRowObject($payload, $state->epoch);
-
-            if ($row === null) {
-                return null;
-            }
-
-            $rows[$token] = $row;
-        }
-
-        return $rows;
-    }
-
-    private function stateStillCurrent(QueryPlan $plan, CacheState $state): bool
-    {
-        $epochKey = $this->keys->epoch();
-        $versionKey = $this->keys->version($plan->root);
-        $generationKey = $this->keys->generation($plan->root);
-        $dependencyKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash) {
-                $dependencyKeys[$dependency->hash] = $this->keys->version($dependency);
-            }
-        }
-
-        $values = $this->store->mget(array_values(array_filter([
-            $epochKey,
-            $versionKey,
-            $generationKey,
-            $state->tagKey,
-            ...array_values($dependencyKeys),
-        ])));
-        $current = static fn(string $key): string => $values[$key] ?? '0';
-
-        if (
-            $current($epochKey) !== $state->epoch
-            || $current($versionKey) !== $state->version
-            || $current($generationKey) !== $state->generation
-        ) {
-            return false;
-        }
-
-        foreach ($dependencyKeys as $hash => $key) {
-            if ($current($key) !== ($state->versions[$hash] ?? null)) {
-                return false;
-            }
-        }
-
-        return $state->tag === null
-            || $state->tagKey !== null && $current($state->tagKey) === $state->tag;
+            ),
+        );
     }
 
     /** @param array<int, mixed> $rows */
     private function publish(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
         BuildLease $lease,
+        string $namespace,
+        string $queryHash,
     ): void {
         match ($plan->route) {
-            QueryPlan::CANONICAL => $this->publishCanonical($query, $plan, $state, $rows, $lease),
-            QueryPlan::DIRECT_PK => $this->publishDirect($plan, $state, $rows, $lease),
+            QueryPlan::CANONICAL => $this->publishCanonical(
+                $query,
+                $plan,
+                $state,
+                $rows,
+                $lease,
+                $namespace,
+                $queryHash,
+            ),
+            QueryPlan::DIRECT_PK => $this->rows->publish($plan, $state, $rows, $lease),
             default => $this->publishResult($query, $plan, $state, $rows, $lease),
         };
     }
 
     private function publishResult(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
         BuildLease $lease,
     ): void {
-        $encoded = $this->codec->encode(
+        $this->results->publish(
+            $query,
+            $plan,
+            $state,
             $rows,
-            $state->epoch,
-            $state->versions,
-            $state->tag,
+            $lease,
+            $this->config->wakeTtl(),
         );
-
-        if (strlen($encoded) <= $this->config->maxResultBytes) {
-            $versionKeys = $plan->route === QueryPlan::EXACT
-                ? [$this->keys->version($plan->root)]
-                : [];
-            $expected = $plan->route === QueryPlan::EXACT
-                ? [$state->version]
-                : [];
-            $this->store->storeVersionedPayload(
-                entries: [$state->key => $encoded],
-                ttl: $query->normCacheTtl() ?? $this->config->queryTtl,
-                versionKeys: $versionKeys,
-                expectedVersions: $expected,
-                buildingKey: $lease->buildingKey,
-                wakeKey: $lease->wakeKey,
-                token: $lease->token,
-                wakeTtl: $this->wakeTtl(),
-            );
-        } else {
-            $this->release($lease);
-        }
-    }
-
-    private function publishDirect(
-        QueryPlan $plan,
-        CacheState $state,
-        array $rows,
-        BuildLease $lease,
-    ): void {
-        if (
-            $plan->primaryKey === null
-            || count($rows) !== 1
-            || !$rows[0] instanceof stdClass
-            || !property_exists($rows[0], $plan->primaryKey->column)
-            || $plan->primaryKey->token($rows[0]->{$plan->primaryKey->column})
-                !== $plan->primaryKeyToken
-        ) {
-            $this->release($lease);
-
-            return;
-        }
-
-        $encoded = $this->codec->encodeRow($rows[0], $state->epoch);
-
-        if (strlen($encoded) <= $this->config->maxResultBytes) {
-            $guardKey = $this->keys->guard(
-                $plan->root,
-                (string) $plan->primaryKeyToken,
-            );
-            $this->store->storeVersionedPayload(
-                entries: [$state->key => $encoded],
-                ttl: $this->config->ttl,
-                versionKeys: [
-                    $this->keys->version($plan->root),
-                    $this->keys->generation($plan->root),
-                    $guardKey,
-                ],
-                expectedVersions: [
-                    $state->version,
-                    $state->generation,
-                    $state->guard,
-                ],
-                buildingKey: $lease->buildingKey,
-                wakeKey: $lease->wakeKey,
-                token: $lease->token,
-                wakeTtl: $this->wakeTtl(),
-            );
-        } else {
-            $this->release($lease);
-        }
     }
 
     private function publishCanonical(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         QueryPlan $plan,
         CacheState $state,
         array $rows,
         BuildLease $lease,
+        string $namespace,
+        string $queryHash,
     ): void {
-        if (
-            $plan->primaryKey === null
-            || count($rows) > $this->config->maxMembershipRows
-        ) {
-            $this->release($lease);
-
-            return;
-        }
-
-        $ids = [];
-        $encodedRows = [];
-        $totalBytes = 0;
-
-        foreach ($rows as $row) {
-            if (!$row instanceof stdClass || !property_exists($row, $plan->primaryKey->column)) {
-                $this->release($lease);
-
-                return;
-            }
-
-            $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
-
-            if ($token === null) {
-                $this->release($lease);
-
-                return;
-            }
-
-            $encoded = $this->codec->encodeRow($row, $state->epoch);
-            $totalBytes += strlen($encoded);
-
-            if (
-                strlen($encoded) > $this->config->maxResultBytes
-                || $totalBytes > $this->config->maxCanonicalBytes
-            ) {
-                $this->release($lease);
-
-                return;
-            }
-
-            $ids[] = $token;
-            $encodedRows[$token] = $encoded;
-        }
-
-        $membership = $this->memberships->encode(
-            epoch: $state->epoch,
-            generation: $state->generation,
-            ids: $ids,
-            versions: $state->versions,
-            tagVersion: $state->tag,
-        );
-
-        if (strlen($membership) > $this->config->maxMembershipBytes) {
-            $this->release($lease);
-
-            return;
-        }
-
-        $rowEntries = [];
-
-        foreach ($encodedRows as $token => $encoded) {
-            $rowEntries[$this->keys->row(
+        $overlay = $plan->materializeResult
+            ? $this->overlays->inlineEntry(
                 $plan->root,
-                $state->generation,
-                $token,
-            )] = $encoded;
-        }
+                $state,
+                $namespace,
+                $queryHash,
+                $rows,
+            )
+            : OverlayAdmission::notAttempted();
 
-        $this->store->publishCanonical(
-            versionKey: $this->keys->version($plan->root),
-            generationKey: $this->keys->generation($plan->root),
-            membershipKey: $state->key,
-            rows: $rowEntries,
-            expectedVersion: $state->version,
-            expectedGeneration: $state->generation,
-            membershipPayload: $membership,
-            membershipTtl: $query->normCacheTtl() ?? $this->config->queryTtl,
-            rowTtl: $this->config->ttl,
-            buildingKey: $lease->buildingKey,
-            wakeKey: (string) $lease->wakeKey,
-            token: (string) $lease->token,
-            wakeTtl: $this->wakeTtl(),
-        );
+        if (!$this->canonical->publish(
+            $query,
+            $plan,
+            $state,
+            $rows,
+            $lease,
+            $this->config->wakeTtl(),
+            $overlay->entry,
+            $overlay->rejected,
+        )) {
+            $this->leases->release($lease);
+        }
     }
 
     private function state(QueryPlan $plan, string $namespace, string $queryHash): CacheState
     {
-        return $this->resolveState($plan, $namespace, $queryHash)[0];
+        return $this->states->resolve($plan, $namespace, $queryHash)[0];
     }
 
-    /**
-     * @param  list<string>  $alsoFetch
-     * @return array{0: CacheState, 1: array<string, ?string>}
-     */
-    private function resolveState(
+    /** @param list<string> $dependencyHashes */
+    private function canonicalQueryHash(
+        QueryBuilder $query,
         QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
         string $namespace,
-        string $queryHash,
-        ?string $knownVersion = null,
-        ?string $knownGeneration = null,
-        array $alsoFetch = [],
-    ): array {
-        $versionKeys = [];
-
-        foreach ($plan->dependencies as $dependency) {
-            $versionKeys[$dependency->hash] = $this->keys->version($dependency);
-        }
-
-        $rootVersionKey = $versionKeys[$plan->root->hash] ?? null;
-
-        if ($knownVersion !== null && $rootVersionKey !== null) {
-            unset($versionKeys[$plan->root->hash]);
-        }
-
-        $generationKey = $knownGeneration === null ? match ($plan->route) {
-            QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
-            default => null,
-        } : null;
-        $tagKey = str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
-            : null;
-        $guardKey = $plan->route === QueryPlan::DIRECT_PK
-            ? $this->keys->guard($plan->root, (string) $plan->primaryKeyToken)
-            : null;
-
-        // Batched, not fetched on its own: a standalone GET made a scope's first
-        // canonical read 3 round trips instead of 2.
-        $epochKey = $this->runtime->knownEpoch() === null ? $this->keys->epoch() : null;
-
-        $values = $this->store->mget(array_values(array_unique(array_filter([
-            $epochKey,
-            ...array_values($versionKeys),
-            $generationKey,
-            $tagKey,
-            $guardKey,
-            ...$alsoFetch,
-        ]))));
-
-        if ($epochKey !== null) {
-            $this->runtime->rememberEpoch($values[$epochKey] ?? '0');
-        }
-
-        if ($knownVersion !== null && $rootVersionKey !== null) {
-            $versionKeys[$plan->root->hash] = $rootVersionKey;
-            $values[$rootVersionKey] = $knownVersion;
-        }
-
-        $epoch = $this->epoch();
-        $allVersions = [];
-
-        foreach ($versionKeys as $hash => $key) {
-            $allVersions[$hash] = $values[$key] ?? '0';
-        }
-
-        ksort($allVersions, SORT_STRING);
-        $rootVersion = $knownVersion ?? $allVersions[$plan->root->hash] ?? '0';
-        $generation = $knownGeneration
-            ?? ($generationKey !== null ? ($values[$generationKey] ?? '0') : '0');
-        $tag = $tagKey !== null ? ($values[$tagKey] ?? '0') : null;
-        $guard = $guardKey !== null ? ($values[$guardKey] ?? '0') : '0';
-        $versions = $allVersions;
-
-        if ($plan->route !== QueryPlan::QUERY_GROUP) {
-            unset($versions[$plan->root->hash]);
-        }
-
-        $key = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membership(
-                $plan->root,
-                $rootVersion,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->row(
-                $plan->root,
-                $generation,
-                (string) $plan->primaryKeyToken,
-            ),
-            QueryPlan::QUERY_GROUP => $this->keys->queryGroupResult($queryHash, $namespace),
-            default => $this->keys->exact(
-                $plan->root,
-                $rootVersion,
-                $namespace,
-                $queryHash,
-            ),
-        };
-
-        return [
-            new CacheState(
-                key: $key,
-                epoch: $epoch,
-                version: $rootVersion,
-                generation: $generation,
-                versions: $versions,
-                tag: $tag,
-                tagKey: $tagKey,
-                guard: $guard,
-            ),
-            $values,
-        ];
-    }
-
-    private function claim(
-        QueryPlan $plan,
-        CacheState $state,
-        string $namespace,
-        string $queryHash,
-    ): BuildLease {
-        $buildingKey = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membershipBuild(
-                $plan->root,
-                $state->version,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::EXACT => $this->keys->exactBuild(
-                $plan->root,
-                $state->version,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->rowBuild(
-                $plan->root,
-                $state->generation,
-                (string) $plan->primaryKeyToken,
-            ),
-            default => $this->keys->queryGroupBuild($queryHash),
-        };
-        $token = bin2hex(random_bytes(16));
-
-        if ($this->store->setNxEx($buildingKey, $token, $this->config->buildingLockTtl)) {
-            return new BuildLease(
-                true,
-                $buildingKey,
-                $this->wakeKey($plan, $queryHash, $token),
-                $token,
+        QueryStatement $statement,
+    ): string {
+        if ($query->columns === null || $query->columns === ['*']) {
+            return $this->identity->hash(
+                route: QueryPlan::CANONICAL,
+                rootHash: $plan->root->hash,
+                dependencyHashes: $dependencyHashes,
+                sql: $statement->sql(),
+                bindings: $statement->preparedBindings($connection),
+                namespace: $namespace,
+                operation: 'select',
             );
         }
 
-        $owner = $this->store->getRaw($buildingKey);
+        $canonical = $query->clone()->select('*');
 
-        return new BuildLease(
-            false,
-            $buildingKey,
-            is_string($owner) ? $this->wakeKey($plan, $queryHash, $owner) : null,
-            $owner,
+        return $this->identity->hash(
+            route: QueryPlan::CANONICAL,
+            rootHash: $plan->root->hash,
+            dependencyHashes: $dependencyHashes,
+            sql: $canonical->toSql(),
+            bindings: $query->bindings['select'] === []
+                ? $statement->preparedBindings($connection)
+                 : $connection->prepareBindings($canonical->getBindings()),
+            namespace: $namespace,
+            operation: 'select',
         );
     }
 
-    private function wakeKey(QueryPlan $plan, string $queryHash, string $token): string
-    {
-        return match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->wake($plan->root, 'm', $queryHash, $token),
-            QueryPlan::EXACT => $this->keys->wake($plan->root, 'e', $queryHash, $token),
-            QueryPlan::DIRECT_PK => $this->keys->wake(
-                $plan->root,
-                'r',
-                (string) $plan->primaryKeyToken,
-                $token,
-            ),
-            default => $this->keys->queryGroupWake($queryHash, $token),
-        };
-    }
-
-    private function release(BuildLease $lease): void
-    {
-        if (!$lease->owner || $lease->token === null || $lease->wakeKey === null) {
-            return;
-        }
-
-        try {
-            $this->store->releaseBuilding(
-                $lease->buildingKey,
-                $lease->wakeKey,
-                $lease->token,
-                $this->wakeTtl(),
-            );
-        } catch (Throwable $exception) {
-            $this->fail($exception);
-        }
-    }
-
-    private function wakeTtl(): int
-    {
-        return $this->config->buildingLockTtl
-            + (int) ceil($this->config->stampedeWaitMs / 1000)
-            + 5;
-    }
-
     private function declaredRoot(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         Connection $connection,
     ): ?TableIdentity {
-        foreach ($query->normCacheDeclaredTables() as $table) {
-            $identity = $this->tables->resolve($connection, $table);
+        $lowest = null;
 
-            if ($identity !== null) {
-                return $identity;
+        foreach ($query->dependencies() as $declaration) {
+            $identity = $declaration->isTable()
+                ? $this->tables->resolve($connection, $declaration->value)
+                : $this->dependencies->modelIdentity($connection, $declaration->value);
+
+            if ($identity !== null && ($lowest === null || $identity->hash < $lowest->hash)) {
+                $lowest = $identity;
             }
         }
 
-        foreach ($query->normCacheDeclaredModels() as $modelClass) {
-            $identity = $this->dependencies->modelIdentity($connection, $modelClass);
-
-            if ($identity !== null) {
-                return $identity;
-            }
-        }
-
-        return null;
+        return $lowest;
     }
 
-    private function fail(Throwable $exception): void
+    /** @param list<TableIdentity> $dependencies */
+    private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
+    {
+        foreach ($dependencies as $dependency) {
+            if ($dependency->hash !== $root->hash) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function fail(\Throwable $exception): void
     {
         $this->runtime->fail($exception);
     }

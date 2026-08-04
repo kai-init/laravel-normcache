@@ -14,7 +14,7 @@ use NormCache\Tests\TestCase;
  * Contract tests: eager loading operations must return identical results on
  * the native path (withoutCache), cold-cache path, and warm-cache path.
  */
-class RelationContractTest extends TestCase
+final class RelationContractTest extends TestCase
 {
     private function fixtures(): array
     {
@@ -41,8 +41,6 @@ class RelationContractTest extends TestCase
 
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
-
-    // Eager loading
 
     public function test_with_has_many(): void
     {
@@ -230,11 +228,16 @@ class RelationContractTest extends TestCase
 
     public function test_with_has_many_limit_constraint(): void
     {
-        $this->fixtures();
+        ['p1' => $p1] = $this->fixtures();
         $this->contract(
             fn() => Author::with(['posts' => fn($q) => $q->orderBy('title')->limit(1)])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->orderBy('title')->limit(1)])->orderBy('name')->get(),
             expectNoStrayQueries: true,
+        );
+
+        $this->assertArrayNotHasKey(
+            'laravel_row',
+            Post::query()->findOrFail($p1->getKey())->getAttributes(),
         );
     }
 
@@ -308,8 +311,6 @@ class RelationContractTest extends TestCase
             fn() => Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get(),
         );
     }
-
-    // Collection loading (load, loadMissing, loadCount, loadSum, loadMax, loadMin)
 
     public function test_load_on_collection_returns_same_relations(): void
     {

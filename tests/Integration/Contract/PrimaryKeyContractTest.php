@@ -11,9 +11,9 @@ use NormCache\Tests\TestCase;
  * results on the native path (withoutCache), cold-cache path, and warm-cache path,
  * particularly regarding result ordering and fast-path bypass.
  */
-class PrimaryKeyContractTest extends TestCase
+final class PrimaryKeyContractTest extends TestCase
 {
-    public function test_where_in_primary_key_order_contract(): void
+    public function test_where_in_primary_key_order(): void
     {
         Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
@@ -30,7 +30,7 @@ class PrimaryKeyContractTest extends TestCase
         );
     }
 
-    public function test_where_in_primary_key_with_explicit_order_contract(): void
+    public function test_where_in_primary_key_with_explicit_order(): void
     {
         Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
@@ -42,7 +42,7 @@ class PrimaryKeyContractTest extends TestCase
         );
     }
 
-    public function test_where_in_uuid_primary_key_order_contract(): void
+    public function test_where_in_uuid_primary_key_order(): void
     {
         UuidItem::create(['id' => 'b8f8702c-4734-45e0-a548-18e3c66f6f9c', 'name' => 'B']);
         UuidItem::create(['id' => 'a1f8702c-4734-45e0-a548-18e3c66f6f9c', 'name' => 'A']);

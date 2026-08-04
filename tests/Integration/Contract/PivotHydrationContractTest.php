@@ -12,7 +12,7 @@ use NormCache\Tests\TestCase;
  * large enough to ensure a pivot payload is reconstructed independently for every
  * related model, without leaking one row's data into another.
  */
-class PivotHydrationContractTest extends TestCase
+final class PivotHydrationContractTest extends TestCase
 {
     public function test_belongs_to_many_pivot_hydration_matches_native_across_many_rows(): void
     {
@@ -70,8 +70,6 @@ class PivotHydrationContractTest extends TestCase
             $author->tags()->attach($tag->id, ['notes' => "note-{$i}"]);
         }
 
-        // Direct relation calls with an extra dependency remain live. This still
-        // verifies native pivot hydration without invoking a graph manifest.
         $query = fn() => $author->tags()->dependsOn([Post::class])->withPivot('notes')->get();
         $native = fn() => $author->tags()->withoutCache()->withPivot('notes')->get();
 

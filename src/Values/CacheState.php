@@ -13,7 +13,6 @@ final readonly class CacheState
         public array $versions,
         public ?string $tag,
         public ?string $tagKey,
-        public string $guard,
     ) {}
 
     /** Value equality: readonly objects still compare by identity under ===. */

@@ -4,10 +4,10 @@ namespace NormCache\Events;
 
 final readonly class CacheInvalidated
 {
-    /** @param list<string> $primaryKeys */
+    /** @param list<string> $primaryKeyTokens */
     public function __construct(
         public string $tableHash,
-        public string $action,
-        public array $primaryKeys = [],
+        public string $mode,
+        public array $primaryKeyTokens = [],
     ) {}
 }

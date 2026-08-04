@@ -9,5 +9,6 @@ final readonly class DependencyAnalysis
         public array $tables,
         public bool $opaque = false,
         public bool $explicit = false,
+        public bool $unresolved = false,
     ) {}
 }

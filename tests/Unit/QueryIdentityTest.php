@@ -12,7 +12,7 @@ final class QueryIdentityTest extends UnitTestCase
         $identity = new QueryIdentity;
 
         $integer = $identity->hash(
-            route: 'exact',
+            route: 'result',
             rootHash: 'root',
             dependencyHashes: ['b', 'a', 'a'],
             sql: 'select * from posts where id = ?',
@@ -21,7 +21,7 @@ final class QueryIdentityTest extends UnitTestCase
             operation: 'select',
         );
         $string = $identity->hash(
-            route: 'exact',
+            route: 'result',
             rootHash: 'root',
             dependencyHashes: ['a', 'b'],
             sql: 'select * from posts where id = ?',
@@ -34,7 +34,7 @@ final class QueryIdentityTest extends UnitTestCase
         $this->assertNotSame($integer, $string);
         $this->assertSame(
             $integer,
-            $identity->hash('exact', 'root', ['a', 'b'], 'select * from posts where id = ?', [42], 'u', 'select'),
+            $identity->hash('result', 'root', ['a', 'b'], 'select * from posts where id = ?', [42], 'u', 'select'),
         );
     }
 
@@ -48,5 +48,38 @@ final class QueryIdentityTest extends UnitTestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $identity->tagHash('');
+    }
+
+    public function test_laravel_prepared_bindings_are_hashable_without_additional_normalization(): void
+    {
+        $connection = $this->app['db']->connection();
+        $query = $connection->query()
+            ->from('posts')
+            ->where('created_at', new \DateTimeImmutable('2026-08-04 12:34:56+10:00'))
+            ->where('published', true);
+        $bindings = $connection->prepareBindings($query->getBindings());
+
+        $this->assertSame(['2026-08-04 12:34:56', 1], $bindings);
+        $this->assertSame(32, strlen((new QueryIdentity)->hash(
+            route: 'result',
+            rootHash: 'root',
+            dependencyHashes: ['dependency'],
+            sql: $query->toSql(),
+            bindings: $bindings,
+            namespace: 'u',
+            operation: 'select',
+        )));
+    }
+
+    public function test_unique_tags_do_not_retain_process_lifetime_state(): void
+    {
+        $identity = new QueryIdentity;
+        $before = memory_get_usage(false);
+
+        for ($index = 0; $index < 50_000; $index++) {
+            $identity->namespace("tenant-{$index}");
+        }
+
+        $this->assertLessThan(2 * 1_024 * 1_024, memory_get_usage(false) - $before);
     }
 }

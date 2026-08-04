@@ -4,20 +4,29 @@ namespace NormCache\Traits;
 
 use Closure;
 use Illuminate\Database\Eloquent\Model;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 
 /**
  * @mixin Model
  */
 trait Cacheable
 {
-    private ?Model $normCachePrototype = null;
+    private ?Model $cachePrototype = null;
 
-    private static ?Closure $normCacheHydrate = null;
+    private ?bool $cacheFastHydration = null;
+
+    private static ?Closure $cacheHydrate = null;
+
+    /** @var array<class-string, bool> */
+    private static array $usesBaseConstruction = [];
 
     public function newFromBuilder($attributes = [], $connection = null)
     {
-        self::$normCacheHydrate ??= Closure::bind(
+        if (!$this->usesFastHydration()) {
+            return parent::newFromBuilder($attributes, $connection);
+        }
+
+        self::$cacheHydrate ??= Closure::bind(
             static function (Model $model, array $attributes): void {
                 $model->attributes = $attributes;
                 $model->original = $attributes;
@@ -28,31 +37,55 @@ trait Cacheable
             Model::class,
         );
 
-        $connectionName = $connection ?: $this->getConnectionName();
+        $connectionName = $connection ?? $this->getConnectionName();
 
         if (
-            $this->normCachePrototype === null
-            || $this->normCachePrototype->getConnectionName() !== $connectionName
-            || $this->normCachePrototype->getTable() !== $this->getTable()
+            $this->cachePrototype === null
+            || $this->cachePrototype->getConnectionName() !== $connectionName
+            || $this->cachePrototype->getTable() !== $this->getTable()
         ) {
-            $this->normCachePrototype = $this->newInstance([], true);
-            $this->normCachePrototype->setConnection($connectionName);
+            $this->cachePrototype = $this->newInstance([], true);
+            $this->cachePrototype->setConnection($connectionName);
         }
 
-        $model = clone $this->normCachePrototype;
-        (self::$normCacheHydrate)($model, (array) $attributes);
+        $model = clone $this->cachePrototype;
+        (self::$cacheHydrate)($model, (array) $attributes);
 
-        if ($this->normCacheHasRetrievedListener()) {
+        if ($this->hasRetrievedListener()) {
             $model->fireModelEvent('retrieved', false);
         }
 
         return $model;
     }
 
-    /** Not memoised: observers and listeners can register at any point in a request. */
-    private function normCacheHasRetrievedListener(): bool
+    private function usesFastHydration(): bool
     {
-        $dispatcher = static::getEventDispatcher();
+        if ($this->cacheFastHydration !== null) {
+            return $this->cacheFastHydration;
+        }
+
+        if (!(self::$usesBaseConstruction[static::class] ??= $this->usesBaseConstruction())) {
+            return $this->cacheFastHydration = false;
+        }
+
+        foreach (get_object_vars($this) as $property => $value) {
+            if ($property !== 'cachePrototype' && is_object($value)) {
+                return $this->cacheFastHydration = false;
+            }
+        }
+
+        return $this->cacheFastHydration = true;
+    }
+
+    private function usesBaseConstruction(): bool
+    {
+        return (new \ReflectionMethod($this, '__construct'))->getDeclaringClass()->getName() === Model::class
+            && (new \ReflectionMethod($this, 'newInstance'))->getDeclaringClass()->getName() === Model::class;
+    }
+
+    private function hasRetrievedListener(): bool
+    {
+        $dispatcher = $this->getEventDispatcher();
 
         return $dispatcher !== null
             && (isset($this->dispatchesEvents['retrieved'])
@@ -63,7 +96,7 @@ trait Cacheable
     {
         $builder = $this->getConnection()->query();
 
-        if (!$builder instanceof CachingQueryBuilder) {
+        if (!$builder instanceof QueryBuilder) {
             return $builder;
         }
 
@@ -71,7 +104,7 @@ trait Cacheable
             ? $this->getDeletedAtColumn()
             : null;
 
-        return $builder->markCacheableModel(
+        return $builder->enableCachingForModel(
             $this::class,
             $this->getKeyName(),
             $this->getKeyType(),

@@ -3,36 +3,41 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
-use NormCache\Database\CachingQueryBuilder;
+use NormCache\Database\QueryBuilder;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\TableIdentity;
-use Throwable;
+use Psr\Log\LoggerInterface;
 
 final class PrimaryKeyResolver
 {
-    /** @var array<string, array{connection: string, metadata: PrimaryKeyMetadata|null}> */
+    /** @var array<string, array<string, PrimaryKeyMetadata|null>> */
     private array $memo = [];
 
-    /** @var array<string, true> */
+    /** @var array<string, PrimaryKeyMetadata> */
+    private array $interned = [];
+
+    /** @var array<string, array<string, true>> */
     private array $warnedConflicts = [];
 
     public function __construct(
         private readonly CacheConfig $config,
+        private readonly LoggerInterface $logger,
+        private readonly SchemaRepository $persistent,
     ) {}
 
     public function resolve(
-        CachingQueryBuilder $query,
+        QueryBuilder $query,
         Connection $connection,
         TableIdentity $table,
     ): ?PrimaryKeyMetadata {
-        if (array_key_exists($table->hash, $this->memo)) {
-            $known = $this->memo[$table->hash]['metadata'];
-            $supplied = $query->normCachePrimaryKey();
+        if (array_key_exists($table->hash, $this->memo[$table->connection] ?? [])) {
+            $known = $this->memo[$table->connection][$table->hash];
+            $supplied = $query->primaryKey();
 
             if ($supplied !== null && !$this->same($known, $supplied)) {
                 $this->conflict($table, $known, $supplied);
-                $this->memo[$table->hash]['metadata'] = null;
+                $this->memo[$table->connection][$table->hash] = null;
 
                 return null;
             }
@@ -40,54 +45,50 @@ final class PrimaryKeyResolver
             return $known;
         }
 
-        $candidates = [];
-        $supplied = $query->normCachePrimaryKey();
+        $configured = $this->configured($table);
+        $supplied = $query->primaryKey();
+        $schema = $this->persistent->primaryKey($table);
 
-        if ($supplied !== null) {
-            $candidates[] = $supplied;
-        }
+        if ($schema === false) {
+            $schema = $this->introspect($connection, $table);
 
-        foreach ($this->configured($table) as $configured) {
-            $candidates[] = $configured;
-        }
-
-        $schema = $this->introspect($connection, $table);
-
-        if ($schema !== null) {
-            $candidates[] = $schema;
-        }
-
-        $metadata = $candidates[0] ?? null;
-
-        foreach (array_slice($candidates, 1) as $candidate) {
-            if (!$this->same($metadata, $candidate)) {
-                $this->conflict($table, $metadata, $candidate);
-                $metadata = null;
-                break;
+            if ($schema !== false) {
+                $this->persistent->putPrimaryKey($table, $schema);
             }
         }
 
-        $this->memo[$table->hash] = [
-            'connection' => $table->connection,
-            'metadata' => $metadata,
-        ];
+        if ($schema instanceof PrimaryKeyMetadata || $configured !== []) {
+            $metadata = $this->consistent($table, [
+                ...$configured,
+                ...($schema instanceof PrimaryKeyMetadata ? [$schema] : []),
+                ...($supplied === null ? [] : [$supplied]),
+            ]);
+            $metadata = $metadata === null ? null : $this->intern($metadata);
+            $this->memo[$table->connection][$table->hash] = $metadata;
 
-        return $metadata;
+            return $metadata;
+        }
+
+        if ($schema === null) {
+            if ($supplied !== null) {
+                $this->conflict($table, null, $supplied);
+            }
+
+            $this->memo[$table->connection][$table->hash] = null;
+        }
+
+        return null;
     }
 
-    public function clear(?string $connection = null): void
+    public function clear(): void
     {
-        if ($connection === null) {
-            $this->memo = [];
+        $this->memo = [];
+        $this->warnedConflicts = [];
+    }
 
-            return;
-        }
-
-        foreach ($this->memo as $hash => $entry) {
-            if ($entry['connection'] === $connection) {
-                unset($this->memo[$hash]);
-            }
-        }
+    private function intern(PrimaryKeyMetadata $metadata): PrimaryKeyMetadata
+    {
+        return $this->interned[$metadata->column . '|' . $metadata->family] ??= $metadata;
     }
 
     /** @return list<PrimaryKeyMetadata> */
@@ -116,6 +117,22 @@ final class PrimaryKeyResolver
         return $matches;
     }
 
+    /** @param non-empty-list<PrimaryKeyMetadata> $candidates */
+    private function consistent(TableIdentity $table, array $candidates): ?PrimaryKeyMetadata
+    {
+        $metadata = $candidates[0];
+
+        foreach (array_slice($candidates, 1) as $candidate) {
+            if (!$this->same($metadata, $candidate)) {
+                $this->conflict($table, $metadata, $candidate);
+
+                return null;
+            }
+        }
+
+        return $metadata;
+    }
+
     private function same(
         ?PrimaryKeyMetadata $left,
         ?PrimaryKeyMetadata $right,
@@ -132,12 +149,12 @@ final class PrimaryKeyResolver
         ?PrimaryKeyMetadata $left,
         ?PrimaryKeyMetadata $right,
     ): void {
-        if (isset($this->warnedConflicts[$table->hash])) {
+        if (isset($this->warnedConflicts[$table->connection][$table->hash])) {
             return;
         }
 
-        $this->warnedConflicts[$table->hash] = true;
-        logger()->warning('NormCache disabled canonical rows for a table with conflicting primary-key metadata.', [
+        $this->warnedConflicts[$table->connection][$table->hash] = true;
+        $this->logger->warning('NormCache disabled canonical rows for a table with conflicting primary-key metadata.', [
             'table_hash' => $table->hash,
             'connection' => $table->connection,
             'table' => $table->table,
@@ -149,14 +166,14 @@ final class PrimaryKeyResolver
     private function introspect(
         Connection $connection,
         TableIdentity $table,
-    ): ?PrimaryKeyMetadata {
+    ): PrimaryKeyMetadata|null|false {
         try {
             $schema = $connection->getSchemaBuilder();
             $indexes = $schema->getIndexes($table->qualifiedTable());
             $primaryColumns = [];
 
             foreach ($indexes as $index) {
-                if ($index['primary'] === true || strtolower($index['name']) === 'primary') {
+                if ($index['primary']) {
                     $primaryColumns = $index['columns'];
                     break;
                 }
@@ -193,8 +210,8 @@ final class PrimaryKeyResolver
 
                 return new PrimaryKeyMetadata($columnName, $family);
             }
-        } catch (Throwable) {
-            return null;
+        } catch (\Throwable) {
+            return false;
         }
 
         return null;

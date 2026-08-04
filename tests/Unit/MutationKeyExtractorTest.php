@@ -34,4 +34,19 @@ final class MutationKeyExtractorTest extends UnitTestCase
 
         $this->assertSame(['i:1', 'i:2', 'i:3'], $tokens);
     }
+
+    public function test_joined_mutations_are_not_treated_as_precise(): void
+    {
+        $query = DB::query()
+            ->from('posts')
+            ->join('authors', 'authors.id', '=', 'posts.author_id')
+            ->where('posts.id', 1);
+
+        $tokens = (new MutationKeyExtractor)->extract(
+            $query,
+            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
+        );
+
+        $this->assertNull($tokens);
+    }
 }

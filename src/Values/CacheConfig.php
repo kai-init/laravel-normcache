@@ -2,40 +2,34 @@
 
 namespace NormCache\Values;
 
-use InvalidArgumentException;
-
 final readonly class CacheConfig
 {
-    public const MAX_MEMBERSHIP_ROWS = 1000;
+    public const MAX_PRECISE_INVALIDATION_KEYS = 1000;
 
-    public const MAX_MEMBERSHIP_BYTES = 1_048_576;
-
-    public const MAX_CANONICAL_BYTES = 16_777_216;
-
-    public const MAX_RESULT_BYTES = 4_194_304;
-
-    public const MAX_PRECISE_INVALIDATION_PKS = 1000;
+    public const MAX_STAMPEDE_WAKE_TOKENS = 1000;
 
     public function __construct(
         public string $connection,
         public string $keyPrefix,
-        public int $ttl,
+        public string $serializer,
+        public int $rowTtl,
         public int $queryTtl,
+        public int $schemaTtl,
+        public int $maxAutoOverlayRows,
         public array $primaryKeys,
-        public array $deploymentIds,
-        public int $maxMembershipRows,
-        public int $maxMembershipBytes,
-        public int $maxCanonicalBytes,
-        public int $maxResultBytes,
-        public int $maxPreciseInvalidationPks,
+        public int $maxPreciseInvalidationKeys,
         public int $buildingLockTtl,
         public int $stampedeWaitMs,
         public int $stampedeWakeTokens,
-        public int $publicationGuardMarginSeconds,
         public bool $enabled,
         public bool $dispatchEvents,
         public bool $debugbar,
     ) {}
+
+    public function wakeTtl(): int
+    {
+        return $this->buildingLockTtl + (int) ceil($this->stampedeWaitMs / 1000) + 5;
+    }
 
     /** @param array<string, mixed> $values */
     public static function fromArray(array $values): self
@@ -43,67 +37,63 @@ final readonly class CacheConfig
         $keyPrefix = (string) ($values['key_prefix'] ?? '');
 
         if (str_contains($keyPrefix, '{') || str_contains($keyPrefix, '}')) {
-            throw new InvalidArgumentException('NormCache key_prefix must not contain Redis hash-tag braces.');
+            throw new \InvalidArgumentException('NormCache key_prefix must not contain Redis hash-tag braces.');
         }
 
-        $ttl = self::positive($values, 'ttl', 604_800);
+        $rowTtl = self::positive($values, 'row_ttl', 604_800);
         $queryTtl = self::positive($values, 'query_ttl', 3_600);
-        $maxMembershipRows = self::bounded(
+        $schemaTtl = self::nonNegative(
             $values,
-            'max_membership_rows',
-            self::MAX_MEMBERSHIP_ROWS,
+            'schema_ttl',
+            86_400,
         );
-        $maxMembershipBytes = self::bounded(
+        $maxAutoOverlayRows = self::nonNegative(
             $values,
-            'max_membership_bytes',
-            self::MAX_MEMBERSHIP_BYTES,
+            'auto_overlay_max_rows',
+            1000,
         );
-        $maxCanonicalBytes = self::bounded(
+        $maxPreciseInvalidationKeys = self::bounded(
             $values,
-            'max_canonical_bytes',
-            self::MAX_CANONICAL_BYTES,
-        );
-        $maxResultBytes = self::bounded(
-            $values,
-            'max_result_bytes',
-            self::MAX_RESULT_BYTES,
-        );
-        $maxPreciseInvalidationPks = self::bounded(
-            $values,
-            'max_precise_invalidation_pks',
-            self::MAX_PRECISE_INVALIDATION_PKS,
+            'max_precise_invalidation_keys',
+            self::MAX_PRECISE_INVALIDATION_KEYS,
         );
         $buildingLockTtl = self::positive($values, 'building_lock_ttl', 5);
         $stampedeWaitMs = self::positive($values, 'stampede_wait_ms', 200);
-        $stampedeWakeTokens = self::positive($values, 'stampede_wake_tokens', 64);
-        $publicationGuardMarginSeconds = (int) ($values['publication_guard_margin_seconds'] ?? 10);
-
-        if ($publicationGuardMarginSeconds < 10) {
-            throw new InvalidArgumentException(
-                'NormCache publication_guard_margin_seconds must be at least 10.'
-            );
-        }
+        $stampedeWakeTokens = self::bounded(
+            $values,
+            'stampede_wake_tokens',
+            self::MAX_STAMPEDE_WAKE_TOKENS,
+            64,
+        );
 
         return new self(
             connection: (string) ($values['connection'] ?? 'cache'),
             keyPrefix: $keyPrefix,
-            ttl: $ttl,
+            serializer: self::serializer($values['serializer'] ?? 'auto'),
+            rowTtl: $rowTtl,
             queryTtl: $queryTtl,
+            schemaTtl: $schemaTtl,
+            maxAutoOverlayRows: $maxAutoOverlayRows,
             primaryKeys: self::primaryKeys($values['primary_keys'] ?? []),
-            deploymentIds: self::deploymentIds($values['deployment_ids'] ?? []),
-            maxMembershipRows: $maxMembershipRows,
-            maxMembershipBytes: $maxMembershipBytes,
-            maxCanonicalBytes: $maxCanonicalBytes,
-            maxResultBytes: $maxResultBytes,
-            maxPreciseInvalidationPks: $maxPreciseInvalidationPks,
+            maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,
             buildingLockTtl: $buildingLockTtl,
             stampedeWaitMs: $stampedeWaitMs,
             stampedeWakeTokens: $stampedeWakeTokens,
-            publicationGuardMarginSeconds: $publicationGuardMarginSeconds,
             enabled: (bool) ($values['enabled'] ?? true),
             dispatchEvents: (bool) ($values['events'] ?? false),
             debugbar: (bool) ($values['debugbar'] ?? false),
         );
+    }
+
+    private static function serializer(mixed $value): string
+    {
+        if (!is_string($value) || !in_array($value, ['auto', 'php', 'igbinary'], true)) {
+            throw new \InvalidArgumentException(
+                'NormCache serializer must be auto, php, or igbinary.',
+            );
+        }
+
+        return $value;
     }
 
     /** @param array<string, mixed> $values */
@@ -112,19 +102,31 @@ final readonly class CacheConfig
         $value = (int) ($values[$key] ?? $default);
 
         if ($value < 1) {
-            throw new InvalidArgumentException("NormCache {$key} must be at least 1.");
+            throw new \InvalidArgumentException("NormCache {$key} must be at least 1.");
         }
 
         return $value;
     }
 
     /** @param array<string, mixed> $values */
-    private static function bounded(array $values, string $key, int $maximum): int
+    private static function nonNegative(array $values, string $key, int $default): int
     {
-        $value = self::positive($values, $key, $maximum);
+        $value = (int) ($values[$key] ?? $default);
+
+        if ($value < 0) {
+            throw new \InvalidArgumentException("NormCache {$key} must be at least 0.");
+        }
+
+        return $value;
+    }
+
+    /** @param array<string, mixed> $values */
+    private static function bounded(array $values, string $key, int $maximum, ?int $default = null): int
+    {
+        $value = self::positive($values, $key, $default ?? $maximum);
 
         if ($value > $maximum) {
-            throw new InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
+            throw new \InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
         }
 
         return $value;
@@ -134,67 +136,112 @@ final readonly class CacheConfig
     private static function primaryKeys(mixed $value): array
     {
         if (!is_array($value)) {
-            throw new InvalidArgumentException('NormCache primary_keys must be an array.');
+            throw new \InvalidArgumentException('NormCache primary_keys must be an array.');
         }
 
         $result = [];
 
-        foreach ($value as $override) {
-            if (!is_array($override)) {
-                throw new InvalidArgumentException(
+        foreach ($value as $group) {
+            if (!is_array($group)) {
+                throw new \InvalidArgumentException(
                     'Each NormCache primary_keys entry must be a structured array.',
                 );
             }
 
-            foreach (['connection', 'database', 'table', 'column', 'type'] as $field) {
-                if (!is_string($override[$field] ?? null) || $override[$field] === '') {
-                    throw new InvalidArgumentException(
-                        "NormCache primary_keys entries require a non-empty {$field}.",
-                    );
-                }
-            }
-
-            if (
-                array_key_exists('schema', $override)
-                && !is_string($override['schema'])
-            ) {
-                throw new InvalidArgumentException(
-                    'NormCache primary_keys schema must be a string when present.',
-                );
-            }
-
-            if (!in_array($override['type'], ['integer', 'string'], true)) {
-                throw new InvalidArgumentException(
-                    'NormCache primary_keys type must be integer or string.',
-                );
-            }
-
-            $result[] = $override;
+            array_push($result, ...self::primaryKeyGroup($group));
         }
 
         return $result;
     }
 
-    /** @return array<string, string> */
-    private static function deploymentIds(mixed $value): array
+    /** @param array<string, mixed> $group
+     * @return list<array<string, string>>
+     */
+    private static function primaryKeyGroup(array $group): array
     {
-        if (!is_array($value)) {
-            throw new InvalidArgumentException('NormCache deployment_ids must be an array.');
-        }
-
-        foreach ($value as $connection => $deployment) {
-            if (
-                !is_string($connection)
-                || $connection === ''
-                || !is_string($deployment)
-                || $deployment === ''
-            ) {
-                throw new InvalidArgumentException(
-                    'NormCache deployment_ids must map connection names to non-empty strings.',
+        foreach (['connection', 'database'] as $field) {
+            if (!is_string($group[$field] ?? null) || $group[$field] === '') {
+                throw new \InvalidArgumentException(
+                    "NormCache primary_keys groups require a non-empty {$field}.",
                 );
             }
         }
 
-        return $value;
+        if (array_key_exists('schema', $group) && !is_string($group['schema'])) {
+            throw new \InvalidArgumentException(
+                'NormCache primary_keys group schema must be a string when present.',
+            );
+        }
+
+        $tables = $group['tables'] ?? null;
+
+        if (!is_array($tables) || $tables === []) {
+            throw new \InvalidArgumentException(
+                'NormCache primary_keys groups require a non-empty tables array.',
+            );
+        }
+
+        $result = [];
+
+        foreach ($tables as $table => $metadata) {
+            if (!is_string($table) || $table === '') {
+                throw new \InvalidArgumentException(
+                    'NormCache primary_keys table names must be non-empty strings.',
+                );
+            }
+
+            if (!is_array($metadata)) {
+                throw new \InvalidArgumentException(
+                    'NormCache primary_keys table metadata must be a structured array.',
+                );
+            }
+
+            $override = [
+                'connection' => $group['connection'],
+                'database' => $group['database'],
+                'table' => $table,
+                'column' => $metadata['column'] ?? null,
+                'type' => $metadata['type'] ?? null,
+            ];
+
+            if (array_key_exists('schema', $group)) {
+                $override['schema'] = $group['schema'];
+            }
+
+            $result[] = self::primaryKey($override);
+        }
+
+        return $result;
+    }
+
+    /** @param array<string, mixed> $override
+     * @return array<string, string>
+     */
+    private static function primaryKey(array $override): array
+    {
+        foreach (['connection', 'database', 'table', 'column', 'type'] as $field) {
+            if (!is_string($override[$field] ?? null) || $override[$field] === '') {
+                throw new \InvalidArgumentException(
+                    "NormCache primary_keys entries require a non-empty {$field}.",
+                );
+            }
+        }
+
+        if (
+            array_key_exists('schema', $override)
+            && !is_string($override['schema'])
+        ) {
+            throw new \InvalidArgumentException(
+                'NormCache primary_keys schema must be a string when present.',
+            );
+        }
+
+        if (!in_array($override['type'], ['integer', 'string'], true)) {
+            throw new \InvalidArgumentException(
+                'NormCache primary_keys type must be integer or string.',
+            );
+        }
+
+        return $override;
     }
 }

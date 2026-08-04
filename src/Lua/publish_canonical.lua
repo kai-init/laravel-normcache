@@ -1,4 +1,5 @@
--- Publish complete canonical rows and their membership as one guarded operation.
+-- Publish every canonical row and its membership as one guarded operation.
+-- Readers cannot discover the rows until this script writes the membership.
 --
 -- KEYS[1] = version key
 -- KEYS[2] = generation key
@@ -6,6 +7,7 @@
 -- KEYS[4..3+n] = row keys
 -- KEYS[4+n] = build lease
 -- KEYS[5+n] = token-scoped wake list
+-- KEYS[6+n] = result overlay key (optional)
 -- ARGV[1] = row count
 -- ARGV[2] = expected version
 -- ARGV[3] = expected generation
@@ -16,18 +18,26 @@
 -- ARGV[7+n] = owner token
 -- ARGV[8+n] = wake token count
 -- ARGV[9+n] = wake TTL
-
+-- ARGV[10+n] = result overlay payload (required when KEYS[6+n] is present)
 local n = tonumber(ARGV[1])
 local lease_index = 4 + n
 local wake_index = 5 + n
+local overlay_index = 6 + n
 local token = ARGV[7 + n]
+local wake_count = tonumber(ARGV[8 + n])
+local wake_tokens = {}
+
+for i = 1, wake_count do
+    wake_tokens[i] = '1'
+end
+
+local function wake()
+    redis.call('LPUSH', KEYS[wake_index], unpack(wake_tokens))
+end
 
 local function release()
     redis.call('DEL', KEYS[lease_index])
-    local wake_count = tonumber(ARGV[8 + n])
-    for i = 1, wake_count do
-        redis.call('LPUSH', KEYS[wake_index], '1')
-    end
+    wake()
     redis.call('EXPIRE', KEYS[wake_index], tonumber(ARGV[9 + n]))
 end
 
@@ -45,6 +55,12 @@ end
 for i = 1, n do
     redis.call('SETEX', KEYS[3 + i], tonumber(ARGV[5]), ARGV[6 + i])
 end
+
 redis.call('SETEX', KEYS[3], tonumber(ARGV[4]), ARGV[6])
+
+if #KEYS >= overlay_index then
+    redis.call('SETEX', KEYS[overlay_index], tonumber(ARGV[4]), ARGV[10 + n])
+end
+
 release()
 return 1

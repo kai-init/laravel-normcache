@@ -17,8 +17,7 @@
         "normcache",
         "normalized-cache",
         "query-cache",
-        "redis-cluster",
-        "normalized-cache"
+        "redis-cluster"
     ],
     "require": {
         "php": "^8.2",
@@ -33,7 +32,7 @@
     },
     "suggest": {
         "fruitcake/laravel-debugbar": "Install to enable the NormCache Debugbar panel (^4.0)",
-        "ext-igbinary": "Faster, smaller serialization for cached model payloads — detected automatically when available"
+        "ext-igbinary": "Faster, smaller serialization when normcache.serializer is auto or igbinary"
     },
     "autoload": {
         "psr-4": {
@@ -50,8 +49,7 @@
         "test:cluster": "REDIS_CLUSTER=true REDIS_PORT=7010 vendor/bin/phpunit",
         "lint": "vendor/bin/pint --test",
         "format": "vendor/bin/pint",
-        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M",
-        "bench": "vendor/bin/phpunit tests/Benchmark"
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=512M"
     },
     "extra": {
         "laravel": {

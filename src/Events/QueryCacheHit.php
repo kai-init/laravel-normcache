@@ -12,5 +12,6 @@ final readonly class QueryCacheHit
         public string $sql,
         public array $bindings,
         public ?string $modelClass = null,
+        public ?string $reason = null,
     ) {}
 }

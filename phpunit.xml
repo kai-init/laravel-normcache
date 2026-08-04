@@ -16,8 +16,8 @@
         <env name="REDIS_CLUSTER" value="false"/>
         <env name="REDIS_CLUSTER_NODES" value="127.0.0.1:7010,127.0.0.1:7011,127.0.0.1:7012,127.0.0.1:7013,127.0.0.1:7014,127.0.0.1:7015"/>
         <env name="NORMCACHE_ENABLED" value="true"/>
-        <env name="NORMCACHE_PREFIX" value="test:"/>
-        <env name="NORMCACHE_TTL" value="3600"/>
+        <env name="NORMCACHE_KEY_PREFIX" value="test:"/>
+        <env name="NORMCACHE_ROW_TTL" value="3600"/>
         <env name="NORMCACHE_QUERY_TTL" value="60"/>
     </php>
 </phpunit>

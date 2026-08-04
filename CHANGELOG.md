@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] — 2026-08-04
+
+### Added
+
+- **Query Builder caching:** supported `DB::table()` reads now use NormCache automatically, including write invalidation.
+- **Automatic result overlays:** eligible canonical queries store a complete result payload for faster warm reads and rebuild it from canonical rows when the overlay is missing.
+- **Unified query controls:** `dependsOn()` accepts models and table names, `tag()` groups related queries, and `NormCache::invalidate()` accepts model or table targets.
+- **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus their facade equivalents, pause and safely resume caching across application nodes.
+- **Database source scopes:** `database.connections.<name>.normcache_scope` isolates shards or tenants and allows aliases for the same source to share cache state deliberately.
+- **Serializer and primary-key configuration:** select `auto`, `php`, or `igbinary` serialization and configure keys that cannot be discovered reliably.
+
+### Changed
+
+- **BREAKING cache layout:** cache spaces were removed and Redis placement is now derived from physical tables and query groups. Cache keys changed, so v3 and v4 must not serve traffic together. Run `normcache:disable`, deploy every web and worker node, then run `normcache:enable`.
+- **BREAKING API consolidation:** replace `dependsOnTables()` with `dependsOn()`, legacy invalidation methods with `NormCache::invalidate()`, model-scoped tag flushing with `flushTag('name')`, and connection-scoped schema clearing with global `clearSchema()`.
+- **BREAKING flush behavior:** `normcache:flush` now always performs a global invalidation; `--model` and `--space` were removed.
+- Row lifetime is configured with `row_ttl` / `NORMCACHE_ROW_TTL`, the key-prefix variable is now `NORMCACHE_KEY_PREFIX`, and completed migrations automatically refresh schema metadata.
+
+### Fixed
+
+- Improved cache isolation and schema refresh behavior for connection aliases, shards, tenants, and runtime database switching.
+- Manual and automatic invalidation now handle connection-aware table names, unknown write targets, and writes that throw after reaching the database safely.
+- Composite or missing database primary keys no longer fall back to Eloquent's default `id`, while custom connections without a stable source identity bypass instead of failing.
+- Improved build-lock and Redis reconnect behavior when responses are lost or operations are retried.
+
+### Removed
+
+- Cache spaces, `$normCacheSpaces`, `space()`, the `spaces` configuration, and space-targeted flushing.
+- Legacy `cooldown`, `fallback`, and `fire_retrieved` options, `Builder::explain()`, old cache-manager facade accessors, and model-level cache events.
+
+---
+
+## [3.1.0] — 2026-07-23
+
+### Added
+
+- `CacheInvalidated` and `CacheMetricRecorded` events when `normcache.events` is enabled. Cache hit and miss events now include cache metadata.
+
+### Changed
+
+- Debugbar records overall cache-operation duration only; component-specific timing breakdowns are no longer collected.
+- Internal cache execution and invalidation code has been consolidated behind dedicated services.
+
+### Fixed
+
+- `useWritePdo()` reads, including relation reads, now bypass the cache and preserve read-your-writes behavior.
+- Cache keys for root, through, and pivot reads now consistently use the active Eloquent connection, preventing cross-connection cache leakage.
+- Model updates now invalidate before and after the write, so a concurrent pre-write read cannot remain reachable after a successful update.
+- Index, through, and pivot cache hits preserve the Lua-resolved model version when fetching model payloads.
+
+---
+
 ## [3.0.0] — 2026-07-09
 
 ### Added
