@@ -16,25 +16,9 @@ final class TableIdentityResolver
         $this->connections = new \WeakMap;
     }
 
-    public function clear(?string $connection = null): void
+    public function clear(): void
     {
-        if ($connection === null) {
-            $this->connections = new \WeakMap;
-
-            return;
-        }
-
-        $bindings = [];
-
-        foreach ($this->connections as $bound => $_) {
-            if ((string) $bound->getName() === $connection) {
-                $bindings[] = $bound;
-            }
-        }
-
-        foreach ($bindings as $bound) {
-            unset($this->connections[$bound]);
-        }
+        $this->connections = new \WeakMap;
     }
 
     public function resolve(Connection $connection, mixed $from): ?TableIdentity

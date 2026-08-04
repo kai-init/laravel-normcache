@@ -7,59 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [4.0.0] — 2026-08-04
 
 ### Added
 
-- **Database source scopes:** table identity now includes `database.connections.<name>.normcache_scope`, falling back to the Laravel connection name. Independent shards or tenants no longer share table-local cache state merely because their database and table names match, while intentional aliases can share one explicit scope.
-- **Serializer policy:** `serializer` / `NORMCACHE_SERIALIZER` accepts `auto`, `php`, or `igbinary`. Explicit igbinary configuration fails fast when the extension is unavailable.
-- **Tagged payload serialization:** serialized payloads carry a PHP or igbinary marker while retaining temporary support for legacy unmarked payloads.
+- **Query Builder caching:** supported `DB::table()` reads now use NormCache automatically, including write invalidation.
+- **Automatic result overlays:** eligible canonical queries store a complete result payload for faster warm reads and rebuild it from canonical rows when the overlay is missing.
+- **Unified query controls:** `dependsOn()` accepts models and table names, `tag()` groups related queries, and `NormCache::invalidate()` accepts model or table targets.
+- **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus their facade equivalents, pause and safely resume caching across application nodes.
+- **Database source scopes:** `database.connections.<name>.normcache_scope` isolates shards or tenants and allows aliases for the same source to share cache state deliberately.
+- **Serializer and primary-key configuration:** select `auto`, `php`, or `igbinary` serialization and configure keys that cannot be discovered reliably.
 
 ### Changed
 
-- **BREAKING cache-key transition:** table identity now includes the database source scope. Old and new package versions must not serve cache traffic together because they invalidate different table-key families. Run `normcache:disable`, deploy every web and worker node, then run `normcache:enable`; enabling advances the global epoch before cache traffic resumes.
-- Fresh persisted schema resolution batches global and connection epochs with `MGET` and batches view and primary-key fields with `HMGET`.
-- Build-lease claiming now uses one token-idempotent Lua operation. A retry after a lost response recognizes the original claimant rather than treating it as an unrelated waiter.
-- Canonical, row-repair, direct-row, and result publication use parallel packed key and payload lists instead of associative full-key maps.
-- Rejected automatic overlay admission is recorded in the canonical membership, preventing repeated encoding and rejection for the same membership version.
-- Redis reconnect retries are explicit: replay-safe operations retain one retry, while the unguarded `SET NX` helper and blocking wake read are not blindly replayed.
+- **BREAKING cache layout:** cache spaces were removed and Redis placement is now derived from physical tables and query groups. Cache keys changed, so v3 and v4 must not serve traffic together. Run `normcache:disable`, deploy every web and worker node, then run `normcache:enable`.
+- **BREAKING API consolidation:** replace `dependsOnTables()` with `dependsOn()`, legacy invalidation methods with `NormCache::invalidate()`, model-scoped tag flushing with `flushTag('name')`, and connection-scoped schema clearing with global `clearSchema()`.
+- **BREAKING flush behavior:** `normcache:flush` now always performs a global invalidation; `--model` and `--space` were removed.
+- Row lifetime is configured with `row_ttl` / `NORMCACHE_ROW_TTL`, the key-prefix variable is now `NORMCACHE_KEY_PREFIX`, and completed migrations automatically refresh schema metadata.
 
 ### Fixed
 
-- Intercepted writes with unresolved targets now conservatively advance the global epoch instead of silently leaving reachable stale data.
-- A write that may have reached the database before throwing is conservatively invalidated before the original exception is rethrown.
-- A verified composite or missing database primary key can no longer be overridden by Eloquent's default `id` assumption. Explicit NormCache primary-key configuration remains available for trusted overrides.
-- Unnamed custom Laravel connections bypass caching when no stable source scope can be established instead of throwing during read planning.
-
-## [4.0.0] — 2026-07-20
-
-### Added
-
-- **Query Builder caching:** supported `DB::table()` reads now participate in NormCache automatically, alongside Eloquent reads. Writes through those cache-aware builders invalidate affected tables automatically.
-- **Unified dependencies:** `dependsOn()` now accepts Eloquent model classes and raw table names in one declaration.
-- **Automatic Result Overlays:** canonical queries returning up to `auto_overlay_max_rows + 1` rows automatically store a complete result payload in Redis when its encoded size is at most 128 KiB. The extra row accommodates Laravel's simple/cursor pagination lookahead; with the default value of 1000, payloads containing up to 1001 rows are eligible. No explicit SQL `LIMIT` is required.
-- **Global tags:** use `tag('name')` to group cached query payloads and `NormCache::flushTag('name')` to invalidate that group.
-- **Unified manual invalidation:** `NormCache::invalidate()` accepts a model instance, model class, table name, or an array of those targets. A model target uses its model connection; table targets use Laravel's default connection unless `connection:` is supplied.
-- **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus `disableCache()`, `enableCache()`, and `cacheDisabled()`, pause caching across application nodes. Re-enabling advances the global epoch before serving cached data again.
-- **Primary-key overrides:** configure `primary_keys` for tables whose key column or type cannot be discovered reliably.
-
-### Changed
-
-- **BREAKING:** Redis Cluster cache spaces have been removed. Remove `$normCacheSpaces`, `space()`, and the `spaces` configuration. NormCache now derives Redis placement from each physical table and query group.
-- **BREAKING:** cache key formats have changed. v4 begins with a cold cache; v3 payloads are not reused and expire under their existing TTLs.
-- **BREAKING:** `dependsOnTables()` has been removed; pass table names to `dependsOn()` instead.
-- **BREAKING:** manual invalidation is now `NormCache::invalidate()`. The old `flushModel()`, `invalidateTableVersion()`, and related table-version APIs are no longer available.
-- **BREAKING:** tag flushing is global: replace `flushTag(Model::class, 'tag')` and `flushTagAcrossModels('tag')` with `flushTag('tag')`.
-- **BREAKING:** `normcache:flush` now always advances the global epoch; its `--model` and `--space` options have been removed.
-- Row payload lifetime is configured with `row_ttl` / `NORMCACHE_ROW_TTL`, replacing `ttl` / `NORMCACHE_TTL`. The key-prefix environment variable is now `NORMCACHE_KEY_PREFIX`.
-- Completed Laravel migrations clear cached schema metadata and advance the global epoch automatically.
+- Improved cache isolation and schema refresh behavior for connection aliases, shards, tenants, and runtime database switching.
+- Manual and automatic invalidation now handle connection-aware table names, unknown write targets, and writes that throw after reaching the database safely.
+- Composite or missing database primary keys no longer fall back to Eloquent's default `id`, while custom connections without a stable source identity bypass instead of failing.
+- Improved build-lock and Redis reconnect behavior when responses are lost or operations are retried.
 
 ### Removed
 
-- Cache-space configuration and space-targeted flushing.
-- The `cooldown`, `fallback`, and `fire_retrieved` configuration options.
-- `Builder::explain()` and the legacy cache-manager service accessors exposed by the facade.
-- `CacheMetricRecorded` and model-level cache hit/miss events. Query outcome events remain available when `events` is enabled.
+- Cache spaces, `$normCacheSpaces`, `space()`, the `spaces` configuration, and space-targeted flushing.
+- Legacy `cooldown`, `fallback`, and `fire_retrieved` options, `Builder::explain()`, old cache-manager facade accessors, and model-level cache events.
 
 ---
 

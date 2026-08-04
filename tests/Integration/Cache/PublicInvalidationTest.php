@@ -11,6 +11,22 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
+final class PublicConnectionAwareInvalidationModel extends Model
+{
+    protected $connection = 'manual_reporting_alias';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    public function getTable(): string
+    {
+        return $this->getConnectionName() === 'manual_primary_alias'
+            ? 'primary_users'
+            : 'reporting_users';
+    }
+}
+
 final class PublicInvalidationTest extends TestCase
 {
     private int $postId;
@@ -159,7 +175,7 @@ final class PublicInvalidationTest extends TestCase
         $read();
         $read();
         DB::statement('alter table reshaped add column subtitle text');
-        $this->assertTrue(NormCache::clearSchema('testing'));
+        $this->assertTrue(NormCache::clearSchema());
 
         $this->assertArrayNotHasKey('subtitle', $read());
     }
@@ -188,6 +204,107 @@ final class PublicInvalidationTest extends TestCase
         $this->assertArrayNotHasKey('removable', $read());
     }
 
+    public function test_refreshing_one_alias_retires_shared_source_schema_metadata_on_another_alias(): void
+    {
+        $database = tempnam(sys_get_temp_dir(), 'normcache-schema-alias-');
+        $this->assertIsString($database);
+
+        $readAlias = 'schema_read_alias';
+        $writeAlias = 'schema_write_alias';
+        $scope = 'shared-schema-source';
+        $this->configureSqliteConnection($readAlias, $database, $scope);
+        $this->configureSqliteConnection($writeAlias, $database, $scope);
+
+        try {
+            $read = DB::connection($readAlias);
+            $write = DB::connection($writeAlias);
+            $pdo = $write->getPdo();
+            $pdo->exec('create table posts (id integer primary key, title text not null)');
+            $pdo->exec('create table alias_subject (id integer primary key, title text not null)');
+            $pdo->exec("insert into posts (id, title) values (1, 'Before')");
+            $pdo->exec("insert into alias_subject (id, title) values (1, 'Before')");
+
+            $readSubject = static fn() => $read
+                ->table('alias_subject')
+                ->where('id', 1)
+                ->value('title');
+
+            $this->assertSame('Before', $readSubject());
+            $this->assertSame('Before', $readSubject());
+
+            $pdo->exec('drop table alias_subject');
+            $pdo->exec('create view alias_subject as select id, title from posts');
+
+            $this->assertTrue(NormCache::refreshSchema($writeAlias));
+            $this->app->forgetScopedInstances();
+
+            $this->assertSame('Before', $readSubject());
+            $this->assertSame('Before', $readSubject());
+
+            $pdo->exec("update posts set title = 'After' where id = 1");
+
+            $this->assertSame('After', $readSubject());
+        } finally {
+            DB::disconnect($readAlias);
+            DB::disconnect($writeAlias);
+            DB::purge($readAlias);
+            DB::purge($writeAlias);
+
+            if (is_file($database)) {
+                unlink($database);
+            }
+        }
+    }
+
+    public function test_model_invalidation_applies_the_connection_before_resolving_the_table(): void
+    {
+        $database = tempnam(sys_get_temp_dir(), 'normcache-manual-invalidation-');
+        $this->assertIsString($database);
+
+        $connectionName = 'manual_primary_alias';
+        $this->configureSqliteConnection($connectionName, $database, $connectionName);
+
+        try {
+            $connection = DB::connection($connectionName);
+            $pdo = $connection->getPdo();
+            $pdo->exec('create table primary_users (id integer primary key, name text not null)');
+            $pdo->exec('create table reporting_users (id integer primary key, name text not null)');
+            $pdo->exec("insert into primary_users (id, name) values (1, 'Before')");
+
+            $readPrimary = static fn() => $connection
+                ->table('primary_users')
+                ->where('id', 1)
+                ->value('name');
+
+            $this->assertSame('Before', $readPrimary());
+            $this->assertSame('Before', $readPrimary());
+
+            $pdo->exec("update primary_users set name = 'After class' where id = 1");
+
+            $this->assertTrue(NormCache::invalidate(
+                PublicConnectionAwareInvalidationModel::class,
+                $connectionName,
+            ));
+            $this->assertSame('After class', $readPrimary());
+            $this->assertSame('After class', $readPrimary());
+
+            $pdo->exec("update primary_users set name = 'After instance' where id = 1");
+            $model = new PublicConnectionAwareInvalidationModel;
+
+            $this->assertSame('manual_reporting_alias', $model->getConnectionName());
+            $this->assertTrue(NormCache::invalidate($model, $connectionName));
+            $this->assertSame('manual_reporting_alias', $model->getConnectionName());
+            $this->assertSame('After instance', $readPrimary());
+        } finally {
+            DB::disconnect($connectionName);
+            DB::purge($connectionName);
+
+            if (is_file($database)) {
+                unlink($database);
+            }
+        }
+    }
+
     private function readReshapedTable(): \Closure
     {
         DB::statement('drop table if exists reshaped');
@@ -195,5 +312,19 @@ final class PublicInvalidationTest extends TestCase
         DB::table('reshaped')->insert(['id' => 1, 'title' => 'Row', 'removable' => 'x']);
 
         return static fn(): array => (array) DB::table('reshaped')->where('id', 1)->first();
+    }
+
+    private function configureSqliteConnection(
+        string $name,
+        string $database,
+        string $scope,
+    ): void {
+        config()->set("database.connections.{$name}", [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+            'normcache_scope' => $scope,
+        ]);
+        DB::purge($name);
     }
 }

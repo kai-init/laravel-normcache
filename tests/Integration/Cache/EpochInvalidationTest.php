@@ -12,7 +12,6 @@ final class EpochInvalidationTest extends TestCase
 {
     public function test_flush_all_evicts_a_pk_value_read(): void
     {
-
         DB::table('authors')->insert(['id' => 1, 'name' => 'Author']);
         DB::table('posts')->insert([
             'id' => 1, 'title' => 'Before', 'views' => 0, 'published' => true,

@@ -196,7 +196,7 @@ final class CanonicalReadTest extends TestCase
                 strtolower(DB::getQueryLog()[0]['query']),
             );
         } finally {
-            $this->app->make(TableIdentityResolver::class)->clear('testing');
+            $this->app->make(TableIdentityResolver::class)->clear();
             DB::statement('DETACH DATABASE tenant');
 
             if (is_file($path)) {

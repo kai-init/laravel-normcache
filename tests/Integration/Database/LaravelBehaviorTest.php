@@ -93,7 +93,7 @@ final class LaravelBehaviorTest extends TestCase
         try {
             $connection->setDatabaseName($database);
             $connection->setPdo($tenantPdo);
-            $resolver->clear('testing');
+            $resolver->clear();
             $secondIdentity = $resolver->resolve($connection, 'posts');
 
             $this->assertNotSame($firstIdentity?->hash, $secondIdentity?->hash);

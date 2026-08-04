@@ -15,9 +15,6 @@ final class SchemaRepository
 
     private ?string $epoch = null;
 
-    /** @var array<string, string> */
-    private array $connectionEpochs = [];
-
     /** @var array<string, array<string, ?string>> */
     private array $fields = [];
 
@@ -256,7 +253,7 @@ final class SchemaRepository
             . ':build:' . hash('xxh128', $this->connectionScope($connection));
     }
 
-    public function clear(?string $connection = null): bool
+    public function clear(): bool
     {
         if ($this->config->schemaTtl === 0) {
             $this->fields = [];
@@ -266,25 +263,13 @@ final class SchemaRepository
         }
 
         try {
-            if ($connection !== null) {
-                $this->connectionEpochs[$connection] = (string) $this->store->increment(
-                    $this->keys->connectionSchemaEpoch($connection),
-                );
-
-                return true;
-            }
-
             $this->epoch = (string) $this->store->increment(
                 $this->keys->schemaEpoch(),
             );
 
             return true;
         } catch (\Throwable) {
-            if ($connection === null) {
-                $this->epoch = null;
-            } else {
-                unset($this->connectionEpochs[$connection]);
-            }
+            $this->epoch = null;
 
             return false;
         } finally {
@@ -344,36 +329,18 @@ final class SchemaRepository
 
     private function metadataKey(string $connection): string
     {
-        $this->resolveEpochs($connection);
+        $this->resolveEpoch();
 
-        return $this->keys->schema(
-            $connection,
-            (string) $this->epoch,
-            $this->connectionEpochs[$connection],
-        );
+        return $this->keys->schema($connection, (string) $this->epoch);
     }
 
-    private function resolveEpochs(string $connection): void
+    private function resolveEpoch(): void
     {
-        if ($this->epoch !== null && array_key_exists($connection, $this->connectionEpochs)) {
+        if ($this->epoch !== null) {
             return;
         }
 
-        $epochKey = $this->keys->schemaEpoch();
-        $connectionKey = $this->keys->connectionSchemaEpoch($connection);
-        $keys = [];
-
-        if ($this->epoch === null) {
-            $keys[] = $epochKey;
-        }
-
-        if (!array_key_exists($connection, $this->connectionEpochs)) {
-            $keys[] = $connectionKey;
-        }
-
-        $values = $this->store->mget($keys);
-        $this->epoch ??= $values[$epochKey] ?? '0';
-        $this->connectionEpochs[$connection] ??= $values[$connectionKey] ?? '0';
+        $this->epoch = $this->store->getRaw($this->keys->schemaEpoch()) ?? '0';
     }
 
     private function schemaField(Connection $connection): string

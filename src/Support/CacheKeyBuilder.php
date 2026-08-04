@@ -125,21 +125,11 @@ final class CacheKeyBuilder
         return $this->keyPrefix . '{ncm}:schema-epoch';
     }
 
-    public function connectionSchemaEpoch(string $connection): string
+    public function schema(string $connection, string $epoch): string
     {
         $hash = hash('xxh128', $connection);
 
-        return $this->keyPrefix . "{ncm:c:{$hash}}:schema-epoch";
-    }
-
-    public function schema(
-        string $connection,
-        string $epoch,
-        string $connectionEpoch,
-    ): string {
-        $hash = hash('xxh128', $connection);
-
-        return $this->keyPrefix . "{ncm:c:{$hash}}:schema:v{$epoch}:c{$connectionEpoch}";
+        return $this->keyPrefix . "{ncm:c:{$hash}}:schema:v{$epoch}";
     }
 
     public function tablePrefix(TableIdentity $table): string

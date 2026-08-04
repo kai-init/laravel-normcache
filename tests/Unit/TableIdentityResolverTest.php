@@ -31,7 +31,7 @@ final class TableIdentityResolverTest extends UnitTestCase
 
         $this->assertSame('tenant', $resolver->resolve($connection, 'posts')?->schema);
         $this->assertSame('tenant', $resolver->resolve($connection, 'posts')?->schema);
-        $resolver->clear('testing');
+        $resolver->clear();
         $this->assertSame('other', $resolver->resolve($connection, 'posts')?->schema);
     }
 

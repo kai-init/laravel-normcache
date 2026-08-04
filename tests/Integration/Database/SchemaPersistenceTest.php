@@ -79,7 +79,7 @@ final class SchemaPersistenceTest extends TestCase
         $this->assertSame('id', $warmPrimaryKey?->column);
         $this->assertSame('integer', $warmPrimaryKey?->family);
 
-        $this->assertTrue($warmRepository->clear('testing'));
+        $this->assertTrue($warmRepository->clear());
 
         $coldBuilder = $this->schemaBuilder(expectIntrospection: true);
         $coldConnection = $this->mysqlConnection($coldBuilder);
@@ -98,7 +98,7 @@ final class SchemaPersistenceTest extends TestCase
         $this->assertSame('id', $coldPrimaryKey?->column);
     }
 
-    public function test_fresh_sqlite_schema_resolution_batches_metadata_reads(): void
+    public function test_fresh_sqlite_schema_resolution_reads_one_epoch_and_batches_metadata_fields(): void
     {
         $connection = DB::connection();
         $query = DB::table('posts');
@@ -138,15 +138,7 @@ final class SchemaPersistenceTest extends TestCase
             ),
         ));
 
-        if ((bool) env('REDIS_CLUSTER', false)) {
-            $this->assertNotContains('get', $metadataCommands);
-            $this->assertNotContains('hget', $metadataCommands);
-            $this->assertContains('hmget', $metadataCommands);
-
-            return;
-        }
-
-        $this->assertSame(['mget', 'hmget'], $metadataCommands);
+        $this->assertSame(['get', 'hmget'], $metadataCommands);
     }
 
     public function test_verified_schema_rejects_model_primary_key_assumptions(): void
@@ -223,13 +215,13 @@ final class SchemaPersistenceTest extends TestCase
         $this->assertFalse($this->repository()->effectiveSchema($connection));
     }
 
-    public function test_connection_clear_keeps_in_flight_writers_in_a_retired_generation(): void
+    public function test_global_clear_keeps_in_flight_writers_in_a_retired_generation(): void
     {
         $connection = $this->mysqlConnection(Mockery::mock(Builder::class));
         $inFlight = $this->repository();
         $inFlight->putEffectiveSchema($connection, 'before_clear');
 
-        $this->assertTrue($this->repository()->clear('testing'));
+        $this->assertTrue($this->repository()->clear());
 
         $inFlight->putEffectiveSchema($connection, 'stale_write');
 

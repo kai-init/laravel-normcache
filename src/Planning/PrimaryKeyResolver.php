@@ -80,16 +80,10 @@ final class PrimaryKeyResolver
         return null;
     }
 
-    public function clear(?string $connection = null): void
+    public function clear(): void
     {
-        if ($connection === null) {
-            $this->memo = [];
-            $this->warnedConflicts = [];
-
-            return;
-        }
-
-        unset($this->memo[$connection], $this->warnedConflicts[$connection]);
+        $this->memo = [];
+        $this->warnedConflicts = [];
     }
 
     private function intern(PrimaryKeyMetadata $metadata): PrimaryKeyMetadata

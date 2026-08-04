@@ -75,10 +75,7 @@ final readonly class CacheManager
     private function invalidationIdentity(mixed $target, ?string $connection): ?TableIdentity
     {
         if ($target instanceof Model) {
-            return $this->tables->resolve(
-                $connection === null ? $target->getConnection() : DB::connection($connection),
-                $target->getTable(),
-            );
+            return $this->modelInvalidationIdentity($target, $connection);
         }
 
         if (!is_string($target)) {
@@ -88,15 +85,20 @@ final readonly class CacheManager
         }
 
         if (is_a($target, Model::class, true)) {
-            $model = new $target;
-
-            return $this->tables->resolve(
-                $connection === null ? $model->getConnection() : DB::connection($connection),
-                $model->getTable(),
-            );
+            return $this->modelInvalidationIdentity(new $target, $connection);
         }
 
         return $this->tables->resolve(DB::connection($connection), $target);
+    }
+
+    private function modelInvalidationIdentity(Model $model, ?string $connection): ?TableIdentity
+    {
+        if ($connection !== null) {
+            $model = clone $model;
+            $model->setConnection($connection);
+        }
+
+        return $this->tables->resolve($model->getConnection(), $model->getTable());
     }
 
     public function flushTag(string $tag): bool
@@ -166,17 +168,17 @@ final readonly class CacheManager
         }
     }
 
-    public function clearSchema(?string $connection = null): bool
+    public function clearSchema(): bool
     {
-        $this->tables->clear($connection);
-        $this->primaryKeys->clear($connection);
+        $this->tables->clear();
+        $this->primaryKeys->clear();
 
-        return $this->schema->clear($connection);
+        return $this->schema->clear();
     }
 
     public function refreshSchema(?string $connection = null): bool
     {
-        $cleared = $this->clearSchema($connection);
+        $cleared = $this->clearSchema();
         $flushed = $this->flushAll();
 
         if (!$cleared || !$flushed) {
