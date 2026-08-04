@@ -62,15 +62,13 @@ final class DependencyAnalyzer
     }
 
     /** @param class-string $modelClass */
-    public function modelIdentity(Connection $fallbackConnection, string $modelClass): ?TableIdentity
+    public function modelIdentity(Connection $activeConnection, string $modelClass): ?TableIdentity
     {
         try {
             $model = new $modelClass;
-            $connection = $model->getConnectionName() === null
-                ? $fallbackConnection
-                : $model->getConnection();
+            $model->setConnection($activeConnection->getName());
 
-            return $this->tables->resolve($connection, $model->getTable());
+            return $this->tables->resolve($activeConnection, $model->getTable());
         } catch (\Throwable) {
             return null;
         }

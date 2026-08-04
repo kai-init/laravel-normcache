@@ -21,6 +21,18 @@ class AmbientUser extends Model
     protected $table = 'users';
 }
 
+class ConnectionAwareTableUser extends Model
+{
+    protected $connection = 'reporting';
+
+    public function getTable()
+    {
+        return $this->getConnectionName() === 'primary'
+            ? 'primary_users'
+            : 'reporting_users';
+    }
+}
+
 final class DependencyAnalyzerTest extends UnitTestCase
 {
     private string $primaryDatabase = '';
@@ -56,7 +68,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
         }
     }
 
-    public function test_declared_model_dependency_resolves_on_the_models_own_connection(): void
+    public function test_declared_model_dependency_uses_the_active_query_connection(): void
     {
         $this->createUsersTables();
 
@@ -73,7 +85,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
         $declared = app(DependencyAnalyzer::class)
             ->modelIdentity(DB::connection('primary'), ReportingUser::class);
 
-        $this->assertSame($reporting?->hash, $declared?->hash);
+        $this->assertSame($primary?->hash, $declared?->hash);
     }
 
     public function test_declared_model_dependency_without_a_connection_uses_the_querying_connection(): void
@@ -87,6 +99,23 @@ final class DependencyAnalyzerTest extends UnitTestCase
             ->modelIdentity(DB::connection('reporting'), AmbientUser::class);
 
         $this->assertSame($reporting?->hash, $declared?->hash);
+    }
+
+    public function test_declared_model_observes_the_active_connection_when_resolving_its_table(): void
+    {
+        Schema::connection('primary')->create('primary_users', function ($table): void {
+            $table->id();
+        });
+        Schema::connection('reporting')->create('reporting_users', function ($table): void {
+            $table->id();
+        });
+
+        $resolver = app(TableIdentityResolver::class);
+        $primary = $resolver->resolve(DB::connection('primary'), 'primary_users');
+        $declared = app(DependencyAnalyzer::class)
+            ->modelIdentity(DB::connection('primary'), ConnectionAwareTableUser::class);
+
+        $this->assertSame($primary?->hash, $declared?->hash);
     }
 
     private function createUsersTables(): void
