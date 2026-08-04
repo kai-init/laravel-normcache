@@ -63,6 +63,15 @@ final class CascadeInvalidationTest extends TestCase
         }
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            Schema::dropIfExists('cascade_notes');
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_parent_delete_generation_invalidates_cascaded_child_rows(): void
     {
         [$author, $post] = $this->authorAndPost();
