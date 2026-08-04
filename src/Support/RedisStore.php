@@ -3,6 +3,7 @@
 namespace NormCache\Support;
 
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
@@ -358,7 +359,10 @@ final class RedisStore
         }
 
         $this->withRetryingConnection(function (Connection $connection) use ($states): void {
-            if ($connection->isCluster()) {
+            if (
+                $connection instanceof PhpRedisClusterConnection
+                || $connection instanceof PredisClusterConnection
+            ) {
                 foreach ($states as $state) {
                     $this->evaluate(
                         $connection,
