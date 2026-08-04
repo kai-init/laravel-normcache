@@ -39,6 +39,7 @@ final class QueryPlanner
 
         if (
             $primaryKey !== null
+            && !$root->isView
             && count($dependencies) === 1
             && $this->allowsDirectControls($query)
         ) {
@@ -77,7 +78,7 @@ final class QueryPlanner
         if (
             $primaryKey !== null
             && $wildcard
-            && (!$root->isView || !$this->hasExternalDependency($root, $dependencies))
+            && !$root->isView
         ) {
             return QueryPlan::canonical(
                 $root,

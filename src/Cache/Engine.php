@@ -9,6 +9,7 @@ use NormCache\Enums\ReadOutcome;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
+use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
@@ -36,6 +37,7 @@ final readonly class Engine
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private DependencyAnalyzer $dependencies,
+        private SqlVolatilityScanner $volatility,
         private QueryObserver $observer,
         private CacheStateResolver $states,
         private CanonicalRepository $canonical,
@@ -87,10 +89,10 @@ final readonly class Engine
 
         $analysis = $this->dependencies->analyze($connection, $query, $table);
 
-        if ($analysis->volatile) {
+        if ($table->isView && !$this->hasExternalDependency($table, $analysis->tables)) {
             return $this->bypass(
                 $query,
-                'volatile_expression',
+                'view_dependencies_required',
                 $statement,
                 $database,
             );
@@ -124,6 +126,20 @@ final readonly class Engine
             $forceQueryGroup,
             $operation,
         );
+
+        if (
+            $plan->route !== QueryPlan::DIRECT_PK
+            && $this->volatility->isVolatile($statement->sql())
+        ) {
+            return $this->bypass(
+                $query,
+                'volatile_expression',
+                $statement,
+                $database,
+                $plan,
+            );
+        }
+
         $namespace = $this->identity->namespace($query->configuredTag());
         $canonicalQueryHash = null;
         $dependencyHashes = array_map(
@@ -897,6 +913,18 @@ final readonly class Engine
         }
 
         return $lowest;
+    }
+
+    /** @param list<TableIdentity> $dependencies */
+    private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
+    {
+        foreach ($dependencies as $dependency) {
+            if ($dependency->hash !== $root->hash) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function fail(\Throwable $exception): void

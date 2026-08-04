@@ -154,6 +154,26 @@ final class TableIdentityResolverTest extends UnitTestCase
         $this->assertNotSame($first?->hash, $second?->hash);
     }
 
+    public function test_quoted_identifiers_with_spaces_bypass_table_identity_resolution(): void
+    {
+        $identity = app(TableIdentityResolver::class)->resolve(
+            $this->sqlServerConnection(),
+            '[Order Details]',
+        );
+
+        $this->assertNull($identity);
+    }
+
+    public function test_four_part_sql_server_sources_bypass_table_identity_resolution(): void
+    {
+        $identity = app(TableIdentityResolver::class)->resolve(
+            $this->sqlServerConnection(),
+            'server.database.schema.posts',
+        );
+
+        $this->assertNull($identity);
+    }
+
     public function test_metadata_is_released_when_its_connection_is_discarded(): void
     {
         $resolver = app(TableIdentityResolver::class);
@@ -239,6 +259,23 @@ final class TableIdentityResolverTest extends UnitTestCase
         $connection->shouldReceive('getTablePrefix')->andReturn('');
         $connection->shouldReceive('getConfig')
             ->andReturn(['name' => 'testing']);
+        $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
+
+        return $connection;
+    }
+
+    private function sqlServerConnection(): Connection
+    {
+        $builder = Mockery::mock(Builder::class);
+        $builder->shouldReceive('getCurrentSchemaName')->andReturn('dbo');
+        $builder->shouldReceive('getViews')->andReturn([]);
+
+        $connection = Mockery::mock(Connection::class);
+        $connection->shouldReceive('getDriverName')->andReturn('sqlsrv');
+        $connection->shouldReceive('getName')->andReturn('testing');
+        $connection->shouldReceive('getDatabaseName')->andReturn('app');
+        $connection->shouldReceive('getTablePrefix')->andReturn('');
+        $connection->shouldReceive('getConfig')->andReturn(['name' => 'testing']);
         $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
 
         return $connection;

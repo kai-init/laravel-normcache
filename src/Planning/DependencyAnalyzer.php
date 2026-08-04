@@ -23,7 +23,6 @@ final class DependencyAnalyzer
         $resolved = [$root->hash => $root];
         $visited = [];
         $opaque = false;
-        $volatile = false;
 
         $this->walk(
             $connection,
@@ -31,7 +30,6 @@ final class DependencyAnalyzer
             $resolved,
             $visited,
             $opaque,
-            $volatile,
         );
 
         $declarations = $query->dependencies();
@@ -59,7 +57,6 @@ final class DependencyAnalyzer
             array_values($resolved),
             $opaque,
             $explicit,
-            $volatile,
             $unresolved,
         );
     }
@@ -89,7 +86,6 @@ final class DependencyAnalyzer
         array &$resolved,
         array &$visited,
         bool &$opaque,
-        bool &$volatile,
     ): void {
         $id = spl_object_id($query);
 
@@ -99,11 +95,11 @@ final class DependencyAnalyzer
 
         $visited[$id] = true;
         $captured = [];
-        $this->walkProjectionValues($query, [$query->from], $captured, $opaque, $volatile);
+        $this->walkProjectionValues($query, [$query->from], $captured, $opaque);
         $this->resolveSource($connection, $query->from, $resolved, $opaque);
 
         foreach ($query->joins ?? [] as $join) {
-            $this->walkProjectionValues($query, [$join->table], $captured, $opaque, $volatile);
+            $this->walkProjectionValues($query, [$join->table], $captured, $opaque);
             $this->resolveSource($connection, $join->table, $resolved, $opaque);
             $this->walkNestedValues(
                 $connection,
@@ -111,7 +107,6 @@ final class DependencyAnalyzer
                 $resolved,
                 $visited,
                 $opaque,
-                $volatile,
             );
         }
 
@@ -121,7 +116,6 @@ final class DependencyAnalyzer
             $resolved,
             $visited,
             $opaque,
-            $volatile,
         );
         $this->walkNestedValues(
             $connection,
@@ -129,12 +123,17 @@ final class DependencyAnalyzer
             $resolved,
             $visited,
             $opaque,
-            $volatile,
         );
-        $this->walkProjectionValues($query, $query->columns ?? [], $captured, $opaque, $volatile);
-        $this->walkOpaqueValues($query, $query->groups ?? [], $opaque, $volatile);
-        $this->walkOpaqueValues($query, $query->orders ?? [], $opaque, $volatile);
-        $this->walkOpaqueValues($query, $query->unionOrders ?? [], $opaque, $volatile);
+        $this->walkProjectionValues($query, $query->columns ?? [], $captured, $opaque);
+        $this->walkProjectionValues(
+            $query,
+            (array) ($query->aggregate['columns'] ?? []),
+            $captured,
+            $opaque,
+        );
+        $this->walkOpaqueValues($query->groups ?? [], $opaque);
+        $this->walkOpaqueValues($query->orders ?? [], $opaque);
+        $this->walkOpaqueValues($query->unionOrders ?? [], $opaque);
 
         foreach ($query->unions ?? [] as $union) {
             $nested = $union['query'] ?? null;
@@ -146,7 +145,6 @@ final class DependencyAnalyzer
                     $resolved,
                     $visited,
                     $opaque,
-                    $volatile,
                 );
             } else {
                 $opaque = true;
@@ -160,24 +158,18 @@ final class DependencyAnalyzer
                 $resolved,
                 $visited,
                 $opaque,
-                $volatile,
             );
         }
     }
 
     /** @param array<mixed> $values */
     private function walkOpaqueValues(
-        Builder $query,
         array $values,
         bool &$opaque,
-        bool &$volatile,
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Expression) {
                 $opaque = true;
-                $volatile = $volatile || $this->isVolatileSql(
-                    (string) $value->getValue($query->getGrammar()),
-                );
 
                 continue;
             }
@@ -189,10 +181,9 @@ final class DependencyAnalyzer
                     true,
                 )) {
                     $opaque = true;
-                    $volatile = $volatile || $this->hasVolatileSqlValue($value);
                 }
 
-                $this->walkOpaqueValues($query, $value, $opaque, $volatile);
+                $this->walkOpaqueValues($value, $opaque);
             }
         }
     }
@@ -207,7 +198,6 @@ final class DependencyAnalyzer
         array $values,
         array &$captured,
         bool &$opaque,
-        bool &$volatile,
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Expression) {
@@ -222,7 +212,6 @@ final class DependencyAnalyzer
                 }
 
                 $sql = (string) $value->getValue($query->getGrammar());
-                $volatile = $volatile || $this->isVolatileSql($sql);
 
                 if (preg_match('/\b(?:select|from|join)\b/i', $sql) === 1) {
                     $opaque = true;
@@ -232,7 +221,7 @@ final class DependencyAnalyzer
             }
 
             if (is_array($value)) {
-                $this->walkProjectionValues($query, $value, $captured, $opaque, $volatile);
+                $this->walkProjectionValues($query, $value, $captured, $opaque);
             }
         }
     }
@@ -248,7 +237,6 @@ final class DependencyAnalyzer
         array &$resolved,
         array &$visited,
         bool &$opaque,
-        bool &$volatile,
     ): void {
         foreach ($values as $value) {
             if ($value instanceof Builder) {
@@ -258,7 +246,6 @@ final class DependencyAnalyzer
                     $resolved,
                     $visited,
                     $opaque,
-                    $volatile,
                 );
 
                 continue;
@@ -266,9 +253,6 @@ final class DependencyAnalyzer
 
             if ($value instanceof Expression) {
                 $opaque = true;
-                $volatile = $volatile || $this->isVolatileSql(
-                    (string) $value->getValue($connection->getQueryGrammar()),
-                );
 
                 continue;
             }
@@ -283,7 +267,6 @@ final class DependencyAnalyzer
                 true,
             )) {
                 $opaque = true;
-                $volatile = $volatile || $this->hasVolatileSqlValue($value);
             }
 
             $this->walkNestedValues(
@@ -292,37 +275,8 @@ final class DependencyAnalyzer
                 $resolved,
                 $visited,
                 $opaque,
-                $volatile,
             );
         }
-    }
-
-    /** @param array<mixed> $values */
-    private function hasVolatileSqlValue(array $values): bool
-    {
-        foreach (['sql', 'value'] as $key) {
-            if (is_string($values[$key] ?? null) && $this->isVolatileSql($values[$key])) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function isVolatileSql(string $sql): bool
-    {
-        return preg_match(
-            '/\b(?:rand|random|randomblob|random_bytes|uuid|uuid_short|newid|newsequentialid|gen_random_uuid|gen_random_bytes|crypt_gen_random|uuid_generate_v[0-9]+|nextval|currval|lastval|setval|last_insert_id|last_insert_rowid|changes|total_changes|row_count|found_rows|connection_id|pg_backend_pid|txid_current|pg_current_xact_id|user|database|schema|current_schema|current_database|current_catalog|current_setting|inet_client_addr|inet_client_port|inet_server_addr|inet_server_port|suser_sname|original_login|host_name|app_name|session_context|context_info|current_request_id|now|sysdate|getdate|sysdatetime|sysutcdatetime|utc_timestamp|utc_date|utc_time|curdate|curtime|clock_timestamp|statement_timestamp|transaction_timestamp|timeofday|sleep|pg_sleep|pg_sleep_for|pg_sleep_until|benchmark)\s*\(/i',
-            $sql,
-        ) === 1
-            || preg_match(
-                '/\b(?:current_timestamp|current_date|current_time|localtimestamp|localtime|current_user|session_user|system_user|current_role|current_schema|current_database|current_catalog|current_path)\b/i',
-                $sql,
-            ) === 1
-            || preg_match(
-                '/\b(?:date|time|datetime|julianday|unixepoch|strftime)\s*\([^)]*[\'\"]now[\'\"]/i',
-                $sql,
-            ) === 1;
     }
 
     /** @param array<string, TableIdentity> $resolved */

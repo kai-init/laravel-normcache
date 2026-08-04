@@ -84,6 +84,17 @@ final class TableIdentityResolver
         );
 
         if (
+            in_array('', $parts, true)
+            || count($parts) > match ($driver) {
+                'mysql', 'mariadb', 'pgsql', 'sqlite' => 2,
+                'sqlsrv' => 3,
+                default => 1,
+            }
+        ) {
+            return null;
+        }
+
+        if (
             in_array($driver, ['mysql', 'mariadb'], true)
             && count($parts) === 2
         ) {
@@ -159,6 +170,10 @@ final class TableIdentityResolver
     private function physicalTable(string $from): ?string
     {
         $from = trim($from);
+
+        if (preg_match('/(?:`[^`]*\s[^`]*`|"[^"]*\s[^"]*"|\[[^]]*\s[^]]*\])/u', $from) === 1) {
+            return null;
+        }
 
         if (preg_match('/^([^\s]+)(?:\s+(?:as\s+)?[^\s]+)?$/i', $from, $matches) !== 1) {
             return null;

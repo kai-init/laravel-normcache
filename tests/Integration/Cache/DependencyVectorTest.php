@@ -2,12 +2,14 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\SQLiteBuilder;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Planning\DependencyAnalyzer;
+use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\AbstractComment;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -16,6 +18,11 @@ use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
+
+class PostTitlesView extends Model
+{
+    protected $table = 'post_titles';
+}
 
 final class DependencyVectorTest extends TestCase
 {
@@ -427,16 +434,10 @@ final class DependencyVectorTest extends TestCase
     #[DataProvider('previouslyUncoveredVolatileExpressions')]
     public function test_connection_and_random_state_expressions_are_volatile(string $expression): void
     {
-        $connection = DB::connection();
         $query = DB::table('posts')->selectRaw("{$expression} as observed_value");
-        $root = $this->app->make(TableIdentityResolver::class)
-            ->resolve($connection, 'posts');
-        $this->assertNotNull($root);
-
-        $analysis = $this->app->make(DependencyAnalyzer::class)
-            ->analyze($connection, $query, $root);
-
-        $this->assertTrue($analysis->volatile);
+        $this->assertTrue(
+            $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
+        );
     }
 
     public static function previouslyUncoveredVolatileExpressions(): array
@@ -455,16 +456,10 @@ final class DependencyVectorTest extends TestCase
     #[DataProvider('driverTimeExpressions')]
     public function test_driver_time_expressions_are_volatile(string $expression): void
     {
-        $connection = DB::connection();
         $query = DB::table('posts')->selectRaw("{$expression} as observed_at");
-        $root = $this->app->make(TableIdentityResolver::class)
-            ->resolve($connection, 'posts');
-        $this->assertNotNull($root);
-
-        $analysis = $this->app->make(DependencyAnalyzer::class)
-            ->analyze($connection, $query, $root);
-
-        $this->assertTrue($analysis->volatile);
+        $this->assertTrue(
+            $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
+        );
     }
 
     public static function driverTimeExpressions(): array
@@ -654,5 +649,38 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame('After', $explicit()?->title);
         DB::disableQueryLog();
         $this->assertCount(1, DB::getQueryLog());
+    }
+
+    #[DataProvider('selfViewDependencies')]
+    public function test_database_views_cannot_use_themselves_as_the_only_dependency(
+        string $dependency,
+    ): void {
+        DB::statement('create view post_titles as select id, title from posts');
+        $this->cacheManager()->clearSchema();
+
+        $read = fn() => DB::table('post_titles')
+            ->dependsOn([$dependency])
+            ->where('id', $this->postId)
+            ->first();
+
+        $this->assertSame('Post', $read()?->title);
+        $this->assertSame('Post', $read()?->title);
+
+        DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $result = $read();
+        DB::disableQueryLog();
+
+        $this->assertSame('After', $result?->title);
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public static function selfViewDependencies(): array
+    {
+        return [
+            'table declaration' => ['post_titles'],
+            'model declaration' => [PostTitlesView::class],
+        ];
     }
 }
