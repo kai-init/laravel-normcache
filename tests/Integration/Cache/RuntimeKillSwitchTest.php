@@ -132,6 +132,14 @@ final class RuntimeKillSwitchTest extends TestCase
 
         // Simulates another node's normcache:disable, bypassing this scope's memo.
         $this->cacheStore()->setRawForever($this->cacheKeys()->disabled(), '1');
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Before', $read());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+
         $this->newScope();
 
         DB::flushQueryLog();

@@ -39,6 +39,19 @@ final class TableIdentityResolver
 
     public function resolve(Connection $connection, mixed $from): ?TableIdentity
     {
+        return $this->resolveIdentity($connection, $from, verifyView: true);
+    }
+
+    public function resolveBaseTable(Connection $connection, mixed $from): ?TableIdentity
+    {
+        return $this->resolveIdentity($connection, $from, verifyView: false);
+    }
+
+    private function resolveIdentity(
+        Connection $connection,
+        mixed $from,
+        bool $verifyView,
+    ): ?TableIdentity {
         if (!is_string($from)) {
             return null;
         }
@@ -55,7 +68,7 @@ final class TableIdentityResolver
             return $metadata->identities[$from];
         }
 
-        $identity = $this->doResolve($connection, $from, $sourceScope);
+        $identity = $this->doResolve($connection, $from, $sourceScope, $verifyView);
 
         if ($identity !== null) {
             $metadata->identities[$from] = $identity;
@@ -68,6 +81,7 @@ final class TableIdentityResolver
         Connection $connection,
         string $from,
         string $sourceScope,
+        bool $verifyView,
     ): ?TableIdentity {
         $table = $this->physicalTable($from);
 
@@ -152,6 +166,11 @@ final class TableIdentityResolver
             table: $resolvedTable,
             sourceScope: $sourceScope,
         );
+
+        if (!$verifyView) {
+            return $identity;
+        }
+
         $this->persistent->prime($connection, $schema, $identity);
         $isView = $this->isView(
             $connection,

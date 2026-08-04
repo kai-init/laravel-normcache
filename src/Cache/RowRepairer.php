@@ -17,6 +17,9 @@ use NormCache\Values\RowRepair;
 
 final readonly class RowRepairer
 {
+    /** Keeps WHERE IN bindings below SQLite's traditional variable limit. */
+    private const REPAIR_BATCH_SIZE = 900;
+
     public function __construct(
         private CacheConfig $config,
         private RedisStore $store,
@@ -104,15 +107,10 @@ final readonly class RowRepairer
             $values[] = $value;
         }
 
-        $limit = match ($plan->root->driver) {
-            'sqlite' => 900,
-            'sqlsrv' => 2000,
-            default => 1000,
-        };
         $rowsByToken = [];
 
         try {
-            foreach (array_chunk($values, $limit) as $batch) {
+            foreach (array_chunk($values, self::REPAIR_BATCH_SIZE) as $batch) {
                 $rows = $connection
                     ->query()
                     ->from($plan->root->qualifiedTable())

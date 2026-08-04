@@ -340,6 +340,58 @@ final class RedisStore
         );
     }
 
+    /**
+     * @param  list<array{
+     *     versionKey: string,
+     *     generationKey: string,
+     *     mode: string,
+     *     tokens: list<string>,
+     *     rowPrefix: string
+     * }>  $states
+     */
+    public function invalidateTableStates(array $states): void
+    {
+        if (count($states) === 1) {
+            $this->invalidateTableState(...$states[0]);
+
+            return;
+        }
+
+        $this->withRetryingConnection(function (Connection $connection) use ($states): void {
+            if ($connection->isCluster()) {
+                foreach ($states as $state) {
+                    $this->evaluate(
+                        $connection,
+                        RedisScripts::get('invalidate_table'),
+                        [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
+                        [$state['mode'], ...$state['tokens']],
+                    );
+                }
+
+                return;
+            }
+
+            $keys = [];
+            $args = [];
+
+            foreach ($states as $state) {
+                $keys[] = $state['versionKey'];
+                $keys[] = $state['generationKey'];
+                $keys[] = $state['rowPrefix'];
+                $args[] = $state['mode'];
+                $args[] = (string) count($state['tokens']);
+                array_push($args, ...$state['tokens']);
+            }
+
+            $this->evaluate(
+                $connection,
+                RedisScripts::get('invalidate_tables'),
+                $keys,
+                $args,
+            );
+        });
+    }
+
     public function enableCache(string $epochKey, string $disabledKey): int
     {
         return (int) $this->script(

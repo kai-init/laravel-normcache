@@ -68,3 +68,83 @@ jobs:
 
       - name: Run Larastan
         run: vendor/bin/phpstan analyse --memory-limit=512M --error-format=github
+
+  database:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: MySQL
+            driver: mysql
+            port: 3306
+            username: root
+            password: normcache
+
+          - label: PostgreSQL
+            driver: pgsql
+            port: 5432
+            username: postgres
+            password: normcache
+
+    name: Database / ${{ matrix.label }}
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: normcache
+          MYSQL_ROOT_PASSWORD: normcache
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping --password=normcache"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: normcache
+          POSTGRES_PASSWORD: normcache
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d normcache"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: redis, pdo_mysql, pdo_pgsql
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run database cascade tests
+        env:
+          TEST_DB_DRIVER: ${{ matrix.driver }}
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: ${{ matrix.port }}
+          TEST_DB_DATABASE: normcache
+          TEST_DB_USERNAME: ${{ matrix.username }}
+          TEST_DB_PASSWORD: ${{ matrix.password }}
+        run: vendor/bin/phpunit tests/Integration/Cache/CascadeInvalidationTest.php

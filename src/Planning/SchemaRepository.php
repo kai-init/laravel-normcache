@@ -21,6 +21,9 @@ final class SchemaRepository
     /** @var array<string, array<string, ?string>> */
     private array $fields = [];
 
+    /** @var array<string, array<string, list<array{table: string, action: string}>>> */
+    private array $deleteActionGraphs = [];
+
     public function __construct(
         private readonly CacheConfig $config,
         private readonly RedisStore $store,
@@ -168,9 +171,97 @@ final class SchemaRepository
         }
     }
 
+    /** @return array<string, list<array{table: string, action: string}>>|null */
+    public function deleteActions(Connection $connection, bool $fresh = false): ?array
+    {
+        $field = $this->deleteActionsField($connection);
+
+        if ($fresh) {
+            unset($this->deleteActionGraphs[$field]);
+
+            try {
+                $key = $this->metadataKey((string) $connection->getName());
+                unset($this->fields[$key][$field]);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        if (array_key_exists($field, $this->deleteActionGraphs)) {
+            return $this->deleteActionGraphs[$field];
+        }
+
+        $raw = $this->read($connection, $field);
+
+        if ($raw === null) {
+            return null;
+        }
+
+        try {
+            $decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+
+            if (!is_array($decoded)) {
+                return null;
+            }
+
+            $graph = [];
+
+            foreach ($decoded as $parent => $edges) {
+                if (!is_string($parent) || $parent === '' || !is_array($edges)) {
+                    return null;
+                }
+
+                foreach ($edges as $edge) {
+                    $table = is_array($edge) ? ($edge['table'] ?? null) : null;
+                    $action = is_array($edge) ? ($edge['action'] ?? null) : null;
+
+                    if (
+                        !is_string($table)
+                        || $table === ''
+                        || !in_array($action, ['cascade', 'set null', 'set default'], true)
+                    ) {
+                        return null;
+                    }
+
+                    $graph[$parent][] = ['table' => $table, 'action' => $action];
+                }
+            }
+
+            return $this->deleteActionGraphs[$field] = $graph;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /** @param array<string, list<array{table: string, action: string}>> $graph */
+    public function putDeleteActions(Connection $connection, array $graph): void
+    {
+        try {
+            $field = $this->deleteActionsField($connection);
+            $value = json_encode($graph, JSON_THROW_ON_ERROR);
+            $this->deleteActionGraphs[$field] = $graph;
+            $this->write(
+                $connection,
+                $field,
+                $value,
+            );
+        } catch (\Throwable) {
+            // Schema introspection remains the fail-open source of truth.
+        }
+    }
+
+    public function deleteActionsBuildKey(Connection $connection): string
+    {
+        return $this->metadataKey((string) $connection->getName())
+            . ':build:' . hash('xxh128', $this->connectionScope($connection));
+    }
+
     public function clear(?string $connection = null): bool
     {
         if ($this->config->schemaTtl === 0) {
+            $this->fields = [];
+            $this->deleteActionGraphs = [];
+
             return true;
         }
 
@@ -198,6 +289,7 @@ final class SchemaRepository
             return false;
         } finally {
             $this->fields = [];
+            $this->deleteActionGraphs = [];
         }
     }
 
@@ -292,6 +384,11 @@ final class SchemaRepository
     private function viewsField(Connection $connection, string $schema): string
     {
         return 'views:' . hash('xxh128', $this->connectionScope($connection) . "\0" . $schema);
+    }
+
+    private function deleteActionsField(Connection $connection): string
+    {
+        return 'delete-actions:' . hash('xxh128', $this->connectionScope($connection));
     }
 
     private function connectionScope(Connection $connection): string

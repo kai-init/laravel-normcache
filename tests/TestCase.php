@@ -3,6 +3,7 @@
 namespace NormCache\Tests;
 
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Schema;
 use NormCache\CacheManager;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
@@ -52,20 +53,15 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function defineEnvironment($app): void
     {
-        $database = sys_get_temp_dir() . '/normcache-tests-' . getmypid() . '.sqlite';
-
-        if (is_file($database)) {
-            unlink($database);
-        }
-
-        touch($database);
+        $driver = (string) env('TEST_DB_DRIVER', 'sqlite');
 
         $app['config']->set('database.default', 'testing');
-        $app['config']->set('database.connections.testing', [
-            'driver' => 'sqlite',
-            'database' => $database,
-            'prefix' => '',
-        ]);
+        $app['config']->set(
+            'database.connections.testing',
+            $driver === 'sqlite'
+                ? $this->sqliteDatabaseConfig()
+                : $this->serverDatabaseConfig($driver),
+        );
 
         $client = env('REDIS_CLIENT', 'phpredis');
         $app['config']->set('database.redis.client', $client);
@@ -109,7 +105,61 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function defineDatabaseMigrations(): void
     {
+        if (env('TEST_DB_DRIVER', 'sqlite') !== 'sqlite') {
+            Schema::dropAllTables();
+        }
+
         $this->loadMigrationsFrom(__DIR__ . '/Fixtures/database');
+    }
+
+    /** @return array<string, mixed> */
+    private function sqliteDatabaseConfig(): array
+    {
+        $database = sys_get_temp_dir() . '/normcache-tests-' . getmypid() . '.sqlite';
+
+        if (is_file($database)) {
+            unlink($database);
+        }
+
+        touch($database);
+
+        return [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function serverDatabaseConfig(string $driver): array
+    {
+        $port = match ($driver) {
+            'pgsql' => 5432,
+            'sqlsrv' => 1433,
+            default => 3306,
+        };
+        $username = match ($driver) {
+            'pgsql' => 'postgres',
+            'sqlsrv' => 'sa',
+            default => 'root',
+        };
+
+        return [
+            'driver' => $driver,
+            'host' => env('TEST_DB_HOST', '127.0.0.1'),
+            'port' => env('TEST_DB_PORT', $port),
+            'database' => env('TEST_DB_DATABASE', 'normcache'),
+            'username' => env('TEST_DB_USERNAME', $username),
+            'password' => env('TEST_DB_PASSWORD', ''),
+            'charset' => in_array($driver, ['mysql', 'mariadb'], true) ? 'utf8mb4' : 'utf8',
+            'collation' => in_array($driver, ['mysql', 'mariadb'], true)
+                ? 'utf8mb4_unicode_ci'
+                : null,
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+        ];
     }
 
     protected function cacheManager(): CacheManager

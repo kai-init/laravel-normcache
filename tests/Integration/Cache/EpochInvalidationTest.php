@@ -30,6 +30,38 @@ final class EpochInvalidationTest extends TestCase
         $this->assertSame('Changed', $read());
     }
 
+    public function test_an_epoch_advanced_by_another_process_is_observed_next_scope(): void
+    {
+        DB::table('authors')->insert(['id' => 1, 'name' => 'Author']);
+        DB::table('posts')->insert([
+            'id' => 1, 'title' => 'Before', 'views' => 0, 'published' => true,
+            'author_id' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $read = fn() => DB::table('posts')->where('id', 1)->value('title');
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+
+        DB::connection()->getPdo()->exec("update posts set title = 'Changed' where id = 1");
+        $this->cacheStore()->increment($this->cacheKeys()->epoch());
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Before', $read());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+
+        $this->app->forgetScopedInstances();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Changed', $read());
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
     public function test_completed_migrations_advance_the_epoch_while_cache_is_disabled_by_configuration(): void
     {
         $epochKey = $this->cacheKeys()->epoch();

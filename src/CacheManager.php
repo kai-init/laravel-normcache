@@ -6,10 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
+use NormCache\Exceptions\CascadeException;
+use NormCache\Planning\CascadeDependencyResolver;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
@@ -23,10 +26,12 @@ final readonly class CacheManager
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,
+        private CascadeDependencyResolver $cascades,
         private SchemaRepository $schema,
         private TableIdentityResolver $tables,
         private PrimaryKeyResolver $primaryKeys,
         private QueryIdentity $identity,
+        private FailureReporter $failures,
     ) {}
 
     /**
@@ -172,8 +177,32 @@ final readonly class CacheManager
     public function refreshSchema(?string $connection = null): bool
     {
         $cleared = $this->clearSchema($connection);
+        $flushed = $this->flushAll();
 
-        return $this->flushAll() && $cleared;
+        if (!$cleared || !$flushed) {
+            return false;
+        }
+
+        $connections = $connection === null
+            ? DB::getConnections()
+            : [$connection => DB::connection($connection)];
+
+        if ($connections === []) {
+            $default = DB::connection();
+            $connections[(string) $default->getName()] = $default;
+        }
+
+        try {
+            foreach ($connections as $database) {
+                $this->cascades->warm($database);
+            }
+        } catch (CascadeException $failure) {
+            $this->failures->cascadeGlobalInvalidation(null, $failure);
+
+            return false;
+        }
+
+        return true;
     }
 
     private function increment(string $key, bool $force = false): bool

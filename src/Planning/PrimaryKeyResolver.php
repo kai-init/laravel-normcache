@@ -179,7 +179,7 @@ final class PrimaryKeyResolver
             $primaryColumns = [];
 
             foreach ($indexes as $index) {
-                if ($index['primary'] === true || strtolower($index['name']) === 'primary') {
+                if ($index['primary']) {
                     $primaryColumns = $index['columns'];
                     break;
                 }

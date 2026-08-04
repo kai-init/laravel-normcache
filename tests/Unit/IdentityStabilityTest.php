@@ -18,7 +18,7 @@ final class IdentityStabilityTest extends UnitTestCase
         $this->assertSame('2:ab0:1:c', TableIdentity::encodeFields(['ab', '', 'c']));
     }
 
-    public function test_query_hash_is_stable_per_route(): void
+    public function test_query_hash_is_stable_per_route_for_prepared_bindings(): void
     {
         $identity = new QueryIdentity;
 
@@ -27,15 +27,15 @@ final class IdentityStabilityTest extends UnitTestCase
             rootHash: 'roothash',
             dependencyHashes: ['deps-b', 'deps-a'],
             sql: 'select * from "posts" where "id" = ?',
-            bindings: [42, 'x', null, true, 1.5],
+            bindings: [42, 'x', null, 1, 1.5],
             namespace: 'u',
             operation: 'select',
         );
 
-        $this->assertSame('60465e1baf4064e424cf842786cb9789', $hash(QueryPlan::CANONICAL));
-        $this->assertSame('3b70a6d0452413dbba57400d1bb63a46', $hash(QueryPlan::RESULT));
-        $this->assertSame('10fe47d045deffca1f538f9d4b28d46b', $hash(QueryPlan::QUERY_GROUP));
-        $this->assertSame('e42fc975f9bae0ce6a5d4eced9d1d21e', $hash(QueryPlan::DIRECT_PK));
+        $this->assertSame('548acc7208c045aac641546e36bdbffc', $hash(QueryPlan::CANONICAL));
+        $this->assertSame('f982b6a4ee8b0a2c9854ce4dffe05908', $hash(QueryPlan::RESULT));
+        $this->assertSame('09bf37953b8677842e6d58ac178f35eb', $hash(QueryPlan::QUERY_GROUP));
+        $this->assertSame('1427a690b77f0404a4ecbc02f48a3dbc', $hash(QueryPlan::DIRECT_PK));
     }
 
     public function test_tag_repair_and_table_digests_are_stable(): void

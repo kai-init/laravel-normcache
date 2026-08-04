@@ -50,6 +50,27 @@ final class QueryIdentityTest extends UnitTestCase
         $identity->tagHash('');
     }
 
+    public function test_laravel_prepared_bindings_are_hashable_without_additional_normalization(): void
+    {
+        $connection = $this->app['db']->connection();
+        $query = $connection->query()
+            ->from('posts')
+            ->where('created_at', new \DateTimeImmutable('2026-08-04 12:34:56+10:00'))
+            ->where('published', true);
+        $bindings = $connection->prepareBindings($query->getBindings());
+
+        $this->assertSame(['2026-08-04 12:34:56', 1], $bindings);
+        $this->assertSame(32, strlen((new QueryIdentity)->hash(
+            route: 'result',
+            rootHash: 'root',
+            dependencyHashes: ['dependency'],
+            sql: $query->toSql(),
+            bindings: $bindings,
+            namespace: 'u',
+            operation: 'select',
+        )));
+    }
+
     public function test_unique_tags_do_not_retain_process_lifetime_state(): void
     {
         $identity = new QueryIdentity;

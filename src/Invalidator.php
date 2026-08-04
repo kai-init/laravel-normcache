@@ -5,6 +5,9 @@ namespace NormCache;
 use Illuminate\Contracts\Database\Query\Expression;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Database\QueryBuilder;
+use NormCache\Enums\MutationType;
+use NormCache\Exceptions\CascadeException;
+use NormCache\Planning\CascadeDependencyResolver;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\TableIdentityResolver;
@@ -21,7 +24,7 @@ final class Invalidator
     /** @var array<string, array<string, array{table: TableIdentity, broad: bool, tokens: array<string, true>}>> */
     private array $pendingInvalidations = [];
 
-    /** @var array<string, true> */
+    /** @var array<string, string> */
     private array $pendingGlobalInvalidations = [];
 
     public function __construct(
@@ -30,6 +33,7 @@ final class Invalidator
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
         private readonly TableIdentityResolver $tables,
+        private readonly CascadeDependencyResolver $cascades,
         private readonly PrimaryKeyResolver $primaryKeys,
         private readonly MutationKeyExtractor $mutationKeys,
         private readonly QueryObserver $observer,
@@ -39,6 +43,7 @@ final class Invalidator
     /** @param array<string, mixed>|null $assigned */
     public function afterWrite(
         QueryBuilder $query,
+        MutationType $mutation,
         bool $mayAffectExistingRows,
         bool $forceBroadInvalidation = false,
         ?array $assigned = null,
@@ -49,6 +54,17 @@ final class Invalidator
 
         $connection = $query->getConnection();
         $connectionName = (string) $connection->getName();
+
+        if ($mutation === MutationType::TRUNCATE) {
+            $this->applyGlobal('truncate');
+
+            if ($connection->transactionLevel() > 0) {
+                $this->pendingGlobalInvalidations[$connectionName] = 'transaction_truncate';
+            }
+
+            return;
+        }
+
         $from = $query->from;
 
         if ($from instanceof Expression) {
@@ -61,7 +77,7 @@ final class Invalidator
             $this->failures->opaqueWriteGlobalInvalidation($connectionName);
 
             if ($connection->transactionLevel() > 0) {
-                $this->pendingGlobalInvalidations[$connectionName] = true;
+                $this->pendingGlobalInvalidations[$connectionName] = 'transaction_opaque_write';
 
                 return;
             }
@@ -69,6 +85,42 @@ final class Invalidator
             $this->applyGlobal('opaque_write');
 
             return;
+        }
+
+        $cascadeTables = [];
+
+        if ($mutation === MutationType::DELETE) {
+            try {
+                $cascadeTables = $this->cascades->affectedByDelete($connection, $table);
+
+                if ($cascadeTables === null) {
+                    if ($connection->transactionLevel() > 0) {
+                        $this->pendingGlobalInvalidations[$connectionName] = 'transaction_cascade_graph_cold';
+                    } else {
+                        $this->applyGlobal('cascade_graph_cold');
+                    }
+
+                    try {
+                        $this->cascades->warm($connection);
+                    } catch (CascadeException $failure) {
+                        $this->failures->cascadeGlobalInvalidation($table, $failure);
+                    }
+
+                    return;
+                }
+            } catch (CascadeException $failure) {
+                $this->failures->cascadeGlobalInvalidation($table, $failure);
+
+                if ($connection->transactionLevel() > 0) {
+                    $this->pendingGlobalInvalidations[$connectionName] = 'transaction_cascade_metadata_unavailable';
+
+                    return;
+                }
+
+                $this->applyGlobal('cascade_metadata_unavailable');
+
+                return;
+            }
         }
 
         $broad = $forceBroadInvalidation;
@@ -94,28 +146,70 @@ final class Invalidator
         if ($connection->transactionLevel() > 0) {
             $this->queueInvalidation($table, $broad, $tokens);
 
+            foreach ($cascadeTables as $cascadeTable) {
+                $this->queueInvalidation($cascadeTable, true, []);
+            }
+
             return;
         }
 
-        $this->apply($table, $broad, $tokens);
+        foreach ($cascadeTables as $cascadeTable) {
+            if ($cascadeTable->hash === $table->hash) {
+                $broad = true;
+
+                break;
+            }
+        }
+
+        if ($cascadeTables === []) {
+            $this->apply($table, $broad, $tokens);
+
+            return;
+        }
+
+        $invalidations = [[
+            'table' => $table,
+            'broad' => $broad,
+            'tokens' => $tokens,
+        ]];
+
+        foreach ($cascadeTables as $cascadeTable) {
+            if ($cascadeTable->hash !== $table->hash) {
+                $invalidations[] = [
+                    'table' => $cascadeTable,
+                    'broad' => true,
+                    'tokens' => [],
+                ];
+            }
+        }
+
+        $this->applyMany($invalidations);
     }
 
     public function commit(string $connection): void
     {
         if (isset($this->pendingGlobalInvalidations[$connection])) {
+            $reason = $this->pendingGlobalInvalidations[$connection];
             unset($this->pendingGlobalInvalidations[$connection]);
             $this->pullInvalidations($connection);
-            $this->applyGlobal('transaction_opaque_write');
+            $this->applyGlobal($reason);
 
             return;
         }
 
+        $invalidations = [];
+
         foreach ($this->pullInvalidations($connection) as $pending) {
             $tokens = array_keys($pending['tokens']);
-            $broad = $pending['broad']
-                || count($tokens) > $this->config->maxPreciseInvalidationKeys;
-            $this->apply($pending['table'], $broad, $tokens);
+            $invalidations[] = [
+                'table' => $pending['table'],
+                'broad' => $pending['broad']
+                    || count($tokens) > $this->config->maxPreciseInvalidationKeys,
+                'tokens' => $tokens,
+            ];
         }
+
+        $this->applyMany($invalidations);
     }
 
     public function rollback(string $connection): void
@@ -198,6 +292,72 @@ final class Invalidator
         } catch (\Throwable $exception) {
             $this->runtime->disable();
             $this->failures->invalidationFailed($exception, $table, $mode, $tokens);
+
+            return false;
+        }
+    }
+
+    /**
+     * @param  list<array{table: TableIdentity, broad: bool, tokens: list<string>}>  $invalidations
+     */
+    private function applyMany(array $invalidations): bool
+    {
+        if ($invalidations === []) {
+            return true;
+        }
+
+        if (count($invalidations) === 1) {
+            $invalidation = $invalidations[0];
+
+            return $this->apply(
+                $invalidation['table'],
+                $invalidation['broad'],
+                $invalidation['tokens'],
+            );
+        }
+
+        $states = [];
+
+        foreach ($invalidations as $invalidation) {
+            $table = $invalidation['table'];
+            $tokens = $invalidation['tokens'];
+            $mode = $invalidation['broad']
+                ? 'generation'
+                : ($tokens === [] ? 'version' : 'precise');
+            $states[] = [
+                'versionKey' => $this->keys->version($table),
+                'generationKey' => $this->keys->generation($table),
+                'mode' => $mode,
+                'tokens' => $tokens,
+                'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
+            ];
+        }
+
+        $first = $invalidations[0];
+        $firstMode = $states[0]['mode'];
+
+        $this->observer->begin();
+
+        try {
+            $this->store->invalidateTableStates($states);
+
+            foreach ($invalidations as $index => $invalidation) {
+                $this->observer->invalidated(
+                    $invalidation['table'],
+                    $states[$index]['mode'],
+                    $invalidation['tokens'],
+                );
+            }
+
+            return true;
+        } catch (\Throwable $exception) {
+            $this->runtime->disable();
+            $this->failures->invalidationFailed(
+                $exception,
+                $first['table'],
+                $firstMode,
+                $first['tokens'],
+            );
 
             return false;
         }

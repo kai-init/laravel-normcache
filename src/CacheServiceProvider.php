@@ -29,6 +29,7 @@ use NormCache\Database\Connections\SqlServerConnection;
 use NormCache\Debug\DebugBarCollector;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
+use NormCache\Planning\CascadeDependencyResolver;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
@@ -92,6 +93,7 @@ final class CacheServiceProvider extends ServiceProvider
         // under, so an instance kept for a worker's lifetime pins a retired one.
         $this->app->scoped(SchemaRepository::class);
         $this->app->scoped(TableIdentityResolver::class);
+        $this->app->scoped(CascadeDependencyResolver::class);
         $this->app->scoped(DependencyAnalyzer::class);
         $this->app->scoped(PrimaryKeyResolver::class);
 

@@ -290,16 +290,16 @@ final class QueryPlanner
                 continue;
             }
 
-            $type = strtolower((string) ($where['type'] ?? ''));
+            $type = $where['type'] ?? null;
 
             if (
-                !in_array($type, ['null', 'notnull'], true)
+                !in_array($type, ['Null', 'NotNull'], true)
                 || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
             ) {
                 return [false, null];
             }
 
-            $modes[] = $type === 'notnull' ? 'only' : 'default';
+            $modes[] = $type === 'NotNull' ? 'only' : 'default';
         }
 
         if (count($modes) > 1) {
@@ -312,11 +312,7 @@ final class QueryPlanner
     /** @param array<string, mixed> $where */
     private function isSoftDeleteWhere(QueryBuilder $query, array $where): bool
     {
-        return in_array(
-            strtolower((string) ($where['type'] ?? '')),
-            ['null', 'notnull'],
-            true,
-        )
+        return in_array($where['type'] ?? null, ['Null', 'NotNull'], true)
             && strtolower((string) ($where['boolean'] ?? 'and')) === 'and'
             && $this->isDeletedAtColumn($query, $where['column'] ?? null);
     }

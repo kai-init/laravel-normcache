@@ -10,6 +10,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
+use NormCache\Enums\MutationType;
 use NormCache\Invalidator;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
@@ -332,6 +333,7 @@ final class QueryBuilder extends Builder
     public function insert(array $values): bool
     {
         return $this->writeWithInvalidation(
+            mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
             forceInvalidation: false,
             operation: function () use ($values): bool {
@@ -346,6 +348,7 @@ final class QueryBuilder extends Builder
     public function insertOrIgnore(array $values): int
     {
         return $this->writeWithInvalidation(
+            MutationType::INSERT,
             false,
             false,
             function () use ($values): int {
@@ -360,6 +363,7 @@ final class QueryBuilder extends Builder
     public function insertOrIgnoreReturning(array $values, array $returning = ['*'], $uniqueBy = null): mixed
     {
         return $this->writeWithInvalidation(
+            MutationType::INSERT,
             false,
             false,
             function () use ($values, $returning, $uniqueBy): mixed {
@@ -374,6 +378,7 @@ final class QueryBuilder extends Builder
     public function insertGetId(array $values, $sequence = null): int|string
     {
         return $this->writeWithInvalidation(
+            MutationType::INSERT,
             false,
             true,
             function () use ($values, $sequence) {
@@ -388,6 +393,7 @@ final class QueryBuilder extends Builder
     public function insertUsing(array $columns, $query): int
     {
         return $this->writeWithInvalidation(
+            MutationType::INSERT,
             false,
             false,
             function () use ($columns, $query): int {
@@ -402,6 +408,7 @@ final class QueryBuilder extends Builder
     public function insertOrIgnoreUsing(array $columns, $query): int
     {
         return $this->writeWithInvalidation(
+            MutationType::INSERT,
             false,
             false,
             function () use ($columns, $query): int {
@@ -416,6 +423,7 @@ final class QueryBuilder extends Builder
     public function update(array $values): int
     {
         return $this->writeWithInvalidation(
+            MutationType::UPDATE,
             true,
             false,
             function () use ($values): int {
@@ -431,6 +439,7 @@ final class QueryBuilder extends Builder
     public function updateFrom(array $values): int
     {
         return $this->writeWithInvalidation(
+            MutationType::UPDATE,
             true,
             false,
             function () use ($values): int {
@@ -446,6 +455,7 @@ final class QueryBuilder extends Builder
     public function updateOrInsert(array $attributes, $values = []): bool
     {
         return $this->writeWithInvalidation(
+            MutationType::UPSERT,
             true,
             true,
             fn(): bool => parent::updateOrInsert($attributes, $values),
@@ -456,6 +466,7 @@ final class QueryBuilder extends Builder
     public function upsert(array $values, $uniqueBy, $update = null): int
     {
         return $this->writeWithInvalidation(
+            MutationType::UPSERT,
             true,
             true,
             function () use ($values, $uniqueBy, $update): int {
@@ -474,6 +485,7 @@ final class QueryBuilder extends Builder
     public function delete($id = null)
     {
         return $this->writeWithInvalidation(
+            MutationType::DELETE,
             true,
             false,
             function () use ($id) {
@@ -488,6 +500,7 @@ final class QueryBuilder extends Builder
     public function truncate(): void
     {
         $this->writeWithInvalidation(
+            MutationType::TRUNCATE,
             true,
             true,
             function (): void {
@@ -534,6 +547,7 @@ final class QueryBuilder extends Builder
     }
 
     private function writeWithInvalidation(
+        MutationType $mutation,
         bool $mayAffectExistingRows,
         bool $forceInvalidation,
         callable $operation,
@@ -564,6 +578,7 @@ final class QueryBuilder extends Builder
                 try {
                     app(Invalidator::class)->afterWrite(
                         $this,
+                        $mutation,
                         $mayAffectExistingRows,
                         forceBroadInvalidation: true,
                         assigned: $assigned,
@@ -578,6 +593,7 @@ final class QueryBuilder extends Builder
 
         if ($owner) {
             $this->finishWriteObservation(
+                $mutation,
                 $mayAffectExistingRows,
                 $forceInvalidation,
                 $this->writeExecuted,
@@ -598,6 +614,7 @@ final class QueryBuilder extends Builder
 
     /** @param array<string, mixed>|null $assignments */
     protected function finishWriteObservation(
+        MutationType $mutation,
         bool $mayAffectExistingRows,
         bool $forceInvalidation,
         bool $executed,
@@ -611,6 +628,7 @@ final class QueryBuilder extends Builder
 
         app(Invalidator::class)->afterWrite(
             $this,
+            $mutation,
             $mayAffectExistingRows,
             $forceBroadInvalidation,
             $assignments,

@@ -10,6 +10,7 @@ use NormCache\Support\RedisStore;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 
 final class UnavailableTest extends TestCase
 {
@@ -122,7 +123,8 @@ final class UnavailableTest extends TestCase
         $store = $this->app->make(RedisStore::class);
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects($this->once())
-            ->method('critical');
+            ->method('log')
+            ->with(LogLevel::CRITICAL);
 
         try {
             $this->app->instance(LoggerInterface::class, $logger);

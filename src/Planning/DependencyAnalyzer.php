@@ -175,11 +175,7 @@ final class DependencyAnalyzer
             }
 
             if (is_array($value)) {
-                if (in_array(
-                    strtolower((string) ($value['type'] ?? '')),
-                    ['raw', 'expression'],
-                    true,
-                )) {
+                if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
                     $opaque = true;
                 }
 
@@ -261,11 +257,7 @@ final class DependencyAnalyzer
                 continue;
             }
 
-            if (in_array(
-                strtolower((string) ($value['type'] ?? '')),
-                ['raw', 'expression'],
-                true,
-            )) {
+            if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
                 $opaque = true;
             }
 

@@ -2,11 +2,8 @@
 
 namespace NormCache\Support;
 
-use BackedEnum;
-use DateTimeInterface;
 use NormCache\Values\TableIdentity;
 use Stringable;
-use UnitEnum;
 
 final class QueryIdentity
 {
@@ -31,7 +28,17 @@ final class QueryIdentity
         $prepared = '';
 
         foreach ($bindings as $binding) {
-            $prepared .= $this->binding($binding);
+            if ($binding instanceof Stringable) {
+                $binding = (string) $binding;
+            }
+
+            $prepared .= match (true) {
+                $binding === null => '4:null0:',
+                is_int($binding) => '3:int' . strlen($digits = (string) $binding) . ':' . $digits,
+                is_float($binding) => '5:float8:' . pack('E', $binding),
+                is_string($binding) => '6:string' . strlen($binding) . ':' . $binding,
+                default => throw new \InvalidArgumentException('NormCache cannot hash an unsupported query binding.'),
+            };
         }
 
         return hash('xxh128', TableIdentity::encodeFields([
@@ -78,27 +85,5 @@ final class QueryIdentity
             $generation,
             TableIdentity::encodeFields($tokens),
         ]));
-    }
-
-    private function binding(mixed $value): string
-    {
-        if ($value instanceof BackedEnum) {
-            $value = $value->value;
-        } elseif ($value instanceof UnitEnum) {
-            $value = $value->name;
-        } elseif ($value instanceof DateTimeInterface) {
-            $value = $value->format('Y-m-d H:i:s.uP');
-        } elseif ($value instanceof Stringable) {
-            $value = (string) $value;
-        }
-
-        return match (true) {
-            $value === null => '4:null0:',
-            is_bool($value) => $value ? '4:bool1:1' : '4:bool1:0',
-            is_int($value) => '3:int' . strlen($digits = (string) $value) . ':' . $digits,
-            is_float($value) => '5:float8:' . pack('E', $value),
-            is_string($value) => '6:string' . strlen($value) . ':' . $value,
-            default => throw new \InvalidArgumentException('NormCache cannot hash an unsupported query binding.'),
-        };
     }
 }

@@ -17,12 +17,23 @@ final class SqlVolatilityScannerTest extends TestCase
     public static function volatileExpressions(): array
     {
         return [
-            'volatile function' => ['GET_LOCK(\'normcache\', 0)'],
+            'MySQL advisory lock' => ['GET_LOCK(\'normcache\', 0)'],
+            'MySQL advisory unlock' => ['RELEASE_LOCK(\'normcache\')'],
+            'PostgreSQL advisory lock' => ['pg_try_advisory_xact_lock(42)'],
+            'PostgreSQL advisory unlock' => ['pg_advisory_unlock_all()'],
+            'SQL Server advisory lock' => ['sp_getapplock(\'normcache\', \'Exclusive\')'],
             'schema-qualified volatile function' => ['pg_catalog.random()'],
             'volatile keyword' => ['CURRENT_TIMESTAMP'],
             'sequence syntax' => ['NEXT VALUE FOR dbo.order_seq'],
             'multiline sequence syntax' => ["NEXT\nVALUE FOR dbo.order_seq"],
-            'session variable' => ['@tenant_id = 42'],
+            'sequence function in projection' => ['select nextval(\'order_seq\') as id'],
+            'sequence function in aggregate' => ['select max(nextval(\'order_seq\'))'],
+            'sequence function in ordering' => ['select id from posts order by nextval(\'order_seq\')'],
+            'sequence function in predicate' => ['select id from posts where id < nextval(\'order_seq\')'],
+            'MySQL session variable' => ['@tenant_id = 42'],
+            'MySQL connection state' => ['CONNECTION_ID()'],
+            'PostgreSQL connection state' => ['current_setting(\'application_name\')'],
+            'SQL Server connection state' => ['SESSION_CONTEXT(N\'tenant\')'],
             'argument-dependent function' => ['datetime(\'now\', \'+1 day\')'],
         ];
     }

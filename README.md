@@ -189,7 +189,7 @@ return [
 ];
 ```
 
-`row_ttl` applies to shared canonical rows. `query_ttl` applies to memberships and result payloads. Per-query `ttl()` changes only query-shaped payloads. `schema_ttl` persists view and primary-key discovery in Redis across application requests; set it to `0` to disable persistence.
+`row_ttl` applies to shared canonical rows. `query_ttl` applies to memberships and result payloads. Per-query `ttl()` changes only query-shaped payloads. `schema_ttl` persists view, primary-key, and referential-action discovery in Redis across application requests; set it to `0` to disable persistence.
 
 For tables whose primary key cannot be discovered reliably, configure grouped overrides:
 
@@ -243,7 +243,9 @@ NormCache bypasses reads when correctness cannot be established, including:
 
 Canonical storage keys each row by one primary-key value, so it requires a single-column primary key. When a table has a promary key column that introspection cannot discover, name it with a `primary_keys` override to restore canonical storage.
 
-Direct database writes executed outside of Eloquent or the cache-aware Query Builder like raw connection SQL, external services, are not intercepted, and database cascades or triggers that change another table are not inferred. Declare the affected tables with `dependsOn()` on every cached read whose result can change, or call `NormCache::invalidate(...)` / `NormCache::flushAll()` after the write.
+For intercepted deletes, NormCache discovers `CASCADE`, `SET NULL`, and `SET DEFAULT` foreign-key actions through Laravel's schema API and broadly invalidates affected child tables, including multi-level cascades. The graph is rebuilt during schema refresh and persisted with the other schema metadata. A delete encountering a cold graph conservatively advances the global epoch before warming it for subsequent deletes.
+
+Direct database writes executed outside of Eloquent or the cache-aware Query Builder, such as raw connection SQL or writes from external services, are not intercepted. Trigger side effects and `ON UPDATE` referential actions are not inferred. Declare the affected tables with `dependsOn()` on every cached read whose result can change, or call `NormCache::invalidate(...)` / `NormCache::flushAll()` after the write.
 
 If connection schemas or table definitions change at runtime, call `NormCache::refreshSchema($connection)`.
 
@@ -278,4 +280,4 @@ New payloads carry a one-byte serializer marker, so an igbinary-enabled node can
 
 ## License
 
-MIT
+**MIT**

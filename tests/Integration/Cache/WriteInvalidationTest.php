@@ -7,10 +7,8 @@ use Illuminate\Database\Query\Grammars\PostgresGrammar;
 use Illuminate\Database\Query\Processors\Processor;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Event;
 use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Database\QueryBuilder;
-use NormCache\Events\CacheInvalidated;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -466,7 +464,7 @@ final class WriteInvalidationTest extends TestCase
         $this->assertNull($this->cacheStore()->getRaw($rowKey));
     }
 
-    public function test_truncate_broadly_invalidates_all_cached_rows(): void
+    public function test_truncate_globally_invalidates_all_cached_rows(): void
     {
         $first = Tag::create(['name' => 'First']);
         $second = Tag::create(['name' => 'Second']);
@@ -474,17 +472,17 @@ final class WriteInvalidationTest extends TestCase
         $this->assertCount(2, Tag::orderBy('id')->get());
         $this->assertNotNull(Tag::find($first->getKey()));
         $this->assertNotNull(Tag::find($second->getKey()));
-        Event::fake([CacheInvalidated::class]);
+        $epoch = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
 
         DB::table('tags')->truncate();
 
+        $this->assertSame(
+            $epoch + 1,
+            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
+        );
         $this->assertSame([], Tag::orderBy('id')->get()->all());
         $this->assertNull(Tag::find($first->getKey()));
         $this->assertNull(Tag::find($second->getKey()));
-        Event::assertDispatched(
-            CacheInvalidated::class,
-            fn(CacheInvalidated $event): bool => $event->mode === 'generation',
-        );
     }
 
     public function test_insert_using_invalidates_the_target_table(): void

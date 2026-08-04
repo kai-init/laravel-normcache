@@ -20,6 +20,8 @@ final class RecordingPredisClusterConnection extends PredisClusterConnection
 
     public int $directMgetCalls = 0;
 
+    public int $evalShaCalls = 0;
+
     public function command($method, array $parameters = [])
     {
         if (strtolower((string) $method) === 'mget') {
@@ -35,6 +37,10 @@ final class RecordingPredisClusterConnection extends PredisClusterConnection
                 static fn(string $key): string => "value:{$key}",
                 $keys,
             );
+        }
+
+        if (strtolower((string) $method) === 'evalsha') {
+            $this->evalShaCalls++;
         }
 
         return null;
@@ -91,6 +97,33 @@ final class RedisProtocolTest extends TestCase
             'pipeline_calls' => $connection->pipelineCalls,
             'direct_mget_calls' => $connection->directMgetCalls,
         ]);
+    }
+
+    public function test_cluster_table_invalidations_remain_separate_scripts(): void
+    {
+        $connection = new RecordingPredisClusterConnection(new Client);
+        $store = new RedisStore('unused');
+        $property = new ReflectionProperty($store, 'connection');
+        $property->setValue($store, $connection);
+
+        $store->invalidateTableStates([
+            [
+                'versionKey' => '{table-a}:version',
+                'generationKey' => '{table-a}:generation',
+                'mode' => 'generation',
+                'tokens' => [],
+                'rowPrefix' => '{table-a}:rows:',
+            ],
+            [
+                'versionKey' => '{table-b}:version',
+                'generationKey' => '{table-b}:generation',
+                'mode' => 'generation',
+                'tokens' => [],
+                'rowPrefix' => '{table-b}:rows:',
+            ],
+        ]);
+
+        $this->assertSame(2, $connection->evalShaCalls);
     }
 
     public function test_corrupt_result_read_does_not_delete_the_observed_payload(): void
@@ -481,6 +514,40 @@ final class RedisProtocolTest extends TestCase
             'result-query',
             'canonical-query',
         )[0]);
+    }
+
+    public function test_multiple_table_states_are_invalidated_together(): void
+    {
+        $store = app(RedisStore::class);
+        $keys = app(CacheKeyBuilder::class);
+        $tables = app(TableIdentityResolver::class);
+        $connection = $this->app['db']->connection();
+        $posts = $tables->resolve($connection, 'posts');
+        $authors = $tables->resolve($connection, 'authors');
+        $authorRow = $keys->row($authors, '0', 'i:123');
+
+        $store->setRawForever($authorRow, 'cached-row');
+        $store->invalidateTableStates([
+            [
+                'versionKey' => $keys->version($posts),
+                'generationKey' => $keys->generation($posts),
+                'mode' => 'generation',
+                'tokens' => ['i:123'],
+                'rowPrefix' => $keys->tablePrefix($posts) . ':r:g',
+            ],
+            [
+                'versionKey' => $keys->version($authors),
+                'generationKey' => $keys->generation($authors),
+                'mode' => 'precise',
+                'tokens' => ['i:123'],
+                'rowPrefix' => $keys->tablePrefix($authors) . ':r:g',
+            ],
+        ]);
+
+        $this->assertSame('1', $store->getRaw($keys->version($posts)));
+        $this->assertSame('1', $store->getRaw($keys->generation($posts)));
+        $this->assertSame('1', $store->getRaw($keys->version($authors)));
+        $this->assertNull($store->getRaw($authorRow));
     }
 
     public function test_expired_owner_cannot_publish_or_release_a_replacement_lease(): void

@@ -880,8 +880,7 @@ final readonly class Engine
             );
         }
 
-        $canonical = $query->cloneWithoutBindings(['select']);
-        $canonical->columns = ['*'];
+        $canonical = $query->clone()->select('*');
 
         return $this->identity->hash(
             route: QueryPlan::CANONICAL,

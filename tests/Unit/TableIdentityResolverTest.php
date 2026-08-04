@@ -154,6 +154,35 @@ final class TableIdentityResolverTest extends UnitTestCase
         $this->assertNotSame($first?->hash, $second?->hash);
     }
 
+    public function test_postgres_schema_switch_requires_a_matching_source_scope_change(): void
+    {
+        $scope = 'tenant-a';
+        $builder = Mockery::mock(Builder::class);
+        $builder->shouldReceive('getCurrentSchemaName')
+            ->twice()
+            ->andReturn('tenant_a', 'tenant_b');
+        $builder->shouldReceive('getViews')->twice()->andReturn([]);
+        $connection = $this->postgresConnection(null, $builder);
+        $connection->shouldReceive('getConfig')
+            ->andReturnUsing(function () use (&$scope): array {
+                return [
+                    'name' => 'testing',
+                    'normcache_scope' => $scope,
+                ];
+            });
+        $resolver = app(TableIdentityResolver::class);
+
+        $tenantA = $resolver->resolve($connection, 'posts');
+        $unchangedScope = $resolver->resolve($connection, 'posts');
+        $scope = 'tenant-b';
+        $tenantB = $resolver->resolve($connection, 'posts');
+
+        $this->assertSame('tenant_a', $tenantA?->schema);
+        $this->assertSame($tenantA?->hash, $unchangedScope?->hash);
+        $this->assertSame('tenant_b', $tenantB?->schema);
+        $this->assertNotSame($tenantA?->hash, $tenantB?->hash);
+    }
+
     public function test_quoted_identifiers_with_spaces_bypass_table_identity_resolution(): void
     {
         $identity = app(TableIdentityResolver::class)->resolve(
@@ -258,6 +287,7 @@ final class TableIdentityResolverTest extends UnitTestCase
         $connection->shouldReceive('getDatabaseName')->andReturn('app');
         $connection->shouldReceive('getTablePrefix')->andReturn('');
         $connection->shouldReceive('getConfig')
+            ->byDefault()
             ->andReturn(['name' => 'testing']);
         $connection->shouldReceive('getSchemaBuilder')->andReturn($builder);
 
