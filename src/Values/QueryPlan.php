@@ -123,14 +123,55 @@ final readonly class QueryPlan
         );
     }
 
+    public function isCanonical(): bool
+    {
+        return $this->route === self::CANONICAL;
+    }
+
+    public function isResult(): bool
+    {
+        return $this->route === self::RESULT;
+    }
+
+    public function isQueryGroup(): bool
+    {
+        return $this->route === self::QUERY_GROUP;
+    }
+
+    public function isDirectPrimaryKey(): bool
+    {
+        return $this->route === self::DIRECT_PK;
+    }
+
+    public function usesGeneration(): bool
+    {
+        return $this->isCanonical() || $this->isDirectPrimaryKey();
+    }
+
+    public function supportsRowFallback(): bool
+    {
+        return $this->isResult()
+            && $this->primaryKey !== null
+            && $this->projectedColumns !== null
+            && $this->primaryKeyToken !== null;
+    }
+
+    public function supportsCanonicalProjectionFallback(): bool
+    {
+        return $this->isResult()
+            && $this->primaryKey !== null
+            && $this->projectedColumns !== null
+            && $this->primaryKeyToken === null;
+    }
+
+    public function shouldMaterializeResult(): bool
+    {
+        return $this->isCanonical() && $this->materializeResult;
+    }
+
     public function asCanonicalProjectionFallback(): self
     {
-        if (
-            $this->route !== self::RESULT
-            || $this->primaryKey === null
-            || $this->projectedColumns === null
-            || $this->primaryKeyToken !== null
-        ) {
+        if (!$this->supportsCanonicalProjectionFallback()) {
             throw new \LogicException(
                 'Only a projected result plan has a canonical projection fallback.',
             );
@@ -146,7 +187,7 @@ final readonly class QueryPlan
 
     public function asFullResultOverlay(): self
     {
-        if ($this->route !== self::CANONICAL) {
+        if (!$this->isCanonical()) {
             throw new \LogicException('Only a canonical plan can be overlaid with a full result.');
         }
 

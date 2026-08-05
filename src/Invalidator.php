@@ -3,10 +3,12 @@
 namespace NormCache;
 
 use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Connection;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\MutationType;
 use NormCache\Exceptions\CascadeException;
+use NormCache\Exceptions\TableInvalidationException;
 use NormCache\Planning\CascadeDependencyResolver;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\PrimaryKeyResolver;
@@ -75,14 +77,7 @@ final class Invalidator
 
         if ($table === null) {
             $this->failures->opaqueWriteGlobalInvalidation($connectionName);
-
-            if ($connection->transactionLevel() > 0) {
-                $this->pendingGlobalInvalidations[$connectionName] = 'transaction_opaque_write';
-
-                return;
-            }
-
-            $this->applyGlobal('opaque_write');
+            $this->applyOrQueueGlobal($connection, 'opaque_write');
 
             return;
         }
@@ -92,32 +87,21 @@ final class Invalidator
         if ($mutation === MutationType::DELETE) {
             try {
                 $cascadeTables = $this->cascades->affectedByDelete($connection, $table);
-
-                if ($cascadeTables === null) {
-                    if ($connection->transactionLevel() > 0) {
-                        $this->pendingGlobalInvalidations[$connectionName] = 'transaction_cascade_graph_cold';
-                    } else {
-                        $this->applyGlobal('cascade_graph_cold');
-                    }
-
-                    try {
-                        $this->cascades->warm($connection);
-                    } catch (CascadeException $failure) {
-                        $this->failures->cascadeGlobalInvalidation($table, $failure);
-                    }
-
-                    return;
-                }
             } catch (CascadeException $failure) {
                 $this->failures->cascadeGlobalInvalidation($table, $failure);
+                $this->applyOrQueueGlobal($connection, 'cascade_metadata_unavailable');
 
-                if ($connection->transactionLevel() > 0) {
-                    $this->pendingGlobalInvalidations[$connectionName] = 'transaction_cascade_metadata_unavailable';
+                return;
+            }
 
-                    return;
+            if ($cascadeTables === null) {
+                $this->applyOrQueueGlobal($connection, 'cascade_graph_cold');
+
+                try {
+                    $this->cascades->warm($connection);
+                } catch (CascadeException $failure) {
+                    $this->failures->cascadeGlobalInvalidation($table, $failure);
                 }
-
-                $this->applyGlobal('cascade_metadata_unavailable');
 
                 return;
             }
@@ -255,6 +239,18 @@ final class Invalidator
         return $pending;
     }
 
+    private function applyOrQueueGlobal(Connection $connection, string $reason): void
+    {
+        if ($connection->transactionLevel() > 0) {
+            $connectionName = (string) $connection->getName();
+            $this->pendingGlobalInvalidations[$connectionName] = 'transaction_' . $reason;
+
+            return;
+        }
+
+        $this->applyGlobal($reason);
+    }
+
     private function applyGlobal(string $reason): bool
     {
         $this->runtime->forgetEpoch();
@@ -274,18 +270,13 @@ final class Invalidator
     /** @param list<string> $tokens */
     private function apply(TableIdentity $table, bool $broad, array $tokens): bool
     {
-        $mode = $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise');
+        $state = $this->storeInvalidation($table, $broad, $tokens);
+        $mode = $state['mode'];
 
         $this->observer->begin();
 
         try {
-            $this->store->invalidateTableState(
-                versionKey: $this->keys->version($table),
-                generationKey: $this->keys->generation($table),
-                mode: $mode,
-                tokens: $tokens,
-                rowPrefix: $this->keys->tablePrefix($table) . ':r:g',
-            );
+            $this->store->invalidateTableState(...$state);
             $this->observer->invalidated($table, $mode, $tokens);
 
             return true;
@@ -319,22 +310,12 @@ final class Invalidator
         $states = [];
 
         foreach ($invalidations as $invalidation) {
-            $table = $invalidation['table'];
-            $tokens = $invalidation['tokens'];
-            $mode = $invalidation['broad']
-                ? 'generation'
-                : ($tokens === [] ? 'version' : 'precise');
-            $states[] = [
-                'versionKey' => $this->keys->version($table),
-                'generationKey' => $this->keys->generation($table),
-                'mode' => $mode,
-                'tokens' => $tokens,
-                'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
-            ];
+            $states[] = $this->storeInvalidation(
+                $invalidation['table'],
+                $invalidation['broad'],
+                $invalidation['tokens'],
+            );
         }
-
-        $first = $invalidations[0];
-        $firstMode = $states[0]['mode'];
 
         $this->observer->begin();
 
@@ -351,15 +332,35 @@ final class Invalidator
 
             return true;
         } catch (\Throwable $exception) {
+            $failedIndex = $exception instanceof TableInvalidationException
+                ? $exception->stateIndex
+                : 0;
+            $failed = $invalidations[$failedIndex] ?? $invalidations[0];
+            $failure = $exception->getPrevious() ?? $exception;
+
             $this->runtime->disable();
             $this->failures->invalidationFailed(
-                $exception,
-                $first['table'],
-                $firstMode,
-                $first['tokens'],
+                $failure,
+                $failed['table'],
+                $states[$failedIndex]['mode'] ?? $states[0]['mode'],
+                $failed['tokens'],
             );
 
             return false;
         }
+    }
+
+    private function storeInvalidation(
+        TableIdentity $table,
+        bool $broad,
+        array $tokens,
+    ): array {
+        return [
+            'versionKey' => $this->keys->version($table),
+            'generationKey' => $this->keys->generation($table),
+            'mode' => $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise'),
+            'tokens' => $tokens,
+            'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
+        ];
     }
 }

@@ -8,6 +8,7 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Exceptions\TableInvalidationException;
 use Predis\NotSupportedException;
 use Predis\Response\ServerException;
 
@@ -363,13 +364,17 @@ final class RedisStore
                 $connection instanceof PhpRedisClusterConnection
                 || $connection instanceof PredisClusterConnection
             ) {
-                foreach ($states as $state) {
-                    $this->evaluate(
-                        $connection,
-                        RedisScripts::get('invalidate_table'),
-                        [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
-                        [$state['mode'], ...$state['tokens']],
-                    );
+                foreach ($states as $index => $state) {
+                    try {
+                        $this->evaluate(
+                            $connection,
+                            RedisScripts::get('invalidate_table'),
+                            [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
+                            [$state['mode'], ...$state['tokens']],
+                        );
+                    } catch (\Exception $exception) {
+                        throw new TableInvalidationException($index, $exception);
+                    }
                 }
 
                 return;
@@ -414,8 +419,6 @@ final class RedisStore
     }
 
     /**
-     * All keys passed to one script must share a Redis Cluster hash slot.
-     *
      * @param  list<string>  $keys
      * @param  list<mixed>  $args
      */
@@ -489,7 +492,7 @@ final class RedisStore
 
     /**
      * @param  list<string>  $keys
-     * @return array<string, ?string> keyed by the original key, null when missing
+     * @return array<string, ?string>
      */
     public function mget(array $keys): array
     {

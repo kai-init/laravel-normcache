@@ -4,6 +4,7 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use NormCache\Database\QueryBuilder;
+use NormCache\Values\DependencyAnalysis;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
@@ -11,8 +12,8 @@ use NormCache\Values\TableIdentity;
 final class QueryPlanner
 {
     /**
-     * @param  list<TableIdentity>  $dependencies  deduplicated and hash-sorted by DependencyAnalyzer
-     * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey  invoked only for shapes that can use the metadata
+     * @param  list<TableIdentity>  $dependencies
+     * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey
      */
     public function plan(
         QueryBuilder $query,
@@ -30,6 +31,10 @@ final class QueryPlanner
             return QueryPlan::queryGroup($root, $dependencies);
         }
 
+        if ($query->configuredCacheContext() !== null) {
+            return QueryPlan::result($root, $dependencies);
+        }
+
         $wildcard = $this->isWildcard($query, $root);
         $plainColumns = $wildcard ? null : $this->plainColumns($query, $root);
         $primaryKey = $this->canUseRowShape($query, $operation)
@@ -37,42 +42,17 @@ final class QueryPlanner
                 ? $resolvePrimaryKey()
                 : null;
 
-        if (
-            $primaryKey !== null
-            && !$root->isView
-            && count($dependencies) === 1
-            && $this->allowsDirectControls($query)
-        ) {
-            $directToken = $this->directPrimaryKeyToken($query, $root, $primaryKey);
+        $direct = $this->directPlan(
+            $query,
+            $root,
+            $dependencies,
+            $primaryKey,
+            $wildcard,
+            $plainColumns,
+        );
 
-            if ($directToken !== null) {
-                [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query);
-
-                if ($softDeleteSafe) {
-                    $deletedAtColumn = $query->deletedAtColumn();
-
-                    if ($wildcard) {
-                        return QueryPlan::directPrimaryKey(
-                            $root,
-                            $dependencies,
-                            $primaryKey,
-                            $directToken,
-                            $softDeleteMode,
-                            $deletedAtColumn,
-                        );
-                    }
-
-                    return QueryPlan::projectedRow(
-                        $root,
-                        $dependencies,
-                        $primaryKey,
-                        $directToken,
-                        $plainColumns,
-                        $softDeleteMode,
-                        $deletedAtColumn,
-                    );
-                }
-            }
+        if ($direct !== null) {
+            return $direct;
         }
 
         if (
@@ -98,6 +78,62 @@ final class QueryPlanner
         }
 
         return QueryPlan::result($root, $dependencies, $primaryKey);
+    }
+
+    /**
+     * @param  list<TableIdentity>  $dependencies
+     * @param  list<string>|null  $plainColumns
+     */
+    private function directPlan(
+        QueryBuilder $query,
+        TableIdentity $root,
+        array $dependencies,
+        ?PrimaryKeyMetadata $primaryKey,
+        bool $wildcard,
+        ?array $plainColumns,
+    ): ?QueryPlan {
+        if (
+            $primaryKey === null
+            || $root->isView
+            || count($dependencies) !== 1
+            || !$this->allowsDirectControls($query)
+            || (!$wildcard && $plainColumns === null)
+        ) {
+            return null;
+        }
+
+        $directToken = $this->directPrimaryKeyToken($query, $root, $primaryKey);
+
+        if ($directToken === null) {
+            return null;
+        }
+
+        [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query);
+
+        if (!$softDeleteSafe) {
+            return null;
+        }
+
+        $deletedAtColumn = $query->deletedAtColumn();
+
+        return $wildcard
+            ? QueryPlan::directPrimaryKey(
+                $root,
+                $dependencies,
+                $primaryKey,
+                $directToken,
+                $softDeleteMode,
+                $deletedAtColumn,
+            )
+            : QueryPlan::projectedRow(
+                $root,
+                $dependencies,
+                $primaryKey,
+                $directToken,
+                (array) $plainColumns,
+                $softDeleteMode,
+                $deletedAtColumn,
+            );
     }
 
     private function allowsDirectControls(QueryBuilder $query): bool
@@ -126,19 +162,7 @@ final class QueryPlanner
         QueryBuilder $query,
     ): bool {
         return !empty($query->unions)
-            && $this->hasExternalDependency($root, $dependencies);
-    }
-
-    /** @param list<TableIdentity> $dependencies */
-    private function hasExternalDependency(TableIdentity $root, array $dependencies): bool
-    {
-        foreach ($dependencies as $dependency) {
-            if ($dependency->hash !== $root->hash) {
-                return true;
-            }
-        }
-
-        return false;
+            && DependencyAnalysis::hasExternalTo($root, $dependencies);
     }
 
     private function isWildcard(QueryBuilder $query, TableIdentity $root): bool

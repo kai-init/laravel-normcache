@@ -73,7 +73,6 @@ final readonly class RowRepairer
             throw $exception;
         }
 
-        // Null means no publication script ran, so this caller still owns the lease.
         if ($rows === null) {
             $this->leases->release($lease);
 
@@ -173,10 +172,10 @@ final readonly class RowRepairer
             token: (string) $lease->token,
             wakeTtl: $this->config->wakeTtl(),
         )) {
-            return [];
+            return null;
         }
 
-        return $this->states->isCurrent($plan, $state) ? $rowsByToken : [];
+        return $this->states->isCurrent($plan, $state) ? $rowsByToken : null;
     }
 
     /**

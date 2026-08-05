@@ -39,6 +39,8 @@ final readonly class ResultOverlayPublisher
         array $rows,
         bool $wakeWaiters = true,
     ): bool {
+        $lease = null;
+
         try {
             $encoded = $this->encodeWithinLimits($rows, $sourceState);
 
@@ -87,11 +89,8 @@ final readonly class ResultOverlayPublisher
                 wakeTtl: $this->config->wakeTtl(),
             );
         } catch (\Throwable $exception) {
-            if (isset($lease) && $lease->owner) {
-                try {
-                    $this->leases->release($lease, $wakeWaiters);
-                } catch (\Throwable) {
-                }
+            if ($lease !== null && $lease->owner) {
+                $this->leases->release($lease, $wakeWaiters);
             }
 
             $this->runtime->fail($exception);
@@ -138,7 +137,6 @@ final readonly class ResultOverlayPublisher
 
     /**
      * @param  array<int, mixed>  $rows
-     * @return string|null null when the overlay exceeds the configured row or byte budget
      */
     private function encodeWithinLimits(array $rows, CacheState $state): ?string
     {

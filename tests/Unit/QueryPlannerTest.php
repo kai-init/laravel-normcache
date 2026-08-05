@@ -128,6 +128,31 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertFalse($plan->materializeResult);
     }
 
+    public function test_cache_context_uses_full_result_storage_without_shared_rows(): void
+    {
+        $primaryKeyRequested = false;
+        $query = DB::query()
+            ->from('posts')
+            ->where('id', 42)
+            ->limit(1)
+            ->cacheContext('tenant:42');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            function () use (&$primaryKeyRequested): PrimaryKeyMetadata {
+                $primaryKeyRequested = true;
+
+                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+            },
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertNull($plan->primaryKey);
+        $this->assertFalse($primaryKeyRequested);
+    }
+
     public function test_narrow_projection_uses_result_route(): void
     {
         $query = DB::query()->from('posts')->select(['id', 'title as heading']);

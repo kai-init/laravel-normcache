@@ -3,9 +3,12 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Redis\Connections\Connection;
+use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Exceptions\TableInvalidationException;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\UnitTestCase;
+use Predis\Client;
 use Predis\Connection\ConnectionException;
 use Predis\Connection\NodeConnectionInterface;
 
@@ -282,6 +285,86 @@ final class RedisStoreRecoveryTest extends UnitTestCase
             $store->getRaw('key');
         } finally {
             $this->assertSame(2, $manager->built);
+        }
+    }
+
+    public function test_cluster_batch_failure_reports_the_failing_state_index(): void
+    {
+        $original = $this->app->make('redis');
+        $manager = new class
+        {
+            public int $built = 0;
+
+            /** @var list<string> */
+            public array $purged = [];
+
+            public function connection($name = null): Connection
+            {
+                $this->built++;
+
+                return new class(new Client) extends PredisClusterConnection
+                {
+                    private int $evaluations = 0;
+
+                    public function command($method, array $parameters = [])
+                    {
+                        if (strtolower((string) $method) !== 'evalsha') {
+                            return null;
+                        }
+
+                        $this->evaluations++;
+
+                        if ($this->evaluations === 2) {
+                            throw new \RuntimeException('Second table invalidation failed.');
+                        }
+
+                        return 1;
+                    }
+                };
+            }
+
+            public function purge(string $name): void
+            {
+                $this->purged[] = $name;
+            }
+        };
+
+        try {
+            $this->app->instance('redis', $manager);
+            Redis::clearResolvedInstance('redis');
+
+            try {
+                (new RedisStore('normcache-test'))->invalidateTableStates([
+                    [
+                        'versionKey' => '{first}:version',
+                        'generationKey' => '{first}:generation',
+                        'mode' => 'generation',
+                        'tokens' => [],
+                        'rowPrefix' => '{first}:rows:',
+                    ],
+                    [
+                        'versionKey' => '{second}:version',
+                        'generationKey' => '{second}:generation',
+                        'mode' => 'generation',
+                        'tokens' => [],
+                        'rowPrefix' => '{second}:rows:',
+                    ],
+                ]);
+
+                $this->fail('Expected the clustered invalidation batch to fail.');
+            } catch (TableInvalidationException $exception) {
+                $this->assertSame(1, $exception->stateIndex);
+                $this->assertSame(
+                    'Second table invalidation failed.',
+                    $exception->getPrevious()?->getMessage(),
+                );
+            }
+
+            $this->assertSame(2, $manager->built);
+            $this->assertSame(['normcache-test'], $manager->purged);
+        } finally {
+            $this->app->instance('redis', $original);
+            Redis::clearResolvedInstance('redis');
         }
     }
 

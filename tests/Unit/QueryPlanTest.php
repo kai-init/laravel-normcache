@@ -134,6 +134,54 @@ final class QueryPlanTest extends UnitTestCase
         QueryPlan::result($table, [$table])->asFullResultOverlay();
     }
 
+    public function test_plan_predicates_express_route_capabilities(): void
+    {
+        $table = $this->table();
+        $primaryKey = $this->primaryKey();
+        $queryGroup = QueryPlan::queryGroup($table, [$table]);
+        $direct = QueryPlan::directPrimaryKey(
+            $table,
+            [$table],
+            $primaryKey,
+            'i:1',
+            null,
+            null,
+        );
+        $canonical = QueryPlan::canonical(
+            $table,
+            [$table],
+            $primaryKey,
+            materializeResult: true,
+        );
+        $projectedResult = QueryPlan::projectedResult(
+            $table,
+            [$table],
+            $primaryKey,
+            ['id'],
+        );
+        $projectedRow = QueryPlan::projectedRow(
+            $table,
+            [$table],
+            $primaryKey,
+            'i:1',
+            ['id'],
+            null,
+            null,
+        );
+
+        $this->assertTrue($queryGroup->isQueryGroup());
+        $this->assertFalse($queryGroup->usesGeneration());
+        $this->assertTrue($direct->isDirectPrimaryKey());
+        $this->assertTrue($direct->usesGeneration());
+        $this->assertTrue($canonical->isCanonical());
+        $this->assertTrue($canonical->shouldMaterializeResult());
+        $this->assertTrue($projectedResult->isResult());
+        $this->assertTrue($projectedResult->supportsCanonicalProjectionFallback());
+        $this->assertFalse($projectedResult->supportsRowFallback());
+        $this->assertTrue($projectedRow->supportsRowFallback());
+        $this->assertFalse($projectedRow->supportsCanonicalProjectionFallback());
+    }
+
     private function table(): TableIdentity
     {
         return TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');

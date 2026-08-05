@@ -49,8 +49,6 @@ trait CacheAssertions
     }
 
     /**
-     * Assert native == cold == warm and return warm SQL for strategy-specific contracts.
-     *
      * @return list<array<string, mixed>>
      */
     protected function contract(callable $cached, callable $native, bool $expectNoStrayQueries = false): array

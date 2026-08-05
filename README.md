@@ -52,6 +52,7 @@ Cache controls are available on Eloquent and Query Builder:
 Post::query()->withoutCache()->get();
 Post::query()->where('published', true)->ttl(600)->get();
 Post::query()->where('published', true)->tag('homepage')->get();
+Post::query()->cacheContext('tenant:' . $tenantId)->get();
 ```
 
 ## Canonical & Normalized Row Caching
@@ -88,6 +89,21 @@ NormCache::flushTag('homepage');
 ```
 
 `flushTag()` advances a Redis version counter; it does not scan for or delete matching keys. The affected queries miss and rebuild on their next read, while old payloads expire naturally. Tags are an additional manual invalidation boundary and do not replace automatic dependency invalidation when an underlying table changes.
+
+## Database security contexts
+
+Queries whose results depend on implicit database state must declare a stable cache context. This includes PostgreSQL row-level security, SQL Server security policies, active database roles, and tenant-aware session variables that change row visibility without changing SQL or bindings:
+
+```php
+$posts = Post::query()
+    ->cacheContext('tenant:' . $tenantId)
+    ->where('published', true)
+    ->get();
+```
+
+The context is hashed into the cache identity and is never written verbatim to Redis. Context-bearing queries use isolated full-result storage rather than shared canonical rows, because the same physical primary key may represent a different visible row in each database security context.
+
+Apply `cacheContext()` to every cached query affected by the implicit policy, including separately executed eager-load queries. If a stable context is unavailable, use `withoutCache()` instead. Authorization or tenancy already represented in SQL bindings, the database source scope, or physical table identity does not need an additional cache context.
 
 ## Dependencies
 
@@ -241,7 +257,7 @@ NormCache bypasses reads when correctness cannot be established, including:
 - raw or opaque dependencies not fully authorized with `dependsOn()`;
 - volatile SQL expressions.
 
-Canonical storage keys each row by one primary-key value, so it requires a single-column primary key. When a table has a promary key column that introspection cannot discover, name it with a `primary_keys` override to restore canonical storage.
+Canonical storage keys each row by one primary-key value, so it requires a single-column primary key. When a table has a primary key column that introspection cannot discover, name it with a `primary_keys` override to restore canonical storage.
 
 For intercepted deletes, NormCache discovers `CASCADE`, `SET NULL`, and `SET DEFAULT` foreign-key actions through Laravel's schema API and broadly invalidates affected child tables, including multi-level cascades. The graph is rebuilt during schema refresh and persisted with the other schema metadata. A delete encountering a cold graph conservatively advances the global epoch before warming it for subsequent deletes.
 

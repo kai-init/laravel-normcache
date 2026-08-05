@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Contract;
 
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Country;
@@ -289,7 +290,39 @@ final class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('latestPost')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('latestPost')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
+    }
+
+    public function test_with_has_one_of_many_latest_invalidates_when_related_table_changes(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+        $query = fn() => Author::with('latestPost')->findOrFail($alice->id);
+
+        $this->assertSame('A2', $query()->latestPost?->title);
+        $this->assertSame('A2', $query()->latestPost?->title);
+
+        Post::create([
+            'title' => 'A3',
+            'author_id' => $alice->id,
+            'views' => 40,
+            'published' => true,
+        ]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        try {
+            $this->assertSame('A3', $query()->latestPost?->title);
+            $this->assertCount(1, DB::getQueryLog());
+
+            DB::flushQueryLog();
+
+            $this->assertSame('A3', $query()->latestPost?->title);
+            $this->assertSame([], DB::getQueryLog());
+        } finally {
+            DB::disableQueryLog();
+        }
     }
 
     public function test_with_has_one_through_of_many_latest(): void
@@ -299,6 +332,7 @@ final class RelationContractTest extends TestCase
         $this->contract(
             fn() => Country::with('latestPost')->orderBy('name')->get(),
             fn() => Country::withoutCache()->with('latestPost')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -309,6 +343,7 @@ final class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('mostViewedPost')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('mostViewedPost')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 

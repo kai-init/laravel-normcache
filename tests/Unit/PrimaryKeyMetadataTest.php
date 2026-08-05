@@ -28,11 +28,26 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
             'i:-9223372036854775808',
             $metadata->token('-9223372036854775808'),
         );
-
-        // Beyond native 64-bit range: never a legitimate PK value, must be rejected
-        // rather than silently truncated.
-        $this->assertNull($metadata->token('18446744073709551615'));
-        $this->assertNull($metadata->valueFromToken('i:18446744073709551615'));
+        $this->assertSame(
+            -9223372036854775807 - 1,
+            $metadata->valueFromToken('i:-9223372036854775808'),
+        );
+        $this->assertSame(
+            'i:9223372036854775808',
+            $metadata->token('9223372036854775808'),
+        );
+        $this->assertSame(
+            '9223372036854775808',
+            $metadata->valueFromToken('i:9223372036854775808'),
+        );
+        $this->assertSame(
+            'i:18446744073709551615',
+            $metadata->token('18446744073709551615'),
+        );
+        $this->assertSame(
+            '18446744073709551615',
+            $metadata->valueFromToken('i:18446744073709551615'),
+        );
     }
 
     public function test_string_tokens_preserve_exact_bytes_without_key_delimiters(): void

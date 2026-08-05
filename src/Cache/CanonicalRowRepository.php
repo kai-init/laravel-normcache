@@ -4,6 +4,7 @@ namespace NormCache\Cache;
 
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisProtocol;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
@@ -29,8 +30,8 @@ final readonly class CanonicalRowRepository
             $this->keys->tablePrefix($plan->root),
             (string) $plan->primaryKeyToken,
         );
-        $generation = is_string($result[0] ?? null) ? $result[0] : '0';
-        $raw = $result[1] ?? null;
+        $generation = RedisProtocol::version($result, 0);
+        $raw = RedisProtocol::value($result, 1);
 
         if (!is_string($raw)) {
             return new CachedRow($generation);

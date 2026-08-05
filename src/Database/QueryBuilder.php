@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\Grammar;
+use Illuminate\Database\Query\JoinClause;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
 use NormCache\Enums\MutationType;
@@ -39,6 +40,8 @@ final class QueryBuilder extends Builder
 
     private ?string $tag = null;
 
+    private ?string $cacheContext = null;
+
     /** @var array<string, DependencyDeclaration> */
     private array $dependencies = [];
 
@@ -69,15 +72,52 @@ final class QueryBuilder extends Builder
             $produced = end($this->columns);
 
             if ($produced instanceof Expression) {
-                $this->capturedSubqueries ??= new \WeakMap;
-                $this->capturedSubqueries[$produced] = [
-                    'builder' => $subquery,
-                    'sql' => $subquery->getGrammar()->compileSelect($subquery),
-                ];
+                $this->captureSubquery($produced, $subquery);
             }
         }
 
         return $result;
+    }
+
+    public function joinSub(
+        $query,
+        $as,
+        $first,
+        $operator = null,
+        $second = null,
+        $type = 'inner',
+        $where = false,
+    ) {
+        $subquery = $query instanceof EloquentBuilder ? $query->toBase() : $query;
+        $result = parent::joinSub(
+            $query,
+            $as,
+            $first,
+            $operator,
+            $second,
+            $type,
+            $where,
+        );
+
+        if ($subquery instanceof Builder) {
+            $join = end($this->joins);
+            $produced = $join instanceof JoinClause ? $join->table : null;
+
+            if ($produced instanceof Expression) {
+                $this->captureSubquery($produced, $subquery);
+            }
+        }
+
+        return $result;
+    }
+
+    private function captureSubquery(Expression $expression, Builder $subquery): void
+    {
+        $this->capturedSubqueries ??= new \WeakMap;
+        $this->capturedSubqueries[$expression] = [
+            'builder' => $subquery,
+            'sql' => $subquery->getGrammar()->compileSelect($subquery),
+        ];
     }
 
     /** @internal */
@@ -195,6 +235,20 @@ final class QueryBuilder extends Builder
     public function configuredTag(): ?string
     {
         return $this->tag;
+    }
+
+    public function cacheContext(string $context): static
+    {
+        (new QueryIdentity)->contextHash($context);
+        $this->cacheContext = $context;
+
+        return $this;
+    }
+
+    /** @internal */
+    public function configuredCacheContext(): ?string
+    {
+        return $this->cacheContext;
     }
 
     /** @param array<mixed> $dependencies */
@@ -348,10 +402,10 @@ final class QueryBuilder extends Builder
     public function insertOrIgnore(array $values): int
     {
         return $this->writeWithInvalidation(
-            MutationType::INSERT,
-            false,
-            false,
-            function () use ($values): int {
+            mutation: MutationType::INSERT,
+            mayAffectExistingRows: false,
+            forceInvalidation: false,
+            operation: function () use ($values): int {
                 $result = parent::insertOrIgnore($values);
                 $this->recordOutcome($values !== [], $result > 0);
 
@@ -363,10 +417,10 @@ final class QueryBuilder extends Builder
     public function insertOrIgnoreReturning(array $values, array $returning = ['*'], $uniqueBy = null): mixed
     {
         return $this->writeWithInvalidation(
-            MutationType::INSERT,
-            false,
-            false,
-            function () use ($values, $returning, $uniqueBy): mixed {
+            mutation: MutationType::INSERT,
+            mayAffectExistingRows: false,
+            forceInvalidation: false,
+            operation: function () use ($values, $returning, $uniqueBy): mixed {
                 $result = parent::insertOrIgnoreReturning($values, $returning, $uniqueBy);
                 $this->recordOutcome($values !== [], $result->isNotEmpty());
 
@@ -378,10 +432,10 @@ final class QueryBuilder extends Builder
     public function insertGetId(array $values, $sequence = null): int|string
     {
         return $this->writeWithInvalidation(
-            MutationType::INSERT,
-            false,
-            true,
-            function () use ($values, $sequence) {
+            mutation: MutationType::INSERT,
+            mayAffectExistingRows: false,
+            forceInvalidation: true,
+            operation: function () use ($values, $sequence) {
                 $result = parent::insertGetId($values, $sequence);
                 $this->recordOutcome(true, true);
 
@@ -393,10 +447,10 @@ final class QueryBuilder extends Builder
     public function insertUsing(array $columns, $query): int
     {
         return $this->writeWithInvalidation(
-            MutationType::INSERT,
-            false,
-            false,
-            function () use ($columns, $query): int {
+            mutation: MutationType::INSERT,
+            mayAffectExistingRows: false,
+            forceInvalidation: false,
+            operation: function () use ($columns, $query): int {
                 $result = parent::insertUsing($columns, $query);
                 $this->recordOutcome(true, $result > 0);
 
@@ -408,10 +462,10 @@ final class QueryBuilder extends Builder
     public function insertOrIgnoreUsing(array $columns, $query): int
     {
         return $this->writeWithInvalidation(
-            MutationType::INSERT,
-            false,
-            false,
-            function () use ($columns, $query): int {
+            mutation: MutationType::INSERT,
+            mayAffectExistingRows: false,
+            forceInvalidation: false,
+            operation: function () use ($columns, $query): int {
                 $result = parent::insertOrIgnoreUsing($columns, $query);
                 $this->recordOutcome(true, $result > 0);
 
@@ -423,10 +477,10 @@ final class QueryBuilder extends Builder
     public function update(array $values): int
     {
         return $this->writeWithInvalidation(
-            MutationType::UPDATE,
-            true,
-            false,
-            function () use ($values): int {
+            mutation: MutationType::UPDATE,
+            mayAffectExistingRows: true,
+            forceInvalidation: false,
+            operation: function () use ($values): int {
                 $result = parent::update($values);
                 $this->recordOutcome(true, $result > 0);
 
@@ -439,10 +493,10 @@ final class QueryBuilder extends Builder
     public function updateFrom(array $values): int
     {
         return $this->writeWithInvalidation(
-            MutationType::UPDATE,
-            true,
-            false,
-            function () use ($values): int {
+            mutation: MutationType::UPDATE,
+            mayAffectExistingRows: true,
+            forceInvalidation: false,
+            operation: function () use ($values): int {
                 $result = parent::updateFrom($values);
                 $this->recordOutcome(true, $result > 0);
 
@@ -455,10 +509,10 @@ final class QueryBuilder extends Builder
     public function updateOrInsert(array $attributes, $values = []): bool
     {
         return $this->writeWithInvalidation(
-            MutationType::UPSERT,
-            true,
-            true,
-            fn(): bool => parent::updateOrInsert($attributes, $values),
+            mutation: MutationType::UPSERT,
+            mayAffectExistingRows: true,
+            forceInvalidation: true,
+            operation: fn(): bool => parent::updateOrInsert($attributes, $values),
             forceBroadInvalidation: true,
         );
     }
@@ -466,10 +520,10 @@ final class QueryBuilder extends Builder
     public function upsert(array $values, $uniqueBy, $update = null): int
     {
         return $this->writeWithInvalidation(
-            MutationType::UPSERT,
-            true,
-            true,
-            function () use ($values, $uniqueBy, $update): int {
+            mutation: MutationType::UPSERT,
+            mayAffectExistingRows: true,
+            forceInvalidation: true,
+            operation: function () use ($values, $uniqueBy, $update): int {
                 $result = parent::upsert($values, $uniqueBy, $update);
 
                 if ($values !== []) {
@@ -485,10 +539,10 @@ final class QueryBuilder extends Builder
     public function delete($id = null)
     {
         return $this->writeWithInvalidation(
-            MutationType::DELETE,
-            true,
-            false,
-            function () use ($id) {
+            mutation: MutationType::DELETE,
+            mayAffectExistingRows: true,
+            forceInvalidation: false,
+            operation: function () use ($id) {
                 $result = parent::delete($id);
                 $this->recordOutcome(true, $result > 0);
 
@@ -500,10 +554,10 @@ final class QueryBuilder extends Builder
     public function truncate(): void
     {
         $this->writeWithInvalidation(
-            MutationType::TRUNCATE,
-            true,
-            true,
-            function (): void {
+            mutation: MutationType::TRUNCATE,
+            mayAffectExistingRows: true,
+            forceInvalidation: true,
+            operation: function (): void {
                 parent::truncate();
                 $this->recordOutcome(true, true);
             },
@@ -577,9 +631,9 @@ final class QueryBuilder extends Builder
             if ($owner) {
                 try {
                     app(Invalidator::class)->afterWrite(
-                        $this,
-                        $mutation,
-                        $mayAffectExistingRows,
+                        query: $this,
+                        mutation: $mutation,
+                        mayAffectExistingRows: $mayAffectExistingRows,
                         forceBroadInvalidation: true,
                         assigned: $assigned,
                     );
@@ -593,13 +647,13 @@ final class QueryBuilder extends Builder
 
         if ($owner) {
             $this->finishWriteObservation(
-                $mutation,
-                $mayAffectExistingRows,
-                $forceInvalidation,
-                $this->writeExecuted,
-                $this->writeChanged,
-                $forceBroadInvalidation,
-                $assigned,
+                mutation: $mutation,
+                mayAffectExistingRows: $mayAffectExistingRows,
+                forceInvalidation: $forceInvalidation,
+                executed: $this->writeExecuted,
+                changed: $this->writeChanged,
+                forceBroadInvalidation: $forceBroadInvalidation,
+                assignments: $assigned,
             );
         }
 
@@ -627,11 +681,11 @@ final class QueryBuilder extends Builder
         }
 
         app(Invalidator::class)->afterWrite(
-            $this,
-            $mutation,
-            $mayAffectExistingRows,
-            $forceBroadInvalidation,
-            $assignments,
+            query: $this,
+            mutation: $mutation,
+            mayAffectExistingRows: $mayAffectExistingRows,
+            forceBroadInvalidation: $forceBroadInvalidation,
+            assigned: $assignments,
         );
     }
 

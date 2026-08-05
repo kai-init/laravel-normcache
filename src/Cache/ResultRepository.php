@@ -57,10 +57,10 @@ final readonly class ResultRepository
             $state->tag,
         );
 
-        $versionKeys = $plan->route === QueryPlan::RESULT
+        $versionKeys = $plan->isResult()
             ? [$this->keys->version($plan->root)]
             : [];
-        $expected = $plan->route === QueryPlan::RESULT
+        $expected = $plan->isResult()
             ? [$state->version]
             : [];
 

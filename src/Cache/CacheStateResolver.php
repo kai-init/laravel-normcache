@@ -39,10 +39,9 @@ final readonly class CacheStateResolver
             unset($versionKeys[$plan->root->hash]);
         }
 
-        $generationKey = $knownGeneration === null ? match ($plan->route) {
-            QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
-            default => null,
-        } : null;
+        $generationKey = $knownGeneration === null && $plan->usesGeneration()
+            ? $this->keys->generation($plan->root)
+            : null;
         $tagKey = $this->tagKey($namespace);
         $epochKey = $this->unknownEpochKey();
         $values = $this->store->mget(array_values(array_unique(array_filter([
@@ -76,7 +75,7 @@ final readonly class CacheStateResolver
         $tag = $tagKey !== null ? ($values[$tagKey] ?? '0') : null;
         $versions = $allVersions;
 
-        if ($plan->route !== QueryPlan::QUERY_GROUP) {
+        if (!$plan->isQueryGroup()) {
             unset($versions[$plan->root->hash]);
         }
 
@@ -204,10 +203,9 @@ final readonly class CacheStateResolver
         }
 
         $versionKey = $this->keys->version($plan->root);
-        $generationKey = match ($plan->route) {
-            QueryPlan::CANONICAL, QueryPlan::DIRECT_PK => $this->keys->generation($plan->root),
-            default => null,
-        };
+        $generationKey = $plan->usesGeneration()
+            ? $this->keys->generation($plan->root)
+            : null;
 
         return [
             'epoch' => $epochKey,
@@ -228,7 +226,7 @@ final readonly class CacheStateResolver
     private function tagKey(string $namespace): ?string
     {
         return str_starts_with($namespace, 'g')
-            ? $this->keys->tagVersion(substr($namespace, 1))
+            ? $this->keys->tagVersion(substr($namespace, 1, 32))
             : null;
     }
 

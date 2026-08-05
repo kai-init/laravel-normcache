@@ -2,7 +2,6 @@
 
 namespace NormCache\Payload;
 
-use JsonException;
 use NormCache\Values\MembershipPayload;
 
 final class MembershipCodec
@@ -46,7 +45,7 @@ final class MembershipCodec
     {
         try {
             $envelope = json_decode($payload, true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
+        } catch (\JsonException) {
             return MembershipPayload::corrupt();
         }
 

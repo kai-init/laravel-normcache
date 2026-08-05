@@ -50,6 +50,28 @@ final class QueryIdentityTest extends UnitTestCase
         $identity->tagHash('');
     }
 
+    public function test_cache_contexts_partition_tagged_and_untagged_namespaces(): void
+    {
+        $identity = new QueryIdentity;
+        $context = 'c' . $identity->contextHash('tenant:42');
+
+        $this->assertSame($context, $identity->namespace(null, 'tenant:42'));
+        $this->assertSame(
+            'g' . $identity->tagHash('homepage') . ':' . $context,
+            $identity->namespace('homepage', 'tenant:42'),
+        );
+        $this->assertSame('u', $identity->namespace(null, null));
+        $this->assertSame('g' . $identity->tagHash('homepage'), $identity->namespace('homepage'));
+    }
+
+    public function test_cache_contexts_are_validated(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('NormCache cache context');
+
+        (new QueryIdentity)->contextHash('');
+    }
+
     public function test_laravel_prepared_bindings_are_hashable_without_additional_normalization(): void
     {
         $connection = $this->app['db']->connection();

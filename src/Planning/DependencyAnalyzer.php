@@ -97,8 +97,18 @@ final class DependencyAnalyzer
         $this->resolveSource($connection, $query->from, $resolved, $opaque);
 
         foreach ($query->joins ?? [] as $join) {
-            $this->walkProjectionValues($query, [$join->table], $captured, $opaque);
-            $this->resolveSource($connection, $join->table, $resolved, $opaque);
+            $subquery = $join->table instanceof Expression
+                && $query instanceof QueryBuilder
+                    ? $query->capturedSubquery($join->table)
+                    : null;
+
+            if ($subquery !== null) {
+                $captured[] = $subquery;
+            } else {
+                $this->walkProjectionValues($query, [$join->table], $captured, $opaque);
+                $this->resolveSource($connection, $join->table, $resolved, $opaque);
+            }
+
             $this->walkNestedValues(
                 $connection,
                 $join->wheres,
@@ -184,8 +194,7 @@ final class DependencyAnalyzer
 
     /**
      * @param  array<mixed>  $values
-     * @param  list<Builder>  $captured  Subqueries this projection stands in for,
-     *                                   drained by the caller once the walk completes.
+     * @param  list<Builder>  $captured
      */
     private function walkProjectionValues(
         Builder $query,

@@ -3,7 +3,6 @@
 namespace NormCache\Support;
 
 use NormCache\Values\TableIdentity;
-use Stringable;
 
 final class QueryIdentity
 {
@@ -28,7 +27,7 @@ final class QueryIdentity
         $prepared = '';
 
         foreach ($bindings as $binding) {
-            if ($binding instanceof Stringable) {
+            if ($binding instanceof \Stringable) {
                 $binding = (string) $binding;
             }
 
@@ -53,24 +52,31 @@ final class QueryIdentity
         ]));
     }
 
-    public function namespace(?string $tag): string
+    public function namespace(?string $tag, ?string $context = null): string
     {
-        if ($tag === null) {
-            return 'u';
+        $namespace = $tag === null
+            ? 'u'
+            : 'g' . $this->tagHash($tag);
+
+        if ($context === null) {
+            return $namespace;
         }
 
-        return 'g' . $this->tagHash($tag);
+        $contextNamespace = 'c' . $this->contextHash($context);
+
+        return $tag === null
+            ? $contextNamespace
+            : $namespace . ':' . $contextNamespace;
     }
 
     public function tagHash(string $tag): string
     {
-        if ($tag === '' || strlen($tag) > 128 || !mb_check_encoding($tag, 'UTF-8')) {
-            throw new \InvalidArgumentException(
-                'NormCache tag must be non-empty valid UTF-8 and at most 128 bytes.'
-            );
-        }
+        return $this->namedHash($tag, 'tag', 'nc-tag');
+    }
 
-        return hash('xxh128', TableIdentity::encodeFields(['nc-tag', $tag]));
+    public function contextHash(string $context): string
+    {
+        return $this->namedHash($context, 'cache context', 'nc-context');
     }
 
     /** @param list<string> $tokens */
@@ -85,5 +91,16 @@ final class QueryIdentity
             $generation,
             TableIdentity::encodeFields($tokens),
         ]));
+    }
+
+    private function namedHash(string $value, string $name, string $domain): string
+    {
+        if ($value === '' || strlen($value) > 128 || !mb_check_encoding($value, 'UTF-8')) {
+            throw new \InvalidArgumentException(
+                "NormCache {$name} must be non-empty valid UTF-8 and at most 128 bytes."
+            );
+        }
+
+        return hash('xxh128', TableIdentity::encodeFields([$domain, $value]));
     }
 }

@@ -11,4 +11,16 @@ final readonly class DependencyAnalysis
         public bool $explicit = false,
         public bool $unresolved = false,
     ) {}
+
+    /** @param list<TableIdentity> $tables */
+    public static function hasExternalTo(TableIdentity $root, array $tables): bool
+    {
+        foreach ($tables as $table) {
+            if ($table->hash !== $root->hash) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

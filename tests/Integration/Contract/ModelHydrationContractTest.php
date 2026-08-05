@@ -32,6 +32,26 @@ final class CustomHydrationModel extends Model
     }
 }
 
+trait InitializesNestedHydrationState
+{
+    public static int $initializerCalls = 0;
+
+    /** @var array{marker: \stdClass} */
+    public array $nestedState;
+
+    public function initializeInitializesNestedHydrationState(): void
+    {
+        self::$initializerCalls++;
+        $this->nestedState = ['marker' => new \stdClass];
+    }
+}
+
+final class TraitInitializedHydrationModel extends Model
+{
+    use Cacheable;
+    use InitializesNestedHydrationState;
+}
+
 /**
  * Contract tests for model hydration after a cached query has been resolved.
  */
@@ -47,6 +67,29 @@ final class ModelHydrationContractTest extends TestCase
 
         $this->assertSame(2, CustomHydrationModel::$newInstanceCalls);
         $this->assertNotSame($first->marker, $second->marker);
+    }
+
+    public function test_trait_initializers_run_for_each_hydrated_model(): void
+    {
+        $source = new TraitInitializedHydrationModel;
+        TraitInitializedHydrationModel::$initializerCalls = 0;
+
+        $first = $source->newFromBuilder(['id' => 1]);
+        $second = $source->newFromBuilder(['id' => 2]);
+
+        $this->assertSame(2, TraitInitializedHydrationModel::$initializerCalls);
+        $this->assertNotSame($first->nestedState['marker'], $second->nestedState['marker']);
+    }
+
+    public function test_runtime_cast_changes_are_applied_to_later_hydrated_models(): void
+    {
+        $source = new Author;
+        $source->mergeCasts(['id' => 'integer']);
+        $this->assertSame(42, $source->newFromBuilder(['id' => 42])->id);
+
+        $source->mergeCasts(['id' => 'string']);
+
+        $this->assertSame('42', $source->newFromBuilder(['id' => 42])->id);
     }
 
     public function test_eager_loaded_models_match_native_eloquent(): void

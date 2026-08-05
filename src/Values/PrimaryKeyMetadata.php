@@ -46,7 +46,9 @@ final readonly class PrimaryKeyMetadata
                 return null;
             }
 
-            return (int) $value;
+            return (string) (int) $value === $value
+                ? (int) $value
+                : $value;
         }
 
         if (!str_starts_with($token, 's:')) {
@@ -72,10 +74,6 @@ final readonly class PrimaryKeyMetadata
         }
 
         if (!is_string($value) || preg_match('/^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$/D', $value) !== 1) {
-            return null;
-        }
-
-        if ((string) (int) $value !== $value) {
             return null;
         }
 

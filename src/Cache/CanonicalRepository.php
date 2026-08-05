@@ -2,12 +2,12 @@
 
 namespace NormCache\Cache;
 
-use Closure;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisProtocol;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
@@ -28,7 +28,7 @@ final readonly class CanonicalRepository
     ) {}
 
     /**
-     * @param  Closure(CacheState, list<string>): ?RowRepair  $repair
+     * @param  \Closure(CacheState, list<string>): ?RowRepair  $repair
      */
     public function read(
         QueryPlan $plan,
@@ -36,12 +36,14 @@ final readonly class CanonicalRepository
         string $queryHash,
         array $head,
         bool $repairMissing,
-        Closure $repair,
+        \Closure $repair,
     ): CacheRead {
-        $status = $head[0] ?? null;
-        $version = is_string($head[1] ?? null) ? $head[1] : '0';
-        $generation = is_string($head[2] ?? null) ? $head[2] : '0';
-        $rawMembership = $status === 'hit' ? ($head[3] ?? null) : null;
+        $status = RedisProtocol::status($head);
+        $version = RedisProtocol::version($head);
+        $generation = RedisProtocol::version($head, 2);
+        $rawMembership = $status === RedisProtocol::HIT
+            ? RedisProtocol::canonicalPayload($head)
+            : null;
         $miss = fn(?string $reason): CacheRead => new CacheRead(
             $this->states->resolve($plan, $namespace, $queryHash, $version, $generation)[0],
             ReadOutcome::MISS,
@@ -50,7 +52,7 @@ final readonly class CanonicalRepository
         );
 
         if (!is_string($rawMembership)) {
-            return $miss($status === 'corrupt' ? 'corrupt_payload' : null);
+            return $miss($status === RedisProtocol::CORRUPT ? 'corrupt_payload' : null);
         }
 
         $membership = $this->memberships->decode($rawMembership);
