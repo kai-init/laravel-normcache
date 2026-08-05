@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static bool invalidateTables(string $connection, array $tables)
  * @method static bool flushTag(string $tag)
  * @method static bool flushAll()
+ * @method static mixed withoutCache(callable $callback)
  * @method static bool disableCache()
  * @method static int|null enableCache()
  * @method static bool cacheDisabled()

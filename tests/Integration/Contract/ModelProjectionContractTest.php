@@ -79,9 +79,17 @@ final class ModelProjectionContractTest extends TestCase
         $author = $this->author();
         Post::create(['title' => 'T', 'views' => 10, 'author_id' => $author->id]);
         Post::create(['title' => 'T', 'views' => 20, 'author_id' => $author->id]);
+        $query = fn() => Post::selectRaw('MAX(views) as max_views')
+            ->dependsOn([Author::class])
+            ->get()
+            ->first();
+        $native = fn() => Post::withoutCache()
+            ->selectRaw('MAX(views) as max_views')
+            ->get()
+            ->first();
 
-        Post::selectRaw('MAX(views) as max_views')->dependsOn([Author::class])->get();
-        $warm = Post::selectRaw('MAX(views) as max_views')->dependsOn([Author::class])->get()->first();
+        $this->contract($query, $native);
+        $warm = $query();
 
         $this->assertSame(20, (int) $warm->max_views);
     }

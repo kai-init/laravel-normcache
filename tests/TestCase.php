@@ -159,6 +159,8 @@ abstract class TestCase extends OrchestraTestCase
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
+            'encrypt' => $driver === 'sqlsrv' ? 'no' : null,
+            'trust_server_certificate' => $driver === 'sqlsrv',
         ];
     }
 

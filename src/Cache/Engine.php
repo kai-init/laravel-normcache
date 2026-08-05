@@ -10,7 +10,6 @@ use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\SqlVolatilityScanner;
-use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
@@ -20,7 +19,6 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
-use NormCache\Values\DependencyAnalysis;
 use NormCache\Values\OverlayAdmission;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
@@ -34,7 +32,6 @@ final readonly class Engine
         private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
-        private TableIdentityResolver $tables,
         private PrimaryKeyResolver $primaryKeys,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
@@ -68,64 +65,25 @@ final readonly class Engine
         $this->observer->begin();
 
         $connection = $query->getConnection();
-        $directRoot = $this->tables->resolve($connection, $query->from);
-        $table = $directRoot ?? $this->declaredRoot($query, $connection);
+        $analysis = $this->dependencies->analyze($connection, $query);
+        $table = $analysis->root;
 
-        if ($table === null) {
+        if ($analysis->bypassReason !== null || $table === null) {
             return $this->bypass(
                 $query,
-                'unidentifiable_dependency',
-                $statement,
-                $database,
-            );
-        }
-
-        if ($table->isView && $query->dependencies() === []) {
-            return $this->bypass(
-                $query,
-                'view_dependencies_required',
-                $statement,
-                $database,
-            );
-        }
-
-        $analysis = $this->dependencies->analyze($connection, $query, $table);
-
-        if ($table->isView && !DependencyAnalysis::hasExternalTo($table, $analysis->tables)) {
-            return $this->bypass(
-                $query,
-                'view_dependencies_required',
-                $statement,
-                $database,
-            );
-        }
-
-        if ($analysis->unresolved) {
-            return $this->bypass(
-                $query,
-                'unresolvable_declared_dependency',
-                $statement,
-                $database,
-            );
-        }
-
-        if ($analysis->opaque && !$analysis->explicit) {
-            return $this->bypass(
-                $query,
-                'unidentifiable_dependency',
+                $analysis->bypassReason ?? 'unidentifiable_dependency',
                 $statement,
                 $database,
             );
         }
 
         $dependencies = $analysis->tables;
-        $forceQueryGroup = $analysis->opaque && $directRoot === null;
         $plan = $this->planner->plan(
             $query,
             $table,
             fn(): ?PrimaryKeyMetadata => $this->primaryKeys->resolve($query, $connection, $table),
             $dependencies,
-            $forceQueryGroup,
+            $analysis->queryScoped,
             $operation,
         );
 
@@ -929,25 +887,6 @@ final readonly class Engine
             namespace: $namespace,
             operation: 'select',
         );
-    }
-
-    private function declaredRoot(
-        QueryBuilder $query,
-        Connection $connection,
-    ): ?TableIdentity {
-        $lowest = null;
-
-        foreach ($query->dependencies() as $declaration) {
-            $identity = $declaration->isTable()
-                ? $this->tables->resolve($connection, $declaration->value)
-                : $this->dependencies->modelIdentity($connection, $declaration->value);
-
-            if ($identity !== null && ($lowest === null || $identity->hash < $lowest->hash)) {
-                $lowest = $identity;
-            }
-        }
-
-        return $lowest;
     }
 
     private function fail(\Throwable $exception): void

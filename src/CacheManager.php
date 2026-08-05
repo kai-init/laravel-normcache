@@ -115,6 +115,11 @@ final readonly class CacheManager
         return $this->increment($this->keys->epoch(), force: true);
     }
 
+    public function withoutCache(callable $callback): mixed
+    {
+        return $this->runtime->withoutCache($callback);
+    }
+
     public function disableCache(): bool
     {
         if (!$this->config->enabled) {

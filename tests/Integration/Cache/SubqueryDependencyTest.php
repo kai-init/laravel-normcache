@@ -152,19 +152,27 @@ final class SubqueryDependencyTest extends TestCase
         $this->assertSame(1, $read());
     }
 
-    public function test_an_uncaptured_raw_select_still_bypasses(): void
+    public function test_a_raw_select_subquery_requires_declared_dependencies(): void
     {
-        $build = fn() => Author::withCount('posts')
-            ->selectRaw('(select count(*) from comments) as smuggled')
+        $build = fn(bool $declared = false) => Author::withCount('posts')
+            ->selectRaw('(select count(*) from comments) as comment_count')
+            ->when($declared, fn($query) => $query->dependsOn(['comments']))
             ->whereKey($this->author->getKey());
 
-        $build()->get();
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $build()->get();
-        DB::disableQueryLog();
-
-        $this->assertCount(1, DB::getQueryLog());
+        $this->bypassContract(
+            fn() => $build()->firstOrFail(),
+            fn() => $build()->firstOrFail(),
+            reason: 'unidentifiable_dependency',
+        );
+        $this->contract(
+            fn() => $build(true)->firstOrFail(),
+            fn() => $build()->firstOrFail(),
+            mutate: fn() => Comment::query()->create([
+                'body' => 'New',
+                'commentable_type' => Author::class,
+                'commentable_id' => $this->author->getKey(),
+            ]),
+        );
     }
 
     public function test_a_volatile_subquery_projection_still_bypasses(): void

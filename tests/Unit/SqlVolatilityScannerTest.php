@@ -35,11 +35,17 @@ final class SqlVolatilityScannerTest extends TestCase
             'PostgreSQL connection state' => ['current_setting(\'application_name\')'],
             'SQL Server connection state' => ['SESSION_CONTEXT(N\'tenant\')'],
             'argument-dependent function' => ['datetime(\'now\', \'+1 day\')'],
+            'unknown function' => ['vendor_schema.custom_score(users.id)'],
+            'quoted unknown function' => ['"custom_score"(users.id)'],
+            'unknown nested function' => ['coalesce(custom_score(id), 0)'],
+            'commented unknown function' => ['custom_score/**/(id)'],
+            'SQL comment' => ['select count(*) /* stable but opaque */ from posts'],
+            'quoted SQL keyword function' => ['"select"(id)'],
         ];
     }
 
     #[DataProvider('deterministicExpressions')]
-    public function test_it_ignores_ordinary_sql_and_unknown_functions(
+    public function test_it_accepts_ordinary_sql_and_known_deterministic_functions(
         string $sql,
     ): void {
         $this->assertFalse((new SqlVolatilityScanner)->isVolatile($sql));
@@ -49,9 +55,6 @@ final class SqlVolatilityScannerTest extends TestCase
     {
         return [
             'deterministic functions' => ['ROUND(AVG(order_items.price), 2)'],
-            'unknown function' => ['vendor_schema.custom_score(users.id)'],
-            'quoted unknown function' => ['"custom_score"(users.id)'],
-            'unknown nested function' => ['coalesce(custom_score(id), 0)'],
             'fixed date argument' => ['date(\'2026-08-04\')'],
             'ordinary query' => ['select * from "posts" where "published" = ? order by "created_at" asc'],
         ];

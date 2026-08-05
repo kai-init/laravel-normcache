@@ -20,32 +20,23 @@ final class PaginationContractTest extends TestCase
     {
         $this->createAuthors(5);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->paginate(2),
             fn() => Author::withoutCache()->orderBy('id')->paginate(2),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->paginate(2, ['*'], 'page', 2),
             fn() => Author::withoutCache()->orderBy('id')->paginate(2, ['*'], 'page', 2),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
     }
 
     public function test_paginate_empty(): void
     {
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::where('name', 'nobody')->paginate(10),
             fn() => Author::withoutCache()->where('name', 'nobody')->paginate(10),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
     }
 
     public function test_paginate_with_column_selection(): void
@@ -70,21 +61,15 @@ final class PaginationContractTest extends TestCase
     {
         $this->createAuthors(5);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->simplePaginate(2),
             fn() => Author::withoutCache()->orderBy('id')->simplePaginate(2),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->simplePaginate(2, ['*'], 'page', 2),
             fn() => Author::withoutCache()->orderBy('id')->simplePaginate(2, ['*'], 'page', 2),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
     }
 
     public function test_simple_paginate_invalidates_on_change(): void
@@ -108,24 +93,18 @@ final class PaginationContractTest extends TestCase
     {
         $this->createAuthors(5);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->cursorPaginate(2),
             fn() => Author::withoutCache()->orderBy('id')->cursorPaginate(2),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
 
         $p1 = Author::withoutCache()->orderBy('id')->cursorPaginate(2);
         $cursor = $p1->nextCursor();
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::orderBy('id')->cursorPaginate(2, ['*'], 'cursor', $cursor),
             fn() => Author::withoutCache()->orderBy('id')->cursorPaginate(2, ['*'], 'cursor', $cursor),
         );
-        Event::assertDispatched(QueryCacheMiss::class);
-        Event::assertDispatched(QueryCacheHit::class);
     }
 
     public function test_cursor_paginate_invalidates_on_change(): void
@@ -151,7 +130,6 @@ final class PaginationContractTest extends TestCase
         $author->posts()->create(['title' => 'Post 1']);
         $author->posts()->create(['title' => 'Post 2']);
 
-        Event::fake([QueryCacheMiss::class, QueryCacheHit::class]);
         $this->contract(
             fn() => Author::join('posts', 'authors.id', '=', 'posts.author_id')
                 ->select('authors.*')

@@ -289,7 +289,7 @@ final class ProjectionFallbackTest extends TestCase
         $connection = $query->getConnection();
         $table = $this->app->make(TableIdentityResolver::class)->resolve($connection, $query->from);
         $this->assertNotNull($table);
-        $analysis = $this->app->make(DependencyAnalyzer::class)->analyze($connection, $query, $table);
+        $analysis = $this->app->make(DependencyAnalyzer::class)->analyze($connection, $query);
         $primaryKey = $this->app->make(PrimaryKeyResolver::class)->resolve($query, $connection, $table);
         $plan = $this->app->make(QueryPlanner::class)->plan(
             $query,

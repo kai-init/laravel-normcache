@@ -118,7 +118,9 @@ final class ModelHydrationContractTest extends TestCase
         $this->assertSame(['Nia', 'Omar'], $seen);
 
         $seen = [];
-        Author::query()->orderBy('id')->get();
+        $this->assertWarmCacheHit(function () {
+            return Author::query()->orderBy('id')->get();
+        });
         $this->assertSame(['Nia', 'Omar'], $seen, 'retrieved must fire on a cache hit');
 
         $seen = [];
@@ -153,7 +155,10 @@ final class ModelHydrationContractTest extends TestCase
         $author = Author::create(['name' => 'Pia']);
 
         Author::query()->whereKey($author->id)->get();
-        $cached = Author::query()->whereKey($author->id)->first();
+        $cached = null;
+        $this->assertWarmCacheHit(function () use ($author, &$cached) {
+            return $cached = Author::query()->whereKey($author->id)->first();
+        });
         $native = Author::withoutCache()->whereKey($author->id)->first();
 
         $this->assertSame($native->getAttributes(), $cached->getAttributes());

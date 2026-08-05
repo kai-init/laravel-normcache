@@ -2,9 +2,11 @@
 
 namespace NormCache\Tests\Unit;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use NormCache\Database\QueryBuilder;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\UnitTestCase;
@@ -82,10 +84,18 @@ final class DependencyAnalyzerTest extends UnitTestCase
             'the two connections must resolve to distinct identities for this test to mean anything',
         );
 
-        $declared = app(DependencyAnalyzer::class)
-            ->modelIdentity(DB::connection('primary'), ReportingUser::class);
+        $query = DB::connection('primary')->query()
+            ->from('users')
+            ->dependsOn([ReportingUser::class]);
+        $this->assertInstanceOf(QueryBuilder::class, $query);
+        $analysis = app(DependencyAnalyzer::class)
+            ->analyze(DB::connection('primary'), $query);
 
-        $this->assertSame($primary?->hash, $declared?->hash);
+        $this->assertSame($primary?->hash, $analysis->root?->hash);
+        $this->assertSame(
+            [$primary?->hash],
+            array_map(static fn($table): string => $table->hash, $analysis->tables),
+        );
     }
 
     public function test_declared_model_dependency_without_a_connection_uses_the_querying_connection(): void
@@ -95,10 +105,32 @@ final class DependencyAnalyzerTest extends UnitTestCase
         $reporting = app(TableIdentityResolver::class)
             ->resolve(DB::connection('reporting'), 'users');
 
-        $declared = app(DependencyAnalyzer::class)
-            ->modelIdentity(DB::connection('reporting'), AmbientUser::class);
+        $query = DB::connection('reporting')->query()
+            ->from('users')
+            ->dependsOn([AmbientUser::class]);
+        $this->assertInstanceOf(QueryBuilder::class, $query);
+        $analysis = app(DependencyAnalyzer::class)
+            ->analyze(DB::connection('reporting'), $query);
 
-        $this->assertSame($reporting?->hash, $declared?->hash);
+        $this->assertSame($reporting?->hash, $analysis->root?->hash);
+    }
+
+    public function test_cross_database_eloquent_subquery_captures_laravel_normalized_builder(): void
+    {
+        $outer = DB::connection('primary')->query()->from('users');
+        $this->assertInstanceOf(QueryBuilder::class, $outer);
+
+        $outer->selectSub(ReportingUser::query(), 'reporting_user');
+        $expression = end($outer->columns);
+        $this->assertInstanceOf(Expression::class, $expression);
+
+        $captured = $outer->capturedSubquery($expression);
+        $this->assertNotNull($captured);
+        $capturedSql = $captured->getGrammar()->compileSelect($captured);
+        $expressionSql = (string) $expression->getValue($outer->getGrammar());
+
+        $this->assertStringContainsString($capturedSql, $expressionSql);
+        $this->assertNotSame('users', $captured->from);
     }
 
     public function test_declared_model_observes_the_active_connection_when_resolving_its_table(): void
@@ -112,10 +144,14 @@ final class DependencyAnalyzerTest extends UnitTestCase
 
         $resolver = app(TableIdentityResolver::class);
         $primary = $resolver->resolve(DB::connection('primary'), 'primary_users');
-        $declared = app(DependencyAnalyzer::class)
-            ->modelIdentity(DB::connection('primary'), ConnectionAwareTableUser::class);
+        $query = DB::connection('primary')->query()
+            ->fromRaw('(select 1) as derived')
+            ->dependsOn([ConnectionAwareTableUser::class]);
+        $this->assertInstanceOf(QueryBuilder::class, $query);
+        $analysis = app(DependencyAnalyzer::class)
+            ->analyze(DB::connection('primary'), $query);
 
-        $this->assertSame($primary?->hash, $declared?->hash);
+        $this->assertSame($primary?->hash, $analysis->root?->hash);
     }
 
     private function createUsersTables(): void

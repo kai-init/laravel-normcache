@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Integration\Database;
 
-use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use NormCache\Database\Connections\SQLiteConnection;
 use NormCache\Database\QueryBuilder;
@@ -21,7 +20,6 @@ final class ConnectionWiringTest extends TestCase
     {
         $connection = DB::connection();
 
-        $this->assertInstanceOf(Connection::class, $connection);
         $this->assertInstanceOf(SQLiteConnection::class, $connection);
     }
 }

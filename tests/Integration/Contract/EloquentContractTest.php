@@ -249,7 +249,7 @@ final class EloquentContractTest extends TestCase
 
     public function test_find_returns_null_for_missing_id(): void
     {
-        $this->contract(
+        $this->missContract(
             fn() => Author::find(99999),
             fn() => Author::withoutCache()->find(99999),
         );
@@ -321,9 +321,15 @@ final class EloquentContractTest extends TestCase
     public function test_aggregate_blob_key_includes_selected_columns(): void
     {
         ['alice' => $alice] = $this->fixtures();
+        $idQuery = fn() => Author::select('id')->withCount('posts')->where('id', $alice->id)->get();
+        $idNative = fn() => Author::withoutCache()->select('id')->withCount('posts')->where('id', $alice->id)->get();
+        $nameQuery = fn() => Author::select('name')->withCount('posts')->where('id', $alice->id)->get();
+        $nameNative = fn() => Author::withoutCache()->select('name')->withCount('posts')->where('id', $alice->id)->get();
 
-        $idOnly = Author::select('id')->withCount('posts')->where('id', $alice->id)->get()->first();
-        $nameOnly = Author::select('name')->withCount('posts')->where('id', $alice->id)->get()->first();
+        $this->contract($idQuery, $idNative);
+        $idOnly = $idQuery()->first();
+        $this->contract($nameQuery, $nameNative);
+        $nameOnly = $nameQuery()->first();
 
         $this->assertArrayHasKey('id', $idOnly->getAttributes(), 'id-only projection must contain id');
         $this->assertArrayNotHasKey('name', $idOnly->getAttributes(), 'id-only projection must not contain name from other query blob');
@@ -358,22 +364,20 @@ final class EloquentContractTest extends TestCase
     {
         $alice = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+        $query = fn() => Author::dependsOn([Tag::class])
+            ->withCount('posts')
+            ->where('id', $alice->id)
+            ->get();
+        $native = fn() => Author::withoutCache()
+            ->withCount('posts')
+            ->where('id', $alice->id)
+            ->get();
 
-        Author::dependsOn([Tag::class])->withCount('posts')->where('id', $alice->id)->get(); // prime
-
-        $connection = $this->app['db']->connection('testing');
-        $tagTable = $this->app->make(TableIdentityResolver::class)->resolve($connection, 'tags');
-        $tagVersionBefore = $this->cacheStore()->getRaw($this->cacheKeys()->version($tagTable)) ?? '0';
-        Tag::create(['name' => 'dummy']); // bumps Tag version; inferred dep is Post only
-        $tagVersionAfter = $this->cacheStore()->getRaw($this->cacheKeys()->version($tagTable)) ?? '0';
-        $this->assertGreaterThan((int) $tagVersionBefore, (int) $tagVersionAfter, 'Tag version must bump on create');
-
-        DB::enableQueryLog();
-        Author::dependsOn([Tag::class])->withCount('posts')->where('id', $alice->id)->get();
-        $log = DB::getQueryLog();
-        DB::disableQueryLog();
-
-        $this->assertNotEmpty($log, 'blob must be invalidated when explicit dependsOn Tag version bumps');
+        $this->contract(
+            $query,
+            $native,
+            mutate: fn() => Tag::create(['name' => 'dummy']),
+        );
     }
 
     public function test_with_count_has_many(): void
@@ -497,22 +501,30 @@ final class EloquentContractTest extends TestCase
     {
         ['carol' => $carol, 'php' => $php] = $this->fixtures();
 
-        Author::withCount('tags')->orderBy('name')->get();
-
-        $carol->tags()->attach($php->id);
-
-        $this->assertSame(
-            $this->normalize(Author::withoutCache()->withCount('tags')->orderBy('name')->get()),
-            $this->normalize(Author::withCount('tags')->orderBy('name')->get()),
+        $this->contract(
+            fn() => Author::withCount('tags')->orderBy('name')->get(),
+            fn() => Author::withoutCache()->withCount('tags')->orderBy('name')->get(),
+            mutate: fn() => $carol->tags()->attach($php->id),
         );
     }
 
-    public function test_with_exists_adds_correct_boolean_attribute(): void
+    public function test_with_exists_requires_declared_dependencies(): void
     {
         $this->fixtures();
+        $query = fn(bool $native, bool $declared = false) => ($native ? Author::withoutCache() : Author::query())
+            ->withExists('posts')
+            ->when($declared, fn($query) => $query->dependsOn([Post::class]))
+            ->orderBy('name')
+            ->get();
+
+        $this->bypassContract(
+            fn() => $query(false),
+            fn() => $query(true),
+            reason: 'unidentifiable_dependency',
+        );
         $this->contract(
-            fn() => Author::withExists('posts')->orderBy('name')->get(),
-            fn() => Author::withoutCache()->withExists('posts')->orderBy('name')->get(),
+            fn() => $query(false, true),
+            fn() => $query(true),
         );
     }
 
@@ -553,9 +565,9 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_with_count_non_cacheable_related_model_falls_through_to_eloquent(): void
+    public function test_with_count_non_cacheable_related_model_infers_table_dependency(): void
     {
-        // Models without Cacheable trait route to native Eloquent subselects (parent::withAggregate).
+        // The related model does not need Cacheable for its table dependency to be inferred.
         $author = Author::create(['name' => 'Alice']);
         UncachedPost::create(['title' => 'P1', 'author_id' => $author->id]);
         UncachedPost::create(['title' => 'P2', 'author_id' => $author->id]);
@@ -578,12 +590,10 @@ final class EloquentContractTest extends TestCase
             'uncached_posts_count' => (int) $m->uncached_posts_count,
         ])->all();
 
-        $native = $values(Author::withoutCache()->withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
-        $cold = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
-        $warm = $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get());
-
-        $this->assertSame($native, $cold, 'cold aggregate values differ from native');
-        $this->assertSame($cold, $warm, 'warm aggregate values differ from cold');
+        $this->contract(
+            fn() => $values(Author::withCount(['posts', 'uncachedPosts'])->orderBy('name')->get()),
+            fn() => $values(Author::withoutCache()->withCount(['posts', 'uncachedPosts'])->orderBy('name')->get()),
+        );
     }
 
     public function test_with_count_having_raw_on_aggregate_alias_behaves_same_as_native(): void
@@ -639,9 +649,9 @@ final class EloquentContractTest extends TestCase
         $this->assertSame($nativeException, $normcacheException, 'NormCache must fail identically to native Eloquent on HAVING aggregate alias');
     }
 
-    public function test_with_count_order_by_raw_aggregate_alias_matches_native(): void
+    public function test_with_count_order_by_raw_aggregate_alias_is_cached(): void
     {
-        // orderByRaw referencing an aggregate alias falls back to native Eloquent subselects.
+        // A raw order using only the generated aggregate alias adds no hidden table dependency.
         $this->fixtures();
         $this->contract(
             fn() => Author::withCount('posts')->orderByRaw('posts_count desc')->get(),
@@ -725,6 +735,10 @@ final class EloquentContractTest extends TestCase
 
     public function test_result_depends_on_with_group_by_and_withcount_skips_aggregate_on_null_pk_models(): void
     {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('This null-primary-key grouped aggregate shape is only valid on SQLite.');
+        }
+
         // GROUP BY result dependsOn results lack primary keys — RelationAggregateLoader must skip aggregate loading.
         $alice = Author::create(['name' => 'Alice']);
         $post = Post::create(['title' => 'P1', 'author_id' => $alice->id]);
@@ -735,12 +749,14 @@ final class EloquentContractTest extends TestCase
             ->dependsOn([Post::class])
             ->withCount('comments')
             ->get();
+        $native = fn() => Post::withoutCache()
+            ->select('author_id', DB::raw('COUNT(*) as post_count'))
+            ->groupBy('author_id')
+            ->withCount('comments')
+            ->get();
 
-        $cold = $run();
-        $warm = $run();
-
-        $this->assertCount(1, $cold);
-        $this->assertCount(1, $warm);
+        $this->contract($run, $native);
+        $this->assertCount(1, $run());
     }
 
     public function test_depends_on_join_with_explicit_select_caches_and_matches_native(): void
@@ -762,7 +778,7 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_join_without_depends_on_falls_through(): void
+    public function test_join_infers_dependencies_without_depends_on(): void
     {
         $this->fixtures();
         $this->contract(
@@ -778,7 +794,7 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_group_by_falls_through(): void
+    public function test_group_by_result_is_cached(): void
     {
         $this->fixtures();
         $this->contract(
@@ -799,33 +815,10 @@ final class EloquentContractTest extends TestCase
     public function test_lock_for_update_falls_through(): void
     {
         $this->fixtures();
-        $this->contract(
+        $this->bypassContract(
             fn() => Author::lockForUpdate()->orderBy('name')->get(),
             fn() => Author::withoutCache()->orderBy('name')->get(),
-        );
-    }
-
-    public function test_simple_paginate_falls_through(): void
-    {
-        $this->fixtures();
-        $native = Author::withoutCache()->orderBy('name')->simplePaginate(2);
-        $result = Author::orderBy('name')->simplePaginate(2);
-        $this->assertSame(
-            collect($native->items())->map->toArray()->values()->all(),
-            collect($result->items())->map->toArray()->values()->all(),
-        );
-    }
-
-    public function test_cursor_paginate_falls_through(): void
-    {
-        $this->fixtures();
-
-        $native = Author::withoutCache()->orderBy('name')->cursorPaginate(2);
-        $result = Author::orderBy('name')->cursorPaginate(2);
-
-        $this->assertSame(
-            collect($native->items())->map->toArray()->values()->all(),
-            collect($result->items())->map->toArray()->values()->all(),
+            reason: 'write_pdo',
         );
     }
 
@@ -878,12 +871,23 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_has_with_count_threshold_returns_correct_models(): void
+    public function test_has_with_count_threshold_requires_declared_dependencies(): void
     {
         $this->fixtures(); // Alice has 2 posts, Bob has 1, Carol has 0
+        $query = fn(bool $native, bool $declared = false) => ($native ? Author::withoutCache() : Author::query())
+            ->has('posts', '>=', 2)
+            ->when($declared, fn($query) => $query->dependsOn([Post::class]))
+            ->orderBy('name')
+            ->get();
+
+        $this->bypassContract(
+            fn() => $query(false),
+            fn() => $query(true),
+            reason: 'unidentifiable_dependency',
+        );
         $this->contract(
-            fn() => Author::has('posts', '>=', 2)->orderBy('name')->get(),
-            fn() => Author::withoutCache()->has('posts', '>=', 2)->orderBy('name')->get(),
+            fn() => $query(false, true),
+            fn() => $query(true),
         );
     }
 
@@ -1263,75 +1267,31 @@ final class EloquentContractTest extends TestCase
     public function test_with_count_pluck_aggregate_alias_matches_native(): void
     {
         $this->fixtures();
-
-        $native = Author::withoutCache()->withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all();
-        $cached = Author::withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all();
-
-        $this->assertSame($native, $cached, 'pluck on aggregate alias must match native Eloquent');
+        $this->contract(
+            fn() => Author::withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all(),
+            fn() => Author::withoutCache()->withCount('posts')->orderBy('name')->pluck('posts_count', 'name')->all(),
+        );
     }
 
     public function test_with_count_value_aggregate_alias_matches_native(): void
     {
         $this->fixtures();
-
-        $native = Author::withoutCache()->withCount('posts')->orderBy('name')->value('posts_count');
-        $cached = Author::withCount('posts')->orderBy('name')->value('posts_count');
-
-        $this->assertSame($native, $cached, 'value on aggregate alias must match native Eloquent');
+        $this->contract(
+            fn() => Author::withCount('posts')->orderBy('name')->value('posts_count'),
+            fn() => Author::withoutCache()->withCount('posts')->orderBy('name')->value('posts_count'),
+        );
     }
 
     public function test_with_count_cursor_aggregate_alias_matches_native(): void
     {
         $this->fixtures();
-
-        $native = Author::withoutCache()->withCount('posts')->orderBy('name')->cursor()->map->posts_count->all();
-        $cached = Author::withCount('posts')->orderBy('name')->cursor()->map->posts_count->all();
-
-        $this->assertSame($native, $cached, 'cursor on aggregate alias must match native Eloquent');
+        $this->databaseContract(
+            fn() => Author::withCount('posts')->orderBy('name')->cursor()->map->posts_count->all(),
+            fn() => Author::withoutCache()->withCount('posts')->orderBy('name')->cursor()->map->posts_count->all(),
+        );
     }
 
-    public function test_flush_tag_clears_aggregate_cache_for_tagged_query(): void
-    {
-        $alice = Author::create(['name' => 'Alice']);
-        Post::create(['title' => 'P1', 'author_id' => $alice->id]);
-
-        Author::query()->tag('home')->withCount('posts')->get();
-
-        DB::table('posts')->insert(['title' => 'P2', 'author_id' => $alice->id, 'created_at' => now(), 'updated_at' => now()]);
-
-        $this->cacheManager()->flushTag('home');
-
-        $result = Author::query()->tag('home')->withCount('posts')->get();
-
-        $this->assertSame(2, $result->first()->posts_count, 'flushTag must clear tagged aggregate cache entries');
-    }
-
-    public function test_flush_tag_allows_arbitrary_characters(): void
-    {
-        // Tags are hashed before use in any Redis key, so there is
-        // no character-safety restriction — only emptiness/UTF-8/length are validated.
-        $this->assertTrue($this->cacheManager()->flushTag('tag:with:colons/and*stars'));
-    }
-
-    public function test_flush_tag_rejects_empty_tag(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->cacheManager()->flushTag('');
-    }
-
-    public function test_flush_tag_rejects_invalid_utf8(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->cacheManager()->flushTag("\xB1\x31");
-    }
-
-    public function test_flush_tag_rejects_tag_over_128_bytes(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->cacheManager()->flushTag(str_repeat('a', 129));
-    }
-
-    public function test_sum_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
+    public function test_sum_with_raw_expression_is_cached_and_returns_correct_result(): void
     {
         $this->fixtures();
 
@@ -1341,7 +1301,7 @@ final class EloquentContractTest extends TestCase
         );
     }
 
-    public function test_value_with_raw_expression_bypasses_cache_and_returns_correct_result(): void
+    public function test_value_with_raw_expression_is_cached_and_returns_correct_result(): void
     {
         $this->fixtures();
 
@@ -1364,20 +1324,32 @@ final class EloquentContractTest extends TestCase
     public function test_pivot_orderby_raw_with_different_bindings_returns_distinct_results(): void
     {
         ['alice' => $alice] = $this->fixtures();
-
-        $phpFirst = $alice->tags()
+        $phpFirst = fn() => $alice->tags()
             ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['php'])
             ->get()
             ->pluck('name')
             ->all();
-
-        $laravelFirst = $alice->tags()
+        $phpNative = fn() => $alice->tags()
+            ->withoutCache()
+            ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['php'])
+            ->get()
+            ->pluck('name')
+            ->all();
+        $laravelFirst = fn() => $alice->tags()
+            ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['laravel'])
+            ->get()
+            ->pluck('name')
+            ->all();
+        $laravelNative = fn() => $alice->tags()
+            ->withoutCache()
             ->orderByRaw('CASE WHEN tags.name = ? THEN 0 ELSE 1 END', ['laravel'])
             ->get()
             ->pluck('name')
             ->all();
 
-        $this->assertSame(['php', 'laravel'], $phpFirst);
-        $this->assertSame(['laravel', 'php'], $laravelFirst);
+        $this->contract($phpFirst, $phpNative);
+        $this->contract($laravelFirst, $laravelNative);
+        $this->assertSame(['php', 'laravel'], $phpFirst());
+        $this->assertSame(['laravel', 'php'], $laravelFirst());
     }
 }

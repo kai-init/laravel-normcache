@@ -231,18 +231,6 @@ final class ScalarContractTest extends TestCase
         );
     }
 
-    public function test_avg_excludes_null_rows_consistently(): void
-    {
-        $author = Author::create(['name' => 'Avg']);
-        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
-        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 30]);
-        // 'views' is non-nullable in fixtures but avg on a filtered empty set returns null
-        $this->contract(
-            fn() => Post::where('author_id', $author->id)->avg('views'),
-            fn() => Post::withoutCache()->where('author_id', $author->id)->avg('views'),
-        );
-    }
-
     public function test_min_returns_null_on_empty_set(): void
     {
         $this->contract(

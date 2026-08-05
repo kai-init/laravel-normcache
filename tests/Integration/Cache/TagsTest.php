@@ -13,16 +13,30 @@ final class TagsTest extends TestCase
     {
         $alice = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $alice->id]);
+        $query = fn() => Author::query()->tag('home')->withCount('posts')->get();
 
-        Author::query()->tag('home')->withCount('posts')->get();
+        $query();
+        $this->assertWarmCacheHit($query);
 
-        DB::table('posts')->insert(['title' => 'P2', 'author_id' => $alice->id, 'created_at' => now(), 'updated_at' => now()]);
+        DB::statement(
+            'insert into posts (title, author_id, created_at, updated_at) values (?, ?, ?, ?)',
+            ['P2', $alice->id, now(), now()],
+        );
+
+        $stale = null;
+        $this->assertWarmCacheHit(function () use ($query, &$stale) {
+            return $stale = $query();
+        });
+        $this->assertSame(1, $stale->first()->posts_count);
 
         $this->cacheManager()->flushTag('home');
 
-        $result = Author::query()->tag('home')->withCount('posts')->get();
-
-        $this->assertSame(2, $result->first()->posts_count, 'flushTag must clear tagged aggregate cache entries');
+        $fresh = null;
+        $this->assertColdCacheMiss(function () use ($query, &$fresh) {
+            return $fresh = $query();
+        });
+        $this->assertSame(2, $fresh->first()->posts_count, 'flushTag must clear tagged aggregate cache entries');
+        $this->assertWarmCacheHit($query);
     }
 
     public function test_flush_tag_allows_arbitrary_characters(): void

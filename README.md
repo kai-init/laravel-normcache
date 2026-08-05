@@ -55,6 +55,16 @@ Post::query()->where('published', true)->tag('homepage')->get();
 Post::query()->cacheContext('tenant:' . $tenantId)->get();
 ```
 
+Use the facade callback when an entire operation, including separately executed eager loads, must read directly from the database:
+
+```php
+$posts = NormCache::withoutCache(
+    fn() => Post::query()->with('comments')->get(),
+);
+```
+
+Writes inside the callback continue to invalidate NormCache normally.
+
 ## Canonical & Normalized Row Caching
 
 Unlike traditional query caching, which stores a full copy of every result set, NormCache stores each row once and caches queries as references to it:
@@ -107,12 +117,14 @@ Apply `cacheContext()` to every cached query affected by the implicit policy, in
 
 ## Dependencies
 
-NormCache infers identifiable tables from ordinary joins, unions, subqueries, and relationship queries. If a query contains an opaque expression or source, declare every table it reads:
+NormCache infers identifiable tables from ordinary joins, unions, subqueries, and relationship queries. Complex or rejected raw SQL can still be cached with explicit physical dependencies:
 
 ```php
 Author::query()
-    ->whereRaw('exists (select 1 from legacy_stats where legacy_stats.author_id = authors.id)')
-    ->dependsOn([Post::class, 'legacy_stats'])
+    ->whereRaw(
+        'exists (select 1 from (select author_id from legacy_stats) as recent where recent.author_id = authors.id)'
+    )
+    ->dependsOn(['legacy_stats'])
     ->get();
 ```
 

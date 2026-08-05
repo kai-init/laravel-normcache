@@ -6,9 +6,9 @@ use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\Grammar;
-use Illuminate\Database\Query\JoinClause;
 use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
 use NormCache\Enums\MutationType;
@@ -65,8 +65,8 @@ final class QueryBuilder extends Builder
 
     public function selectSub($query, $as)
     {
-        $subquery = $query instanceof EloquentBuilder ? $query->toBase() : $query;
         $result = parent::selectSub($query, $as);
+        $subquery = $this->baseSubquery($query);
 
         if ($subquery instanceof Builder) {
             $produced = end($this->columns);
@@ -88,7 +88,6 @@ final class QueryBuilder extends Builder
         $type = 'inner',
         $where = false,
     ) {
-        $subquery = $query instanceof EloquentBuilder ? $query->toBase() : $query;
         $result = parent::joinSub(
             $query,
             $as,
@@ -98,10 +97,11 @@ final class QueryBuilder extends Builder
             $type,
             $where,
         );
+        $subquery = $this->baseSubquery($query);
 
         if ($subquery instanceof Builder) {
             $join = end($this->joins);
-            $produced = $join instanceof JoinClause ? $join->table : null;
+            $produced = $join->table;
 
             if ($produced instanceof Expression) {
                 $this->captureSubquery($produced, $subquery);
@@ -109,6 +109,15 @@ final class QueryBuilder extends Builder
         }
 
         return $result;
+    }
+
+    private function baseSubquery(mixed $query): ?Builder
+    {
+        if ($query instanceof EloquentBuilder || $query instanceof Relation) {
+            return $query->toBase();
+        }
+
+        return $query instanceof Builder ? $query : null;
     }
 
     private function captureSubquery(Expression $expression, Builder $subquery): void
@@ -127,17 +136,22 @@ final class QueryBuilder extends Builder
             ? null
             : ($this->capturedSubqueries[$expression] ?? null);
 
-        if ($captured === null) {
-            return null;
+        if ($captured !== null && $this->capturedBuilderIsCurrent($captured)) {
+            return $captured['builder'];
         }
 
+        return null;
+    }
+
+    /** @param array{builder: Builder, sql: string} $captured */
+    private function capturedBuilderIsCurrent(array $captured): bool
+    {
         try {
-            $sql = $captured['builder']->getGrammar()->compileSelect($captured['builder']);
+            return $captured['builder']->getGrammar()->compileSelect($captured['builder'])
+                === $captured['sql'];
         } catch (\Throwable) {
-            return null;
+            return false;
         }
-
-        return $sql === $captured['sql'] ? $captured['builder'] : null;
     }
 
     public function getConnection(): Connection

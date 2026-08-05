@@ -7,6 +7,16 @@ final class SqlVolatilityScanner
     private const ARGUMENT_DEPENDENT_FUNCTIONS =
         '|date|datetime|julianday|strftime|time|unixepoch|';
 
+    private const PARENTHESIZED_SQL_TOKENS =
+        '|and|as|by|case|else|end|from|having|join|not|on|or|order|select|then|union|values|when|where|';
+
+    private const STABLE_FUNCTIONS =
+        '|abs|array_agg|avg|bit_and|bit_or|bool_and|bool_or|cast|ceil|ceiling|char_length|coalesce|concat|concat_ws|'
+        . 'count|date|datetime|dense_rank|every|exists|extract|filter|floor|greatest|group_concat|if|ifnull|in|instr|'
+        . 'json_agg|json_array|json_arrayagg|json_extract|json_group_array|json_group_object|json_object|json_objectagg|'
+        . 'json_query|json_unquote|json_value|julianday|least|len|length|lower|ltrim|max|min|nullif|octet_length|over|'
+        . 'position|rank|replace|round|row_number|rtrim|strftime|string_agg|substr|substring|sum|time|trim|unixepoch|upper|';
+
     private const VOLATILE_FUNCTIONS =
         '|app_name|benchmark|changes|clock_timestamp|connection_id|context_info|crypt_gen_random|curdate|currval|'
         . 'curtime|current_catalog|current_database|current_request_id|current_schema|current_setting|database|'
@@ -20,21 +30,40 @@ final class SqlVolatilityScanner
     public function isVolatile(string $sql): bool
     {
         $sql = strtolower($sql);
+
+        if (preg_match('/(?:--|#|\/\*)/', $sql) !== 0) {
+            return true;
+        }
+
         $argumentDependent = false;
 
         if (str_contains($sql, '(')) {
             $matched = preg_match_all(
-                '/\b([a-z_][a-z0-9_]*)\s*\(/',
+                '/(?:\b([a-z_][a-z0-9_]*)|`([^`]+)`|"([^"]+)"|\[([^\]]+)\])\s*\(/',
                 $sql,
                 $functions,
+                PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL,
             );
 
             if ($matched === false) {
                 return true;
             }
 
-            foreach ($functions[1] as $function) {
+            foreach ($functions as $matches) {
+                $function = (string) ($matches[1] ?? $matches[2] ?? $matches[3] ?? $matches[4]);
+
                 if ($this->isVolatileFunction($function)) {
+                    return true;
+                }
+
+                if (
+                    $matches[1] !== null
+                    && $this->listed(self::PARENTHESIZED_SQL_TOKENS, $function)
+                ) {
+                    continue;
+                }
+
+                if (!$this->listed(self::STABLE_FUNCTIONS, $function)) {
                     return true;
                 }
 

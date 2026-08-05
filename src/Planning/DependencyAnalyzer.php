@@ -4,6 +4,7 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Query\Builder;
 use NormCache\Database\QueryBuilder;
 use NormCache\Values\DependencyAnalysis;
@@ -18,22 +19,12 @@ final class DependencyAnalyzer
     public function analyze(
         Connection $connection,
         QueryBuilder $query,
-        TableIdentity $root,
     ): DependencyAnalysis {
-        $resolved = [$root->hash => $root];
-        $visited = [];
-        $opaque = false;
-
-        $this->walk(
-            $connection,
-            $query,
-            $resolved,
-            $visited,
-            $opaque,
-        );
-
+        $directRoot = $this->tables->resolve($connection, $query->from);
+        $dependencies = new DependencyCollection;
         $declarations = $query->dependencies();
-        $explicit = $declarations !== [];
+        $declaredRoot = null;
+        $authoritative = false;
         $unresolved = false;
 
         foreach ($declarations as $declaration) {
@@ -42,220 +33,147 @@ final class DependencyAnalyzer
                 : $this->modelIdentity($connection, $declaration->value);
 
             if ($identity === null) {
-                $opaque = true;
                 $unresolved = true;
 
                 continue;
             }
 
-            $resolved[$identity->hash] = $identity;
+            if ($declaredRoot === null || $identity->hash < $declaredRoot->hash) {
+                $declaredRoot = $identity;
+            }
+
+            if ($identity->isView) {
+                $unresolved = true;
+
+                continue;
+            }
+
+            $authoritative = true;
+            $dependencies->add($identity);
         }
 
-        ksort($resolved, SORT_STRING);
+        $root = $directRoot
+            ?? $this->modelRoot($connection, $query)
+            ?? $declaredRoot;
+
+        if ($root === null) {
+            return new DependencyAnalysis(
+                root: null,
+                tables: $dependencies->all(),
+                queryScoped: true,
+                bypassReason: 'unidentifiable_dependency',
+            );
+        }
+
+        $dependencies->add($root);
+        $this->walk($connection, $query, $dependencies, $directRoot);
+
+        $bypassReason = null;
+
+        if (
+            $root->isView
+            && (
+                $declarations === []
+                || !DependencyAnalysis::hasExternalTo($root, $dependencies->all())
+            )
+        ) {
+            $bypassReason = 'view_dependencies_required';
+        } elseif ($unresolved) {
+            $bypassReason = 'unresolvable_declared_dependency';
+        } elseif ($dependencies->isOpaque() && !$authoritative) {
+            $bypassReason = 'unidentifiable_dependency';
+        }
 
         return new DependencyAnalysis(
-            array_values($resolved),
-            $opaque,
-            $explicit,
-            $unresolved,
+            root: $root,
+            tables: $dependencies->all(),
+            queryScoped: $directRoot === null,
+            bypassReason: $bypassReason,
         );
     }
 
-    /** @param class-string $modelClass */
-    public function modelIdentity(Connection $activeConnection, string $modelClass): ?TableIdentity
-    {
-        try {
-            $model = new $modelClass;
-            $model->setConnection($activeConnection->getName());
-
-            return $this->tables->resolve($activeConnection, $model->getTable());
-        } catch (\Throwable) {
-            return null;
-        }
-    }
-
-    /**
-     * @param  array<string, TableIdentity>  $resolved
-     * @param  array<int, true>  $visited
-     */
     private function walk(
         Connection $connection,
         Builder $query,
-        array &$resolved,
-        array &$visited,
-        bool &$opaque,
+        DependencyCollection $dependencies,
+        ?TableIdentity $resolvedSource = null,
     ): void {
-        $id = spl_object_id($query);
-
-        if (isset($visited[$id])) {
+        if (!$dependencies->enter($query)) {
             return;
         }
 
-        $visited[$id] = true;
-        $captured = [];
-        $this->walkProjectionValues($query, [$query->from], $captured, $opaque);
-        $this->resolveSource($connection, $query->from, $resolved, $opaque);
-
-        foreach ($query->joins ?? [] as $join) {
-            $subquery = $join->table instanceof Expression
-                && $query instanceof QueryBuilder
-                    ? $query->capturedSubquery($join->table)
-                    : null;
-
-            if ($subquery !== null) {
-                $captured[] = $subquery;
-            } else {
-                $this->walkProjectionValues($query, [$join->table], $captured, $opaque);
-                $this->resolveSource($connection, $join->table, $resolved, $opaque);
-            }
-
-            $this->walkNestedValues(
+        if ($resolvedSource !== null) {
+            $dependencies->add($resolvedSource);
+        } elseif ($query->from instanceof Expression) {
+            $this->walkExpression(
                 $connection,
-                $join->wheres,
-                $resolved,
-                $visited,
-                $opaque,
+                $query,
+                $query->from,
+                $dependencies,
+                source: true,
             );
+        } else {
+            $this->resolveSource($connection, $query->from, $dependencies);
         }
 
-        $this->walkNestedValues(
-            $connection,
+        foreach ($query->joins ?? [] as $join) {
+            if ($join->table instanceof Expression) {
+                $this->walkExpression(
+                    $connection,
+                    $query,
+                    $join->table,
+                    $dependencies,
+                    source: true,
+                );
+            } else {
+                $this->resolveSource($connection, $join->table, $dependencies);
+            }
+
+            $this->walkValues($connection, $query, $join->wheres, $dependencies);
+        }
+
+        foreach ([
             $query->wheres,
-            $resolved,
-            $visited,
-            $opaque,
-        );
-        $this->walkNestedValues(
-            $connection,
             $query->havings ?? [],
-            $resolved,
-            $visited,
-            $opaque,
-        );
-        $this->walkProjectionValues($query, $query->columns ?? [], $captured, $opaque);
-        $this->walkProjectionValues(
-            $query,
+            $query->columns ?? [],
             (array) ($query->aggregate['columns'] ?? []),
-            $captured,
-            $opaque,
-        );
-        $this->walkOpaqueValues($query->groups ?? [], $opaque);
-        $this->walkOpaqueValues($query->orders ?? [], $opaque);
-        $this->walkOpaqueValues($query->unionOrders ?? [], $opaque);
+            $query->groups ?? [],
+            $query->orders ?? [],
+            $query->unionOrders ?? [],
+        ] as $values) {
+            $this->walkValues($connection, $query, $values, $dependencies);
+        }
 
         foreach ($query->unions ?? [] as $union) {
             $nested = $union['query'] ?? null;
+            $nested = $nested instanceof EloquentBuilder ? $nested->toBase() : $nested;
 
             if ($nested instanceof Builder) {
-                $this->walk(
-                    $connection,
-                    $nested,
-                    $resolved,
-                    $visited,
-                    $opaque,
-                );
+                $this->walk($connection, $nested, $dependencies);
             } else {
-                $opaque = true;
+                $dependencies->markOpaque();
             }
-        }
-
-        foreach ($captured as $subquery) {
-            $this->walk(
-                $connection,
-                $subquery,
-                $resolved,
-                $visited,
-                $opaque,
-            );
         }
     }
 
     /** @param array<mixed> $values */
-    private function walkOpaqueValues(
-        array $values,
-        bool &$opaque,
-    ): void {
-        foreach ($values as $value) {
-            if ($value instanceof Expression) {
-                $opaque = true;
-
-                continue;
-            }
-
-            if (is_array($value)) {
-                if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
-                    $opaque = true;
-                }
-
-                $this->walkOpaqueValues($value, $opaque);
-            }
-        }
-    }
-
-    /**
-     * @param  array<mixed>  $values
-     * @param  list<Builder>  $captured
-     */
-    private function walkProjectionValues(
+    private function walkValues(
+        Connection $connection,
         Builder $query,
         array $values,
-        array &$captured,
-        bool &$opaque,
+        DependencyCollection $dependencies,
     ): void {
         foreach ($values as $value) {
-            if ($value instanceof Expression) {
-                $subquery = $query instanceof QueryBuilder
-                    ? $query->capturedSubquery($value)
-                    : null;
+            $value = $value instanceof EloquentBuilder ? $value->toBase() : $value;
 
-                if ($subquery !== null) {
-                    $captured[] = $subquery;
-
-                    continue;
-                }
-
-                $sql = (string) $value->getValue($query->getGrammar());
-
-                if (preg_match('/\b(?:select|from|join)\b/i', $sql) === 1) {
-                    $opaque = true;
-                }
-
-                continue;
-            }
-
-            if (is_array($value)) {
-                $this->walkProjectionValues($query, $value, $captured, $opaque);
-            }
-        }
-    }
-
-    /**
-     * @param  array<mixed>  $values
-     * @param  array<string, TableIdentity>  $resolved
-     * @param  array<int, true>  $visited
-     */
-    private function walkNestedValues(
-        Connection $connection,
-        array $values,
-        array &$resolved,
-        array &$visited,
-        bool &$opaque,
-    ): void {
-        foreach ($values as $value) {
             if ($value instanceof Builder) {
-                $this->walk(
-                    $connection,
-                    $value,
-                    $resolved,
-                    $visited,
-                    $opaque,
-                );
+                $this->walk($connection, $value, $dependencies);
 
                 continue;
             }
 
             if ($value instanceof Expression) {
-                $opaque = true;
+                $this->walkExpression($connection, $query, $value, $dependencies);
 
                 continue;
             }
@@ -265,34 +183,92 @@ final class DependencyAnalyzer
             }
 
             if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
-                $opaque = true;
+                $sql = $value['sql'] ?? $value['column'] ?? null;
+
+                if (!is_string($sql) || $this->rawMayReferenceSource($sql)) {
+                    $dependencies->markOpaque();
+                }
             }
 
-            $this->walkNestedValues(
-                $connection,
-                array_values($value),
-                $resolved,
-                $visited,
-                $opaque,
-            );
+            $this->walkValues($connection, $query, array_values($value), $dependencies);
         }
     }
 
-    /** @param array<string, TableIdentity> $resolved */
-    private function resolveSource(
+    private function walkExpression(
         Connection $connection,
-        mixed $source,
-        array &$resolved,
-        bool &$opaque,
+        Builder $query,
+        Expression $expression,
+        DependencyCollection $dependencies,
+        bool $source = false,
     ): void {
-        $identity = $this->tables->resolve($connection, $source);
+        $subquery = $query instanceof QueryBuilder
+            ? $query->capturedSubquery($expression)
+            : null;
 
-        if ($identity === null) {
-            $opaque = true;
+        if ($subquery !== null) {
+            $this->walk($connection, $subquery, $dependencies);
 
             return;
         }
 
-        $resolved[$identity->hash] = $identity;
+        if ($source) {
+            $dependencies->markOpaque();
+
+            return;
+        }
+
+        $sql = (string) $expression->getValue($query->getGrammar());
+
+        if ($this->rawMayReferenceSource($sql)) {
+            $dependencies->markOpaque();
+        }
+    }
+
+    private function rawMayReferenceSource(string $sql): bool
+    {
+        return preg_match(
+            '/(?:--|#|\/\*)|\b(?:select|from|join|table|with|union|intersect|except|using|natural|lateral|apply|only|tablesample)\b/i',
+            $sql,
+        ) !== 0;
+    }
+
+    private function resolveSource(
+        Connection $connection,
+        mixed $source,
+        DependencyCollection $dependencies,
+    ): void {
+        $identity = $this->tables->resolve($connection, $source);
+
+        if ($identity === null || $identity->isView) {
+            $dependencies->markOpaque();
+
+            return;
+        }
+
+        $dependencies->add($identity);
+    }
+
+    private function modelRoot(
+        Connection $connection,
+        QueryBuilder $query,
+    ): ?TableIdentity {
+        $modelClass = $query->modelClass();
+
+        return $modelClass === null
+            ? null
+            : $this->modelIdentity($connection, $modelClass);
+    }
+
+    /** @param class-string $modelClass */
+    private function modelIdentity(Connection $activeConnection, string $modelClass): ?TableIdentity
+    {
+        try {
+            $model = new $modelClass;
+            $model->setConnection($activeConnection->getName());
+
+            return $this->tables->resolve($activeConnection, $model->getTable());
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

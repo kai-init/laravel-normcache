@@ -11,6 +11,8 @@ final class CacheRuntime
 {
     private bool $available = true;
 
+    private int $readBypassDepth = 0;
+
     private ?string $epoch = null;
 
     private ?bool $runtimeDisabled = null;
@@ -24,7 +26,7 @@ final class CacheRuntime
 
     public function readable(): bool
     {
-        if (!$this->config->enabled || !$this->available) {
+        if ($this->readBypassDepth > 0 || !$this->config->enabled || !$this->available) {
             return false;
         }
 
@@ -73,6 +75,17 @@ final class CacheRuntime
     {
         $this->epoch = null;
         $this->runtimeDisabled = null;
+    }
+
+    public function withoutCache(callable $callback): mixed
+    {
+        $this->readBypassDepth++;
+
+        try {
+            return $callback();
+        } finally {
+            $this->readBypassDepth--;
+        }
     }
 
     public function available(): bool

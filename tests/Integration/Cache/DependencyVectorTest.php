@@ -94,20 +94,24 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    public function test_where_in_subquery_is_not_cached_without_an_authoritative_dependency(): void
+    public function test_where_in_subquery_requires_declared_dependencies(): void
     {
-        $read = fn() => DB::table('posts')
+        $build = fn(bool $declared = false) => DB::table('posts')
             ->whereIn('id', DB::table('comments')->select('commentable_id'))
-            ->get();
+            ->when($declared, fn($query) => $query->dependsOn(['comments']));
 
-        $this->assertCount(1, $read());
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $this->assertCount(1, $read());
-        DB::disableQueryLog();
-
-        $this->assertCount(1, DB::getQueryLog());
+        $this->bypassContract(
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            reason: 'unidentifiable_dependency',
+        );
+        $this->contract(
+            fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            mutate: fn() => DB::table('comments')
+                ->where('commentable_id', $this->postId)
+                ->delete(),
+        );
     }
 
     public function test_explicit_model_dependencies_are_additive_and_invalidate_results(): void
@@ -218,11 +222,33 @@ final class DependencyVectorTest extends TestCase
         Post::query()->dependsOn([\DateTime::class]);
     }
 
-    public function test_opaque_dependency_requires_an_explicit_authoritative_declaration(): void
+    public function test_raw_predicate_subquery_requires_declared_dependencies(): void
+    {
+        $build = fn(bool $declared = false) => DB::table('posts')
+            ->whereRaw(
+                'exists (select 1 from comments where comments.commentable_id = posts.id)'
+            )
+            ->when($declared, fn($query) => $query->dependsOn(['comments']));
+
+        $this->bypassContract(
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            reason: 'unidentifiable_dependency',
+        );
+        $this->contract(
+            fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            mutate: fn() => DB::table('comments')
+                ->where('commentable_id', $this->postId)
+                ->delete(),
+        );
+    }
+
+    public function test_derived_raw_subquery_requires_an_explicit_authoritative_declaration(): void
     {
         $build = fn() => DB::table('posts')
             ->whereRaw(
-                'exists (select 1 from comments where comments.commentable_id = posts.id)'
+                'exists (select 1 from (select commentable_id from comments) as recent_comments where recent_comments.commentable_id = posts.id)'
             );
 
         $build()->get();
@@ -297,10 +323,9 @@ final class DependencyVectorTest extends TestCase
         $this->assertNotNull($root);
 
         $analysis = $this->app->make(DependencyAnalyzer::class)
-            ->analyze($connection, $query, $root);
+            ->analyze($connection, $query);
 
-        $this->assertTrue($analysis->explicit);
-        $this->assertTrue($analysis->unresolved);
+        $this->assertSame('unresolvable_declared_dependency', $analysis->bypassReason);
     }
 
     public function test_explicit_dependencies_authorize_a_hashable_derived_result_as_query_group(): void
@@ -520,22 +545,26 @@ final class DependencyVectorTest extends TestCase
         }
     }
 
-    public function test_raw_ordering_subquery_is_not_cached_without_declared_dependencies(): void
+    public function test_raw_ordering_subquery_requires_declared_dependencies(): void
     {
-        $read = fn() => DB::table('posts')
+        $build = fn(bool $declared = false) => DB::table('posts')
             ->orderByRaw(
                 '(select count(*) from comments where comments.commentable_id = posts.id) desc'
             )
-            ->get();
+            ->when($declared, fn($query) => $query->dependsOn(['comments']));
 
-        $read();
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $read();
-        DB::disableQueryLog();
-
-        $this->assertCount(1, DB::getQueryLog());
+        $this->bypassContract(
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            reason: 'unidentifiable_dependency',
+        );
+        $this->contract(
+            fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
+            fn() => $build()->get()->map(static fn($row): array => (array) $row),
+            mutate: fn() => DB::table('comments')
+                ->where('commentable_id', $this->postId)
+                ->delete(),
+        );
     }
 
     public function test_eloquent_query_bypasses_when_view_metadata_lookup_fails(): void
