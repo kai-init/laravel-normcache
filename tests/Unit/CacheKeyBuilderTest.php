@@ -17,20 +17,10 @@ final class CacheKeyBuilderTest extends UnitTestCase
 
         $this->assertSame('app:' . $expectedTag . ':ver', $keys->version($table));
         $this->assertSame('app:' . $expectedTag . ':gen', $keys->generation($table));
-        $this->assertStringContainsString($expectedTag, $keys->membership($table, '12', 'u', 'abc'));
-        $this->assertStringContainsString($expectedTag, $keys->result($table, '12', 'u', 'abc'));
+        $this->assertStringContainsString($expectedTag, $keys->queryEntry($table, '12', 'u', 'abc'));
         $this->assertStringContainsString($expectedTag, $keys->row($table, '4', 'i:42'));
-    }
-
-    public function test_repair_wake_key_places_wake_after_the_repair_batch_segment(): void
-    {
-        $table = TableIdentity::fromParts('mysql', 'main', 'app', 'app', '', 'posts');
-        $keys = new CacheKeyBuilder('app:');
-
-        $this->assertSame(
-            'app:{nc:t:' . $table->hash . '}:repair:batch:wake:token',
-            $keys->repairWake($table, 'batch', 'token'),
-        );
+        $this->assertStringContainsString($expectedTag, $keys->repairBuild($table, '4', 'batch'));
+        $this->assertStringContainsString($expectedTag, $keys->repairWake($table, '4', 'batch', 'token'));
     }
 
     public function test_global_tag_and_query_group_keys_have_independent_groups(): void
@@ -45,8 +35,8 @@ final class CacheKeyBuilderTest extends UnitTestCase
         );
         $this->assertSame('app:{nc:g:taghash}:ver', $keys->tagVersion('taghash'));
         $this->assertSame(
-            'app:{nc:x:queryhash}:result:gabc',
-            $keys->queryGroupResult('queryhash', 'gabc'),
+            'app:{nc:x:queryhash}:q:gabc',
+            $keys->queryGroupEntry('queryhash', 'gabc'),
         );
     }
 

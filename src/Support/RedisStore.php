@@ -33,6 +33,29 @@ final class RedisStore
         });
     }
 
+    public function readHashField(string $key, string $field): ?string
+    {
+        return $this->withRawValues(static function (Connection $connection) use ($key, $field): ?string {
+            $value = $connection->hget($key, $field);
+
+            return is_string($value) ? $value : null;
+        });
+    }
+
+    public function writeHashField(string $key, string $field, string $value): void
+    {
+        $this->withRawValues(static function (Connection $connection) use ($key, $field, $value): void {
+            $connection->hset($key, $field, $value);
+        });
+    }
+
+    public function deleteHashField(string $key, string $field): void
+    {
+        $this->withRawValues(static function (Connection $connection) use ($key, $field): void {
+            $connection->hdel($key, $field);
+        });
+    }
+
     public function setRawForever(string $key, string $value): void
     {
         $this->withRawValues(static function (Connection $connection) use ($key, $value): void {
@@ -158,6 +181,8 @@ final class RedisStore
      * @param  list<string>  $entryPayloads
      * @param  list<string>  $versionKeys
      * @param  list<string>  $expectedVersions
+     * @param  list<string>  $entryFields  hash field per entry; an empty field writes a
+     *                                     plain string entry instead
      */
     public function publishVersionedEntries(
         array $entryKeys,
@@ -169,10 +194,19 @@ final class RedisStore
         ?string $wakeKey = null,
         ?string $token = null,
         int $wakeTtl = 10,
+        array $entryFields = [],
     ): bool {
         if (count($entryKeys) !== count($entryPayloads)) {
             throw new \InvalidArgumentException(
                 'NormCache versioned entry keys and payloads must have the same length.',
+            );
+        }
+
+        if ($entryFields === []) {
+            $entryFields = array_fill(0, count($entryKeys), '');
+        } elseif (count($entryFields) !== count($entryKeys)) {
+            throw new \InvalidArgumentException(
+                'NormCache versioned entry keys and fields must have the same length.',
             );
         }
 
@@ -194,6 +228,7 @@ final class RedisStore
                 (string) count($entryKeys),
                 (string) $ttl,
                 ...$expectedVersions,
+                ...$entryFields,
                 ...$entryPayloads,
                 $token ?? '',
                 (string) $this->wakeTokenCount,
@@ -279,7 +314,6 @@ final class RedisStore
         string $wakeKey,
         string $token,
         int $wakeTtl,
-        ?string $resultKey = null,
         ?string $resultPayload = null,
     ): bool {
         if (count($rowKeys) !== count($rowPayloads)) {
@@ -288,14 +322,6 @@ final class RedisStore
             );
         }
 
-        $keys = [
-            $versionKey,
-            $generationKey,
-            $membershipKey,
-            ...$rowKeys,
-            $buildingKey,
-            $wakeKey,
-        ];
         $args = [
             (string) count($rowKeys),
             $expectedVersion,
@@ -309,12 +335,22 @@ final class RedisStore
             (string) $wakeTtl,
         ];
 
-        if ($resultKey !== null && $resultPayload !== null) {
-            $keys[] = $resultKey;
+        if ($resultPayload !== null) {
             $args[] = $resultPayload;
         }
 
-        return (bool) $this->script(RedisScripts::get('publish_canonical'), $keys, $args);
+        return (bool) $this->script(
+            RedisScripts::get('publish_canonical'),
+            [
+                $versionKey,
+                $generationKey,
+                $membershipKey,
+                ...$rowKeys,
+                $buildingKey,
+                $wakeKey,
+            ],
+            $args,
+        );
     }
 
     public function increment(string $key): int

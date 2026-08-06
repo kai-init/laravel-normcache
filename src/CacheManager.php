@@ -7,10 +7,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Exceptions\CascadeException;
-use NormCache\Planning\CascadeDependencyResolver;
-use NormCache\Planning\PrimaryKeyResolver;
-use NormCache\Planning\SchemaRepository;
-use NormCache\Planning\TableIdentityResolver;
+use NormCache\Planning\SchemaCatalog;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
@@ -26,10 +23,7 @@ final readonly class CacheManager
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,
-        private CascadeDependencyResolver $cascades,
-        private SchemaRepository $schema,
-        private TableIdentityResolver $tables,
-        private PrimaryKeyResolver $primaryKeys,
+        private SchemaCatalog $schema,
         private QueryIdentity $identity,
         private FailureReporter $failures,
     ) {}
@@ -88,7 +82,7 @@ final readonly class CacheManager
             return $this->modelInvalidationIdentity(new $target, $connection);
         }
 
-        return $this->tables->resolve(DB::connection($connection), $target);
+        return $this->schema->resolveTable(DB::connection($connection), $target);
     }
 
     private function modelInvalidationIdentity(Model $model, ?string $connection): ?TableIdentity
@@ -98,7 +92,7 @@ final readonly class CacheManager
             $model->setConnection($connection);
         }
 
-        return $this->tables->resolve($model->getConnection(), $model->getTable());
+        return $this->schema->resolveTable($model->getConnection(), $model->getTable());
     }
 
     public function flushTag(string $tag): bool
@@ -175,9 +169,6 @@ final readonly class CacheManager
 
     public function clearSchema(): bool
     {
-        $this->tables->clear();
-        $this->primaryKeys->clear();
-
         return $this->schema->clear();
     }
 
@@ -201,7 +192,7 @@ final readonly class CacheManager
 
         try {
             foreach ($connections as $database) {
-                $this->cascades->warm($database);
+                $this->schema->warm($database);
             }
         } catch (CascadeException $failure) {
             $this->failures->cascadeGlobalInvalidation(null, $failure);

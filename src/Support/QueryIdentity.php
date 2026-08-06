@@ -79,20 +79,6 @@ final class QueryIdentity
         return $this->namedHash($context, 'cache context', 'nc-context');
     }
 
-    /** @param list<string> $tokens */
-    public function repairHash(string $tableHash, string $generation, array $tokens): string
-    {
-        $tokens = array_values(array_unique($tokens));
-        sort($tokens, SORT_STRING);
-
-        return hash('xxh128', TableIdentity::encodeFields([
-            'nc-repair',
-            $tableHash,
-            $generation,
-            TableIdentity::encodeFields($tokens),
-        ]));
-    }
-
     private function namedHash(string $value, string $name, string $domain): string
     {
         if ($value === '' || strlen($value) > 128 || !mb_check_encoding($value, 'UTF-8')) {

@@ -9,10 +9,8 @@ use NormCache\Database\QueryBuilder;
 use NormCache\Enums\MutationType;
 use NormCache\Exceptions\CascadeException;
 use NormCache\Exceptions\TableInvalidationException;
-use NormCache\Planning\CascadeDependencyResolver;
 use NormCache\Planning\MutationKeyExtractor;
-use NormCache\Planning\PrimaryKeyResolver;
-use NormCache\Planning\TableIdentityResolver;
+use NormCache\Planning\SchemaCatalog;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryObserver;
@@ -34,9 +32,7 @@ final class Invalidator
         private readonly CacheRuntime $runtime,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
-        private readonly TableIdentityResolver $tables,
-        private readonly CascadeDependencyResolver $cascades,
-        private readonly PrimaryKeyResolver $primaryKeys,
+        private readonly SchemaCatalog $schema,
         private readonly MutationKeyExtractor $mutationKeys,
         private readonly QueryObserver $observer,
         private readonly FailureReporter $failures,
@@ -73,7 +69,7 @@ final class Invalidator
             $from = $from->getValue($query->getGrammar());
         }
 
-        $table = $this->tables->resolve($connection, $from);
+        $table = $this->schema->resolveTable($connection, $from);
 
         if ($table === null) {
             $this->failures->opaqueWriteGlobalInvalidation($connectionName);
@@ -86,7 +82,7 @@ final class Invalidator
 
         if ($mutation === MutationType::DELETE) {
             try {
-                $cascadeTables = $this->cascades->affectedByDelete($connection, $table);
+                $cascadeTables = $this->schema->affectedByDelete($connection, $table);
             } catch (CascadeException $failure) {
                 $this->failures->cascadeGlobalInvalidation($table, $failure);
                 $this->applyOrQueueGlobal($connection, 'cascade_metadata_unavailable');
@@ -98,7 +94,7 @@ final class Invalidator
                 $this->applyOrQueueGlobal($connection, 'cascade_graph_cold');
 
                 try {
-                    $this->cascades->warm($connection);
+                    $this->schema->warm($connection);
                 } catch (CascadeException $failure) {
                     $this->failures->cascadeGlobalInvalidation($table, $failure);
                 }
@@ -111,7 +107,7 @@ final class Invalidator
         $tokens = [];
 
         if ($mayAffectExistingRows && !$forceBroadInvalidation) {
-            $primaryKey = $this->primaryKeys->resolve($query, $connection, $table);
+            $primaryKey = $this->schema->resolvePrimaryKey($query, $connection, $table);
             $extracted = $primaryKey !== null
                 && $primaryKey->family === PrimaryKeyMetadata::INTEGER
                 ? $this->mutationKeys->extractMutation($query, $primaryKey, $assigned)

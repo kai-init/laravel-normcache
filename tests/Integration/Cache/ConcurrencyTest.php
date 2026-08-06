@@ -85,34 +85,27 @@ final class ConcurrencyTest extends TestCase
         $this->assertTrue($owner->owner);
     }
 
-    public function test_repair_leases_use_the_repair_key_family_and_share_the_protocol(): void
+    public function test_matching_row_repairs_share_one_lease(): void
     {
         $leases = $this->app->make(BuildLeaseCoordinator::class);
         $root = $this->table();
 
-        $first = $leases->claimRepair($root, 'repair-hash');
-        $second = $leases->claimRepair($root, 'repair-hash');
+        $owner = $leases->claimRepair($root, '4', 'batch');
+        $waiter = $leases->claimRepair($root, '4', 'batch');
 
-        $this->assertTrue($first->owner);
-        $this->assertFalse($second->owner);
-        $this->assertSame($first->wakeKey, $second->wakeKey);
-        $this->assertNotSame(
-            $first->buildingKey,
-            $leases->claim($this->plan(), $this->state(), 'n', 'repair-hash')->buildingKey,
-        );
-
-        $leases->release($first);
-
-        $this->assertTrue($leases->claimRepair($root, 'repair-hash')->owner);
+        $this->assertTrue($owner->owner);
+        $this->assertFalse($waiter->owner);
+        $this->assertSame($owner->buildingKey, $waiter->buildingKey);
+        $this->assertSame($owner->wakeKey, $waiter->wakeKey);
     }
 
-    public function test_distinct_repair_hashes_do_not_share_a_lease(): void
+    public function test_row_repairs_from_different_generations_do_not_share_a_lease(): void
     {
         $leases = $this->app->make(BuildLeaseCoordinator::class);
         $root = $this->table();
 
-        $this->assertTrue($leases->claimRepair($root, 'hash-a')->owner);
-        $this->assertTrue($leases->claimRepair($root, 'hash-b')->owner);
+        $this->assertTrue($leases->claimRepair($root, '4', 'batch')->owner);
+        $this->assertTrue($leases->claimRepair($root, '5', 'batch')->owner);
     }
 
     public function test_a_request_that_loses_the_lease_race_serves_from_the_database(): void
@@ -120,9 +113,6 @@ final class ConcurrencyTest extends TestCase
         Author::create(['name' => 'Alice']);
         $query = static fn() => Author::orderBy('id')->get();
 
-        // The build lease only exists between the claim and the publish, so the
-        // key is captured from inside that window — while the SQL that the lease
-        // is protecting is running.
         $buildKey = null;
         DB::listen(function () use (&$buildKey): void {
             $buildKey ??= $this->cacheKeysMatching(':build:')[0] ?? null;
@@ -131,12 +121,8 @@ final class ConcurrencyTest extends TestCase
         $query();
         $this->assertIsString($buildKey, 'expected a build lease to be held across the database read');
 
-        // Drop the published payloads but keep the version and generation counters:
-        // the build key embeds the version, so resetting it would make the planted
-        // lease refer to a key the next request never looks at.
         $this->cacheStore()->delete([
-            ...$this->cacheKeysMatching(':m:v'),
-            ...$this->cacheKeysMatching(':e:v'),
+            ...$this->cacheKeysMatching(':q:v'),
             ...$this->cacheKeysMatching(':r:g'),
         ]);
 
@@ -153,7 +139,7 @@ final class ConcurrencyTest extends TestCase
         $this->assertSame('Alice', $contended->first()->name);
         $this->assertNotSame([], $queries, 'a losing claimant must fall through to the database');
         $published = array_values(array_filter(
-            $this->cacheKeysMatching(':m:v'),
+            $this->cacheQueryKeysWithField('m'),
             static fn(string $key): bool => !str_contains($key, ':build:'),
         ));
 
@@ -174,8 +160,6 @@ final class ConcurrencyTest extends TestCase
 
         $leases->release($owner);
 
-        // Released with waiters pending, so the wake list is already populated and
-        // the blocking pop returns without burning the stampede timeout.
         $started = hrtime(true);
         $woken = $this->cacheStore()->brpop((string) $waiter->wakeKey, 2.0);
         $elapsedMs = (hrtime(true) - $started) / 1e6;
@@ -188,8 +172,8 @@ final class ConcurrencyTest extends TestCase
     {
         $table = $this->table();
         $keys = $this->cacheKeys();
-        $buildKey = $keys->membershipBuild($table, '1', 'n', 'hash');
-        $entryKey = $keys->membership($table, '1', 'n', 'hash');
+        $buildKey = $keys->queryBuild($table, '1', 'n', 'hash');
+        $entryKey = $keys->queryEntry($table, '1', 'n', 'hash');
         $owner = str_repeat('a', 32);
         $this->cacheStore()->setNxEx($buildKey, $owner, 30);
 
@@ -225,7 +209,6 @@ final class ConcurrencyTest extends TestCase
             $root,
             [$root],
             new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
-            materializeResult: false,
         );
     }
 

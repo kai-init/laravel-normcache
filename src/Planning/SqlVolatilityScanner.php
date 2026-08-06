@@ -8,7 +8,7 @@ final class SqlVolatilityScanner
         '|date|datetime|julianday|strftime|time|unixepoch|';
 
     private const PARENTHESIZED_SQL_TOKENS =
-        '|and|as|by|case|else|end|from|having|join|not|on|or|order|select|then|union|values|when|where|';
+        '|all|and|as|by|case|else|end|from|having|join|lateral|not|on|or|order|select|then|union|values|when|where|';
 
     private const STABLE_FUNCTIONS =
         '|abs|array_agg|avg|bit_and|bit_or|bool_and|bool_or|cast|ceil|ceiling|char_length|coalesce|concat|concat_ws|'

@@ -57,6 +57,12 @@ final class SqlVolatilityScannerTest extends TestCase
             'deterministic functions' => ['ROUND(AVG(order_items.price), 2)'],
             'fixed date argument' => ['date(\'2026-08-04\')'],
             'ordinary query' => ['select * from "posts" where "published" = ? order by "created_at" asc'],
+            'MySQL parenthesized union all' => [
+                '(select * from `authors` where `name` = ?) union all (select * from `authors` where `name` = ?)',
+            ],
+            'PostgreSQL lateral join' => [
+                'select "authors".* from "authors" left join lateral (select "posts".* from "posts") as "latest" on true',
+            ],
         ];
     }
 }

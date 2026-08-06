@@ -7,8 +7,8 @@ use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Planning\DependencyAnalyzer;
-use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
+use NormCache\Planning\SchemaCatalog;
 use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
@@ -19,7 +19,6 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
-use NormCache\Values\OverlayAdmission;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RowRepair;
@@ -32,18 +31,16 @@ final readonly class Engine
         private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
-        private PrimaryKeyResolver $primaryKeys,
+        private SchemaCatalog $schema,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private DependencyAnalyzer $dependencies,
         private SqlVolatilityScanner $volatility,
         private QueryObserver $observer,
         private CacheStateResolver $states,
-        private CanonicalRepository $canonical,
-        private ResultRepository $results,
+        private QueryEntryRepository $entries,
         private BuildLeaseCoordinator $leases,
         private RowRepairer $repairer,
-        private ResultOverlayPublisher $overlays,
         private CanonicalRowRepository $rows,
     ) {}
 
@@ -81,7 +78,7 @@ final readonly class Engine
         $plan = $this->planner->plan(
             $query,
             $table,
-            fn(): ?PrimaryKeyMetadata => $this->primaryKeys->resolve($query, $connection, $table),
+            fn(): ?PrimaryKeyMetadata => $this->schema->resolvePrimaryKey($query, $connection, $table),
             $dependencies,
             $analysis->queryScoped,
             $operation,
@@ -228,15 +225,7 @@ final readonly class Engine
             $after = $this->state($plan, $namespace, $queryHash);
 
             if ($after->equals($cached->state)) {
-                $this->publish(
-                    $query,
-                    $plan,
-                    $cached->state,
-                    $rows,
-                    $lease,
-                    $namespace,
-                    $queryHash,
-                );
+                $this->publish($query, $plan, $cached->state, $rows, $lease);
             } else {
                 $this->leases->release($lease);
             }
@@ -280,28 +269,20 @@ final readonly class Engine
                 $connection,
                 $dependencyHashes,
                 $namespace,
-                $statement,
+                $statement->sql(),
+                $statement->preparedBindings($connection),
             ));
         }
 
-        return new QueryHashResolver(function () use (
-            $plan,
-            $dependencyHashes,
-            $namespace,
-            $operation,
-            $statement,
-            $connection,
-        ): string {
-            return $this->identity->hash(
-                route: $plan->route,
-                rootHash: $plan->root->hash,
-                dependencyHashes: $dependencyHashes,
-                sql: $statement->sql(),
-                bindings: $statement->preparedBindings($connection),
-                namespace: $namespace,
-                operation: $operation,
-            );
-        });
+        return new QueryHashResolver(fn(): string => $this->identity->hash(
+            route: $plan->route,
+            rootHash: $plan->root->hash,
+            dependencyHashes: $dependencyHashes,
+            sql: $statement->sql(),
+            bindings: $statement->preparedBindings($connection),
+            namespace: $namespace,
+            operation: $operation,
+        ));
     }
 
     /** @param list<string> $dependencyHashes */
@@ -323,7 +304,8 @@ final readonly class Engine
             $connection,
             $dependencyHashes,
             $namespace,
-            $statement,
+            $statement->sql(),
+            $statement->preparedBindings($connection),
         );
     }
 
@@ -383,7 +365,7 @@ final readonly class Engine
         ?string $canonicalQueryHash = null,
     ): CacheRead {
         if ($plan->isCanonical()) {
-            return $plan->shouldMaterializeResult() && $this->config->maxAutoOverlayRows > 0
+            return $this->config->maxAutoOverlayRows > 0
                 ? $this->readCanonicalWithResultOverlay(
                     $query,
                     $plan,
@@ -394,15 +376,18 @@ final readonly class Engine
         }
 
         if ($plan->isQueryGroup()) {
-            $entryKey = $this->keys->queryGroupResult($queryHash, $namespace);
-            [$state, $values] = $this->states->resolve(
+            // The entry and the version keys it is guarded by sit in different
+            // hash slots, so no script can read both. Reading the payload first
+            // keeps the guards no older than what they validate.
+            $entryKey = $this->keys->queryGroupEntry($queryHash, $namespace);
+            $raw = $this->store->readHashField($entryKey, 'r');
+            $state = $this->states->resolve(
                 $plan,
                 $namespace,
                 $queryHash,
-                alsoFetch: [$entryKey],
             );
 
-            return $this->results->read($state, $values[$entryKey] ?? null);
+            return $this->entries->readResult($state, $raw);
         }
 
         if ($canonicalQueryHash !== null && $plan->supportsCanonicalProjectionFallback()) {
@@ -432,9 +417,9 @@ final readonly class Engine
             }
         }
 
-        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
+        $state = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
-        return $this->results->read($state, $raw);
+        return $this->entries->readResult($state, $raw);
     }
 
     private function readCanonicalWithResultOverlay(
@@ -455,9 +440,14 @@ final readonly class Engine
         $version = RedisProtocol::version($head);
 
         if ($status === RedisProtocol::RESULT) {
-            $resultPlan = $plan->asFullResultOverlay();
-            [$state] = $this->states->resolve($resultPlan, $namespace, $queryHash, $version);
-            $result = $this->results->read($state, RedisProtocol::resultPayload($head));
+            $state = $this->states->resolve(
+                $plan,
+                $namespace,
+                $queryHash,
+                $version,
+                usesGeneration: false,
+            );
+            $result = $this->entries->readResult($state, RedisProtocol::resultPayload($head));
 
             if ($result->served()) {
                 return $result->withReason('result_overlay');
@@ -472,18 +462,17 @@ final readonly class Engine
             );
 
             if ($canonicalResult->promotable()) {
-                $promoted = $this->overlays->promote(
+                $promoted = $this->entries->promoteResult(
                     $query,
-                    $resultPlan,
+                    $plan,
                     $canonicalResult->state,
                     $namespace,
                     $queryHash,
                     $canonicalResult->rows,
-                    wakeWaiters: false,
                 );
 
                 if ($overlayReason === 'corrupt_payload') {
-                    $canonicalResult = $this->overlays->rebuildOutcome(
+                    $canonicalResult = $this->entries->rebuiltResultOutcome(
                         $canonicalResult,
                         $promoted,
                     );
@@ -512,14 +501,13 @@ final readonly class Engine
         );
 
         if ($result->promotable()) {
-            $this->overlays->promote(
+            $this->entries->promoteResult(
                 $query,
-                $plan->asFullResultOverlay(),
+                $plan,
                 $result->state,
                 $namespace,
                 $queryHash,
                 $result->rows,
-                wakeWaiters: false,
             );
         }
 
@@ -556,8 +544,8 @@ final readonly class Engine
             );
         }
 
-        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
-        $result = $this->results->read($state, RedisProtocol::resultPayload($head));
+        $state = $this->states->resolve($plan, $namespace, $queryHash, $version);
+        $result = $this->entries->readResult($state, RedisProtocol::resultPayload($head));
 
         if ($result->served()) {
             return $result->withReason('result_overlay');
@@ -602,7 +590,7 @@ final readonly class Engine
             $generation = RedisProtocol::version($head, 2);
             $result = $this->readCanonicalHead(
                 $query,
-                $plan->asCanonicalProjectionFallback(),
+                $plan,
                 $namespace,
                 $canonicalQueryHash,
                 [
@@ -622,7 +610,7 @@ final readonly class Engine
 
                 if ($projected !== null) {
                     $result = $result->withRows($projected);
-                    $promoted = $this->overlays->promote(
+                    $promoted = $this->entries->promoteResult(
                         $query,
                         $plan,
                         $result->state,
@@ -632,7 +620,7 @@ final readonly class Engine
                     );
 
                     return $fallbackReason === 'corrupt_payload'
-                        ? $this->overlays->rebuildOutcome($result, $promoted)
+                        ? $this->entries->rebuiltResultOutcome($result, $promoted)
                         : $result->withReason('canonical_projection_fallback');
                 }
             }
@@ -640,7 +628,7 @@ final readonly class Engine
             $fallbackReason = $result->reason ?? $fallbackReason;
         }
 
-        [$state] = $this->states->resolve($plan, $namespace, $queryHash, $version);
+        $state = $this->states->resolve($plan, $namespace, $queryHash, $version);
 
         return new CacheRead($state, ReadOutcome::MISS, [], $fallbackReason);
     }
@@ -679,7 +667,7 @@ final readonly class Engine
             $namespace,
             $hash->value(),
             knownGeneration: $cached->generation,
-        )[0];
+        );
 
         if ($cached->row === null) {
             return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached->reason);
@@ -758,7 +746,7 @@ final readonly class Engine
         array $head,
         bool $repairMissing,
     ): CacheRead {
-        return $this->canonical->read(
+        return $this->entries->readCanonical(
             $plan,
             $namespace,
             $queryHash,
@@ -780,20 +768,16 @@ final readonly class Engine
         CacheState $state,
         array $rows,
         BuildLease $lease,
-        string $namespace,
-        string $queryHash,
     ): void {
-        match ($plan->route) {
-            QueryPlan::CANONICAL => $this->publishCanonical(
+        match (true) {
+            $plan->isCanonical() => $this->publishCanonical(
                 $query,
                 $plan,
                 $state,
                 $rows,
                 $lease,
-                $namespace,
-                $queryHash,
             ),
-            QueryPlan::DIRECT_PK => $this->rows->publish($plan, $state, $rows, $lease),
+            $plan->isDirectPrimaryKey() => $this->rows->publish($plan, $state, $rows, $lease),
             default => $this->publishResult($query, $plan, $state, $rows, $lease),
         };
     }
@@ -805,7 +789,7 @@ final readonly class Engine
         array $rows,
         BuildLease $lease,
     ): void {
-        $this->results->publish(
+        $this->entries->publishResult(
             $query,
             $plan,
             $state,
@@ -821,27 +805,17 @@ final readonly class Engine
         CacheState $state,
         array $rows,
         BuildLease $lease,
-        string $namespace,
-        string $queryHash,
     ): void {
-        $overlay = $plan->shouldMaterializeResult()
-            ? $this->overlays->inlineEntry(
-                $plan->root,
-                $state,
-                $namespace,
-                $queryHash,
-                $rows,
-            )
-            : OverlayAdmission::notAttempted();
+        $overlay = $this->entries->inlineResult($state, $rows);
 
-        if (!$this->canonical->publish(
+        if (!$this->entries->publishCanonical(
             $query,
             $plan,
             $state,
             $rows,
             $lease,
             $this->config->wakeTtl(),
-            $overlay->entry,
+            $overlay->payload,
             $overlay->rejected,
         )) {
             $this->leases->release($lease);
@@ -850,7 +824,7 @@ final readonly class Engine
 
     private function state(QueryPlan $plan, string $namespace, string $queryHash): CacheState
     {
-        return $this->states->resolve($plan, $namespace, $queryHash)[0];
+        return $this->states->resolve($plan, $namespace, $queryHash);
     }
 
     /** @param list<string> $dependencyHashes */
@@ -860,15 +834,16 @@ final readonly class Engine
         Connection $connection,
         array $dependencyHashes,
         string $namespace,
-        QueryStatement $statement,
+        string $sql,
+        array $preparedBindings,
     ): string {
         if ($query->columns === null || $query->columns === ['*']) {
             return $this->identity->hash(
                 route: QueryPlan::CANONICAL,
                 rootHash: $plan->root->hash,
                 dependencyHashes: $dependencyHashes,
-                sql: $statement->sql(),
-                bindings: $statement->preparedBindings($connection),
+                sql: $sql,
+                bindings: $preparedBindings,
                 namespace: $namespace,
                 operation: 'select',
             );
@@ -882,7 +857,7 @@ final readonly class Engine
             dependencyHashes: $dependencyHashes,
             sql: $canonical->toSql(),
             bindings: $query->bindings['select'] === []
-                ? $statement->preparedBindings($connection)
+                ? $preparedBindings
                  : $connection->prepareBindings($canonical->getBindings()),
             namespace: $namespace,
             operation: 'select',

@@ -104,10 +104,10 @@ final class CanonicalReadTest extends TestCase
             ->resolve($query->getConnection(), $query->from);
         $this->assertNotNull($table);
 
-        $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+        $membershipKey = $this->cacheQueryKeysWithField('m')[0] ?? null;
         $this->assertIsString($membershipKey);
         $membership = $this->app->make(MembershipCodec::class)
-            ->decode((string) $this->cacheStore()->getRaw($membershipKey));
+            ->decode((string) $this->cacheStore()->readHashField($membershipKey, 'm'));
         $this->assertTrue($membership->valid);
 
         $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
@@ -226,7 +226,7 @@ final class CanonicalReadTest extends TestCase
         $rows = DB::table('posts')->orderBy('id')->get();
 
         $this->assertCount(1_001, $rows);
-        $this->assertCount(1, $this->cacheKeysMatching(':m:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('m'));
         $this->assertCount(1_001, $this->cacheKeysMatching(':r:g'));
     }
 

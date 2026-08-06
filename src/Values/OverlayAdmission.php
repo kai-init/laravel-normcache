@@ -4,15 +4,14 @@ namespace NormCache\Values;
 
 final readonly class OverlayAdmission
 {
-    /** @param array{0: string, 1: string}|null $entry */
     private function __construct(
-        public ?array $entry,
+        public ?string $payload,
         public bool $rejected,
     ) {}
 
-    public static function accepted(string $key, string $payload): self
+    public static function accepted(string $payload): self
     {
-        return new self([$key, $payload], false);
+        return new self($payload, false);
     }
 
     public static function rejected(): self

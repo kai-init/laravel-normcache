@@ -34,8 +34,8 @@ final class ResultOverlayStalenessTest extends TestCase
     {
         $this->overlayQuery()();
 
-        $this->assertCount(1, $this->cacheKeysMatching(':m:v'));
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('m'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -72,15 +72,15 @@ final class ResultOverlayStalenessTest extends TestCase
         DB::table('posts')->insert($rows);
         $query = static fn() => DB::table('posts')->orderBy('id')->get();
         $this->assertCount(40, $query());
-        $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+        $membershipKey = $this->cacheQueryKeysWithField('m')[0] ?? null;
         $postsPrefix = $this->cacheKeys()->tablePrefix($this->postsIdentity());
         $postResults = fn(): array => array_values(array_filter(
-            $this->cacheKeysMatching(':e:v'),
+            $this->cacheQueryKeysWithField('r'),
             static fn(string $key): bool => str_starts_with($key, $postsPrefix),
         ));
 
         $this->assertIsString($membershipKey);
-        $raw = $this->cacheStore()->getRaw($membershipKey);
+        $raw = $this->cacheStore()->readHashField($membershipKey, 'm');
         $this->assertIsString($raw);
         $this->assertTrue(app(MembershipCodec::class)->decode($raw)->overlayRejected);
         $this->assertSame([], $postResults());
@@ -97,7 +97,7 @@ final class ResultOverlayStalenessTest extends TestCase
     public function test_an_overlay_is_not_served_after_its_root_table_is_invalidated(): void
     {
         $this->warmOverlay();
-        $this->assertNotSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertNotSame([], $this->cacheQueryKeysWithField('r'));
 
         NormCache::invalidate(['posts']);
 
@@ -157,7 +157,7 @@ final class ResultOverlayStalenessTest extends TestCase
     public function test_an_overlay_written_against_a_superseded_version_is_never_served(): void
     {
         $this->warmOverlay();
-        $overlayKey = $this->cacheKeysMatching(':e:v')[0] ?? null;
+        $overlayKey = $this->cacheQueryKeysWithField('r')[0] ?? null;
         $this->assertIsString($overlayKey);
 
         $this->cacheStore()->increment($this->cacheKeys()->version($this->postsIdentity()));
@@ -167,7 +167,7 @@ final class ResultOverlayStalenessTest extends TestCase
         // The orphaned payload is still physically present — invalidation advances
         // counters rather than deleting keys — so unreachability, not absence, is the
         // guarantee being pinned here.
-        $this->assertContains($overlayKey, $this->cacheKeysMatching(':e:v'));
+        $this->assertContains($overlayKey, $this->cacheQueryKeysWithField('r'));
     }
 
     private function warmOverlay(): void

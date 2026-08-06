@@ -39,7 +39,6 @@ final class QueryPlannerTest extends UnitTestCase
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
         $this->assertSame($primaryKey, $plan->primaryKey);
-        $this->assertTrue($plan->materializeResult);
     }
 
     public function test_limited_root_wildcard_uses_an_automatic_result_overlay(): void
@@ -54,7 +53,6 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
-        $this->assertTrue($plan->materializeResult);
     }
 
     public function test_bare_alias_wildcard_uses_canonical_rows(): void
@@ -106,7 +104,6 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
-        $this->assertTrue($plan->materializeResult);
     }
 
     public function test_primary_key_query_uses_direct_row_route(): void
@@ -125,7 +122,6 @@ final class QueryPlannerTest extends UnitTestCase
 
         $this->assertSame(QueryPlan::DIRECT_PK, $plan->route);
         $this->assertSame('i:42', $plan->primaryKeyToken);
-        $this->assertFalse($plan->materializeResult);
     }
 
     public function test_cache_context_uses_full_result_storage_without_shared_rows(): void

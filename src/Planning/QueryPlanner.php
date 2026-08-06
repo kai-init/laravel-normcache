@@ -64,7 +64,6 @@ final class QueryPlanner
                 $root,
                 $dependencies,
                 $primaryKey,
-                materializeResult: true,
             );
         }
 

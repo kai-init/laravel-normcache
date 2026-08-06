@@ -25,20 +25,14 @@ final readonly class BuildLeaseCoordinator
         string $namespace,
         string $queryHash,
     ): BuildLease {
-        $buildingKey = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membershipBuild(
+        $buildingKey = match (true) {
+            !$plan->isDirectPrimaryKey() && !$plan->isQueryGroup() => $this->keys->queryBuild(
                 $plan->root,
                 $state->version,
                 $namespace,
                 $queryHash,
             ),
-            QueryPlan::RESULT => $this->keys->resultBuild(
-                $plan->root,
-                $state->version,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->rowBuild(
+            $plan->isDirectPrimaryKey() => $this->keys->rowBuild(
                 $plan->root,
                 $state->generation,
                 (string) $plan->primaryKeyToken,
@@ -52,11 +46,19 @@ final readonly class BuildLeaseCoordinator
         );
     }
 
-    public function claimRepair(TableIdentity $root, string $repairHash): BuildLease
-    {
+    public function claimRepair(
+        TableIdentity $root,
+        string $generation,
+        string $batchHash,
+    ): BuildLease {
         return $this->acquire(
-            $this->keys->repairBuild($root, $repairHash),
-            fn(string $token): string => $this->keys->repairWake($root, $repairHash, $token),
+            $this->keys->repairBuild($root, $generation, $batchHash),
+            fn(string $token): string => $this->keys->repairWake(
+                $root,
+                $generation,
+                $batchHash,
+                $token,
+            ),
         );
     }
 
@@ -98,10 +100,14 @@ final readonly class BuildLeaseCoordinator
 
     private function wakeKey(QueryPlan $plan, string $queryHash, string $token): string
     {
-        return match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->wake($plan->root, 'm', $queryHash, $token),
-            QueryPlan::RESULT => $this->keys->wake($plan->root, 'e', $queryHash, $token),
-            QueryPlan::DIRECT_PK => $this->keys->wake(
+        return match (true) {
+            !$plan->isDirectPrimaryKey() && !$plan->isQueryGroup() => $this->keys->wake(
+                $plan->root,
+                'q',
+                $queryHash,
+                $token,
+            ),
+            $plan->isDirectPrimaryKey() => $this->keys->wake(
                 $plan->root,
                 'r',
                 (string) $plan->primaryKeyToken,

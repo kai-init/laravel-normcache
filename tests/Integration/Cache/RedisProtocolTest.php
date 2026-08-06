@@ -5,7 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Cache\ResultRepository;
+use NormCache\Cache\QueryEntryRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
@@ -141,7 +141,7 @@ final class RedisProtocolTest extends TestCase
             tagKey: null,
         );
 
-        $result = app(ResultRepository::class)->read($state, 'corrupt');
+        $result = app(QueryEntryRepository::class)->readResult($state, 'corrupt');
 
         $this->assertSame('corrupt_payload', $result->reason);
         $this->assertSame('corrupt', $store->getRaw($key));
@@ -208,6 +208,75 @@ final class RedisProtocolTest extends TestCase
         } finally {
             $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
             $connection->del($buildingKey, $wakeKey);
+            $client->setOption(\Redis::OPT_SERIALIZER, $originalSerializer);
+        }
+    }
+
+    public function test_phpredis_unified_query_hash_protocol_supports_shared_serializer(): void
+    {
+        $connection = Redis::connection('normcache-test');
+
+        if (!$connection instanceof PhpRedisConnection) {
+            $this->markTestSkipped('PhpRedis only.');
+        }
+
+        $client = $connection->client();
+        $originalSerializer = $client->getOption(\Redis::OPT_SERIALIZER);
+        $store = app(RedisStore::class);
+        $keys = app(CacheKeyBuilder::class);
+        $table = app(TableIdentityResolver::class)
+            ->resolve($this->app['db']->connection(), 'posts');
+        $this->assertNotNull($table);
+
+        $versionKey = $keys->version($table);
+        $generationKey = $keys->generation($table);
+        $entryKey = $keys->queryEntry($table, '0', 'u', 'serializer-query');
+        $buildKey = $keys->queryBuild($table, '0', 'u', 'serializer-query');
+        $token = str_repeat('a', 32);
+        $wakeKey = $keys->wake($table, 'q', 'serializer-query', $token);
+
+        try {
+            $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_PHP);
+
+            $this->assertTrue($store->setNxEx($buildKey, $token, 30));
+            $this->assertTrue($store->publishCanonical(
+                versionKey: $versionKey,
+                generationKey: $generationKey,
+                membershipKey: $entryKey,
+                rowKeys: [],
+                rowPayloads: [],
+                expectedVersion: '0',
+                expectedGeneration: '0',
+                membershipPayload: 'membership-payload',
+                membershipTtl: 60,
+                rowTtl: 60,
+                buildingKey: $buildKey,
+                wakeKey: $wakeKey,
+                token: $token,
+                wakeTtl: 10,
+                resultPayload: 'result-payload',
+            ));
+
+            $this->assertSame(
+                ['result', '0', 'result-payload'],
+                $store->fetchResultOrCanonical(
+                    $versionKey,
+                    $generationKey,
+                    $keys->tablePrefix($table),
+                    'u',
+                    'serializer-query',
+                    'serializer-query',
+                ),
+            );
+            $this->assertSame('membership-payload', $store->readHashField($entryKey, 'm'));
+            $this->assertSame('result-payload', $store->readHashField($entryKey, 'r'));
+            $this->assertSame(
+                \Redis::SERIALIZER_PHP,
+                $client->getOption(\Redis::OPT_SERIALIZER),
+            );
+        } finally {
+            $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
+            $connection->del($entryKey, $buildKey, $wakeKey);
             $client->setOption(\Redis::OPT_SERIALIZER, $originalSerializer);
         }
     }
@@ -280,10 +349,10 @@ final class RedisProtocolTest extends TestCase
             ->resolve($this->app['db']->connection(), 'posts');
         $versionKey = $keys->version($table);
         $generationKey = $keys->generation($table);
-        $membershipKey = $keys->membership($table, '0', 'u', 'query');
-        $buildKey = $keys->membershipBuild($table, '0', 'u', 'query');
+        $membershipKey = $keys->queryEntry($table, '0', 'u', 'query');
+        $buildKey = $keys->queryBuild($table, '0', 'u', 'query');
         $token = str_repeat('a', 32);
-        $wakeKey = $keys->wake($table, 'm', 'query', $token);
+        $wakeKey = $keys->wake($table, 'q', 'query', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
         $this->assertTrue($store->setNxEx($buildKey, $token, 5));
@@ -335,12 +404,11 @@ final class RedisProtocolTest extends TestCase
             ->resolve($this->app['db']->connection(), 'posts');
         $versionKey = $keys->version($table);
         $generationKey = $keys->generation($table);
-        $membershipKey = $keys->membership($table, '0', 'u', 'query');
-        $buildKey = $keys->membershipBuild($table, '0', 'u', 'query');
+        $membershipKey = $keys->queryEntry($table, '0', 'u', 'query');
+        $buildKey = $keys->queryBuild($table, '0', 'u', 'query');
         $token = str_repeat('e', 32);
-        $wakeKey = $keys->wake($table, 'm', 'query', $token);
+        $wakeKey = $keys->wake($table, 'q', 'query', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
-        $overlayKey = $keys->result($table, '0', 'u', 'query');
 
         $this->assertTrue($store->setNxEx($buildKey, $token, 5));
         $this->assertTrue($store->publishCanonical(
@@ -358,7 +426,6 @@ final class RedisProtocolTest extends TestCase
             wakeKey: $wakeKey,
             token: $token,
             wakeTtl: 11,
-            resultKey: $overlayKey,
             resultPayload: 'overlay-payload',
         ));
 
@@ -381,7 +448,9 @@ final class RedisProtocolTest extends TestCase
             'u',
             'query',
         )[0]);
-        $this->assertSame(60, Redis::connection('normcache-test')->ttl($overlayKey));
+        // The overlay rides in the membership's own key, under its single TTL.
+        $this->assertSame('overlay-payload', $store->readHashField($membershipKey, 'r'));
+        $this->assertSame(60, Redis::connection('normcache-test')->ttl($membershipKey));
     }
 
     public function test_canonical_publication_rejects_the_result_overlay_after_state_changes(): void
@@ -392,12 +461,11 @@ final class RedisProtocolTest extends TestCase
             ->resolve($this->app['db']->connection(), 'posts');
         $versionKey = $keys->version($table);
         $generationKey = $keys->generation($table);
-        $membershipKey = $keys->membership($table, '0', 'u', 'guarded');
-        $buildKey = $keys->membershipBuild($table, '0', 'u', 'guarded');
+        $membershipKey = $keys->queryEntry($table, '0', 'u', 'guarded');
+        $buildKey = $keys->queryBuild($table, '0', 'u', 'guarded');
         $token = str_repeat('f', 32);
-        $wakeKey = $keys->wake($table, 'm', 'guarded', $token);
+        $wakeKey = $keys->wake($table, 'q', 'guarded', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
-        $overlayKey = $keys->result($table, '0', 'u', 'guarded');
 
         $this->assertTrue($store->setNxEx($buildKey, $token, 5));
         $store->increment($generationKey);
@@ -417,13 +485,12 @@ final class RedisProtocolTest extends TestCase
             wakeKey: $wakeKey,
             token: $token,
             wakeTtl: 11,
-            resultKey: $overlayKey,
             resultPayload: 'overlay-payload',
         ));
 
-        $this->assertNull($store->getRaw($membershipKey));
+        $this->assertNull($store->readHashField($membershipKey, 'm'));
         $this->assertNull($store->getRaw($rowKey));
-        $this->assertNull($store->getRaw($overlayKey));
+        $this->assertNull($store->readHashField($membershipKey, 'r'));
     }
 
     public function test_canonical_publication_rejects_membership_after_state_changes(): void
@@ -434,10 +501,10 @@ final class RedisProtocolTest extends TestCase
             ->resolve($this->app['db']->connection(), 'posts');
         $versionKey = $keys->version($table);
         $generationKey = $keys->generation($table);
-        $membershipKey = $keys->membership($table, '0', 'u', 'changed');
-        $buildKey = $keys->membershipBuild($table, '0', 'u', 'changed');
+        $membershipKey = $keys->queryEntry($table, '0', 'u', 'changed');
+        $buildKey = $keys->queryBuild($table, '0', 'u', 'changed');
         $token = str_repeat('d', 32);
-        $wakeKey = $keys->wake($table, 'm', 'changed', $token);
+        $wakeKey = $keys->wake($table, 'q', 'changed', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
         $this->assertTrue($store->setNxEx($buildKey, $token, 5));
@@ -459,7 +526,7 @@ final class RedisProtocolTest extends TestCase
             $token,
             11,
         ));
-        $this->assertNull($store->getRaw($membershipKey));
+        $this->assertNull($store->readHashField($membershipKey, 'm'));
         $this->assertNull($store->getRaw($rowKey));
     }
 
@@ -472,12 +539,12 @@ final class RedisProtocolTest extends TestCase
         $versionKey = $keys->version($table);
         $generationKey = $keys->generation($table);
         $prefix = $keys->tablePrefix($table);
-        $resultKey = $keys->result($table, '0', 'u', 'result-query');
-        $membershipKey = $keys->membership($table, '0', 'u', 'canonical-query');
+        $resultKey = $keys->queryEntry($table, '0', 'u', 'result-query');
+        $membershipKey = $keys->queryEntry($table, '0', 'u', 'canonical-query');
         $membership = '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}';
 
-        $store->setRawForever($membershipKey, $membership);
-        $store->setRawForever($resultKey, 'result-payload');
+        $store->writeHashField($membershipKey, 'm', $membership);
+        $store->writeHashField($resultKey, 'r', 'result-payload');
 
         $result = $store->fetchResultOrCanonical(
             $versionKey,
@@ -490,7 +557,7 @@ final class RedisProtocolTest extends TestCase
 
         $this->assertSame(['result', '0', 'result-payload'], $result);
 
-        $store->delete($resultKey);
+        $store->deleteHashField($resultKey, 'r');
         $canonical = $store->fetchResultOrCanonical(
             $versionKey,
             $generationKey,
@@ -574,51 +641,33 @@ final class RedisProtocolTest extends TestCase
         $this->assertSame(str_repeat('b', 32), $store->getRaw($build));
     }
 
-    public function test_repair_publication_is_version_and_lease_protected(): void
+    public function test_repair_publication_is_version_protected_without_a_lease(): void
     {
         $store = app(RedisStore::class);
         $keys = app(CacheKeyBuilder::class);
         $table = app(TableIdentityResolver::class)
             ->resolve($this->app['db']->connection(), 'posts');
-        $repair = $keys->repairBuild($table, 'batch');
-        $token = str_repeat('c', 32);
-        $wake = $keys->repairWake($table, 'batch', $token);
         $row = $keys->row($table, '0', 'i:1');
 
-        $this->assertTrue($store->setNxEx($repair, $token, 5));
         $this->assertTrue($store->publishVersionedEntries(
             entryKeys: [$row],
             entryPayloads: ['repaired'],
             ttl: 3600,
             versionKeys: [$keys->version($table), $keys->generation($table)],
             expectedVersions: ['0', '0'],
-            buildingKey: $repair,
-            wakeKey: $wake,
-            token: $token,
-            wakeTtl: 11,
         ));
         $this->assertSame('repaired', $store->getRaw($row));
-        $this->assertNull($store->getRaw($repair));
 
-        $mismatchRepair = $keys->repairBuild($table, 'version-mismatch');
-        $mismatchToken = str_repeat('e', 32);
-        $mismatchWake = $keys->repairWake($table, 'version-mismatch', $mismatchToken);
         $mismatchRow = $keys->row($table, '0', 'i:2');
         $store->increment($keys->version($table));
 
-        $this->assertTrue($store->setNxEx($mismatchRepair, $mismatchToken, 5));
         $this->assertFalse($store->publishVersionedEntries(
             entryKeys: [$mismatchRow],
             entryPayloads: ['stale'],
             ttl: 3600,
             versionKeys: [$keys->version($table), $keys->generation($table)],
             expectedVersions: ['0', '0'],
-            buildingKey: $mismatchRepair,
-            wakeKey: $mismatchWake,
-            token: $mismatchToken,
-            wakeTtl: 11,
         ));
         $this->assertNull($store->getRaw($mismatchRow));
-        $this->assertNull($store->getRaw($mismatchRepair));
     }
 }

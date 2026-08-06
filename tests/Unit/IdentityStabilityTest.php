@@ -38,15 +38,11 @@ final class IdentityStabilityTest extends UnitTestCase
         $this->assertSame('1427a690b77f0404a4ecbc02f48a3dbc', $hash(QueryPlan::DIRECT_PK));
     }
 
-    public function test_tag_repair_and_table_digests_are_stable(): void
+    public function test_tag_and_table_digests_are_stable(): void
     {
         $identity = new QueryIdentity;
 
         $this->assertSame('70cf626fa4c84d4ae1d3931451bf301c', $identity->tagHash('homepage'));
-        $this->assertSame(
-            'ee352ad782d5558a44ba6e7a01230b9d',
-            $identity->repairHash('roothash', '7', ['i:9', 'i:2']),
-        );
         $this->assertSame(
             '06a3bba515102093afe9de576d942169',
             TableIdentity::fromParts(

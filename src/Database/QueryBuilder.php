@@ -50,9 +50,7 @@ final class QueryBuilder extends Builder
 
     private int $writeDepth = 0;
 
-    private bool $writeChanged = false;
-
-    private bool $writeExecuted = false;
+    private int $nestedMutationSequence = 0;
 
     public function __construct(
         Connection $connection,
@@ -403,13 +401,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: false,
-            operation: function () use ($values): bool {
-                $result = parent::insert($values);
-                $this->recordOutcome($values !== [], $values !== [] && $result);
-
-                return $result;
-            },
+            operation: fn(): bool => parent::insert($values),
+            invalidate: static fn(bool $result): bool => $values !== [] && $result,
         );
     }
 
@@ -418,13 +411,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: false,
-            operation: function () use ($values): int {
-                $result = parent::insertOrIgnore($values);
-                $this->recordOutcome($values !== [], $result > 0);
-
-                return $result;
-            },
+            operation: fn(): int => parent::insertOrIgnore($values),
+            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -433,13 +421,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: false,
-            operation: function () use ($values, $returning, $uniqueBy): mixed {
-                $result = parent::insertOrIgnoreReturning($values, $returning, $uniqueBy);
-                $this->recordOutcome($values !== [], $result->isNotEmpty());
-
-                return $result;
-            },
+            operation: fn(): mixed => parent::insertOrIgnoreReturning($values, $returning, $uniqueBy),
+            invalidate: static fn($result): bool => $result->isNotEmpty(),
         );
     }
 
@@ -448,13 +431,7 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: true,
-            operation: function () use ($values, $sequence) {
-                $result = parent::insertGetId($values, $sequence);
-                $this->recordOutcome(true, true);
-
-                return $result;
-            },
+            operation: fn() => parent::insertGetId($values, $sequence),
         );
     }
 
@@ -463,13 +440,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: false,
-            operation: function () use ($columns, $query): int {
-                $result = parent::insertUsing($columns, $query);
-                $this->recordOutcome(true, $result > 0);
-
-                return $result;
-            },
+            operation: fn(): int => parent::insertUsing($columns, $query),
+            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -478,13 +450,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
             mayAffectExistingRows: false,
-            forceInvalidation: false,
-            operation: function () use ($columns, $query): int {
-                $result = parent::insertOrIgnoreUsing($columns, $query);
-                $this->recordOutcome(true, $result > 0);
-
-                return $result;
-            },
+            operation: fn(): int => parent::insertOrIgnoreUsing($columns, $query),
+            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -493,13 +460,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::UPDATE,
             mayAffectExistingRows: true,
-            forceInvalidation: false,
-            operation: function () use ($values): int {
-                $result = parent::update($values);
-                $this->recordOutcome(true, $result > 0);
-
-                return $result;
-            },
+            operation: fn(): int => parent::update($values),
+            invalidate: static fn(int $result): bool => $result > 0,
             assigned: $values,
         );
     }
@@ -509,24 +471,21 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::UPDATE,
             mayAffectExistingRows: true,
-            forceInvalidation: false,
-            operation: function () use ($values): int {
-                $result = parent::updateFrom($values);
-                $this->recordOutcome(true, $result > 0);
-
-                return $result;
-            },
+            operation: fn(): int => parent::updateFrom($values),
+            invalidate: static fn(int $result): bool => $result > 0,
             assigned: $values,
         );
     }
 
     public function updateOrInsert(array $attributes, $values = []): bool
     {
+        $mutationSequence = $this->nestedMutationSequence;
+
         return $this->writeWithInvalidation(
             mutation: MutationType::UPSERT,
             mayAffectExistingRows: true,
-            forceInvalidation: true,
             operation: fn(): bool => parent::updateOrInsert($attributes, $values),
+            invalidate: fn(): bool => $this->nestedMutationSequence !== $mutationSequence,
             forceBroadInvalidation: true,
         );
     }
@@ -536,16 +495,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::UPSERT,
             mayAffectExistingRows: true,
-            forceInvalidation: true,
-            operation: function () use ($values, $uniqueBy, $update): int {
-                $result = parent::upsert($values, $uniqueBy, $update);
-
-                if ($values !== []) {
-                    $this->recordOutcome(true, $result > 0);
-                }
-
-                return $result;
-            },
+            operation: fn(): int => parent::upsert($values, $uniqueBy, $update),
+            invalidate: $values !== [],
             forceBroadInvalidation: true,
         );
     }
@@ -555,13 +506,8 @@ final class QueryBuilder extends Builder
         return $this->writeWithInvalidation(
             mutation: MutationType::DELETE,
             mayAffectExistingRows: true,
-            forceInvalidation: false,
-            operation: function () use ($id) {
-                $result = parent::delete($id);
-                $this->recordOutcome(true, $result > 0);
-
-                return $result;
-            },
+            operation: fn() => parent::delete($id),
+            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -570,11 +516,7 @@ final class QueryBuilder extends Builder
         $this->writeWithInvalidation(
             mutation: MutationType::TRUNCATE,
             mayAffectExistingRows: true,
-            forceInvalidation: true,
-            operation: function (): void {
-                parent::truncate();
-                $this->recordOutcome(true, true);
-            },
+            operation: fn() => parent::truncate(),
             forceBroadInvalidation: true,
         );
     }
@@ -614,20 +556,21 @@ final class QueryBuilder extends Builder
         );
     }
 
+    /**
+     * The operation's return value is always passed to $invalidate. Callables
+     * that decide from builder state instead may declare no parameters.
+     *
+     * @param  bool|callable(mixed): bool  $invalidate
+     */
     private function writeWithInvalidation(
         MutationType $mutation,
         bool $mayAffectExistingRows,
-        bool $forceInvalidation,
         callable $operation,
+        bool|callable $invalidate = true,
         bool $forceBroadInvalidation = false,
         ?array $assigned = null,
     ): mixed {
         $owner = $this->writeDepth === 0;
-
-        if ($owner) {
-            $this->writeExecuted = false;
-            $this->writeChanged = false;
-        }
 
         $this->writeDepth++;
         $failure = null;
@@ -659,48 +602,27 @@ final class QueryBuilder extends Builder
             throw $failure;
         }
 
-        if ($owner) {
-            $this->finishWriteObservation(
+        $shouldInvalidate = is_bool($invalidate) ? $invalidate : $invalidate($result);
+
+        if (!$owner) {
+            if ($shouldInvalidate) {
+                $this->nestedMutationSequence++;
+            }
+
+            return $result;
+        }
+
+        if ($shouldInvalidate) {
+            app(Invalidator::class)->afterWrite(
+                query: $this,
                 mutation: $mutation,
                 mayAffectExistingRows: $mayAffectExistingRows,
-                forceInvalidation: $forceInvalidation,
-                executed: $this->writeExecuted,
-                changed: $this->writeChanged,
                 forceBroadInvalidation: $forceBroadInvalidation,
-                assignments: $assigned,
+                assigned: $assigned,
             );
         }
 
         return $result;
-    }
-
-    protected function recordOutcome(bool $executed, bool $changed): void
-    {
-        $this->writeExecuted = $this->writeExecuted || $executed;
-        $this->writeChanged = $this->writeChanged || $changed;
-    }
-
-    /** @param array<string, mixed>|null $assignments */
-    protected function finishWriteObservation(
-        MutationType $mutation,
-        bool $mayAffectExistingRows,
-        bool $forceInvalidation,
-        bool $executed,
-        bool $changed,
-        bool $forceBroadInvalidation,
-        ?array $assignments,
-    ): void {
-        if (!$executed || !$forceInvalidation && !$changed) {
-            return;
-        }
-
-        app(Invalidator::class)->afterWrite(
-            query: $this,
-            mutation: $mutation,
-            mayAffectExistingRows: $mayAffectExistingRows,
-            forceBroadInvalidation: $forceBroadInvalidation,
-            assigned: $assignments,
-        );
     }
 
     private function connectionPretending(): bool

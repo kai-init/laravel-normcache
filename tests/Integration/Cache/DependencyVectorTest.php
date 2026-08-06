@@ -5,6 +5,8 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\SQLiteBuilder;
 use Illuminate\Database\SQLiteConnection;
+use Illuminate\Redis\Connections\PhpRedisConnection;
+use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use NormCache\Database\Connections\BuildsCachingQueries;
@@ -343,6 +345,84 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_query_group_invalidation_between_payload_and_state_reads_cannot_serve_stale_data(): void
+    {
+        $read = fn() => DB::table(DB::raw('(select id, title from posts) as derived'))
+            ->dependsOn(['posts'])
+            ->where('id', $this->postId)
+            ->first();
+
+        $this->assertSame('Post', $read()?->title);
+
+        $store = $this->cacheStore();
+        $connectionProperty = (new \ReflectionClass($store))->getProperty('connection');
+        $connection = $connectionProperty->getValue($store);
+        $invalidate = function (): void {
+            DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
+        };
+
+        if ($connection instanceof PhpRedisConnection) {
+            $interceptingConnection = new class($connection->client(), $invalidate) extends PhpRedisConnection
+            {
+                private bool $intercepted = false;
+
+                public function __construct(
+                    mixed $client,
+                    private \Closure $afterFirstHget,
+                ) {
+                    parent::__construct($client);
+                }
+
+                public function hget($key, $field)
+                {
+                    $result = $this->command('hget', [$key, $field]);
+
+                    if (!$this->intercepted) {
+                        $this->intercepted = true;
+                        ($this->afterFirstHget)();
+                    }
+
+                    return $result;
+                }
+            };
+        } else {
+            $this->assertInstanceOf(PredisConnection::class, $connection);
+            $interceptingConnection = new class($connection->client(), $invalidate) extends PredisConnection
+            {
+                private bool $intercepted = false;
+
+                public function __construct(
+                    mixed $client,
+                    private \Closure $afterFirstHget,
+                ) {
+                    parent::__construct($client);
+                }
+
+                public function hget($key, $field)
+                {
+                    $result = $this->command('hget', [$key, $field]);
+
+                    if (!$this->intercepted) {
+                        $this->intercepted = true;
+                        ($this->afterFirstHget)();
+                    }
+
+                    return $result;
+                }
+            };
+        }
+
+        $connectionProperty->setValue($store, $interceptingConnection);
+
+        try {
+            $result = $read();
+        } finally {
+            $connectionProperty->setValue($store, $connection);
+        }
+
+        $this->assertSame('After', $result?->title);
+    }
+
     public function test_explicit_dependency_order_does_not_change_opaque_query_identity(): void
     {
         $build = fn(array $dependencies) => DB::table(
@@ -670,7 +750,7 @@ final class DependencyVectorTest extends TestCase
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
         $this->assertSame([], $this->cacheKeysMatching(':r:g'));
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
         DB::flushQueryLog();

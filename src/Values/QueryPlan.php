@@ -25,7 +25,6 @@ final readonly class QueryPlan
         public ?string $softDeleteMode = null,
         public ?string $deletedAtColumn = null,
         public ?array $projectedColumns = null,
-        public bool $materializeResult = false,
     ) {}
 
     /** @param list<TableIdentity> $dependencies */
@@ -59,14 +58,12 @@ final readonly class QueryPlan
         TableIdentity $root,
         array $dependencies,
         PrimaryKeyMetadata $primaryKey,
-        bool $materializeResult,
     ): self {
         return new self(
             self::CANONICAL,
             $root,
             $dependencies,
             $primaryKey,
-            materializeResult: $materializeResult,
         );
     }
 
@@ -162,35 +159,5 @@ final readonly class QueryPlan
             && $this->primaryKey !== null
             && $this->projectedColumns !== null
             && $this->primaryKeyToken === null;
-    }
-
-    public function shouldMaterializeResult(): bool
-    {
-        return $this->isCanonical() && $this->materializeResult;
-    }
-
-    public function asCanonicalProjectionFallback(): self
-    {
-        if (!$this->supportsCanonicalProjectionFallback()) {
-            throw new \LogicException(
-                'Only a projected result plan has a canonical projection fallback.',
-            );
-        }
-
-        return self::canonical(
-            $this->root,
-            $this->dependencies,
-            $this->primaryKey,
-            materializeResult: false,
-        );
-    }
-
-    public function asFullResultOverlay(): self
-    {
-        if (!$this->isCanonical()) {
-            throw new \LogicException('Only a canonical plan can be overlaid with a full result.');
-        }
-
-        return self::result($this->root, $this->dependencies, $this->primaryKey);
     }
 }

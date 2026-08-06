@@ -129,10 +129,10 @@ final class DiagnosticsTest extends TestCase
             ->select('title')
             ->get();
         $query();
-        $key = $this->cacheKeysMatching(':e:v')[0] ?? null;
+        $key = $this->cacheQueryKeysWithField('r')[0] ?? null;
 
         $this->assertIsString($key);
-        $this->cacheStore()->setRawForever($key, 'corrupt');
+        $this->cacheStore()->writeHashField($key, 'r', 'corrupt');
         Event::fake([QueryCacheMiss::class]);
 
         $query();

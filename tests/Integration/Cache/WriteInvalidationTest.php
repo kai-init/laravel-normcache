@@ -293,6 +293,66 @@ final class WriteInvalidationTest extends TestCase
         $this->assertSame('Composite', DB::table('posts')->where('id', $this->postId)->value('title'));
     }
 
+    public function test_update_or_insert_existing_row_without_values_does_not_invalidate(): void
+    {
+        DB::table('posts')->where('id', $this->postId)->get();
+        $before = $this->tableVersion();
+
+        $this->assertTrue(DB::table('posts')->updateOrInsert(['id' => $this->postId]));
+
+        $this->assertSame($before, $this->tableVersion());
+    }
+
+    public function test_update_or_insert_missing_row_without_values_still_invalidates(): void
+    {
+        DB::table('posts')->where('id', $this->postId)->get();
+        $before = (int) $this->tableVersion();
+
+        $this->assertTrue(DB::table('posts')->updateOrInsert([
+            'id' => $this->postId + 1,
+            'title' => 'Inserted',
+            'author_id' => Author::query()->value('id'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]));
+
+        $this->assertSame($before + 1, (int) $this->tableVersion());
+    }
+
+    public function test_update_matching_no_rows_does_not_invalidate(): void
+    {
+        DB::table('posts')->where('id', $this->postId)->get();
+        $before = $this->tableVersion();
+
+        $this->assertSame(0, DB::table('posts')->where('id', -1)->update(['title' => 'Nobody']));
+
+        $this->assertSame($before, $this->tableVersion());
+    }
+
+    public function test_update_or_insert_invalidates_exactly_when_its_nested_update_reports_rows(): void
+    {
+        $values = ['title' => 'Unchanged'];
+        DB::table('posts')->where('id', $this->postId)->update($values);
+
+        // Drivers disagree about a value-preserving update: MySQL reports zero
+        // affected rows, SQLite and Postgres report the matched row. Probe this
+        // one so the expectation follows the driver rather than assuming one.
+        $affected = DB::table('posts')->where('id', $this->postId)->update($values);
+
+        DB::table('posts')->where('id', $this->postId)->get();
+        $before = (int) $this->tableVersion();
+
+        $this->assertSame(
+            $affected > 0,
+            DB::table('posts')->updateOrInsert(['id' => $this->postId], $values),
+        );
+        $this->assertSame(
+            $before + ($affected > 0 ? 1 : 0),
+            (int) $this->tableVersion(),
+            'updateOrInsert must invalidate on the same terms as the update it delegates to',
+        );
+    }
+
     public function test_proven_primary_key_update_preserves_unrelated_canonical_rows(): void
     {
         $second = DB::table('posts')->insertGetId([

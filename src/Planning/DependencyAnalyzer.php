@@ -13,14 +13,14 @@ use NormCache\Values\TableIdentity;
 final class DependencyAnalyzer
 {
     public function __construct(
-        private TableIdentityResolver $tables,
+        private SchemaCatalog $schema,
     ) {}
 
     public function analyze(
         Connection $connection,
         QueryBuilder $query,
     ): DependencyAnalysis {
-        $directRoot = $this->tables->resolve($connection, $query->from);
+        $directRoot = $this->schema->resolveTable($connection, $query->from);
         $dependencies = new DependencyCollection;
         $declarations = $query->dependencies();
         $declaredRoot = null;
@@ -29,7 +29,7 @@ final class DependencyAnalyzer
 
         foreach ($declarations as $declaration) {
             $identity = $declaration->isTable()
-                ? $this->tables->resolve($connection, $declaration->value)
+                ? $this->schema->resolveTable($connection, $declaration->value)
                 : $this->modelIdentity($connection, $declaration->value);
 
             if ($identity === null) {
@@ -237,7 +237,7 @@ final class DependencyAnalyzer
         mixed $source,
         DependencyCollection $dependencies,
     ): void {
-        $identity = $this->tables->resolve($connection, $source);
+        $identity = $this->schema->resolveTable($connection, $source);
 
         if ($identity === null || $identity->isView) {
             $dependencies->markOpaque();
@@ -266,7 +266,7 @@ final class DependencyAnalyzer
             $model = new $modelClass;
             $model->setConnection($activeConnection->getName());
 
-            return $this->tables->resolve($activeConnection, $model->getTable());
+            return $this->schema->resolveTable($activeConnection, $model->getTable());
         } catch (\Throwable) {
             return null;
         }

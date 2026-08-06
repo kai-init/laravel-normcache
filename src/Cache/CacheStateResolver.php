@@ -15,18 +15,14 @@ final readonly class CacheStateResolver
         private CacheKeyBuilder $keys,
     ) {}
 
-    /**
-     * @param  list<string>  $alsoFetch
-     * @return array{0: CacheState, 1: array<string, ?string>}
-     */
     public function resolve(
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
         ?string $knownVersion = null,
         ?string $knownGeneration = null,
-        array $alsoFetch = [],
-    ): array {
+        ?bool $usesGeneration = null,
+    ): CacheState {
         $versionKeys = [];
 
         foreach ($plan->dependencies as $dependency) {
@@ -39,7 +35,7 @@ final readonly class CacheStateResolver
             unset($versionKeys[$plan->root->hash]);
         }
 
-        $generationKey = $knownGeneration === null && $plan->usesGeneration()
+        $generationKey = $knownGeneration === null && ($usesGeneration ?? $plan->usesGeneration())
             ? $this->keys->generation($plan->root)
             : null;
         $tagKey = $this->tagKey($namespace);
@@ -49,7 +45,6 @@ final readonly class CacheStateResolver
             ...array_values($versionKeys),
             $generationKey,
             $tagKey,
-            ...$alsoFetch,
         ]))));
         $this->rememberEpochFrom($epochKey, $values);
 
@@ -79,20 +74,14 @@ final readonly class CacheStateResolver
             unset($versions[$plan->root->hash]);
         }
 
-        $key = match ($plan->route) {
-            QueryPlan::CANONICAL => $this->keys->membership(
-                $plan->root,
-                $rootVersion,
-                $namespace,
-                $queryHash,
-            ),
-            QueryPlan::DIRECT_PK => $this->keys->row(
+        $key = match (true) {
+            $plan->isDirectPrimaryKey() => $this->keys->row(
                 $plan->root,
                 $generation,
                 (string) $plan->primaryKeyToken,
             ),
-            QueryPlan::QUERY_GROUP => $this->keys->queryGroupResult($queryHash, $namespace),
-            default => $this->keys->result(
+            $plan->isQueryGroup() => $this->keys->queryGroupEntry($queryHash, $namespace),
+            default => $this->keys->queryEntry(
                 $plan->root,
                 $rootVersion,
                 $namespace,
@@ -100,18 +89,15 @@ final readonly class CacheStateResolver
             ),
         };
 
-        return [
-            new CacheState(
-                key: $key,
-                epoch: $this->runtime->epoch(),
-                version: $rootVersion,
-                generation: $generation,
-                versions: $versions,
-                tag: $tag,
-                tagKey: $tagKey,
-            ),
-            $values,
-        ];
+        return new CacheState(
+            key: $key,
+            epoch: $this->runtime->epoch(),
+            version: $rootVersion,
+            generation: $generation,
+            versions: $versions,
+            tag: $tag,
+            tagKey: $tagKey,
+        );
     }
 
     /**
@@ -124,7 +110,12 @@ final readonly class CacheStateResolver
         string $queryHash,
         array $rowKeys,
     ): array {
-        $keys = $this->stateKeys($plan, $this->tagKey($namespace), $this->unknownEpochKey());
+        $keys = $this->stateKeys(
+            $plan,
+            $this->tagKey($namespace),
+            $this->unknownEpochKey(),
+            usesGeneration: true,
+        );
         $values = $this->store->mget(array_values(array_unique([
             ...$rowKeys,
             ...$keys['all'],
@@ -142,7 +133,7 @@ final readonly class CacheStateResolver
 
         return [
             new CacheState(
-                key: $this->keys->membership($plan->root, $version, $namespace, $queryHash),
+                key: $this->keys->queryEntry($plan->root, $version, $namespace, $queryHash),
                 epoch: $this->runtime->epoch(),
                 version: $version,
                 generation: $keys['generation'] !== null
@@ -157,9 +148,17 @@ final readonly class CacheStateResolver
     }
 
     /** @phpstan-impure */
-    public function isCurrent(QueryPlan $plan, CacheState $expected): bool
-    {
-        $keys = $this->stateKeys($plan, $expected->tagKey, $this->keys->epoch());
+    public function isCurrent(
+        QueryPlan $plan,
+        CacheState $expected,
+        ?bool $usesGeneration = null,
+    ): bool {
+        $keys = $this->stateKeys(
+            $plan,
+            $expected->tagKey,
+            $this->keys->epoch(),
+            $usesGeneration,
+        );
         $values = $this->store->mget($keys['all']);
         $current = static fn(string $key): string => $values[$key] ?? '0';
 
@@ -192,8 +191,12 @@ final readonly class CacheStateResolver
      *     all: list<string>
      * }
      */
-    private function stateKeys(QueryPlan $plan, ?string $tagKey, ?string $epochKey): array
-    {
+    private function stateKeys(
+        QueryPlan $plan,
+        ?string $tagKey,
+        ?string $epochKey,
+        ?bool $usesGeneration = null,
+    ): array {
         $dependencies = [];
 
         foreach ($plan->dependencies as $dependency) {
@@ -203,7 +206,7 @@ final readonly class CacheStateResolver
         }
 
         $versionKey = $this->keys->version($plan->root);
-        $generationKey = $plan->usesGeneration()
+        $generationKey = ($usesGeneration ?? $plan->usesGeneration())
             ? $this->keys->generation($plan->root)
             : null;
 

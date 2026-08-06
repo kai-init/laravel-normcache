@@ -83,10 +83,10 @@ final class CanonicalProjectionFallbackTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame([], DB::getQueryLog());
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         $this->cacheStore()->delete([
-            ...$this->cacheKeysMatching(':m:v'),
+            ...$this->cacheQueryKeysWithField('m'),
             ...$this->cacheKeysMatching(':r:g'),
         ]);
 
@@ -117,8 +117,8 @@ final class CanonicalProjectionFallbackTest extends TestCase
             ->get();
 
         $expected = $projected()->pluck('id')->all();
-        $resultKey = $this->cacheKeysMatching(':e:v')[0];
-        $this->cacheStore()->setRawForever($resultKey, 'corrupt');
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $this->cacheStore()->writeHashField($resultKey, 'r', 'corrupt');
         Event::fake([QueryCacheRepaired::class]);
 
         DB::flushQueryLog();
@@ -128,7 +128,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         $this->assertSame($expected, $actual);
         $this->assertSame([], DB::getQueryLog());
-        $payload = $this->cacheStore()->getRaw($resultKey);
+        $payload = $this->cacheStore()->readHashField($resultKey, 'r');
         $this->assertIsString($payload);
         $this->assertNotSame('corrupt', $payload);
         Event::assertDispatched(

@@ -1,28 +1,29 @@
--- Publish every canonical row and its membership as one guarded operation.
--- Readers cannot discover the rows until this script writes the membership.
+-- Publish every canonical row and its query entry as one guarded operation.
+-- Readers cannot discover the rows until this script writes the membership field.
 --
 -- KEYS[1] = version key
 -- KEYS[2] = generation key
--- KEYS[3] = membership key
+-- KEYS[3] = query entry key
 -- KEYS[4..3+n] = row keys
 -- KEYS[4+n] = build lease
 -- KEYS[5+n] = token-scoped wake list
--- KEYS[6+n] = result overlay key (optional)
 -- ARGV[1] = row count
 -- ARGV[2] = expected version
 -- ARGV[3] = expected generation
--- ARGV[4] = membership TTL
+-- ARGV[4] = entry TTL
 -- ARGV[5] = row TTL
 -- ARGV[6] = membership payload
 -- ARGV[7..6+n] = row payloads
 -- ARGV[7+n] = owner token
 -- ARGV[8+n] = wake token count
 -- ARGV[9+n] = wake TTL
--- ARGV[10+n] = result overlay payload (required when KEYS[6+n] is present)
+-- ARGV[10+n] = result overlay payload (optional; absent clears the stale overlay)
+--
+-- The overlay shares KEYS[3] with the membership, so one EXPIRE covers both fields.
 local n = tonumber(ARGV[1])
 local lease_index = 4 + n
 local wake_index = 5 + n
-local overlay_index = 6 + n
+local overlay = ARGV[10 + n]
 local token = ARGV[7 + n]
 local wake_count = tonumber(ARGV[8 + n])
 local wake_tokens = {}
@@ -56,11 +57,15 @@ for i = 1, n do
     redis.call('SETEX', KEYS[3 + i], tonumber(ARGV[5]), ARGV[6 + i])
 end
 
-redis.call('SETEX', KEYS[3], tonumber(ARGV[4]), ARGV[6])
+redis.call('HSET', KEYS[3], 'm', ARGV[6])
 
-if #KEYS >= overlay_index then
-    redis.call('SETEX', KEYS[overlay_index], tonumber(ARGV[4]), ARGV[10 + n])
+if overlay then
+    redis.call('HSET', KEYS[3], 'r', overlay)
+else
+    redis.call('HDEL', KEYS[3], 'r')
 end
+
+redis.call('EXPIRE', KEYS[3], tonumber(ARGV[4]))
 
 release()
 return 1

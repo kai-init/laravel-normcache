@@ -7,13 +7,13 @@ use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FailureReporter;
-use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RowRepair;
+use NormCache\Values\TableIdentity;
 
 final readonly class RowRepairer
 {
@@ -24,7 +24,6 @@ final readonly class RowRepairer
         private CacheConfig $config,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
-        private QueryIdentity $identity,
         private RawResultCodec $codec,
         private CacheStateResolver $states,
         private BuildLeaseCoordinator $leases,
@@ -41,12 +40,8 @@ final readonly class RowRepairer
         $tokens = array_values(array_unique($tokens));
         sort($tokens, SORT_STRING);
 
-        $repairHash = $this->identity->repairHash(
-            $plan->root->hash,
-            $state->generation,
-            $tokens,
-        );
-        $lease = $this->leases->claimRepair($plan->root, $repairHash);
+        $batchHash = hash('xxh128', TableIdentity::encodeFields($tokens));
+        $lease = $this->leases->claimRepair($plan->root, $state->generation, $batchHash);
 
         if (!$lease->owner) {
             if ($lease->wakeKey !== null) {
@@ -58,11 +53,20 @@ final readonly class RowRepairer
 
             $rows = $this->readRepaired($plan, $state, $tokens);
 
-            if ($rows === null || !$this->states->isCurrent($plan, $state)) {
-                return null;
-            }
+            return $rows !== null
+                && $this->states->isCurrent($plan, $state, usesGeneration: true)
+                    ? new RowRepair($rows, ReadOutcome::HIT)
+                    : null;
+        }
 
-            return new RowRepair($rows, ReadOutcome::HIT);
+        $repaired = $this->readRepaired($plan, $state, $tokens);
+
+        if ($repaired !== null) {
+            $this->leases->release($lease);
+
+            return $this->states->isCurrent($plan, $state, usesGeneration: true)
+                ? new RowRepair($repaired, ReadOutcome::HIT)
+                : null;
         }
 
         try {
@@ -75,11 +79,11 @@ final readonly class RowRepairer
 
         if ($rows === null) {
             $this->leases->release($lease);
-
-            return null;
         }
 
-        return new RowRepair($rows, ReadOutcome::REPAIRED);
+        return $rows === null
+            ? null
+            : new RowRepair($rows, ReadOutcome::REPAIRED);
     }
 
     /**
@@ -138,7 +142,7 @@ final readonly class RowRepairer
             return null;
         }
 
-        if (!$this->states->isCurrent($plan, $state)) {
+        if (!$this->states->isCurrent($plan, $state, usesGeneration: true)) {
             return null;
         }
 
@@ -168,14 +172,14 @@ final readonly class RowRepairer
                 $state->generation,
             ],
             buildingKey: $lease->buildingKey,
-            wakeKey: (string) $lease->wakeKey,
-            token: (string) $lease->token,
+            wakeKey: $lease->wakeKey,
+            token: $lease->token,
             wakeTtl: $this->config->wakeTtl(),
         )) {
             return null;
         }
 
-        return $this->states->isCurrent($plan, $state) ? $rowsByToken : null;
+        return $this->states->isCurrent($plan, $state, usesGeneration: true) ? $rowsByToken : null;
     }
 
     /**

@@ -24,40 +24,22 @@ final class CacheKeyBuilder
         return $this->tablePrefix($table) . ':gen';
     }
 
-    public function membership(
+    public function queryEntry(
         TableIdentity $table,
         string $version,
         string $namespace,
         string $queryHash,
     ): string {
-        return $this->tablePrefix($table) . ":m:v{$version}:{$namespace}:{$queryHash}";
+        return $this->tablePrefix($table) . ":q:v{$version}:{$namespace}:{$queryHash}";
     }
 
-    public function membershipBuild(
+    public function queryBuild(
         TableIdentity $table,
         string $version,
         string $namespace,
         string $queryHash,
     ): string {
-        return $this->tablePrefix($table) . ":build:m:v{$version}:{$namespace}:{$queryHash}";
-    }
-
-    public function result(
-        TableIdentity $table,
-        string $version,
-        string $namespace,
-        string $queryHash,
-    ): string {
-        return $this->tablePrefix($table) . ":e:v{$version}:{$namespace}:{$queryHash}";
-    }
-
-    public function resultBuild(
-        TableIdentity $table,
-        string $version,
-        string $namespace,
-        string $queryHash,
-    ): string {
-        return $this->tablePrefix($table) . ":build:e:v{$version}:{$namespace}:{$queryHash}";
+        return $this->tablePrefix($table) . ":build:q:v{$version}:{$namespace}:{$queryHash}";
     }
 
     public function row(TableIdentity $table, string $generation, string $pkToken): string
@@ -75,14 +57,18 @@ final class CacheKeyBuilder
         return $this->tablePrefix($table) . ":build:r:g{$generation}:{$pkToken}";
     }
 
-    public function repairBuild(TableIdentity $table, string $batchHash): string
+    public function repairBuild(TableIdentity $table, string $generation, string $batchHash): string
     {
-        return $this->tablePrefix($table) . ":repair:{$batchHash}:build";
+        return $this->tablePrefix($table) . ":build:x:g{$generation}:{$batchHash}";
     }
 
-    public function repairWake(TableIdentity $table, string $batchHash, string $token): string
-    {
-        return $this->tablePrefix($table) . ":repair:{$batchHash}:wake:{$token}";
+    public function repairWake(
+        TableIdentity $table,
+        string $generation,
+        string $batchHash,
+        string $token,
+    ): string {
+        return $this->wake($table, 'x', "g{$generation}:{$batchHash}", $token);
     }
 
     public function wake(TableIdentity $table, string $family, string $identity, string $token): string
@@ -90,9 +76,9 @@ final class CacheKeyBuilder
         return $this->tablePrefix($table) . ":wake:{$family}:{$identity}:{$token}";
     }
 
-    public function queryGroupResult(string $queryHash, string $namespace): string
+    public function queryGroupEntry(string $queryHash, string $namespace): string
     {
-        return $this->keyPrefix . "{nc:x:{$queryHash}}:result:{$namespace}";
+        return $this->keyPrefix . "{nc:x:{$queryHash}}:q:{$namespace}";
     }
 
     public function queryGroupBuild(string $queryHash): string

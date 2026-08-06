@@ -77,7 +77,7 @@ final class ResultCacheStrategyTest extends TestCase
         $cold = $query();
 
         $this->assertCount(5, $cold);
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         Event::fake([QueryCacheHit::class]);
         DB::flushQueryLog();
@@ -115,7 +115,7 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $this->assertCount(51, $query());
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -146,7 +146,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertCount(50, $cold->items());
         $this->assertTrue($cold->hasMorePages());
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -182,7 +182,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertCount(50, $cold->items());
         $this->assertTrue($cold->hasMorePages());
-        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -192,7 +192,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertCount(50, $warm->items());
         $this->assertTrue($warm->hasMorePages());
         $this->assertSame([], DB::getQueryLog());
-        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
     }
 
     public function test_eloquent_forwards_use_result_cache_to_the_query_builder(): void
@@ -230,10 +230,10 @@ final class ResultCacheStrategyTest extends TestCase
                 ->get();
 
             $this->assertCount(4, $query());
-            $this->assertSame([], $this->cacheKeysMatching(':e:v'));
-            $membershipKey = $this->cacheKeysMatching(':m:v')[0] ?? null;
+            $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+            $membershipKey = $this->cacheQueryKeysWithField('m')[0] ?? null;
             $this->assertIsString($membershipKey);
-            $membership = $this->cacheStore()->getRaw($membershipKey);
+            $membership = $this->cacheStore()->readHashField($membershipKey, 'm');
             $this->assertIsString($membership);
             $this->assertFalse(app(MembershipCodec::class)->decode($membership)->overlayRejected);
 
@@ -243,7 +243,7 @@ final class ResultCacheStrategyTest extends TestCase
             DB::disableQueryLog();
 
             $this->assertSame([], DB::getQueryLog());
-            $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+            $this->assertSame([], $this->cacheQueryKeysWithField('r'));
         } finally {
             $this->app->instance(CacheConfig::class, $originalConfig);
             $this->app->forgetScopedInstances();
@@ -269,10 +269,10 @@ final class ResultCacheStrategyTest extends TestCase
                     ->get();
 
                 $this->assertCount($expected, $query());
-                $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+                $this->assertSame([], $this->cacheQueryKeysWithField('r'));
 
                 $this->assertCount($expected, $query());
-                $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+                $this->assertSame([], $this->cacheQueryKeysWithField('r'));
             }
         } finally {
             $this->app->instance(CacheConfig::class, $originalConfig);
@@ -307,7 +307,7 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $this->assertCount($rows, $query());
-        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -334,7 +334,7 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $this->assertCount(4, $query());
-        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -342,7 +342,7 @@ final class ResultCacheStrategyTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame([], DB::getQueryLog());
-        $this->assertSame([], $this->cacheKeysMatching(':e:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
     }
 
     public function test_many_mid_sized_rows_under_the_payload_limit_are_still_promoted(): void
@@ -366,7 +366,7 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $this->assertCount(45, $query());
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -386,8 +386,8 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $expected = $query()->pluck('id')->all();
-        $resultKey = $this->cacheKeysMatching(':e:v')[0];
-        $this->cacheStore()->delete($resultKey);
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $this->cacheStore()->deleteHashField($resultKey, 'r');
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -396,7 +396,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertSame($expected, $actual);
         $this->assertSame([], DB::getQueryLog());
-        $this->assertCount(1, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
     }
 
     public function test_corrupt_result_overlay_falls_back_to_canonical_and_self_heals(): void
@@ -408,8 +408,8 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $expected = $query()->pluck('id')->all();
-        $resultKey = $this->cacheKeysMatching(':e:v')[0];
-        $this->cacheStore()->setRawForever($resultKey, 'corrupt');
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $this->cacheStore()->writeHashField($resultKey, 'r', 'corrupt');
         Event::fake([QueryCacheRepaired::class]);
 
         DB::flushQueryLog();
@@ -419,7 +419,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertSame($expected, $actual);
         $this->assertSame([], DB::getQueryLog());
-        $payload = $this->cacheStore()->getRaw($resultKey);
+        $payload = $this->cacheStore()->readHashField($resultKey, 'r');
         $this->assertIsString($payload);
         $this->assertNotSame('corrupt', $payload);
         Event::assertDispatched(
@@ -501,8 +501,8 @@ final class ResultCacheStrategyTest extends TestCase
             ->get();
 
         $connection = Redis::connection('normcache-test');
-        $membershipKey = $this->cacheKeysMatching(':m:v')[0];
-        $resultKey = $this->cacheKeysMatching(':e:v')[0];
+        $membershipKey = $this->cacheQueryKeysWithField('m')[0];
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
         $membershipTtl = (int) $connection->ttl($membershipKey);
         $resultTtl = (int) $connection->ttl($resultKey);
 

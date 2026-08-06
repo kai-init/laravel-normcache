@@ -70,13 +70,13 @@ Writes inside the callback continue to invalidate NormCache normally.
 Unlike traditional query caching, which stores a full copy of every result set, NormCache stores each row once and caches queries as references to it:
 
 - **Rows stored once**: each database row lives under a single canonical key (`table:r:<id>`).
-- **Queries store only IDs**: a cached query is an ordered list of primary keys (`table:m:<query_hash>`), not a copy of the model attributes.
+- **Queries store only IDs**: a normalized query stores its ordered primary keys in the `m` field of a versioned query hash (`table:q:<query_hash>`), not as copied model attributes.
 - **No `KEYS` or `SCAN`**: updating a model deletes just that row key and bumps the table version counter (`table:v`). Invalidation cost does not grow with the number of cached queries.
 - **One update, every query**: because all queries share the same row key, updating Post #42 refreshes it everywhere on the next read — no per-query cleanup.
 
 ## Automatic Result & Projection Overlay
 
-For small result sets, NormCache also stores the assembled result alongside the canonical rows, so a warm read is a single Redis fetch instead of a membership lookup plus row assembly:
+For small result sets, NormCache stores the assembled result in the `r` field of the same query hash, so a warm read is a single Redis fetch instead of a membership lookup plus row assembly:
 
 - **Automatic promotion**: a canonical query is promoted when it returns at most `auto_overlay_max_rows + 1` rows (default `1000`, so up to 1001) and the encoded payload is at most 128 KiB — a fixed cap that keeps wide rows out.
 - **Self-healing**: writes to the query's tables invalidate the overlay along with the canonical rows. If the overlay is missing or expired, the read falls back to canonical row assembly and re-promotes.
@@ -177,10 +177,6 @@ php artisan normcache:enable
 While disabled, reads bypass NormCache and go directly to the database, and writes do not perform cache invalidation. The switch is stored in Redis and is observed by new requests and jobs across every node.
 
 `normcache:enable` atomically advances the global epoch before clearing the disabled flag. This prevents payloads cached before the pause from being served after writes occurred while invalidation was disabled.
-
-### Required rollout for table-identity changes
-
-The source-scoped table identity uses different table version and generation keys from earlier releases. Do not run old and new application versions together while NormCache is active: each version would invalidate only its own table-key family.
 
 Use this deployment sequence:
 

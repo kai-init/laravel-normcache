@@ -312,7 +312,7 @@ final class ProjectionFallbackTest extends TestCase
         $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
         $epoch = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
         $token = str_repeat('a', 32);
-        $buildKey = $this->cacheKeys()->resultBuild($table, $version, $namespace, $queryHash);
+        $buildKey = $this->cacheKeys()->queryBuild($table, $version, $namespace, $queryHash);
         $wakeKey = $this->cacheKeys()->wake($table, 'e', $queryHash, $token);
         $rowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->postId);
         $payload = $this->app->make(RawResultCodec::class)->encodeRow(

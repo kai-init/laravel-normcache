@@ -34,7 +34,7 @@ final class CacheContextTest extends TestCase
         $this->assertSame('Tenant A', $tenantA?->title);
         $this->assertCount(1, DB::getQueryLog());
         $this->assertSame([], $this->cacheKeysMatching(':r:g'));
-        $this->assertCount(2, $this->cacheKeysMatching(':e:v'));
+        $this->assertCount(2, $this->cacheQueryKeysWithField('r'));
     }
 
     public function test_contexts_isolate_identical_canonical_shapes(): void
@@ -53,7 +53,7 @@ final class CacheContextTest extends TestCase
 
         $this->assertSame('Tenant B', $read('tenant:b'));
         $this->assertSame('Tenant A', $read('tenant:a'));
-        $this->assertSame([], $this->cacheKeysMatching(':m:v'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('m'));
         $this->assertSame([], $this->cacheKeysMatching(':r:g'));
     }
 

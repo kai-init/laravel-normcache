@@ -18,7 +18,7 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->canonicalPlan();
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
 
         $this->assertTrue($resolver->isCurrent($plan, $state));
     }
@@ -28,7 +28,7 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->canonicalPlan();
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
         $this->cacheStore()->increment($this->cacheKeys()->version($plan->root));
 
         $this->assertFalse($resolver->isCurrent($plan, $state));
@@ -39,7 +39,7 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->canonicalPlan();
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
         $this->assertTrue($resolver->isCurrent($plan, $state));
 
         // The epoch is memoized for this scope by now, so isCurrent() must still
@@ -58,10 +58,9 @@ final class CacheStateResolverTest extends TestCase
             $root,
             [$root, $dependency],
             new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
-            materializeResult: false,
         );
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
         $this->assertTrue($resolver->isCurrent($plan, $state));
 
         $this->cacheStore()->increment($this->cacheKeys()->version($dependency));
@@ -76,7 +75,7 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->{$factory}();
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
         $this->assertSame('0', $state->generation);
         $this->assertTrue($resolver->isCurrent($plan, $state));
 
@@ -98,10 +97,23 @@ final class CacheStateResolverTest extends TestCase
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->canonicalPlan();
 
-        [$state] = $resolver->resolve($plan, 'n', 'hash');
+        $state = $resolver->resolve($plan, 'n', 'hash');
         $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
 
         $this->assertFalse($resolver->isCurrent($plan, $state));
+    }
+
+    public function test_a_canonical_result_overlay_can_resolve_without_row_generation(): void
+    {
+        $resolver = $this->app->make(CacheStateResolver::class);
+        $plan = $this->canonicalPlan();
+
+        $state = $resolver->resolve($plan, 'n', 'hash', usesGeneration: false);
+        $this->assertSame('0', $state->generation);
+
+        $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
+
+        $this->assertTrue($resolver->isCurrent($plan, $state, usesGeneration: false));
     }
 
     private function resultPlan(): QueryPlan
@@ -130,7 +142,6 @@ final class CacheStateResolverTest extends TestCase
             $root,
             [$root],
             new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
-            materializeResult: false,
         );
     }
 
