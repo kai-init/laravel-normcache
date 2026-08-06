@@ -76,7 +76,7 @@ final class UnifiedQueryEntryTest extends TestCase
         }
     }
 
-    public function test_a_query_group_read_costs_a_hash_read_plus_a_separate_state_read(): void
+    public function test_a_query_group_read_costs_a_single_pipelined_round_trip(): void
     {
         $this->skipWhenCommandStatsAreSharded();
 
@@ -94,10 +94,14 @@ final class UnifiedQueryEntryTest extends TestCase
             'a joined query must take the query-group route',
         );
 
+        DB::flushQueryLog();
+        DB::enableQueryLog();
         $calls = $this->commandCallsDuring($query);
+        DB::disableQueryLog();
 
-        $this->assertSame(1, $calls['hget'] ?? 0, 'the query entry needs its own HGET');
-        $this->assertSame(1, $calls['mget'] ?? 0, 'the cache state needs a second round trip');
+        $this->assertSame([], DB::getQueryLog(), 'the read must still be served from cache');
+        $this->assertSame(0, $calls['hget'] ?? 0, 'the entry must not cost a standalone HGET');
+        $this->assertSame(0, $calls['mget'] ?? 0, 'the cache state must not cost a second round trip');
     }
 
     public function test_a_canonical_overlay_read_needs_nothing_beyond_its_script(): void

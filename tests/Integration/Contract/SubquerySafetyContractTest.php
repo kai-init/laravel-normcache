@@ -253,8 +253,9 @@ final class SubquerySafetyContractTest extends TestCase
         }
     }
 
+    /** withoutCache() is the opt-out; NormCache will not prove the function stable. */
     #[DataProvider('unknownFunctionExpressions')]
-    public function test_unknown_database_function_cannot_be_authorized_by_dependencies(
+    public function test_unknown_database_function_is_cached_rather_than_bypassed(
         string $expression,
     ): void {
         if (DB::connection()->getDriverName() !== 'sqlite') {
@@ -281,18 +282,7 @@ final class SubquerySafetyContractTest extends TestCase
             ->whereKey($author->id)
             ->first();
 
-        $this->bypassContract($query, $native);
-        $declared = static fn() => Author::query()
-            ->selectRaw("{$expression} as post_count")
-            ->dependsOn(['posts'])
-            ->whereKey($author->id)
-            ->first();
-
-        $this->bypassContract(
-            $declared,
-            $native,
-            reason: 'volatile_expression',
-        );
+        $this->contract($query, $native);
     }
 
     public static function unknownFunctionExpressions(): array
@@ -300,8 +290,26 @@ final class SubquerySafetyContractTest extends TestCase
         return [
             'bare' => ['normcache_post_count()'],
             'quoted identifier' => ['"normcache_post_count"()'],
-            'comment before arguments' => ['normcache_post_count/**/()'],
         ];
+    }
+
+    /**
+     * A comment in a raw fragment is DependencyAnalyzer's concern, not the
+     * volatility scan's: it may hide a reference to another source.
+     */
+    public function test_a_commented_raw_projection_is_still_opaque(): void
+    {
+        $author = Author::create(['name' => 'Alice']);
+        $query = static fn() => Author::query()
+            ->selectRaw('1/**/ as post_count')
+            ->whereKey($author->id)
+            ->first();
+        $native = static fn() => Author::withoutCache()
+            ->selectRaw('1/**/ as post_count')
+            ->whereKey($author->id)
+            ->first();
+
+        $this->bypassContract($query, $native, reason: 'unidentifiable_dependency');
     }
 
     public function test_raw_join_expression_requires_declared_dependencies(): void

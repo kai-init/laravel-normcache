@@ -21,6 +21,41 @@ use NormCache\Tests\TestCase;
 use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
 
+trait SplitsPipelineAroundInvalidation
+{
+    private bool $intercepted = false;
+
+    public function pipeline(?callable $callback = null)
+    {
+        $recorder = new class
+        {
+            /** @var list<array{0: string, 1: array<int, mixed>}> */
+            public array $calls = [];
+
+            public function __call(string $method, array $arguments): static
+            {
+                $this->calls[] = [$method, $arguments];
+
+                return $this;
+            }
+        };
+
+        $callback($recorder);
+        $replies = [];
+
+        foreach ($recorder->calls as $index => [$method, $arguments]) {
+            $replies[] = $this->command($method, $arguments);
+
+            if ($index === 0 && !$this->intercepted) {
+                $this->intercepted = true;
+                ($this->afterFirstCommand)();
+            }
+        }
+
+        return $replies;
+    }
+}
+
 class PostTitlesView extends Model
 {
     protected $table = 'post_titles';
@@ -361,53 +396,31 @@ final class DependencyVectorTest extends TestCase
             DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
         };
 
+        // Redis lets another client's write land between two commands of one
+        // pipeline; running them separately reproduces that worst case.
         if ($connection instanceof PhpRedisConnection) {
             $interceptingConnection = new class($connection->client(), $invalidate) extends PhpRedisConnection
             {
-                private bool $intercepted = false;
+                use SplitsPipelineAroundInvalidation;
 
                 public function __construct(
                     mixed $client,
-                    private \Closure $afterFirstHget,
+                    private \Closure $afterFirstCommand,
                 ) {
                     parent::__construct($client);
-                }
-
-                public function hget($key, $field)
-                {
-                    $result = $this->command('hget', [$key, $field]);
-
-                    if (!$this->intercepted) {
-                        $this->intercepted = true;
-                        ($this->afterFirstHget)();
-                    }
-
-                    return $result;
                 }
             };
         } else {
             $this->assertInstanceOf(PredisConnection::class, $connection);
             $interceptingConnection = new class($connection->client(), $invalidate) extends PredisConnection
             {
-                private bool $intercepted = false;
+                use SplitsPipelineAroundInvalidation;
 
                 public function __construct(
                     mixed $client,
-                    private \Closure $afterFirstHget,
+                    private \Closure $afterFirstCommand,
                 ) {
                     parent::__construct($client);
-                }
-
-                public function hget($key, $field)
-                {
-                    $result = $this->command('hget', [$key, $field]);
-
-                    if (!$this->intercepted) {
-                        $this->intercepted = true;
-                        ($this->afterFirstHget)();
-                    }
-
-                    return $result;
                 }
             };
         }

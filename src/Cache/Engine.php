@@ -376,15 +376,19 @@ final readonly class Engine
         }
 
         if ($plan->isQueryGroup()) {
-            // The entry and the version keys it is guarded by sit in different
-            // hash slots, so no script can read both. Reading the payload first
-            // keeps the guards no older than what they validate.
+            // The entry and its version keys sit in different hash slots, so unlike
+            // the other routes no single script can read both.
             $entryKey = $this->keys->queryGroupEntry($queryHash, $namespace);
-            $raw = $this->store->readHashField($entryKey, 'r');
+            [$raw, $values] = $this->store->readHashFieldWithValues(
+                $entryKey,
+                'r',
+                $this->states->pendingStateKeys($plan, $namespace),
+            );
             $state = $this->states->resolve(
                 $plan,
                 $namespace,
                 $queryHash,
+                prefetched: $values,
             );
 
             return $this->entries->readResult($state, $raw);

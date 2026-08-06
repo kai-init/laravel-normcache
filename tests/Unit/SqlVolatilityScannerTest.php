@@ -35,6 +35,18 @@ final class SqlVolatilityScannerTest extends TestCase
             'PostgreSQL connection state' => ['current_setting(\'application_name\')'],
             'SQL Server connection state' => ['SESSION_CONTEXT(N\'tenant\')'],
             'argument-dependent function' => ['datetime(\'now\', \'+1 day\')'],
+        ];
+    }
+
+    #[DataProvider('undetectedExpressions')]
+    public function test_it_does_not_attempt_to_detect_unrecognised_calls(string $sql): void
+    {
+        $this->assertFalse((new SqlVolatilityScanner)->isVolatile($sql));
+    }
+
+    public static function undetectedExpressions(): array
+    {
+        return [
             'unknown function' => ['vendor_schema.custom_score(users.id)'],
             'quoted unknown function' => ['"custom_score"(users.id)'],
             'unknown nested function' => ['coalesce(custom_score(id), 0)'],

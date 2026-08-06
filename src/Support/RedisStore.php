@@ -42,6 +42,36 @@ final class RedisStore
         });
     }
 
+    public function readHashFieldWithValues(string $key, string $field, array $valueKeys): array
+    {
+        $connection = $this->connection();
+
+        if (
+            $valueKeys === []
+            || $connection instanceof PredisClusterConnection
+            || $connection instanceof PhpRedisClusterConnection
+        ) {
+            return [$this->readHashField($key, $field), $this->mget($valueKeys)];
+        }
+
+        return $this->withRawValues(function (Connection $connection) use ($key, $field, $valueKeys): array {
+            $queue = static function (mixed $pipe) use ($key, $field, $valueKeys): void {
+                $pipe->hget($key, $field);
+                $pipe->mget($valueKeys);
+            };
+
+            // Predis's client takes the callback itself; phpredis needs Laravel's wrapper.
+            $replies = (array) ($connection instanceof PhpRedisConnection
+                ? $connection->pipeline($queue)
+                : $connection->command('pipeline', [$queue]));
+
+            return [
+                is_string($replies[0] ?? null) ? $replies[0] : null,
+                $this->mapMgetValues($valueKeys, $replies[1] ?? []),
+            ];
+        });
+    }
+
     public function writeHashField(string $key, string $field, string $value): void
     {
         $this->withRawValues(static function (Connection $connection) use ($key, $field, $value): void {

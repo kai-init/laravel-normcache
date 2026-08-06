@@ -15,14 +15,24 @@ final readonly class CacheStateResolver
         private CacheKeyBuilder $keys,
     ) {}
 
-    public function resolve(
+    /**
+     * Feed the values back to resolve() as $prefetched; unmatched arguments there
+     * would silently resolve missing keys to version '0'.
+     *
+     * @return list<string>
+     */
+    public function pendingStateKeys(QueryPlan $plan, string $namespace): array
+    {
+        return $this->pendingKeys($plan, $namespace)['all'];
+    }
+
+    private function pendingKeys(
         QueryPlan $plan,
         string $namespace,
-        string $queryHash,
         ?string $knownVersion = null,
         ?string $knownGeneration = null,
         ?bool $usesGeneration = null,
-    ): CacheState {
+    ): array {
         $versionKeys = [];
 
         foreach ($plan->dependencies as $dependency) {
@@ -40,12 +50,45 @@ final readonly class CacheStateResolver
             : null;
         $tagKey = $this->tagKey($namespace);
         $epochKey = $this->unknownEpochKey();
-        $values = $this->store->mget(array_values(array_unique(array_filter([
-            $epochKey,
-            ...array_values($versionKeys),
-            $generationKey,
-            $tagKey,
-        ]))));
+
+        return [
+            'versions' => $versionKeys,
+            'root' => $rootVersionKey,
+            'generation' => $generationKey,
+            'tag' => $tagKey,
+            'epoch' => $epochKey,
+            'all' => array_values(array_unique(array_filter([
+                $epochKey,
+                ...array_values($versionKeys),
+                $generationKey,
+                $tagKey,
+            ]))),
+        ];
+    }
+
+    /** @param ?array<string, ?string> $prefetched values for pendingStateKeys() */
+    public function resolve(
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+        ?string $knownVersion = null,
+        ?string $knownGeneration = null,
+        ?bool $usesGeneration = null,
+        ?array $prefetched = null,
+    ): CacheState {
+        $pending = $this->pendingKeys(
+            $plan,
+            $namespace,
+            $knownVersion,
+            $knownGeneration,
+            $usesGeneration,
+        );
+        $versionKeys = $pending['versions'];
+        $rootVersionKey = $pending['root'];
+        $generationKey = $pending['generation'];
+        $tagKey = $pending['tag'];
+        $epochKey = $pending['epoch'];
+        $values = $prefetched ?? $this->store->mget($pending['all']);
         $this->rememberEpochFrom($epochKey, $values);
 
         if (
