@@ -21,6 +21,7 @@ final readonly class CacheConfig
         public int $buildingLockTtl,
         public int $stampedeWaitMs,
         public int $stampedeWakeTokens,
+        public int $epochRefreshSeconds,
         public bool $enabled,
         public bool $dispatchEvents,
         public bool $debugbar,
@@ -65,6 +66,7 @@ final readonly class CacheConfig
             self::MAX_STAMPEDE_WAKE_TOKENS,
             64,
         );
+        $epochRefreshSeconds = self::nonNegative($values, 'epoch_refresh_seconds', 5);
 
         return new self(
             connection: (string) ($values['connection'] ?? 'cache'),
@@ -78,6 +80,7 @@ final readonly class CacheConfig
             maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,
             buildingLockTtl: $buildingLockTtl,
             stampedeWaitMs: $stampedeWaitMs,
+            epochRefreshSeconds: $epochRefreshSeconds,
             stampedeWakeTokens: $stampedeWakeTokens,
             enabled: (bool) ($values['enabled'] ?? true),
             dispatchEvents: (bool) ($values['events'] ?? false),

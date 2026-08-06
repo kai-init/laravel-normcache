@@ -15,6 +15,8 @@ final class CacheRuntime
 
     private ?string $epoch = null;
 
+    private ?float $epochReadAt = null;
+
     private ?string $schemaEpoch = null;
 
     private ?bool $runtimeDisabled = null;
@@ -60,7 +62,9 @@ final class CacheRuntime
 
     public function epoch(): string
     {
-        return $this->epoch ?? $this->resolveState()[0];
+        return $this->epoch !== null && !$this->epochExpired()
+            ? $this->epoch
+            : $this->resolveState()[0];
     }
 
     public function knownEpoch(): ?string
@@ -70,13 +74,26 @@ final class CacheRuntime
 
     public function rememberEpoch(string $epoch): void
     {
-        $this->epoch ??= $epoch;
+        if ($this->epoch === null) {
+            $this->epoch = $epoch;
+            $this->epochReadAt = microtime(true);
+        }
     }
 
     public function forgetEpoch(): void
     {
         $this->epoch = null;
+        $this->epochReadAt = null;
         $this->runtimeDisabled = null;
+    }
+
+    private function epochExpired(): bool
+    {
+        $interval = $this->config->epochRefreshSeconds;
+
+        return $interval > 0
+            && $this->epochReadAt !== null
+            && (microtime(true) - $this->epochReadAt) >= $interval;
     }
 
     public function withoutCache(callable $callback): mixed
@@ -130,12 +147,13 @@ final class CacheRuntime
     /** @return array{0: string, 1: bool} */
     private function resolveState(): array
     {
-        if ($this->epoch === null) {
+        if ($this->epoch === null || $this->epochExpired()) {
             $epochKey = $this->keys->epoch();
             $disabledKey = $this->keys->disabled();
             $schemaEpochKey = $this->keys->schemaEpoch();
             $values = $this->store->mget([$epochKey, $disabledKey, $schemaEpochKey]);
             $this->epoch = $values[$epochKey] ?? '0';
+            $this->epochReadAt = microtime(true);
             $this->runtimeDisabled ??= ($values[$disabledKey] ?? null) !== null;
             $this->schemaEpoch ??= $values[$schemaEpochKey] ?? '0';
         }

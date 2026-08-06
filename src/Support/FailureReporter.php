@@ -90,6 +90,21 @@ final class FailureReporter
         );
     }
 
+    public function observationFailed(\Throwable $exception, string $outcome): void
+    {
+        $this->log(
+            LogLevel::WARNING,
+            'observation',
+            'NormCache diagnostics failed; the query itself was unaffected.',
+            $exception,
+            [
+                'exception' => $exception,
+                'outcome' => $outcome,
+            ],
+            [$outcome],
+        );
+    }
+
     public function repairUnreachable(
         \Throwable $exception,
         TableIdentity $table,

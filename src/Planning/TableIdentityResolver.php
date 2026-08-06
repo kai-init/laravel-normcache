@@ -221,30 +221,15 @@ final class TableIdentityResolver
     ): ?string {
         $metadata = $this->metadata($connection, $sourceScope);
 
-        // The flag separates "answered with no schema name" from "never asked":
-        // a lookup that throws is transient and must stay unmemoized.
         if ($metadata->schemaResolved) {
             return $metadata->schema;
         }
-
-        $persistent = $this->persistent->effectiveSchema($connection);
-
-        if (is_string($persistent)) {
-            $metadata->schemaResolved = true;
-
-            return $metadata->schema = $persistent;
-        }
-
         try {
             $schema = $connection->getSchemaBuilder()->getCurrentSchemaName();
             $schema = is_string($schema) ? trim($schema) : null;
 
             if ($schema === '') {
                 $schema = null;
-            }
-
-            if ($schema !== null) {
-                $this->persistent->putEffectiveSchema($connection, $schema);
             }
         } catch (\Throwable) {
             return null;

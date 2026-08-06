@@ -19,6 +19,21 @@ final class ConnectionSourceResolver
 
         $source = (string) ($config['name'] ?? '');
 
-        return $source === '' ? null : $source;
+        if ($source === '') {
+            return null;
+        }
+
+        // A search_path decides which schema an unqualified PostgreSQL source
+        // resolves to, so two tenants sharing a connection name must not share
+        // a table identity. An explicit normcache_scope overrides this above.
+        $searchPath = $config['search_path'] ?? $config['schema'] ?? null;
+
+        if (is_array($searchPath)) {
+            $searchPath = implode(',', $searchPath);
+        }
+
+        return is_string($searchPath) && $searchPath !== ''
+            ? $source . "\0" . $searchPath
+            : $source;
     }
 }

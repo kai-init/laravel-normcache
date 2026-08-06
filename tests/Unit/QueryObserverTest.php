@@ -8,11 +8,13 @@ use NormCache\Database\QueryStatement;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Events\QueryCacheRepaired;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryObserver;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
+use Psr\Log\NullLogger;
 
 final class QueryObserverTest extends UnitTestCase
 {
@@ -27,6 +29,7 @@ final class QueryObserverTest extends UnitTestCase
         $observer = new QueryObserver(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
+            new FailureReporter(new NullLogger),
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = QueryPlan::queryGroup($table, [$table]);
@@ -75,6 +78,7 @@ final class QueryObserverTest extends UnitTestCase
         $observer = new QueryObserver(
             CacheConfig::fromArray([...config('normcache'), 'events' => true]),
             null,
+            new FailureReporter(new NullLogger),
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = QueryPlan::result($table, []);

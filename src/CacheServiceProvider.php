@@ -85,7 +85,7 @@ final class CacheServiceProvider extends ServiceProvider
                 }
             }
 
-            return new QueryObserver($config, $collector);
+            return new QueryObserver($config, $collector, $app->make(FailureReporter::class));
         });
 
         // Scoped, not shared: these memoize the schema epoch they were read

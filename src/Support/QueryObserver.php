@@ -26,7 +26,17 @@ final class QueryObserver
     public function __construct(
         private readonly CacheConfig $config,
         private readonly ?DebugBarCollector $sink,
+        private readonly FailureReporter $failures,
     ) {}
+
+    private function guard(string $outcome, \Closure $observation): void
+    {
+        try {
+            $observation();
+        } catch (\Throwable $exception) {
+            $this->failures->observationFailed($exception, $outcome);
+        }
+    }
 
     public function begin(): void
     {
@@ -101,6 +111,21 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason,
     ): void {
+        $this->guard($outcome->value, function () use (
+            $outcome, $query, $plan, $hash, $statement, $reason,
+        ): void {
+            $this->record($outcome, $query, $plan, $hash, $statement, $reason);
+        });
+    }
+
+    private function record(
+        ReadOutcome $outcome,
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $hash,
+        QueryStatement $statement,
+        ?string $reason,
+    ): void {
         if (!$this->enabled()) {
             return;
         }
@@ -156,6 +181,17 @@ final class QueryObserver
         QueryStatement $statement,
         ?QueryPlan $plan = null,
     ): void {
+        $this->guard('bypass', function () use ($query, $reason, $statement, $plan): void {
+            $this->recordBypass($query, $reason, $statement, $plan);
+        });
+    }
+
+    private function recordBypass(
+        QueryBuilder $query,
+        string $reason,
+        QueryStatement $statement,
+        ?QueryPlan $plan,
+    ): void {
         if (!$this->enabled()) {
             return;
         }
@@ -191,6 +227,14 @@ final class QueryObserver
 
     /** @param list<string> $tokens */
     public function invalidated(TableIdentity $table, string $mode, array $tokens): void
+    {
+        $this->guard('invalidation', function () use ($table, $mode, $tokens): void {
+            $this->recordInvalidation($table, $mode, $tokens);
+        });
+    }
+
+    /** @param list<string> $tokens */
+    private function recordInvalidation(TableIdentity $table, string $mode, array $tokens): void
     {
         if (!$this->enabled()) {
             return;
