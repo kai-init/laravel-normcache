@@ -3,6 +3,7 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
@@ -12,8 +13,6 @@ use NormCache\Values\TableIdentity;
 final class SchemaRepository
 {
     private const NONE = '-';
-
-    private ?string $epoch = null;
 
     /** @var array<string, array<string, ?string>> */
     private array $fields = [];
@@ -25,6 +24,7 @@ final class SchemaRepository
         private readonly CacheConfig $config,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
+        private readonly CacheRuntime $runtime,
     ) {}
 
     public function prime(Connection $connection, string $schema, TableIdentity $table): void
@@ -263,13 +263,14 @@ final class SchemaRepository
         }
 
         try {
-            $this->epoch = (string) $this->store->increment(
+            $this->runtime->rememberSchemaEpoch((string) $this->store->increment(
                 $this->keys->schemaEpoch(),
-            );
+            ));
 
             return true;
         } catch (\Throwable) {
-            $this->epoch = null;
+            // The increment may or may not have landed, so re-read it next time.
+            $this->runtime->forgetSchemaEpoch();
 
             return false;
         } finally {
@@ -329,18 +330,7 @@ final class SchemaRepository
 
     private function metadataKey(string $connection): string
     {
-        $this->resolveEpoch();
-
-        return $this->keys->schema($connection, (string) $this->epoch);
-    }
-
-    private function resolveEpoch(): void
-    {
-        if ($this->epoch !== null) {
-            return;
-        }
-
-        $this->epoch = $this->store->getRaw($this->keys->schemaEpoch()) ?? '0';
+        return $this->keys->schema($connection, $this->runtime->schemaEpoch());
     }
 
     private function schemaField(Connection $connection): string

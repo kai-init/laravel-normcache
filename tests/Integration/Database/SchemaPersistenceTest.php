@@ -10,11 +10,13 @@ use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Mockery;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Database\QueryBuilder;
 use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\FailureReporter;
 use NormCache\Support\RedisStore;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\TestCase;
@@ -98,7 +100,7 @@ final class SchemaPersistenceTest extends TestCase
         $this->assertSame('id', $coldPrimaryKey?->column);
     }
 
-    public function test_fresh_sqlite_schema_resolution_reads_one_epoch_and_batches_metadata_fields(): void
+    public function test_fresh_sqlite_schema_resolution_folds_the_epoch_into_the_runtime_read(): void
     {
         $connection = DB::connection();
         $query = DB::table('posts');
@@ -138,7 +140,7 @@ final class SchemaPersistenceTest extends TestCase
             ),
         ));
 
-        $this->assertSame(['get', 'hmget'], $metadataCommands);
+        $this->assertSame(['mget', 'hmget'], $metadataCommands);
     }
 
     public function test_verified_schema_rejects_model_primary_key_assumptions(): void
@@ -238,11 +240,7 @@ final class SchemaPersistenceTest extends TestCase
             $this->app->instance('redis', $manager);
             Redis::clearResolvedInstance('redis');
 
-            $recovering = new SchemaRepository(
-                $this->app->make(CacheConfig::class),
-                new RedisStore('normcache-test'),
-                $this->app->make(CacheKeyBuilder::class),
-            );
+            $recovering = $this->repositoryOn(new RedisStore('normcache-test'));
 
             $this->assertFalse($recovering->effectiveSchema($connection));
             $this->assertSame('current', $recovering->effectiveSchema($connection));
@@ -256,10 +254,9 @@ final class SchemaPersistenceTest extends TestCase
     public function test_a_zero_ttl_disables_persistence_entirely(): void
     {
         $connection = $this->mysqlConnection(Mockery::mock(Builder::class));
-        $repository = new SchemaRepository(
-            CacheConfig::fromArray([...config('normcache'), 'schema_ttl' => 0]),
+        $repository = $this->repositoryOn(
             $this->app->make(RedisStore::class),
-            $this->app->make(CacheKeyBuilder::class),
+            CacheConfig::fromArray([...config('normcache'), 'schema_ttl' => 0]),
         );
 
         $repository->putEffectiveSchema($connection, 'public');
@@ -278,8 +275,6 @@ final class SchemaPersistenceTest extends TestCase
         $keys = $this->cacheKeysMatching(':schema:v');
         $this->assertCount(1, $keys);
 
-        // A sliding expiry would push this back to the configured ttl and let a
-        // busy application keep retired metadata alive forever.
         $redis = Redis::connection('normcache-test');
         $redis->expire($keys[0], 5);
         $repository->putViews($connection, 'public', ['post_titles' => true]);
@@ -334,10 +329,24 @@ final class SchemaPersistenceTest extends TestCase
 
     private function repository(): SchemaRepository
     {
+        return $this->repositoryOn($this->app->make(RedisStore::class));
+    }
+
+    private function repositoryOn(RedisStore $store, ?CacheConfig $config = null): SchemaRepository
+    {
+        $config ??= $this->app->make(CacheConfig::class);
+        $keys = $this->app->make(CacheKeyBuilder::class);
+
         return new SchemaRepository(
-            $this->app->make(CacheConfig::class),
-            $this->app->make(RedisStore::class),
-            $this->app->make(CacheKeyBuilder::class),
+            $config,
+            $store,
+            $keys,
+            new CacheRuntime(
+                $config,
+                $store,
+                $keys,
+                $this->app->make(FailureReporter::class),
+            ),
         );
     }
 

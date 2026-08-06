@@ -152,6 +152,32 @@ final class SubqueryDependencyTest extends TestCase
         $this->assertSame(1, $read());
     }
 
+    public function test_a_subquery_mutated_after_capture_is_no_longer_trusted(): void
+    {
+        $subquery = DB::table('comments')->selectRaw('count(*)');
+        $query = DB::table('posts')->selectSub($subquery, 'comment_count');
+        $expression = null;
+
+        foreach ((array) $query->columns as $column) {
+            if (!is_string($column)) {
+                $expression = $column;
+            }
+        }
+
+        $this->assertNotNull($expression);
+        $this->assertNotNull(
+            $query->capturedSubquery($expression),
+            'an untouched capture must resolve to its builder',
+        );
+
+        $subquery->from('tags');
+
+        $this->assertNull(
+            $query->capturedSubquery($expression),
+            'a capture whose builder no longer compiles to the copied SQL must be rejected',
+        );
+    }
+
     public function test_a_raw_select_subquery_requires_declared_dependencies(): void
     {
         $build = fn(bool $declared = false) => Author::withCount('posts')

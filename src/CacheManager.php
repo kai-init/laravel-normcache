@@ -48,11 +48,7 @@ final readonly class CacheManager
             $identities[$identity->encoded] = $identity;
         }
 
-        foreach ($identities as $identity) {
-            $success = $this->invalidator->invalidateTable($identity) && $success;
-        }
-
-        return $success;
+        return $this->invalidator->invalidateTables(array_values($identities)) && $success;
     }
 
     public function invalidateTable(string $connection, string $table): bool

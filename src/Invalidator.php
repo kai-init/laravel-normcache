@@ -202,11 +202,23 @@ final class Invalidator
 
     public function invalidateTable(TableIdentity $table): bool
     {
-        if (!$this->runtime->invalidating()) {
-            return false;
+        return $this->invalidateTables([$table]);
+    }
+
+    public function invalidateTables(array $tables): bool
+    {
+        if ($tables === [] || !$this->runtime->invalidating()) {
+            return $tables === [];
         }
 
-        return $this->apply($table, true, []);
+        return $this->applyMany(array_map(
+            static fn(TableIdentity $table): array => [
+                'table' => $table,
+                'broad' => true,
+                'tokens' => [],
+            ],
+            $tables,
+        ));
     }
 
     /** @param list<string> $tokens */
