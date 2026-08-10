@@ -6,6 +6,7 @@ use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 
@@ -18,7 +19,7 @@ final class UnifiedQueryEntryTest extends TestCase
         $author = Author::query()->create(['name' => 'Author']);
 
         foreach (range(1, 4) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Post {$index}",
                 'views' => $index,
                 'published' => true,
@@ -31,7 +32,7 @@ final class UnifiedQueryEntryTest extends TestCase
 
     public function test_a_canonical_publish_writes_the_membership_and_overlay_to_one_key(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         $withMembership = $this->cacheQueryKeysWithField('m');
 
@@ -45,7 +46,7 @@ final class UnifiedQueryEntryTest extends TestCase
 
     public function test_an_oversized_result_clears_a_stale_overlay_but_keeps_the_membership(): void
     {
-        $query = fn() => DB::table('posts')->orderBy('id')->get();
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
         $query();
 
         $entryKey = $this->cacheQueryKeysWithField('m')[0];
@@ -80,7 +81,7 @@ final class UnifiedQueryEntryTest extends TestCase
     {
         $this->skipWhenCommandStatsAreSharded();
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->join('authors', 'authors.id', '=', 'posts.author_id')
             ->select('posts.id')
             ->orderBy('posts.id')
@@ -108,7 +109,7 @@ final class UnifiedQueryEntryTest extends TestCase
     {
         $this->skipWhenCommandStatsAreSharded();
 
-        $query = fn() => DB::table('posts')->orderBy('id')->get();
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
 
         $query();
 
@@ -124,7 +125,7 @@ final class UnifiedQueryEntryTest extends TestCase
 
     public function test_promoting_an_overlay_refreshes_the_shared_query_entry_ttl(): void
     {
-        $query = fn() => DB::table('posts')->orderBy('id')->get();
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
         $query();
 
         $entryKey = $this->cacheQueryKeysWithField('m')[0];
@@ -147,7 +148,7 @@ final class UnifiedQueryEntryTest extends TestCase
 
     public function test_a_warm_overlay_hit_leaves_the_query_entry_ttl_alone(): void
     {
-        $query = fn() => DB::table('posts')->orderBy('id')->get();
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
         $query();
 
         $entryKey = $this->cacheQueryKeysWithField('m')[0];

@@ -10,6 +10,7 @@ use NormCache\Events\QueryCacheRepaired;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 
@@ -25,7 +26,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->authorId = (int) $author->getKey();
 
         foreach (range(1, 6) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Post {$index}",
                 'views' => $index * 10,
                 'published' => $index !== 5,
@@ -39,7 +40,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_small_canonical_result_automatically_materializes_an_overlay(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->where(function ($query): void {
                 $query->whereBetween('views', [10, 60])
@@ -69,7 +70,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_unlimited_small_canonical_result_automatically_materializes_an_overlay(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->get();
@@ -100,7 +101,7 @@ final class ResultCacheStrategyTest extends TestCase
     public function test_one_row_allowance_applies_to_non_paginated_results(): void
     {
         foreach (range(1, 45) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Extra {$index}",
                 'views' => $index,
                 'published' => true,
@@ -110,7 +111,7 @@ final class ResultCacheStrategyTest extends TestCase
             ]);
         }
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->orderBy('id')
             ->get();
 
@@ -128,7 +129,7 @@ final class ResultCacheStrategyTest extends TestCase
     public function test_query_builder_simple_pagination_uses_the_one_row_lookahead_allowance(): void
     {
         foreach (range(1, 45) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Extra {$index}",
                 'views' => $index,
                 'published' => true,
@@ -138,7 +139,7 @@ final class ResultCacheStrategyTest extends TestCase
             ]);
         }
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->orderBy('id')
             ->simplePaginate(50);
 
@@ -161,7 +162,7 @@ final class ResultCacheStrategyTest extends TestCase
     public function test_pagination_lookahead_row_still_counts_toward_the_payload_size_limit(): void
     {
         foreach (range(1, 45) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Extra {$index}",
                 'views' => $index,
                 'published' => true,
@@ -174,7 +175,7 @@ final class ResultCacheStrategyTest extends TestCase
             ]);
         }
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->orderBy('id')
             ->simplePaginate(50);
 
@@ -223,7 +224,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->app->forgetScopedInstances();
 
         try {
-            $query = fn() => DB::table('posts')
+            $query = fn() => RawPost::query()->toBase()
                 ->where('published', true)
                 ->orderBy('id')
                 ->limit(4)
@@ -262,7 +263,7 @@ final class ResultCacheStrategyTest extends TestCase
             foreach ([1, 0] as $expected) {
                 Redis::connection('normcache-test')->flushdb();
 
-                $query = fn() => DB::table('posts')
+                $query = fn() => RawPost::query()->toBase()
                     ->where('published', true)
                     ->where('views', $expected === 1 ? '=' : '>', $expected === 1 ? 10 : 10_000)
                     ->orderBy('id')
@@ -284,10 +285,10 @@ final class ResultCacheStrategyTest extends TestCase
     {
         // One row past the lookahead allowance, so the row cap rejects regardless of size.
         $rows = $this->app->make(CacheConfig::class)->maxAutoOverlayRows + 2;
-        $existing = DB::table('posts')->where('published', true)->count();
+        $existing = RawPost::query()->toBase()->where('published', true)->count();
 
         foreach (range($existing + 1, $rows) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Extra {$index}",
                 'views' => $index,
                 'published' => true,
@@ -300,7 +301,7 @@ final class ResultCacheStrategyTest extends TestCase
         // The seeding count above is an aggregate, so it leaves a result entry of its own.
         Redis::connection('normcache-test')->flushdb();
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit($rows)
@@ -319,7 +320,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_result_larger_than_the_payload_limit_is_not_promoted(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('id', 1)
             ->update([
                 'metadata' => json_encode([
@@ -327,7 +328,7 @@ final class ResultCacheStrategyTest extends TestCase
                 ]),
             ]);
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
@@ -348,7 +349,7 @@ final class ResultCacheStrategyTest extends TestCase
     public function test_many_mid_sized_rows_under_the_payload_limit_are_still_promoted(): void
     {
         foreach (range(1, 45) as $index) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => "Wide {$index}",
                 'views' => $index,
                 'published' => true,
@@ -359,7 +360,7 @@ final class ResultCacheStrategyTest extends TestCase
             ]);
         }
 
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(45)
@@ -379,7 +380,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
@@ -401,7 +402,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_corrupt_result_overlay_falls_back_to_canonical_and_self_heals(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
@@ -430,7 +431,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_write_invalidates_the_materialized_overlay(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
@@ -438,7 +439,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $before = $query();
         $id = (int) $before->first()->id;
-        DB::table('posts')->where('id', $id)->update(['title' => 'Changed']);
+        RawPost::query()->toBase()->where('id', $id)->update(['title' => 'Changed']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -451,7 +452,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_tag_flush_invalidates_the_materialized_overlay(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)
@@ -472,7 +473,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_dependency_version_invalidates_the_materialized_overlay(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->dependsOn(['authors'])
             ->where('published', true)
             ->orderBy('id')
@@ -481,7 +482,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $query();
         $query();
-        DB::table('authors')->update(['name' => 'Changed']);
+        Author::query()->toBase()->update(['name' => 'Changed']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -493,7 +494,7 @@ final class ResultCacheStrategyTest extends TestCase
 
     public function test_query_ttl_applies_to_membership_and_result_overlay(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->limit(4)

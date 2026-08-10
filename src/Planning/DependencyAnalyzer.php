@@ -13,14 +13,14 @@ use NormCache\Values\TableIdentity;
 final class DependencyAnalyzer
 {
     public function __construct(
-        private SchemaCatalog $schema,
+        private TableIdentityResolver $tables,
     ) {}
 
     public function analyze(
         Connection $connection,
         QueryBuilder $query,
     ): DependencyAnalysis {
-        $directRoot = $this->schema->resolveTable($connection, $query->from);
+        $directRoot = $this->tables->resolve($connection, $query->from);
         $dependencies = new DependencyCollection;
         $declarations = $query->dependencies();
         $declaredRoot = null;
@@ -29,7 +29,7 @@ final class DependencyAnalyzer
 
         foreach ($declarations as $declaration) {
             $identity = $declaration->isTable()
-                ? $this->schema->resolveTable($connection, $declaration->value)
+                ? $this->tables->resolve($connection, $declaration->value)
                 : $this->modelIdentity($connection, $declaration->value);
 
             if ($identity === null) {
@@ -40,12 +40,6 @@ final class DependencyAnalyzer
 
             if ($declaredRoot === null || $identity->hash < $declaredRoot->hash) {
                 $declaredRoot = $identity;
-            }
-
-            if ($identity->isView) {
-                $unresolved = true;
-
-                continue;
             }
 
             $authoritative = true;
@@ -70,15 +64,7 @@ final class DependencyAnalyzer
 
         $bypassReason = null;
 
-        if (
-            $root->isView
-            && (
-                $declarations === []
-                || !DependencyAnalysis::hasExternalTo($root, $dependencies->all())
-            )
-        ) {
-            $bypassReason = 'view_dependencies_required';
-        } elseif ($unresolved) {
+        if ($unresolved) {
             $bypassReason = 'unresolvable_declared_dependency';
         } elseif ($dependencies->isOpaque() && !$authoritative) {
             $bypassReason = 'unidentifiable_dependency';
@@ -237,9 +223,9 @@ final class DependencyAnalyzer
         mixed $source,
         DependencyCollection $dependencies,
     ): void {
-        $identity = $this->schema->resolveTable($connection, $source);
+        $identity = $this->tables->resolve($connection, $source);
 
-        if ($identity === null || $identity->isView) {
+        if ($identity === null) {
             $dependencies->markOpaque();
 
             return;
@@ -260,13 +246,15 @@ final class DependencyAnalyzer
     }
 
     /** @param class-string $modelClass */
-    private function modelIdentity(Connection $activeConnection, string $modelClass): ?TableIdentity
-    {
+    private function modelIdentity(
+        Connection $activeConnection,
+        string $modelClass,
+    ): ?TableIdentity {
         try {
             $model = new $modelClass;
             $model->setConnection($activeConnection->getName());
 
-            return $this->schema->resolveTable($activeConnection, $model->getTable());
+            return $this->tables->resolve($activeConnection, $model->getTable());
         } catch (\Throwable) {
             return null;
         }

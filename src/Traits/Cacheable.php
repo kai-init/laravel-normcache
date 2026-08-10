@@ -12,11 +12,12 @@ trait Cacheable
 {
     protected function newBaseQueryBuilder()
     {
-        $builder = $this->getConnection()->query();
-
-        if (!$builder instanceof QueryBuilder) {
-            return $builder;
-        }
+        $connection = $this->getConnection();
+        $builder = new QueryBuilder(
+            $connection,
+            $connection->getQueryGrammar(),
+            $connection->getPostProcessor(),
+        );
 
         $deletedAtColumn = method_exists($this, 'getDeletedAtColumn')
             ? $this->getDeletedAtColumn()

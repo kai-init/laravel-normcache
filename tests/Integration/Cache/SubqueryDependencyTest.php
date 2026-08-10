@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
@@ -130,9 +131,9 @@ final class SubqueryDependencyTest extends TestCase
     public function test_a_nested_subquery_mutation_is_detected_at_any_depth(): void
     {
         $read = function (): int {
-            $inner = DB::table('authors');
-            $subquery = DB::table('comments')->selectRaw('count(*)')->whereExists($inner);
-            $query = DB::table('posts')->selectSub($subquery, 'comment_count');
+            $inner = Author::query()->toBase();
+            $subquery = Comment::query()->toBase()->selectRaw('count(*)')->whereExists($inner);
+            $query = RawPost::query()->toBase()->selectSub($subquery, 'comment_count');
             $inner->from('tags');
 
             return (int) $query->first()->comment_count;
@@ -141,7 +142,7 @@ final class SubqueryDependencyTest extends TestCase
         $this->assertSame(0, $read());
         $this->assertSame(0, $read());
 
-        DB::table('comments')->insert([
+        Comment::query()->toBase()->insert([
             'body' => 'First',
             'commentable_type' => 'post',
             'commentable_id' => Post::query()->value('id'),
@@ -154,8 +155,8 @@ final class SubqueryDependencyTest extends TestCase
 
     public function test_a_subquery_mutated_after_capture_is_no_longer_trusted(): void
     {
-        $subquery = DB::table('comments')->selectRaw('count(*)');
-        $query = DB::table('posts')->selectSub($subquery, 'comment_count');
+        $subquery = Comment::query()->toBase()->selectRaw('count(*)');
+        $query = RawPost::query()->toBase()->selectSub($subquery, 'comment_count');
         $expression = null;
 
         foreach ((array) $query->columns as $column) {

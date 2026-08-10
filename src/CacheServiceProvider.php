@@ -3,8 +3,8 @@
 namespace NormCache;
 
 use DebugBar\DataCollector\TimeDataCollector;
-use Illuminate\Database\Connection;
 use Illuminate\Database\Events\MigrationsEnded;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
@@ -19,21 +19,13 @@ use NormCache\Cache\RowRepairer;
 use NormCache\Console\DisableCommand;
 use NormCache\Console\EnableCommand;
 use NormCache\Console\FlushCommand;
-use NormCache\Database\Connections\MariaDbConnection;
-use NormCache\Database\Connections\MySqlConnection;
-use NormCache\Database\Connections\PostgresConnection;
-use NormCache\Database\Connections\SQLiteConnection;
-use NormCache\Database\Connections\SqlServerConnection;
 use NormCache\Debug\DebugBarCollector;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
-use NormCache\Planning\CascadeDependencyResolver;
+use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\MutationKeyExtractor;
-use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
-use NormCache\Planning\SchemaCatalog;
-use NormCache\Planning\SchemaRepository;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheSerializer;
@@ -42,17 +34,12 @@ use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
-use Psr\Log\LoggerInterface;
 
 final class CacheServiceProvider extends ServiceProvider
 {
-    /** @var list<string> */
-    private array $unreplacedDrivers = [];
-
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
-        $this->registerConnectionResolvers();
 
         $this->app->singleton(CacheConfig::class, fn() => CacheConfig::fromArray(
             (array) config('normcache', []),
@@ -88,14 +75,9 @@ final class CacheServiceProvider extends ServiceProvider
             return new QueryObserver($config, $collector, $app->make(FailureReporter::class));
         });
 
-        // Scoped, not shared: these memoize the schema epoch they were read
-        // under, so an instance kept for a worker's lifetime pins a retired one.
-        $this->app->scoped(SchemaRepository::class);
-        $this->app->scoped(TableIdentityResolver::class);
-        $this->app->scoped(CascadeDependencyResolver::class);
+        $this->app->singleton(TableIdentityResolver::class);
+        $this->app->singleton(DeleteDependencyResolver::class);
         $this->app->scoped(DependencyAnalyzer::class);
-        $this->app->scoped(PrimaryKeyResolver::class);
-        $this->app->scoped(SchemaCatalog::class);
 
         $this->app->scoped(FailureReporter::class);
         $this->app->scoped(CacheRuntime::class);
@@ -112,13 +94,17 @@ final class CacheServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        foreach ($this->unreplacedDrivers as $driver) {
-            $this->app->make(LoggerInterface::class)->warning(
-                'NormCache did not replace an existing database connection resolver.',
-                ['driver' => $driver],
-            );
-        }
+        Event::listen(TransactionBeginning::class, function (TransactionBeginning $event): void {
+            $name = (string) $event->connection->getName();
 
+            try {
+                $event->connection->afterCommit(function () use ($name): void {
+                    $this->app->make(Invalidator::class)->commit($name);
+                });
+            } catch (\Throwable $exception) {
+                $this->app->make(FailureReporter::class)->cacheUnavailable($exception);
+            }
+        });
         Event::listen(TransactionCommitted::class, function (TransactionCommitted $event): void {
             if ($event->connection->transactionLevel() === 0) {
                 $this->app->make(Invalidator::class)->commit((string) $event->connection->getName());
@@ -130,11 +116,7 @@ final class CacheServiceProvider extends ServiceProvider
             }
         });
         Event::listen(MigrationsEnded::class, function (): void {
-            if (!$this->app->make(CacheManager::class)->refreshSchema()) {
-                $this->app->make(LoggerInterface::class)->warning(
-                    'NormCache invalidation failed. Run normcache:flush before enabling cache traffic.',
-                );
-            }
+            $this->app->make(CacheManager::class)->flushAll();
         });
 
         if ($this->app->runningInConsole()) {
@@ -143,41 +125,6 @@ final class CacheServiceProvider extends ServiceProvider
             ], 'normcache-config');
 
             $this->commands([FlushCommand::class, DisableCommand::class, EnableCommand::class]);
-        }
-    }
-
-    private function registerConnectionResolvers(): void
-    {
-        $resolvers = [
-            'mysql' => MySqlConnection::class,
-            'mariadb' => MariaDbConnection::class,
-            'pgsql' => PostgresConnection::class,
-            'sqlite' => SQLiteConnection::class,
-            'sqlsrv' => SqlServerConnection::class,
-        ];
-
-        foreach ($resolvers as $driver => $class) {
-            $existing = Connection::getResolver($driver);
-
-            if ($existing !== null) {
-                $reflection = new \ReflectionFunction($existing);
-
-                if ($reflection->getFileName() !== __FILE__) {
-                    $this->unreplacedDrivers[] = $driver;
-                }
-
-                continue;
-            }
-
-            Connection::resolverFor(
-                $driver,
-                static fn($connection, $database, $prefix, $config) => new $class(
-                    $connection,
-                    $database,
-                    $prefix,
-                    $config,
-                ),
-            );
         }
     }
 }

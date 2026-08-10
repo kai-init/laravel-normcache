@@ -72,4 +72,14 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
         $this->assertTrue($string->matchesToken('42', 's:NDI'));
         $this->assertFalse($string->matchesToken('42', 'i:42'));
     }
+
+    public function test_malformed_string_tokens_are_rejected(): void
+    {
+        $metadata = new PrimaryKeyMetadata('uuid', PrimaryKeyMetadata::STRING);
+
+        $this->assertNull($metadata->valueFromToken('i:42'));
+        $this->assertNull($metadata->valueFromToken('s:*'));
+        $this->assertNull($metadata->valueFromToken('s:NDI='));
+        $this->assertNull($metadata->valueFromToken('s:ND'));
+    }
 }

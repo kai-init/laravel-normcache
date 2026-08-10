@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisStore;
+use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 use Psr\Log\LoggerInterface;
@@ -27,8 +29,8 @@ final class UnavailableTest extends TestCase
         );
         $this->useMissingRedisConnection();
 
-        $first = DB::table('posts')->where('id', 1)->first();
-        $second = DB::table('posts')->where('id', 1)->first();
+        $first = RawPost::query()->toBase()->where('id', 1)->first();
+        $second = RawPost::query()->toBase()->where('id', 1)->first();
 
         $this->assertSame('Live database', $first?->title);
         $this->assertSame('Live database', $second?->title);
@@ -102,20 +104,20 @@ final class UnavailableTest extends TestCase
     {
         $this->useMissingRedisConnection();
 
-        DB::table('authors')->insert(['name' => 'Still written']);
-        DB::table('authors')->where('name', 'Still written')->update([
+        Author::query()->toBase()->insert(['name' => 'Still written']);
+        Author::query()->toBase()->where('name', 'Still written')->update([
             'name' => 'Updated',
         ]);
 
         $this->assertTrue(
-            DB::table('authors')->where('name', 'Updated')->exists(),
+            Author::query()->toBase()->where('name', 'Updated')->exists(),
         );
     }
 
     public function test_failed_invalidation_is_logged_as_critical(): void
     {
-        $authorId = DB::table('authors')->insertGetId(['name' => 'Author']);
-        DB::table('posts')->insert([
+        $authorId = Author::query()->toBase()->insertGetId(['name' => 'Author']);
+        RawPost::query()->toBase()->insert([
             'title' => 'Before',
             'author_id' => $authorId,
         ]);
@@ -134,7 +136,7 @@ final class UnavailableTest extends TestCase
             );
             $this->app->forgetScopedInstances();
 
-            DB::table('posts')->where('id', 1)->update(['title' => 'After']);
+            RawPost::query()->toBase()->where('id', 1)->update(['title' => 'After']);
         } finally {
             $this->app->instance(RedisStore::class, $store);
             $this->app->forgetScopedInstances();
@@ -143,8 +145,8 @@ final class UnavailableTest extends TestCase
 
     public function test_disabled_cache_reads_do_not_suppress_write_invalidation(): void
     {
-        DB::table('authors')->insert(['id' => 1, 'name' => 'Author']);
-        DB::table('posts')->insert([
+        Author::query()->toBase()->insert(['id' => 1, 'name' => 'Author']);
+        RawPost::query()->toBase()->insert([
             'id' => 1,
             'title' => 'Before',
             'views' => 0,
@@ -153,7 +155,7 @@ final class UnavailableTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('posts')->where('id', 1)->first();
+        RawPost::query()->toBase()->where('id', 1)->first();
 
         $table = $this->app->make(TableIdentityResolver::class)
             ->resolve(DB::connection(), 'posts');
@@ -162,11 +164,11 @@ final class UnavailableTest extends TestCase
         $before = $this->cacheStore()->getRaw($versionKey) ?? '0';
 
         $this->app->make(CacheRuntime::class)->disable();
-        DB::table('posts')->where('id', 1)->update(['title' => 'After']);
+        RawPost::query()->toBase()->where('id', 1)->update(['title' => 'After']);
 
         $this->assertSame((string) ((int) $before + 1), $this->cacheStore()->getRaw($versionKey));
         $this->app->forgetScopedInstances();
-        $this->assertSame('After', DB::table('posts')->where('id', 1)->first()?->title);
+        $this->assertSame('After', RawPost::query()->toBase()->where('id', 1)->first()?->title);
     }
 
     private function useMissingRedisConnection(): void

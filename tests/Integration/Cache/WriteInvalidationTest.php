@@ -7,20 +7,20 @@ use Illuminate\Database\Query\Grammars\PostgresGrammar;
 use Illuminate\Database\Query\Processors\Processor;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
-use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Database\QueryBuilder;
+use NormCache\Facades\NormCache;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
+use NormCache\Values\PrimaryKeyMetadata;
 
 final class AppliedThenThrowsConnection extends SQLiteConnection
 {
-    use BuildsCachingQueries;
-
     public bool $throwAfterNextAffectingStatement = false;
 
     public function affectingStatement($query, $bindings = [])
@@ -46,7 +46,7 @@ final class WriteInvalidationTest extends TestCase
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
-        $this->postId = (int) DB::table('posts')->insertGetId([
+        $this->postId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Before',
             'views' => 0,
             'published' => true,
@@ -56,14 +56,14 @@ final class WriteInvalidationTest extends TestCase
         ]);
     }
 
-    public function test_db_table_update_invalidates_warm_results(): void
+    public function test_cacheable_base_builder_update_invalidates_warm_results(): void
     {
-        $read = fn() => DB::table('posts')->where('id', $this->postId)->value('title');
+        $read = fn() => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
 
         $this->assertSame('Before', $read());
         $this->assertSame('Before', $read());
 
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'After']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -74,79 +74,61 @@ final class WriteInvalidationTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    public function test_simple_raw_write_target_invalidates_warm_results(): void
+    public function test_db_table_write_remains_stale_until_explicit_invalidation(): void
     {
-        $read = fn() => DB::table('posts')->where('id', $this->postId)->value('title');
+        $read = fn() => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
 
         $this->assertSame('Before', $read());
         $this->assertSame('Before', $read());
 
-        DB::table(DB::raw('posts'))
+        DB::table('posts')
             ->where('id', $this->postId)
-            ->update(['title' => 'Raw target']);
+            ->update(['title' => 'Manual']);
 
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $this->assertSame('Raw target', $read());
-        $this->assertSame('Raw target', $read());
-        DB::disableQueryLog();
-
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertSame('Before', $read());
+        $this->assertTrue(NormCache::invalidate(Post::class));
+        $this->assertSame('Manual', $read());
     }
 
-    public function test_opaque_write_target_advances_the_global_epoch(): void
+    public function test_manual_invalidation_is_immediate_outside_a_transaction(): void
     {
-        DB::table('posts')->where('id', $this->postId)->first();
-        $before = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
+        $before = $this->tableVersion();
 
-        DB::table(DB::raw('posts NOT INDEXED'))
-            ->where('id', $this->postId)
-            ->update(['title' => 'Opaque target']);
+        $this->assertTrue(NormCache::invalidate(Post::class));
 
-        $this->assertSame(
-            $before + 1,
-            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
-        );
-        $this->assertSame(
-            'Opaque target',
-            DB::table('posts')->where('id', $this->postId)->value('title'),
-        );
+        $this->assertSame((string) ((int) $before + 1), $this->tableVersion());
     }
 
-    public function test_opaque_write_global_invalidation_waits_for_commit(): void
+    public function test_manual_invalidation_inside_a_transaction_waits_for_commit(): void
     {
-        $before = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
+        $read = fn() => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
+        $this->assertSame('Before', $read());
+        $before = $this->tableVersion();
 
         DB::beginTransaction();
-        DB::table(DB::raw('posts NOT INDEXED'))
-            ->where('id', $this->postId)
-            ->update(['title' => 'Committed opaque']);
-        $this->assertSame(
-            $before,
-            (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0'),
-        );
+        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Committed manual']);
+        $this->assertTrue(NormCache::invalidate(Post::class));
+        $this->assertSame($before, $this->tableVersion());
         DB::commit();
 
-        $this->assertSame(
-            $before + 1,
-            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
-        );
+        $this->assertSame((string) ((int) $before + 1), $this->tableVersion());
+        $this->assertSame('Committed manual', $read());
     }
 
-    public function test_opaque_write_global_invalidation_is_discarded_on_rollback(): void
+    public function test_manual_invalidation_inside_a_rolled_back_transaction_is_discarded(): void
     {
-        $before = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
+        $read = fn() => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
+        $this->assertSame('Before', $read());
+        $before = $this->tableVersion();
 
         DB::beginTransaction();
-        DB::table(DB::raw('posts NOT INDEXED'))
-            ->where('id', $this->postId)
-            ->update(['title' => 'Rolled back opaque']);
+        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Rolled back manual']);
+        $this->assertTrue(NormCache::invalidate(Post::class));
         DB::rollBack();
 
-        $this->assertSame(
-            $before,
-            $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0',
-        );
+        $this->assertSame($before, $this->tableVersion());
+        $this->assertSame('Before', $read());
     }
 
     public function test_applied_write_that_throws_invalidates_before_rethrowing(): void
@@ -173,8 +155,8 @@ final class WriteInvalidationTest extends TestCase
             $connection = DB::connection($name);
             $this->assertInstanceOf(AppliedThenThrowsConnection::class, $connection);
             $postId = $this->postId;
-            $read = static fn() => $connection
-                ->table('posts')
+            $read = static fn() => RawPost::on($name)
+                ->toBase()
                 ->where('id', $postId)
                 ->value('title');
 
@@ -183,8 +165,8 @@ final class WriteInvalidationTest extends TestCase
             $connection->throwAfterNextAffectingStatement = true;
 
             try {
-                $connection
-                    ->table('posts')
+                RawPost::on($name)
+                    ->toBase()
                     ->where('id', $this->postId)
                     ->update(['title' => 'Applied then thrown']);
                 $this->fail('The simulated lost response was not thrown.');
@@ -199,8 +181,8 @@ final class WriteInvalidationTest extends TestCase
             $connection->throwAfterNextAffectingStatement = true;
 
             try {
-                $connection
-                    ->table('posts')
+                RawPost::on($name)
+                    ->toBase()
                     ->updateOrInsert(
                         ['id' => $postId],
                         ['title' => 'Nested applied then thrown'],
@@ -223,14 +205,14 @@ final class WriteInvalidationTest extends TestCase
 
     public function test_sqlite_identifier_case_variants_share_invalidation_state(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->value('title');
 
         $this->assertSame('Before', $read());
         $this->assertSame('Before', $read());
 
-        DB::table('POSTS')->where('id', $this->postId)->update(['title' => 'Case-safe']);
+        RawPost::query()->toBase()->from('POSTS')->where('id', $this->postId)->update(['title' => 'Case-safe']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -241,22 +223,25 @@ final class WriteInvalidationTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    public function test_traitless_eloquent_writes_invalidate_opted_in_reads(): void
+    public function test_traitless_eloquent_write_remains_stale_until_explicit_invalidation(): void
     {
+        $this->assertSame('Before', Post::query()->findOrFail($this->postId)->title);
         $this->assertSame('Before', Post::query()->findOrFail($this->postId)->title);
 
         UncachedPost::query()->whereKey($this->postId)->update(['title' => 'Traitless']);
 
+        $this->assertSame('Before', Post::query()->findOrFail($this->postId)->title);
+        $this->assertTrue(NormCache::invalidate(Post::class));
         $this->assertSame('Traitless', Post::query()->findOrFail($this->postId)->title);
     }
 
     public function test_transaction_writes_publish_no_invalidation_before_commit(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = $this->tableVersion();
 
         DB::beginTransaction();
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Committed']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Committed']);
         $this->assertSame($before, $this->tableVersion());
         DB::commit();
 
@@ -265,50 +250,109 @@ final class WriteInvalidationTest extends TestCase
 
     public function test_outer_transaction_rollback_discards_pending_invalidation(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = $this->tableVersion();
 
         DB::beginTransaction();
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Rolled back']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Rolled back']);
         DB::rollBack();
 
         $this->assertSame($before, $this->tableVersion());
         $this->assertSame(
             'Before',
-            DB::table('posts')->where('id', $this->postId)->value('title'),
+            RawPost::query()->toBase()->where('id', $this->postId)->value('title'),
         );
+    }
+
+    public function test_transaction_invalidation_is_published_before_after_commit_callbacks(): void
+    {
+        $read = fn(): ?string => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+        $observed = null;
+
+        DB::transaction(function () use (&$observed, $read): void {
+            RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Committed']);
+            DB::afterCommit(function () use (&$observed, $read): void {
+                $observed = $read();
+            });
+        });
+
+        $this->assertSame('Committed', $observed);
+    }
+
+    public function test_transaction_invalidation_precedes_a_callback_registered_before_the_write(): void
+    {
+        $read = fn(): ?string => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+        $observed = null;
+
+        DB::transaction(function () use (&$observed, $read): void {
+            DB::afterCommit(function () use (&$observed, $read): void {
+                $observed = $read();
+            });
+            RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Committed']);
+        });
+
+        $this->assertSame('Committed', $observed);
+    }
+
+    public function test_transaction_invalidation_precedes_a_callback_registered_in_a_nested_transaction(): void
+    {
+        $read = fn(): ?string => RawPost::query()->toBase()->where('id', $this->postId)->value('title');
+
+        $this->assertSame('Before', $read());
+        $this->assertSame('Before', $read());
+        $observed = null;
+
+        DB::transaction(function () use (&$observed, $read): void {
+            DB::transaction(function () use (&$observed, $read): void {
+                RawPost::query()->toBase()
+                    ->where('id', $this->postId)
+                    ->update(['title' => 'Committed']);
+
+                DB::afterCommit(function () use (&$observed, $read): void {
+                    $observed = $read();
+                });
+            });
+        });
+
+        $this->assertSame('Committed', $observed);
     }
 
     public function test_update_or_insert_internal_exists_is_live_and_invalidates_once(): void
     {
-        DB::table('posts')->where('id', $this->postId)->exists();
+        RawPost::query()->toBase()->where('id', $this->postId)->exists();
         $before = (int) $this->tableVersion();
 
-        DB::table('posts')->updateOrInsert(
+        RawPost::query()->toBase()->updateOrInsert(
             ['id' => $this->postId],
             ['title' => 'Composite'],
         );
 
         $this->assertSame($before + 1, (int) $this->tableVersion());
-        $this->assertSame('Composite', DB::table('posts')->where('id', $this->postId)->value('title'));
+        $this->assertSame('Composite', RawPost::query()->toBase()->where('id', $this->postId)->value('title'));
     }
 
     public function test_update_or_insert_existing_row_without_values_does_not_invalidate(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = $this->tableVersion();
 
-        $this->assertTrue(DB::table('posts')->updateOrInsert(['id' => $this->postId]));
+        $this->assertTrue(RawPost::query()->toBase()->updateOrInsert(['id' => $this->postId]));
 
         $this->assertSame($before, $this->tableVersion());
     }
 
     public function test_update_or_insert_missing_row_without_values_still_invalidates(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = (int) $this->tableVersion();
 
-        $this->assertTrue(DB::table('posts')->updateOrInsert([
+        $this->assertTrue(RawPost::query()->toBase()->updateOrInsert([
             'id' => $this->postId + 1,
             'title' => 'Inserted',
             'author_id' => Author::query()->value('id'),
@@ -321,10 +365,10 @@ final class WriteInvalidationTest extends TestCase
 
     public function test_update_matching_no_rows_does_not_invalidate(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = $this->tableVersion();
 
-        $this->assertSame(0, DB::table('posts')->where('id', -1)->update(['title' => 'Nobody']));
+        $this->assertSame(0, RawPost::query()->toBase()->where('id', -1)->update(['title' => 'Nobody']));
 
         $this->assertSame($before, $this->tableVersion());
     }
@@ -332,19 +376,19 @@ final class WriteInvalidationTest extends TestCase
     public function test_update_or_insert_invalidates_exactly_when_its_nested_update_reports_rows(): void
     {
         $values = ['title' => 'Unchanged'];
-        DB::table('posts')->where('id', $this->postId)->update($values);
+        RawPost::query()->toBase()->where('id', $this->postId)->update($values);
 
         // Drivers disagree about a value-preserving update: MySQL reports zero
         // affected rows, SQLite and Postgres report the matched row. Probe this
         // one so the expectation follows the driver rather than assuming one.
-        $affected = DB::table('posts')->where('id', $this->postId)->update($values);
+        $affected = RawPost::query()->toBase()->where('id', $this->postId)->update($values);
 
-        DB::table('posts')->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
         $before = (int) $this->tableVersion();
 
         $this->assertSame(
             $affected > 0,
-            DB::table('posts')->updateOrInsert(['id' => $this->postId], $values),
+            RawPost::query()->toBase()->updateOrInsert(['id' => $this->postId], $values),
         );
         $this->assertSame(
             $before + ($affected > 0 ? 1 : 0),
@@ -355,15 +399,15 @@ final class WriteInvalidationTest extends TestCase
 
     public function test_proven_primary_key_update_preserves_unrelated_canonical_rows(): void
     {
-        $second = DB::table('posts')->insertGetId([
+        $second = RawPost::query()->toBase()->insertGetId([
             'title' => 'Second',
             'views' => 0,
             'published' => true,
-            'author_id' => DB::table('authors')->value('id'),
+            'author_id' => Author::query()->toBase()->value('id'),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         $identity = app(TableIdentityResolver::class)
             ->resolve(DB::connection(), 'posts');
@@ -373,7 +417,7 @@ final class WriteInvalidationTest extends TestCase
 
         $this->assertNotNull($this->cacheStore()->getRaw($secondRowKey));
 
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Precise']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Precise']);
 
         $this->assertSame(
             $generationBefore,
@@ -383,7 +427,7 @@ final class WriteInvalidationTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $second)->first();
+        $row = RawPost::query()->toBase()->where('id', $second)->first();
         DB::disableQueryLog();
 
         $this->assertSame('Second', $row->title);
@@ -426,7 +470,7 @@ final class WriteInvalidationTest extends TestCase
 
     public function test_primary_key_mutation_deletes_the_cached_old_token_without_advancing_generation(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         $identity = app(TableIdentityResolver::class)
             ->resolve(DB::connection(), 'posts');
         $keys = $this->cacheKeys();
@@ -435,7 +479,7 @@ final class WriteInvalidationTest extends TestCase
         $oldRow = $keys->row($identity, $generation, 'i:' . $this->postId);
         $newId = $this->postId + 1000;
 
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->update(['id' => $newId]);
 
@@ -457,7 +501,7 @@ final class WriteInvalidationTest extends TestCase
         $keys = $this->cacheKeys();
         $before = $this->cacheStore()->getRaw($keys->generation($identity)) ?? '0';
 
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->update(['id' => DB::raw('id + 1000')]);
 
@@ -467,22 +511,32 @@ final class WriteInvalidationTest extends TestCase
         );
     }
 
-    public function test_string_primary_key_mutations_use_generation_invalidation(): void
+    public function test_string_primary_key_mutations_invalidate_broadly(): void
     {
         UuidItem::query()->create(['id' => 'abc', 'name' => 'Before']);
         UuidItem::query()->get();
         $identity = app(TableIdentityResolver::class)
             ->resolve(DB::connection(), 'uuid_items');
         $keys = $this->cacheKeys();
-        $before = $this->cacheStore()->getRaw(
-            $keys->generation($identity),
-        ) ?? '0';
+        $generation = $this->cacheStore()->getRaw($keys->generation($identity)) ?? '0';
+        $version = $this->cacheStore()->getRaw($keys->version($identity)) ?? '0';
+        $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::STRING);
+        $token = $primaryKey->token('abc');
+
+        $this->assertNotNull($token);
+        $row = $keys->row($identity, $generation, $token);
+        $this->assertNotNull($this->cacheStore()->getRaw($row));
 
         UuidItem::query()->whereKey('abc')->update(['name' => 'After']);
 
         $this->assertSame(
-            (string) ((int) $before + 1),
+            (string) ((int) $generation + 1),
             $this->cacheStore()->getRaw($keys->generation($identity)),
+            'string keys compare case-insensitively under common collations, so a row token is not proof of row identity',
+        );
+        $this->assertSame(
+            (string) ((int) $version + 1),
+            $this->cacheStore()->getRaw($keys->version($identity)),
         );
     }
 
@@ -501,7 +555,8 @@ final class WriteInvalidationTest extends TestCase
             $connection->getQueryGrammar(),
             $processor,
         );
-        $builder->from('uuid_items');
+        $builder->enableCachingForModel(UuidItem::class, 'id', 'string')
+            ->from('uuid_items');
 
         $this->assertSame(
             'generated-uuid',
@@ -512,7 +567,7 @@ final class WriteInvalidationTest extends TestCase
     public function test_precise_invalidation_deletes_the_atomically_resolved_current_generation(): void
     {
         $this->cacheManager()->invalidateTable('testing', 'posts');
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         $identity = app(TableIdentityResolver::class)
             ->resolve(DB::connection(), 'posts');
         $keys = $this->cacheKeys();
@@ -520,11 +575,11 @@ final class WriteInvalidationTest extends TestCase
         $rowKey = $keys->row($identity, (string) $generation, 'i:' . $this->postId);
 
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Current generation']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Current generation']);
         $this->assertNull($this->cacheStore()->getRaw($rowKey));
     }
 
-    public function test_truncate_globally_invalidates_all_cached_rows(): void
+    public function test_truncate_broadly_invalidates_all_rows_in_its_table(): void
     {
         $first = Tag::create(['name' => 'First']);
         $second = Tag::create(['name' => 'Second']);
@@ -532,13 +587,22 @@ final class WriteInvalidationTest extends TestCase
         $this->assertCount(2, Tag::orderBy('id')->get());
         $this->assertNotNull(Tag::find($first->getKey()));
         $this->assertNotNull(Tag::find($second->getKey()));
+        $identity = app(TableIdentityResolver::class)
+            ->resolve(DB::connection(), 'tags');
+        $generation = $this->cacheStore()->getRaw(
+            $this->cacheKeys()->generation($identity),
+        ) ?? '0';
         $epoch = (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0');
 
-        DB::table('tags')->truncate();
+        Tag::query()->toBase()->truncate();
 
         $this->assertSame(
-            $epoch + 1,
-            (int) $this->cacheStore()->getRaw($this->cacheKeys()->epoch()),
+            $epoch,
+            (int) ($this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0'),
+        );
+        $this->assertSame(
+            (string) ((int) $generation + 1),
+            $this->cacheStore()->getRaw($this->cacheKeys()->generation($identity)),
         );
         $this->assertSame([], Tag::orderBy('id')->get()->all());
         $this->assertNull(Tag::find($first->getKey()));
@@ -553,9 +617,9 @@ final class WriteInvalidationTest extends TestCase
         $this->assertSame([], $read());
         $this->assertSame([], $read());
 
-        $affected = DB::table('tags')->insertUsing(
+        $affected = Tag::query()->toBase()->insertUsing(
             ['name', 'created_at', 'updated_at'],
-            DB::table('authors')
+            Author::query()->toBase()
                 ->where('id', $source->getKey())
                 ->select(['name', 'created_at', 'updated_at']),
         );
@@ -572,9 +636,9 @@ final class WriteInvalidationTest extends TestCase
         $this->assertSame([], $read());
         $this->assertSame([], $read());
 
-        $affected = DB::table('uuid_items')->insertOrIgnoreUsing(
+        $affected = UuidItem::query()->toBase()->insertOrIgnoreUsing(
             ['id', 'name'],
-            DB::table('authors')
+            Author::query()->toBase()
                 ->where('id', $source->getKey())
                 ->select(['id', 'name']),
         );
@@ -594,7 +658,7 @@ final class WriteInvalidationTest extends TestCase
         $this->assertSame([], $read());
         $this->assertSame([], $read());
 
-        $returned = DB::table('tags')->insertOrIgnoreReturning([
+        $returned = Tag::query()->toBase()->insertOrIgnoreReturning([
             'id' => 10,
             'name' => 'Returned',
             'created_at' => now(),
@@ -620,7 +684,9 @@ final class WriteInvalidationTest extends TestCase
             new PostgresGrammar($connection),
             $connection->getPostProcessor(),
         );
-        $builder->from('authors')->where('id', $author->getKey());
+        $builder->enableCachingForModel(Author::class, 'id', 'int')
+            ->from('authors')
+            ->where('id', $author->getKey());
 
         $this->assertSame(1, $builder->updateFrom(['name' => 'After']));
         $this->assertSame('After', $read());

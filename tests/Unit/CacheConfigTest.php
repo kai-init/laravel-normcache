@@ -18,7 +18,6 @@ final class CacheConfigTest extends UnitTestCase
         $this->assertSame('auto', $config->serializer);
         $this->assertSame(604_800, $config->rowTtl);
         $this->assertSame(3_600, $config->queryTtl);
-        $this->assertSame(86_400, $config->schemaTtl);
         $this->assertSame(1000, $config->maxAutoOverlayRows);
         $this->assertSame(1000, $config->maxPreciseInvalidationKeys);
         $this->assertSame(5, $config->buildingLockTtl);
@@ -62,7 +61,6 @@ final class CacheConfigTest extends UnitTestCase
             ['row_ttl', 0],
             ['query_ttl', 0],
             ['auto_overlay_max_rows', -1],
-            ['schema_ttl', -1],
             ['stampede_wake_tokens', 0],
             ['stampede_wake_tokens', -1],
             ['stampede_wake_tokens', 1001],
@@ -81,78 +79,5 @@ final class CacheConfigTest extends UnitTestCase
         $config = CacheConfig::fromArray(['auto_overlay_max_rows' => 0]);
 
         $this->assertSame(0, $config->maxAutoOverlayRows);
-    }
-
-    public function test_accepts_zero_as_the_schema_cache_disable_value(): void
-    {
-        $config = CacheConfig::fromArray(['schema_ttl' => 0]);
-
-        $this->assertSame(0, $config->schemaTtl);
-    }
-
-    public function test_expands_grouped_primary_key_overrides(): void
-    {
-        $config = CacheConfig::fromArray([
-            'primary_keys' => [[
-                'connection' => 'pgsql',
-                'database' => 'app',
-                'schema' => 'public',
-                'tables' => [
-                    'events' => ['column' => 'event_id', 'type' => 'string'],
-                    'orders' => ['column' => 'order_id', 'type' => 'integer'],
-                ],
-            ]],
-        ]);
-
-        $this->assertSame([
-            [
-                'connection' => 'pgsql',
-                'database' => 'app',
-                'table' => 'events',
-                'column' => 'event_id',
-                'type' => 'string',
-                'schema' => 'public',
-            ],
-            [
-                'connection' => 'pgsql',
-                'database' => 'app',
-                'table' => 'orders',
-                'column' => 'order_id',
-                'type' => 'integer',
-                'schema' => 'public',
-            ],
-        ], $config->primaryKeys);
-    }
-
-    public function test_validates_grouped_primary_key_overrides(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('type must be integer or string');
-
-        CacheConfig::fromArray([
-            'primary_keys' => [[
-                'connection' => 'tenant',
-                'database' => 'app',
-                'tables' => [
-                    'events' => ['column' => 'event_id', 'type' => 'uuid'],
-                ],
-            ]],
-        ]);
-    }
-
-    public function test_rejects_ungrouped_primary_key_overrides(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('groups require a non-empty tables array');
-
-        CacheConfig::fromArray([
-            'primary_keys' => [[
-                'connection' => 'pgsql',
-                'database' => 'app',
-                'table' => 'events',
-                'column' => 'event_id',
-                'type' => 'string',
-            ]],
-        ]);
     }
 }

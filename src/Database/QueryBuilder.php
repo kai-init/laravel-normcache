@@ -25,8 +25,6 @@ final class QueryBuilder extends Builder
 
     private Connection $databaseConnection;
 
-    private bool $eligible = false;
-
     /** @var class-string|null */
     private ?string $modelClass = null;
 
@@ -157,14 +155,6 @@ final class QueryBuilder extends Builder
         return $this->databaseConnection;
     }
 
-    /** @internal */
-    public function enableCachingForTable(): static
-    {
-        $this->eligible = true;
-
-        return $this;
-    }
-
     /**
      * @internal
      *
@@ -176,7 +166,6 @@ final class QueryBuilder extends Builder
         string $keyType,
         ?string $deletedAtColumn = null,
     ): static {
-        $this->eligible = true;
         $this->modelClass = $modelClass;
         $this->primaryKey = new PrimaryKeyMetadata(
             $keyName,
@@ -524,7 +513,7 @@ final class QueryBuilder extends Builder
     /** @return array{0: bool, 1: ?string} */
     private function bypassDecision(): array
     {
-        if (!$this->eligible || $this->writeDepth > 0) {
+        if ($this->writeDepth > 0) {
             return [true, null];
         }
 

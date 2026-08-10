@@ -9,6 +9,7 @@ use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 
 final class DiagnosticsTest extends TestCase
@@ -20,7 +21,7 @@ final class DiagnosticsTest extends TestCase
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
-        $this->postId = (int) DB::table('posts')->insertGetId([
+        $this->postId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Events',
             'views' => 0,
             'published' => true,
@@ -39,10 +40,10 @@ final class DiagnosticsTest extends TestCase
             CacheInvalidated::class,
         ]);
 
-        DB::table('posts')->where('id', $this->postId)->get();
-        DB::table('posts')->where('id', $this->postId)->get();
-        DB::table('posts')->where('id', $this->postId)->withoutCache()->get();
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Changed']);
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->withoutCache()->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Changed']);
 
         Event::assertDispatched(QueryCacheMiss::class);
         Event::assertDispatched(QueryCacheHit::class);
@@ -70,8 +71,8 @@ final class DiagnosticsTest extends TestCase
     {
         Event::fake([QueryBypassed::class]);
 
-        DB::table('posts')->cursor()->all();
-        DB::table('posts')->explain();
+        RawPost::query()->toBase()->cursor()->all();
+        RawPost::query()->toBase()->explain();
 
         Event::assertNotDispatched(QueryBypassed::class);
     }
@@ -80,10 +81,10 @@ final class DiagnosticsTest extends TestCase
     {
         Event::fake([QueryBypassed::class]);
 
-        DB::table('posts')->where('id', $this->postId)->withoutCache()->get();
-        DB::table('posts')->where('id', $this->postId)->useWritePdo()->get();
-        DB::transaction(fn() => DB::table('posts')->where('id', $this->postId)->get());
-        DB::table('posts')->where('id', $this->postId)->lockForUpdate()->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->withoutCache()->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->useWritePdo()->get();
+        DB::transaction(fn() => RawPost::query()->toBase()->where('id', $this->postId)->get());
+        RawPost::query()->toBase()->where('id', $this->postId)->lockForUpdate()->get();
 
         Event::assertDispatchedTimes(QueryBypassed::class, 4);
         Event::assertDispatched(
@@ -112,7 +113,7 @@ final class DiagnosticsTest extends TestCase
         Event::fake([QueryBypassed::class]);
 
         $this->assertTrue(
-            DB::table('posts')->where('id', $this->postId)->withoutCache()->exists(),
+            RawPost::query()->toBase()->where('id', $this->postId)->withoutCache()->exists(),
         );
 
         Event::assertDispatchedTimes(QueryBypassed::class, 1);
@@ -124,7 +125,7 @@ final class DiagnosticsTest extends TestCase
 
     public function test_corrupt_result_payload_self_heals_as_a_miss(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->select('title')
             ->get();
@@ -150,14 +151,14 @@ final class DiagnosticsTest extends TestCase
 
     public function test_absent_canonical_row_repairs_without_reporting_corruption(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         $rowKey = $this->cacheKeysMatching(':r:g')[0] ?? null;
 
         $this->assertIsString($rowKey);
         $this->cacheStore()->delete($rowKey);
         Event::fake([QueryCacheMiss::class]);
 
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         Event::assertNotDispatched(
             QueryCacheMiss::class,

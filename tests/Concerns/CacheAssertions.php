@@ -55,8 +55,8 @@ trait CacheAssertions
         return array_values(array_filter(
             array_filter(
                 $this->cacheKeysMatching(':q:'),
-                static fn(string $key): bool => ! str_contains($key, ':build:q:')
-                    && ! str_contains($key, ':wake:q:'),
+                static fn(string $key): bool => !str_contains($key, ':build:q:')
+                    && !str_contains($key, ':wake:q:'),
             ),
             fn(string $key): bool => $this->cacheStore()->readHashField($key, $field) !== null,
         ));

@@ -1,6 +1,6 @@
 {
     "name": "kai-init/laravel-normcache",
-    "description": "Redis-backed normalized query caching for Laravel Eloquent and Query Builder.",
+    "description": "Redis-backed normalized query caching for Laravel Eloquent.",
     "type": "library",
     "license": "MIT",
     "authors": [

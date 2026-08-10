@@ -6,10 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
-use NormCache\Exceptions\CascadeException;
-use NormCache\Planning\SchemaCatalog;
+use NormCache\Planning\DeleteDependencyResolver;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\RedisStore;
 use NormCache\Values\CacheConfig;
@@ -23,9 +22,9 @@ final readonly class CacheManager
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,
-        private SchemaCatalog $schema,
+        private TableIdentityResolver $tables,
+        private DeleteDependencyResolver $deleteDependencies,
         private QueryIdentity $identity,
-        private FailureReporter $failures,
     ) {}
 
     /**
@@ -78,7 +77,7 @@ final readonly class CacheManager
             return $this->modelInvalidationIdentity(new $target, $connection);
         }
 
-        return $this->schema->resolveTable(DB::connection($connection), $target);
+        return $this->tables->resolve(DB::connection($connection), $target);
     }
 
     private function modelInvalidationIdentity(Model $model, ?string $connection): ?TableIdentity
@@ -88,7 +87,7 @@ final readonly class CacheManager
             $model->setConnection($connection);
         }
 
-        return $this->schema->resolveTable($model->getConnection(), $model->getTable());
+        return $this->tables->resolve($model->getConnection(), $model->getTable());
     }
 
     public function flushTag(string $tag): bool
@@ -100,6 +99,7 @@ final readonly class CacheManager
 
     public function flushAll(): bool
     {
+        $this->deleteDependencies->clear();
         $this->runtime->forgetEpoch();
 
         return $this->increment($this->keys->epoch(), force: true);
@@ -161,42 +161,6 @@ final readonly class CacheManager
 
             return false;
         }
-    }
-
-    public function clearSchema(): bool
-    {
-        return $this->schema->clear();
-    }
-
-    public function refreshSchema(?string $connection = null): bool
-    {
-        $cleared = $this->clearSchema();
-        $flushed = $this->flushAll();
-
-        if (!$cleared || !$flushed) {
-            return false;
-        }
-
-        $connections = $connection === null
-            ? DB::getConnections()
-            : [$connection => DB::connection($connection)];
-
-        if ($connections === []) {
-            $default = DB::connection();
-            $connections[(string) $default->getName()] = $default;
-        }
-
-        try {
-            foreach ($connections as $database) {
-                $this->schema->warm($database);
-            }
-        } catch (CascadeException $failure) {
-            $this->failures->cascadeGlobalInvalidation(null, $failure);
-
-            return false;
-        }
-
-        return true;
     }
 
     private function increment(string $key, bool $force = false): bool

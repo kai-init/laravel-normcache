@@ -14,9 +14,7 @@ final readonly class CacheConfig
         public string $serializer,
         public int $rowTtl,
         public int $queryTtl,
-        public int $schemaTtl,
         public int $maxAutoOverlayRows,
-        public array $primaryKeys,
         public int $maxPreciseInvalidationKeys,
         public int $buildingLockTtl,
         public int $stampedeWaitMs,
@@ -43,11 +41,6 @@ final readonly class CacheConfig
 
         $rowTtl = self::positive($values, 'row_ttl', 604_800);
         $queryTtl = self::positive($values, 'query_ttl', 3_600);
-        $schemaTtl = self::nonNegative(
-            $values,
-            'schema_ttl',
-            86_400,
-        );
         $maxAutoOverlayRows = self::nonNegative(
             $values,
             'auto_overlay_max_rows',
@@ -74,9 +67,7 @@ final readonly class CacheConfig
             serializer: self::serializer($values['serializer'] ?? 'auto'),
             rowTtl: $rowTtl,
             queryTtl: $queryTtl,
-            schemaTtl: $schemaTtl,
             maxAutoOverlayRows: $maxAutoOverlayRows,
-            primaryKeys: self::primaryKeys($values['primary_keys'] ?? []),
             maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,
             buildingLockTtl: $buildingLockTtl,
             stampedeWaitMs: $stampedeWaitMs,
@@ -133,118 +124,5 @@ final readonly class CacheConfig
         }
 
         return $value;
-    }
-
-    /** @return list<array<string, string>> */
-    private static function primaryKeys(mixed $value): array
-    {
-        if (!is_array($value)) {
-            throw new \InvalidArgumentException('NormCache primary_keys must be an array.');
-        }
-
-        $result = [];
-
-        foreach ($value as $group) {
-            if (!is_array($group)) {
-                throw new \InvalidArgumentException(
-                    'Each NormCache primary_keys entry must be a structured array.',
-                );
-            }
-
-            array_push($result, ...self::primaryKeyGroup($group));
-        }
-
-        return $result;
-    }
-
-    /** @param array<string, mixed> $group
-     * @return list<array<string, string>>
-     */
-    private static function primaryKeyGroup(array $group): array
-    {
-        foreach (['connection', 'database'] as $field) {
-            if (!is_string($group[$field] ?? null) || $group[$field] === '') {
-                throw new \InvalidArgumentException(
-                    "NormCache primary_keys groups require a non-empty {$field}.",
-                );
-            }
-        }
-
-        if (array_key_exists('schema', $group) && !is_string($group['schema'])) {
-            throw new \InvalidArgumentException(
-                'NormCache primary_keys group schema must be a string when present.',
-            );
-        }
-
-        $tables = $group['tables'] ?? null;
-
-        if (!is_array($tables) || $tables === []) {
-            throw new \InvalidArgumentException(
-                'NormCache primary_keys groups require a non-empty tables array.',
-            );
-        }
-
-        $result = [];
-
-        foreach ($tables as $table => $metadata) {
-            if (!is_string($table) || $table === '') {
-                throw new \InvalidArgumentException(
-                    'NormCache primary_keys table names must be non-empty strings.',
-                );
-            }
-
-            if (!is_array($metadata)) {
-                throw new \InvalidArgumentException(
-                    'NormCache primary_keys table metadata must be a structured array.',
-                );
-            }
-
-            $override = [
-                'connection' => $group['connection'],
-                'database' => $group['database'],
-                'table' => $table,
-                'column' => $metadata['column'] ?? null,
-                'type' => $metadata['type'] ?? null,
-            ];
-
-            if (array_key_exists('schema', $group)) {
-                $override['schema'] = $group['schema'];
-            }
-
-            $result[] = self::primaryKey($override);
-        }
-
-        return $result;
-    }
-
-    /** @param array<string, mixed> $override
-     * @return array<string, string>
-     */
-    private static function primaryKey(array $override): array
-    {
-        foreach (['connection', 'database', 'table', 'column', 'type'] as $field) {
-            if (!is_string($override[$field] ?? null) || $override[$field] === '') {
-                throw new \InvalidArgumentException(
-                    "NormCache primary_keys entries require a non-empty {$field}.",
-                );
-            }
-        }
-
-        if (
-            array_key_exists('schema', $override)
-            && !is_string($override['schema'])
-        ) {
-            throw new \InvalidArgumentException(
-                'NormCache primary_keys schema must be a string when present.',
-            );
-        }
-
-        if (!in_array($override['type'], ['integer', 'string'], true)) {
-            throw new \InvalidArgumentException(
-                'NormCache primary_keys type must be integer or string.',
-            );
-        }
-
-        return $override;
     }
 }

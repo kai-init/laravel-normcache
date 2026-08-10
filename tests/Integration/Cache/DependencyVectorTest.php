@@ -3,27 +3,35 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Schema\SQLiteBuilder;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
-use InvalidArgumentException;
-use NormCache\Database\Connections\BuildsCachingQueries;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\AbstractComment;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Comment;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
-use PDO;
+use NormCache\Traits\Cacheable;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 trait SplitsPipelineAroundInvalidation
 {
     private bool $intercepted = false;
+
+    public function command($method, array $parameters = [])
+    {
+        if ($method === 'pipeline') {
+            return $this->pipeline($parameters[0] ?? null);
+        }
+
+        return parent::command($method, $parameters);
+    }
 
     public function pipeline(?callable $callback = null)
     {
@@ -56,8 +64,10 @@ trait SplitsPipelineAroundInvalidation
     }
 }
 
-class PostTitlesView extends Model
+final class PostTitlesView extends Model
 {
+    use Cacheable;
+
     protected $table = 'post_titles';
 }
 
@@ -70,7 +80,7 @@ final class DependencyVectorTest extends TestCase
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
-        $this->postId = (int) DB::table('posts')->insertGetId([
+        $this->postId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Post',
             'views' => 0,
             'published' => true,
@@ -78,7 +88,7 @@ final class DependencyVectorTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('comments')->insert([
+        Comment::query()->toBase()->insert([
             'body' => 'Before',
             'commentable_type' => 'post',
             'commentable_id' => $this->postId,
@@ -89,14 +99,14 @@ final class DependencyVectorTest extends TestCase
 
     public function test_join_result_misses_after_any_dependency_version_changes(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->join('comments', 'comments.commentable_id', '=', 'posts.id')
             ->select(['posts.id', 'comments.body'])
             ->get();
 
         $read();
         $read();
-        DB::table('comments')->where('commentable_id', $this->postId)->update(['body' => 'After']);
+        Comment::query()->toBase()->where('commentable_id', $this->postId)->update(['body' => 'After']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -109,7 +119,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_predicate_subquery_membership_tracks_the_extra_dependency(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->whereExists(function ($query) {
                 $query->from('comments')
                     ->whereColumn('comments.commentable_id', 'posts.id')
@@ -120,7 +130,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, $read());
         $this->assertCount(1, $read());
 
-        DB::table('comments')->where('commentable_id', $this->postId)->update(['body' => 'After']);
+        Comment::query()->toBase()->where('commentable_id', $this->postId)->update(['body' => 'After']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -133,8 +143,8 @@ final class DependencyVectorTest extends TestCase
 
     public function test_where_in_subquery_requires_declared_dependencies(): void
     {
-        $build = fn(bool $declared = false) => DB::table('posts')
-            ->whereIn('id', DB::table('comments')->select('commentable_id'))
+        $build = fn(bool $declared = false) => RawPost::query()->toBase()
+            ->whereIn('id', Comment::query()->toBase()->select('commentable_id'))
             ->when($declared, fn($query) => $query->dependsOn(['comments']));
 
         $this->bypassContract(
@@ -145,7 +155,7 @@ final class DependencyVectorTest extends TestCase
         $this->contract(
             fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
             fn() => $build()->get()->map(static fn($row): array => (array) $row),
-            mutate: fn() => DB::table('comments')
+            mutate: fn() => Comment::query()->toBase()
                 ->where('commentable_id', $this->postId)
                 ->delete(),
         );
@@ -183,7 +193,7 @@ final class DependencyVectorTest extends TestCase
         DB::purge('tenant');
 
         try {
-            $read = fn() => Post::on('tenant')
+            $read = fn() => RawPost::on('tenant')
                 ->dependsOn([Author::class])
                 ->selectRaw(
                     'posts.*, (select name from authors where authors.id = posts.author_id) as author_name'
@@ -218,7 +228,7 @@ final class DependencyVectorTest extends TestCase
 
         $read();
         $read();
-        DB::table('comments')->where('commentable_id', $this->postId)->update(['body' => 'After']);
+        Comment::query()->toBase()->where('commentable_id', $this->postId)->update(['body' => 'After']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -245,7 +255,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_depends_on_rejects_missing_model_class_names(): void
     {
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('does not exist');
 
         Post::query()->dependsOn(['App\\Models\\MissingDependency']);
@@ -253,7 +263,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_depends_on_rejects_existing_non_model_classes(): void
     {
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('must be an Eloquent model');
 
         Post::query()->dependsOn([\DateTime::class]);
@@ -261,7 +271,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_raw_predicate_subquery_requires_declared_dependencies(): void
     {
-        $build = fn(bool $declared = false) => DB::table('posts')
+        $build = fn(bool $declared = false) => RawPost::query()->toBase()
             ->whereRaw(
                 'exists (select 1 from comments where comments.commentable_id = posts.id)'
             )
@@ -275,7 +285,7 @@ final class DependencyVectorTest extends TestCase
         $this->contract(
             fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
             fn() => $build()->get()->map(static fn($row): array => (array) $row),
-            mutate: fn() => DB::table('comments')
+            mutate: fn() => Comment::query()->toBase()
                 ->where('commentable_id', $this->postId)
                 ->delete(),
         );
@@ -283,7 +293,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_derived_raw_subquery_requires_an_explicit_authoritative_declaration(): void
     {
-        $build = fn() => DB::table('posts')
+        $build = fn() => RawPost::query()->toBase()
             ->whereRaw(
                 'exists (select 1 from (select commentable_id from comments) as recent_comments where recent_comments.commentable_id = posts.id)'
             );
@@ -306,7 +316,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_unresolvable_declaration_does_not_authorize_an_opaque_query(): void
     {
-        $build = fn() => DB::table('posts')
+        $build = fn() => RawPost::query()->toBase()
             ->whereRaw(
                 'exists (select 1 from comments where comments.commentable_id = posts.id)'
             )
@@ -324,7 +334,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_unresolvable_declaration_bypasses_an_otherwise_cacheable_query(): void
     {
-        $build = fn() => DB::table('posts')
+        $build = fn() => RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->dependsOn([Author::class, AbstractComment::class])
             ->get();
@@ -340,21 +350,37 @@ final class DependencyVectorTest extends TestCase
 
     public function test_unresolvable_declaration_never_serves_stale_rows(): void
     {
-        $build = fn() => DB::table('posts')
+        $build = fn() => RawPost::query()->toBase()
             ->whereRaw('exists (select 1 from comments where comments.body = ?)', ['Before'])
             ->dependsOn([AbstractComment::class])
             ->get();
 
         $this->assertCount(1, $build());
-        DB::table('comments')->where('commentable_id', $this->postId)->update(['body' => 'After']);
+        Comment::query()->toBase()->where('commentable_id', $this->postId)->update(['body' => 'After']);
 
         $this->assertCount(0, $build());
+    }
+
+    public function test_declared_table_dependencies_are_trusted_without_schema_queries(): void
+    {
+        $build = fn() => RawPost::query()->toBase()
+            ->where('id', $this->postId)
+            ->dependsOn(['definitely_missing_table'])
+            ->get();
+
+        $build();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $build();
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
     }
 
     public function test_unresolvable_declaration_is_reported_as_incomplete(): void
     {
         $connection = DB::connection();
-        $query = DB::table('posts')->dependsOn(['comments', AbstractComment::class]);
+        $query = RawPost::query()->toBase()->dependsOn(['comments', AbstractComment::class]);
         $root = $this->app->make(TableIdentityResolver::class)
             ->resolve($connection, 'posts');
         $this->assertNotNull($root);
@@ -367,7 +393,8 @@ final class DependencyVectorTest extends TestCase
 
     public function test_explicit_dependencies_authorize_a_hashable_derived_result_as_query_group(): void
     {
-        $build = fn() => DB::table(DB::raw('(select id, title from posts) as derived'))
+        $build = fn() => RawPost::query()->toBase()
+            ->from(DB::raw('(select id, title from posts) as derived'))
             ->dependsOn(['posts'])
             ->select(['id', 'title']);
 
@@ -382,7 +409,8 @@ final class DependencyVectorTest extends TestCase
 
     public function test_query_group_invalidation_between_payload_and_state_reads_cannot_serve_stale_data(): void
     {
-        $read = fn() => DB::table(DB::raw('(select id, title from posts) as derived'))
+        $read = fn() => RawPost::query()->toBase()
+            ->from(DB::raw('(select id, title from posts) as derived'))
             ->dependsOn(['posts'])
             ->where('id', $this->postId)
             ->first();
@@ -393,7 +421,7 @@ final class DependencyVectorTest extends TestCase
         $connectionProperty = (new \ReflectionClass($store))->getProperty('connection');
         $connection = $connectionProperty->getValue($store);
         $invalidate = function (): void {
-            DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
+            RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'After']);
         };
 
         // Redis lets another client's write land between two commands of one
@@ -438,9 +466,8 @@ final class DependencyVectorTest extends TestCase
 
     public function test_explicit_dependency_order_does_not_change_opaque_query_identity(): void
     {
-        $build = fn(array $dependencies) => DB::table(
-            DB::raw('(select id, title from posts) as derived')
-        )
+        $build = fn(array $dependencies) => RawPost::query()->toBase()
+            ->from(DB::raw('(select id, title from posts) as derived'))
             ->dependsOn($dependencies)
             ->select(['id', 'title']);
 
@@ -455,8 +482,8 @@ final class DependencyVectorTest extends TestCase
 
     public function test_select_subquery_context_is_captured_before_compilation(): void
     {
-        $base = fn() => DB::table('posts')->selectSub(
-            DB::table('comments')
+        $base = fn() => RawPost::query()->toBase()->selectSub(
+            Comment::query()->toBase()
                 ->selectRaw('count(*)')
                 ->whereColumn('comments.commentable_id', 'posts.id'),
             'comment_count',
@@ -469,7 +496,7 @@ final class DependencyVectorTest extends TestCase
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
 
-        DB::table('comments')->insert([
+        Comment::query()->toBase()->insert([
             'body' => 'Second',
             'commentable_type' => 'post',
             'commentable_id' => $this->postId,
@@ -494,7 +521,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_direct_root_calculated_projection_uses_table_local_result_caching(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->selectRaw('upper(title) as heading')
             ->where('id', $this->postId)
             ->get();
@@ -511,7 +538,7 @@ final class DependencyVectorTest extends TestCase
 
     public function test_volatile_projection_is_never_cached(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->selectRaw('random() as value')
             ->where('id', $this->postId)
             ->dependsOn(['posts'])
@@ -533,7 +560,7 @@ final class DependencyVectorTest extends TestCase
             'random_bytes',
             static fn(int $length): string => bin2hex(\random_bytes($length)),
         );
-        $read = fn(): string => (string) DB::table('posts')
+        $read = fn(): string => (string) RawPost::query()->toBase()
             ->selectRaw('random_bytes(16) as value')
             ->where('id', $this->postId)
             ->value('value');
@@ -552,7 +579,7 @@ final class DependencyVectorTest extends TestCase
     #[DataProvider('previouslyUncoveredVolatileExpressions')]
     public function test_connection_and_random_state_expressions_are_volatile(string $expression): void
     {
-        $query = DB::table('posts')->selectRaw("{$expression} as observed_value");
+        $query = RawPost::query()->toBase()->selectRaw("{$expression} as observed_value");
         $this->assertTrue(
             $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
         );
@@ -574,7 +601,7 @@ final class DependencyVectorTest extends TestCase
     #[DataProvider('driverTimeExpressions')]
     public function test_driver_time_expressions_are_volatile(string $expression): void
     {
-        $query = DB::table('posts')->selectRaw("{$expression} as observed_at");
+        $query = RawPost::query()->toBase()->selectRaw("{$expression} as observed_at");
         $this->assertTrue(
             $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
         );
@@ -633,14 +660,14 @@ final class DependencyVectorTest extends TestCase
         if (method_exists($pdo, 'createFunction')) {
             $pdo->createFunction($name, $callback);
         } elseif (method_exists($pdo, 'sqliteCreateFunction')) {
-            /** @var PDO $pdo */
+            /** @var \PDO $pdo */
             $pdo->sqliteCreateFunction($name, $callback);
         }
     }
 
     public function test_raw_ordering_subquery_requires_declared_dependencies(): void
     {
-        $build = fn(bool $declared = false) => DB::table('posts')
+        $build = fn(bool $declared = false) => RawPost::query()->toBase()
             ->orderByRaw(
                 '(select count(*) from comments where comments.commentable_id = posts.id) desc'
             )
@@ -654,56 +681,10 @@ final class DependencyVectorTest extends TestCase
         $this->contract(
             fn() => $build(true)->get()->map(static fn($row): array => (array) $row),
             fn() => $build()->get()->map(static fn($row): array => (array) $row),
-            mutate: fn() => DB::table('comments')
+            mutate: fn() => Comment::query()->toBase()
                 ->where('commentable_id', $this->postId)
                 ->delete(),
         );
-    }
-
-    public function test_eloquent_query_bypasses_when_view_metadata_lookup_fails(): void
-    {
-        $name = 'metadata-failure';
-        $database = (string) DB::connection()->getDatabaseName();
-        config()->set("database.connections.{$name}", [
-            'driver' => 'sqlite',
-            'database' => $database,
-            'prefix' => '',
-            'name' => $name,
-            'normcache_scope' => $name,
-        ]);
-        DB::extend($name, static fn(array $config) => new class(new PDO('sqlite:' . $database), $database, '', $config) extends SQLiteConnection
-        {
-            use BuildsCachingQueries;
-
-            public function getSchemaBuilder()
-            {
-                return new class($this) extends SQLiteBuilder
-                {
-                    public function hasView($view)
-                    {
-                        throw new \RuntimeException('View metadata unavailable.');
-                    }
-                };
-            }
-        });
-        DB::purge($name);
-
-        try {
-            $read = fn() => Post::on($name)->whereKey($this->postId)->firstOrFail();
-            $this->assertSame('Post', $read()->title);
-
-            $connection = DB::connection($name);
-            $connection->flushQueryLog();
-            $connection->enableQueryLog();
-            $this->assertSame('Post', $read()->title);
-            $connection->disableQueryLog();
-
-            $this->assertCount(1, $connection->getQueryLog());
-        } finally {
-            DB::disconnect($name);
-            DB::purge($name);
-            DB::forgetExtension($name);
-        }
     }
 
     public function test_unnamed_custom_connection_bypasses_without_a_source_scope(): void
@@ -715,14 +696,11 @@ final class DependencyVectorTest extends TestCase
             'database' => $database,
             'prefix' => '',
         ]);
-        DB::extend($name, static fn(array $config) => new class(new PDO('sqlite:' . $database), $database, '', $config) extends SQLiteConnection
-        {
-            use BuildsCachingQueries;
-        });
+        DB::extend($name, static fn(array $config) => new class(new \PDO('sqlite:' . $database), $database, '', $config) extends SQLiteConnection {});
         DB::purge($name);
 
         try {
-            $read = fn() => Post::on($name)->whereKey($this->postId)->firstOrFail();
+            $read = fn() => RawPost::on($name)->whereKey($this->postId)->firstOrFail();
             $this->assertSame('Post', $read()->title);
 
             $connection = DB::connection($name);
@@ -739,20 +717,11 @@ final class DependencyVectorTest extends TestCase
         }
     }
 
-    public function test_database_views_require_explicit_table_dependencies(): void
+    public function test_database_views_use_explicit_physical_dependencies(): void
     {
         DB::statement('create view post_titles as select id, title from posts');
-        $this->cacheManager()->clearSchema();
 
-        $implicit = fn() => DB::table('post_titles')->where('id', $this->postId)->first();
-        $this->assertSame('Post', $implicit()?->title);
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $this->assertSame('Post', $implicit()?->title);
-        DB::disableQueryLog();
-        $this->assertCount(1, DB::getQueryLog());
-
-        $explicit = fn() => DB::table('post_titles')
+        $explicit = fn() => PostTitlesView::query()->toBase()
             ->dependsOn(['posts'])
             ->where('id', $this->postId)
             ->first();
@@ -762,47 +731,12 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame('Post', $explicit()?->title);
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
-        $this->assertSame([], $this->cacheKeysMatching(':r:g'));
-        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
 
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'After']);
         DB::flushQueryLog();
         DB::enableQueryLog();
         $this->assertSame('After', $explicit()?->title);
         DB::disableQueryLog();
         $this->assertCount(1, DB::getQueryLog());
-    }
-
-    #[DataProvider('selfViewDependencies')]
-    public function test_database_views_cannot_use_themselves_as_the_only_dependency(
-        string $dependency,
-    ): void {
-        DB::statement('create view post_titles as select id, title from posts');
-        $this->cacheManager()->clearSchema();
-
-        $read = fn() => DB::table('post_titles')
-            ->dependsOn([$dependency])
-            ->where('id', $this->postId)
-            ->first();
-
-        $this->assertSame('Post', $read()?->title);
-        $this->assertSame('Post', $read()?->title);
-
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'After']);
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-        $result = $read();
-        DB::disableQueryLog();
-
-        $this->assertSame('After', $result?->title);
-        $this->assertCount(1, DB::getQueryLog());
-    }
-
-    public static function selfViewDependencies(): array
-    {
-        return [
-            'table declaration' => ['post_titles'],
-            'model declaration' => [PostTitlesView::class],
-        ];
     }
 }
