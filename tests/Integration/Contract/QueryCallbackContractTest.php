@@ -11,9 +11,9 @@ use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 use ReflectionProperty;
 
-class QueryCallbackContractTest extends TestCase
+final class QueryCallbackContractTest extends TestCase
 {
-    public function test_before_query_callback_affects_normalized_cache_key_and_results(): void
+    public function test_before_query_callback_affects_graph_key_and_results(): void
     {
         $this->fixtures();
 
@@ -24,7 +24,12 @@ class QueryCallbackContractTest extends TestCase
             ->get();
 
         $this->assertSame(['Bob'], $query()->pluck('name')->all());
-        $this->assertSame(['Bob'], $query()->pluck('name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['Bob'], $result->pluck('name')->all());
+
+            return $result;
+        });
     }
 
     public function test_before_query_callback_runs_after_global_scopes_like_eloquent(): void
@@ -34,21 +39,20 @@ class QueryCallbackContractTest extends TestCase
         Author::addGlobalScope('has_country', fn($builder) => $builder->whereNotNull('country_id'));
 
         try {
-            $cached = Author::orderBy('name')
+            $cached = fn() => Author::orderBy('name')
                 ->beforeQuery(fn($base) => $base->orWhere('name', 'Carol'))
                 ->get()
                 ->pluck('name')
                 ->all();
-
-            $native = Author::withoutCache()
+            $native = fn() => Author::withoutCache()
                 ->orderBy('name')
                 ->beforeQuery(fn($base) => $base->orWhere('name', 'Carol'))
                 ->get()
                 ->pluck('name')
                 ->all();
 
-            $this->assertSame($native, $cached);
-            $this->assertSame(['Alice', 'Bob', 'Carol'], $cached);
+            $this->contract($cached, $native);
+            $this->assertSame(['Alice', 'Bob', 'Carol'], $cached());
         } finally {
             $this->clearGlobalScope(Author::class, 'has_country');
         }
@@ -68,14 +72,19 @@ class QueryCallbackContractTest extends TestCase
             $query = fn() => Author::orderBy('name')->get();
 
             $this->assertSame(['Alice', 'Bob'], $query()->pluck('name')->all());
-            $this->assertSame(['Alice', 'Bob'], $query()->pluck('name')->all());
+            $this->assertWarmCacheHit(function () use ($query) {
+                $result = $query();
+                $this->assertSame(['Alice', 'Bob'], $result->pluck('name')->all());
+
+                return $result;
+            });
             $this->assertSame(2, $calls);
         } finally {
             $this->clearGlobalScope(Author::class, 'counted');
         }
     }
 
-    public function test_before_query_callback_affects_result_cache_key_and_results(): void
+    public function test_before_query_callback_affects_value_payload_key_and_results(): void
     {
         $this->fixtures();
 
@@ -87,10 +96,15 @@ class QueryCallbackContractTest extends TestCase
             ->get();
 
         $this->assertSame(['Bob'], $query()->pluck('name')->all());
-        $this->assertSame(['Bob'], $query()->pluck('name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['Bob'], $result->pluck('name')->all());
+
+            return $result;
+        });
     }
 
-    public function test_before_query_callback_affects_scalar_cache_key_and_results(): void
+    public function test_before_query_callback_affects_scalar_value_key_and_results(): void
     {
         $this->fixtures();
         $calls = 0;
@@ -106,7 +120,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(2, $query());
-        $this->assertSame(2, $query());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(2, $result);
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
     }
 
@@ -134,9 +153,19 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(['Alice', 'Bob'], $pluck()->all());
-        $this->assertSame(['Alice', 'Bob'], $pluck()->all());
+        $this->assertWarmCacheHit(function () use ($pluck) {
+            $result = $pluck();
+            $this->assertSame(['Alice', 'Bob'], $result->all());
+
+            return $result;
+        });
         $this->assertSame('Bob', $value());
-        $this->assertSame('Bob', $value());
+        $this->assertWarmCacheHit(function () use ($value) {
+            $result = $value();
+            $this->assertSame('Bob', $result);
+
+            return $result;
+        });
         $this->assertSame(4, $calls);
     }
 
@@ -151,7 +180,10 @@ class QueryCallbackContractTest extends TestCase
             ->paginate(10);
 
         $cold = $query();
-        $warm = $query();
+        $warm = null;
+        $this->assertWarmCacheHit(function () use ($query, &$warm) {
+            return $warm = $query();
+        });
 
         $this->assertSame(2, $cold->total());
         $this->assertSame(['Alice', 'Bob'], $cold->pluck('name')->all());
@@ -177,7 +209,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame([null, null, 'Bob'], $query()->pluck('author.name')->all());
-        $this->assertSame([null, null, 'Bob'], $query()->pluck('author.name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame([null, null, 'Bob'], $result->pluck('author.name')->all());
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
     }
 
@@ -198,7 +235,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(['php'], $query()->pluck('name')->all());
-        $this->assertSame(['php'], $query()->pluck('name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['php'], $result->pluck('name')->all());
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
     }
 
@@ -209,14 +251,13 @@ class QueryCallbackContractTest extends TestCase
         Tag::addGlobalScope('php_only', fn($builder) => $builder->where('tags.name', 'php'));
 
         try {
-            $cached = $alice->tags()
+            $cached = fn() => $alice->tags()
                 ->orderBy('tags.name')
                 ->beforeQuery(fn($base) => $base->orWhere('tags.name', 'laravel'))
                 ->get()
                 ->pluck('name')
                 ->all();
-
-            $native = $alice->tags()
+            $native = fn() => $alice->tags()
                 ->withoutCache()
                 ->orderBy('tags.name')
                 ->beforeQuery(fn($base) => $base->orWhere('tags.name', 'laravel'))
@@ -224,8 +265,8 @@ class QueryCallbackContractTest extends TestCase
                 ->pluck('name')
                 ->all();
 
-            $this->assertSame($native, $cached);
-            $this->assertSame(['laravel', 'php'], $cached);
+            $this->contract($cached, $native);
+            $this->assertSame(['laravel', 'php'], $cached());
         } finally {
             $this->clearGlobalScope(Tag::class, 'php_only');
         }
@@ -248,7 +289,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(['B1'], $query()->pluck('title')->all());
-        $this->assertSame(['B1'], $query()->pluck('title')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['B1'], $result->pluck('title')->all());
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
     }
 
@@ -268,7 +314,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(['Alice', 'Carol'], $query()->pluck('name')->all());
-        $this->assertSame(['Alice', 'Carol'], $query()->pluck('name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['Alice', 'Carol'], $result->pluck('name')->all());
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
         $this->assertSame(['Alice', 'Bob', 'Carol'], Author::orderBy('name')->get()->pluck('name')->all());
     }
@@ -290,7 +341,12 @@ class QueryCallbackContractTest extends TestCase
         };
 
         $this->assertSame(['Alice', 'Carol'], $query()->pluck('name')->all());
-        $this->assertSame(['Alice', 'Carol'], $query()->pluck('name')->all());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(['Alice', 'Carol'], $result->pluck('name')->all());
+
+            return $result;
+        });
         $this->assertSame(2, $calls);
         $this->assertSame(
             ['Alice', 'Bob', 'Carol'],
@@ -315,9 +371,19 @@ class QueryCallbackContractTest extends TestCase
             ->value('name');
 
         $this->assertSame(['ALICE', 'BOB', 'CAROL'], $pluck()->all());
-        $this->assertSame(['ALICE', 'BOB', 'CAROL'], $pluck()->all());
+        $this->assertWarmCacheHit(function () use ($pluck) {
+            $result = $pluck();
+            $this->assertSame(['ALICE', 'BOB', 'CAROL'], $result->all());
+
+            return $result;
+        });
         $this->assertSame('CHANGED', $value());
-        $this->assertSame('CHANGED', $value());
+        $this->assertWarmCacheHit(function () use ($value) {
+            $result = $value();
+            $this->assertSame('CHANGED', $result);
+
+            return $result;
+        });
         $this->assertSame(['Alice', 'Bob', 'Carol'], Author::orderBy('name')->pluck('name')->all());
     }
 
@@ -335,7 +401,12 @@ class QueryCallbackContractTest extends TestCase
             ->count();
 
         $this->assertSame(3, $query());
-        $this->assertSame(3, $query());
+        $this->assertWarmCacheHit(function () use ($query) {
+            $result = $query();
+            $this->assertSame(3, $result);
+
+            return $result;
+        });
         $this->assertSame(0, $calls);
     }
 
@@ -349,8 +420,12 @@ class QueryCallbackContractTest extends TestCase
             ->get();
 
         $this->assertSame(['laravel'], $filtered()->pluck('name')->all());
-        $this->assertSame(['laravel'], $filtered()->pluck('name')->all());
-        $this->assertNotEmpty($this->redisKeys('pivot:*'));
+        $this->assertWarmCacheHit(function () use ($filtered) {
+            $result = $filtered();
+            $this->assertSame(['laravel'], $result->pluck('name')->all());
+
+            return $result;
+        });
         $this->assertSame(
             ['laravel', 'php'],
             $alice->tags()->orderBy('tags.name')->get()->pluck('name')->all()
@@ -367,8 +442,12 @@ class QueryCallbackContractTest extends TestCase
             ->get();
 
         $this->assertSame(['A1', 'A2'], $filtered()->pluck('title')->all());
-        $this->assertSame(['A1', 'A2'], $filtered()->pluck('title')->all());
-        $this->assertNotEmpty($this->redisKeys('through:*'));
+        $this->assertWarmCacheHit(function () use ($filtered) {
+            $result = $filtered();
+            $this->assertSame(['A1', 'A2'], $result->pluck('title')->all());
+
+            return $result;
+        });
         $this->assertSame(
             ['A1', 'A2', 'B1'],
             $country->posts()->orderBy('posts.title')->get()->pluck('title')->all()

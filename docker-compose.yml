@@ -1,7 +1,3 @@
-# Local Redis for the test suite.
-#   redis          — single node on 6379 (default `composer test`)
-#   redis-cluster  — 6-node cluster (3 masters + 3 replicas) on 7010-7015,
-#                    matching REDIS_CLUSTER_NODES in phpunit.xml (`composer test:cluster`)
 services:
   redis:
     image: redis:7-alpine

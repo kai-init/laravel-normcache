@@ -2,23 +2,21 @@
 
 namespace NormCache\Tests;
 
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
-use Illuminate\Database\Eloquent\Collection as EloquentCollection;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Pagination\CursorPaginator;
-use Illuminate\Pagination\Paginator;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Schema;
+use NormCache\Cache\CacheRuntime;
 use NormCache\CacheManager;
-use NormCache\CacheManagerFactory;
 use NormCache\CacheServiceProvider;
 use NormCache\Support\CacheKeyBuilder;
+use NormCache\Support\RedisStore;
+use NormCache\Tests\Concerns\CacheAssertions;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Predis\Client;
 
 abstract class TestCase extends OrchestraTestCase
 {
+    use CacheAssertions;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -26,13 +24,13 @@ abstract class TestCase extends OrchestraTestCase
         $redis = Redis::connection('normcache-test');
         $client = $redis->client();
 
-        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+        if ($this->isClusterRun()) {
             if (class_exists(Client::class) && $client instanceof Client) {
                 foreach ($client as $node) {
                     try {
                         $node->flushdb();
-                    } catch (\Exception $e) {
-                        // Ignore READONLY errors from replicas
+                    } catch (\Exception) {
+                        // Replicas reject FLUSHDB.
                     }
                 }
             } elseif ($client instanceof \RedisCluster) {
@@ -44,7 +42,8 @@ abstract class TestCase extends OrchestraTestCase
             $redis->flushdb();
         }
 
-        $this->resetClassKeyCache();
+        // Migrations memoize cache state before Redis is flushed.
+        $this->app->forgetScopedInstances();
     }
 
     protected function getPackageProviders($app): array
@@ -54,33 +53,39 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function defineEnvironment($app): void
     {
+        $driver = (string) env('TEST_DB_DRIVER', 'sqlite');
+
         $app['config']->set('database.default', 'testing');
-        $app['config']->set('database.connections.testing', [
-            'driver' => 'sqlite',
-            'database' => ':memory:',
-            'prefix' => '',
-        ]);
+        $app['config']->set(
+            'database.connections.testing',
+            $driver === 'sqlite'
+                ? $this->sqliteDatabaseConfig()
+                : $this->serverDatabaseConfig($driver),
+        );
 
         $client = env('REDIS_CLIENT', 'phpredis');
         $app['config']->set('database.redis.client', $client);
         $app['config']->set('database.redis.options.prefix', '');
 
-        if (env('REDIS_CLUSTER') === 'true' || env('REDIS_CLUSTER') === true) {
+        if ($this->isClusterRun()) {
             if ($client === 'predis') {
                 $app['config']->set('database.redis.options.cluster', 'redis');
             }
 
             $nodes = explode(',', env('REDIS_CLUSTER_NODES', '127.0.0.1:6379'));
-            $app['config']->set('database.redis.clusters.normcache-test', array_map(function ($node) {
-                [$host, $port] = explode(':', $node);
+            $app['config']->set('database.redis.clusters.normcache-test', array_map(
+                static function (string $node): array {
+                    [$host, $port] = explode(':', $node);
 
-                return [
-                    'host' => $host,
-                    'port' => $port,
-                    'database' => 0,
-                    'password' => env('REDIS_PASSWORD', null),
-                ];
-            }, $nodes));
+                    return [
+                        'host' => $host,
+                        'port' => $port,
+                        'database' => 0,
+                        'password' => env('REDIS_PASSWORD', null),
+                    ];
+                },
+                $nodes,
+            ));
         } else {
             $app['config']->set('database.redis.normcache-test', [
                 'host' => env('REDIS_HOST', '127.0.0.1'),
@@ -94,164 +99,96 @@ abstract class TestCase extends OrchestraTestCase
         $app['config']->set('normcache.enabled', true);
         $app['config']->set('normcache.events', true);
         $app['config']->set('normcache.key_prefix', 'test:');
-        $app['config']->set('normcache.ttl', 3600);
+        $app['config']->set('normcache.row_ttl', 3600);
         $app['config']->set('normcache.query_ttl', 60);
-        $app['config']->set('normcache.cooldown', 0);
     }
 
     protected function defineDatabaseMigrations(): void
     {
+        if (env('TEST_DB_DRIVER', 'sqlite') !== 'sqlite') {
+            Schema::dropAllTables();
+        }
+
         $this->loadMigrationsFrom(__DIR__ . '/Fixtures/database');
     }
 
-    protected function resetClassKeyCache(): void
+    /** @return array<string, mixed> */
+    private function sqliteDatabaseConfig(): array
     {
-        CacheKeyBuilder::reset();
+        $database = sys_get_temp_dir() . '/normcache-tests-' . getmypid() . '.sqlite';
+
+        if (is_file($database)) {
+            unlink($database);
+        }
+
+        touch($database);
+
+        return [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+        ];
     }
 
-    protected function modelCacheEntry(string $class, mixed $id): mixed
+    /** @return array<string, mixed> */
+    private function serverDatabaseConfig(string $driver): array
     {
-        $manager = $this->cacheManager();
+        $port = match ($driver) {
+            'pgsql' => 5432,
+            'sqlsrv' => 1433,
+            default => 3306,
+        };
+        $username = match ($driver) {
+            'pgsql' => 'postgres',
+            'sqlsrv' => 'sa',
+            default => 'root',
+        };
 
-        return $manager->store()->get($this->currentModelKey($manager, $class, $id));
-    }
-
-    protected function evictModelCache(string $class, mixed $id): void
-    {
-        $manager = $this->cacheManager();
-        $manager->store()->delete($this->currentModelKey($manager, $class, $id));
-    }
-
-    protected function prefixedModelKey(string $class, mixed $id): string
-    {
-        $manager = $this->cacheManager();
-
-        return $this->currentModelKey($manager, $class, $id);
-    }
-
-    private function currentModelKey(CacheManager $manager, string $class, mixed $id): string
-    {
-        $classKey = $manager->keys()->classKey($class);
-        $version = $manager->currentVersion($class);
-
-        return $manager->keys()->modelPrefix($classKey, $version) . $id;
-    }
-
-    protected function redisKeys(string $pattern = '*'): array
-    {
-        $manager = $this->cacheManager();
-
-        return $manager->store()->scanPattern($manager->keys()->prefixed($pattern));
+        return [
+            'driver' => $driver,
+            'host' => env('TEST_DB_HOST', '127.0.0.1'),
+            'port' => env('TEST_DB_PORT', $port),
+            'database' => env('TEST_DB_DATABASE', 'normcache'),
+            'username' => env('TEST_DB_USERNAME', $username),
+            'password' => env('TEST_DB_PASSWORD', ''),
+            'charset' => in_array($driver, ['mysql', 'mariadb'], true) ? 'utf8mb4' : 'utf8',
+            'collation' => in_array($driver, ['mysql', 'mariadb'], true)
+                ? 'utf8mb4_unicode_ci'
+                : null,
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+            'encrypt' => $driver === 'sqlsrv' ? 'no' : null,
+            'trust_server_certificate' => $driver === 'sqlsrv',
+        ];
     }
 
     protected function cacheManager(): CacheManager
     {
-        return $this->app->make('normcache');
+        return $this->app->make(CacheManager::class);
     }
 
-    protected function setClusterMode(bool $enabled): void
+    protected function cacheStore(): RedisStore
     {
-        $this->app->forgetInstance(CacheManager::class);
-        $this->app->forgetInstance('normcache');
+        return $this->app->make(RedisStore::class);
     }
 
-    /**
-     * Build a standalone CacheManager (not bound in the container) for tests
-     * that need specific construction parameters like cooldown.
-     */
-    protected function buildManager(
-        string $connection = 'normcache-test',
-        ?int $ttl = null,
-        ?int $queryTtl = null,
-        string $keyPrefix = 'test:',
-        int $cooldown = 0,
-        bool $enabled = true,
-        bool $dispatchEvents = true,
-        bool $fallback = false,
-        bool $fireRetrieved = false,
-        int $buildingLockTtl = 5,
-        int $stampedeWaitMs = 200,
-        int $stampedeWakeTokens = 64,
-    ): CacheManager {
-        return $this->app->make(CacheManagerFactory::class)->make([
-            'connection' => $connection,
-            'ttl' => $ttl ?? (int) config('normcache.ttl'),
-            'query_ttl' => $queryTtl ?? (int) config('normcache.query_ttl'),
-            'key_prefix' => $keyPrefix,
-            'cooldown' => $cooldown,
-            'enabled' => $enabled,
-            'events' => $dispatchEvents,
-            'fallback' => $fallback,
-            'fire_retrieved' => $fireRetrieved,
-            'building_lock_ttl' => $buildingLockTtl,
-            'stampede_wait_ms' => $stampedeWaitMs,
-            'stampede_wake_tokens' => $stampedeWakeTokens,
-        ]);
-    }
-
-    /** Assert native == cold == warm for a given query. */
-    protected function contract(callable $cached, callable $native, bool $expectNoStrayQueries = false): void
+    protected function cacheKeys(): CacheKeyBuilder
     {
-        $expected = $this->normalize($native());
-        $cold = $this->normalize($cached());
-
-        DB::flushQueryLog();
-        DB::enableQueryLog();
-
-        try {
-            $warm = $this->normalize($cached());
-            $strayQueries = DB::getQueryLog();
-        } finally {
-            DB::disableQueryLog();
-        }
-
-        $this->assertSame($expected, $cold, 'cold cache result differs from native Eloquent');
-        $this->assertSame($cold, $warm, 'warm cache result differs from cold');
-
-        if ($expectNoStrayQueries) {
-            $this->assertSame([], $strayQueries, 'expected no SQL queries on the warm cache path');
-        }
+        return $this->app->make(CacheKeyBuilder::class);
     }
 
-    protected function normalize(mixed $value): mixed
+    protected function expireEpochMemo(): void
     {
-        if ($value instanceof LengthAwarePaginator) {
-            return [
-                'data' => collect($value->items())->map->toArray()->values()->all(),
-                'total' => $value->total(),
-                'current_page' => $value->currentPage(),
-                'has_more' => $value->hasMorePages(),
-            ];
-        }
+        $runtime = $this->app->make(CacheRuntime::class);
+        $readAt = new \ReflectionProperty($runtime, 'epochReadAt');
 
-        if ($value instanceof Paginator) {
-            return [
-                'data' => collect($value->items())->map->toArray()->values()->all(),
-                'current_page' => $value->currentPage(),
-                'has_more' => $value->hasMorePages(),
-            ];
-        }
+        $this->assertNotNull(
+            $readAt->getValue($runtime),
+            'a read must record when it resolved the epoch, or nothing can expire it',
+        );
 
-        if ($value instanceof CursorPaginator) {
-            return [
-                'data' => collect($value->items())->map->toArray()->values()->all(),
-                'has_more' => $value->hasMorePages(),
-                'cursor' => $value->cursor()?->toArray(),
-            ];
-        }
-
-        if ($value instanceof EloquentCollection) {
-            return $value->map->toArray()->values()->all();
-        }
-
-        if ($value instanceof Collection) {
-            return $value->all(); // preserve keys (e.g. keyed pluck)
-        }
-
-        if ($value instanceof Model) {
-            return $value->toArray();
-        }
-
-        return $value;
+        $readAt->setValue($runtime, microtime(true) - 3600);
     }
 }

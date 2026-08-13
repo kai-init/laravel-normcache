@@ -2,55 +2,80 @@
 
 namespace NormCache\Support;
 
-final class CacheSerializer
+final readonly class CacheSerializer
 {
-    private bool $igbinary;
+    private const AUTO = 'auto';
 
-    public function __construct()
+    private const PHP = 'php';
+
+    private const IGBINARY = 'igbinary';
+
+    private const PHP_MARKER = 'P';
+
+    private const IGBINARY_MARKER = 'I';
+
+    private string $serializer;
+
+    private bool $igbinaryAvailable;
+
+    public function __construct(string $serializer = self::AUTO)
     {
-        $this->igbinary = extension_loaded('igbinary');
+        $this->igbinaryAvailable = extension_loaded('igbinary');
+
+        if (!in_array($serializer, [self::AUTO, self::PHP, self::IGBINARY], true)) {
+            throw new \InvalidArgumentException(
+                'NormCache serializer must be auto, php, or igbinary.',
+            );
+        }
+
+        if ($serializer === self::IGBINARY && !$this->igbinaryAvailable) {
+            throw new \RuntimeException('The igbinary codec was requested but the extension is unavailable.');
+        }
+
+        $this->serializer = $serializer === self::AUTO
+            ? ($this->igbinaryAvailable ? self::IGBINARY : self::PHP)
+            : $serializer;
     }
 
-    public function serialize(mixed $value): mixed
+    public function encode(mixed $value): string
     {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        return $this->igbinary ? igbinary_serialize($value) : serialize($value);
+        return $this->serializer === self::IGBINARY
+            ? self::IGBINARY_MARKER . igbinary_serialize($value)
+            : self::PHP_MARKER . serialize($value);
     }
 
-    public function unserialize(mixed $value): mixed
+    public function decode(string $payload): mixed
     {
-        if (is_numeric($value)) {
-            return str_contains((string) $value, '.') ? (float) $value : (int) $value;
-        }
+        $marker = $payload[0] ?? '';
 
-        if (!is_string($value)) {
-            return $value;
-        }
-
-        if (isset($value[0]) && $value[0] === "\x00") {
-            return $this->igbinary ? igbinary_unserialize($value) : null;
-        }
-
-        if (isset($value[1]) && ($value[1] === ':' || $value[1] === ';')) {
-            return unserialize($value);
-        }
-
-        return $value;
+        return match ($marker) {
+            self::PHP_MARKER => $this->decodePhp(substr($payload, 1)),
+            self::IGBINARY_MARKER => $this->decodeIgbinary(substr($payload, 1)),
+            default => null,
+        };
     }
 
-    public function unserializeMany(array $raw): array
+    private function decodePhp(string $payload): mixed
     {
-        $values = [];
+        try {
+            $value = @unserialize($payload, ['allowed_classes' => false]);
 
-        foreach ($raw as $key => $value) {
-            $values[$key] = $value !== null && $value !== false
-                ? $this->unserialize($value)
-                : null;
+            return $value === false && $payload !== 'b:0;' ? null : $value;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function decodeIgbinary(string $payload): mixed
+    {
+        if (!$this->igbinaryAvailable) {
+            return null;
         }
 
-        return $values;
+        try {
+            return @igbinary_unserialize($payload);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

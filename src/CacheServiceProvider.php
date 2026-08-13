@@ -2,146 +2,137 @@
 
 namespace NormCache;
 
+use DebugBar\DataCollector\TimeDataCollector;
+use Illuminate\Database\Events\MigrationsEnded;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Events\TransactionRolledBack;
-use Illuminate\Queue\Events\JobProcessed;
-use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use NormCache\Cache\BuildLeaseCoordinator;
+use NormCache\Cache\CacheRuntime;
+use NormCache\Cache\CacheStateResolver;
+use NormCache\Cache\CanonicalRowRepository;
+use NormCache\Cache\Engine;
+use NormCache\Cache\MembershipRevalidator;
+use NormCache\Cache\QueryEntryRepository;
+use NormCache\Cache\RowRepairer;
+use NormCache\Console\DisableCommand;
+use NormCache\Console\EnableCommand;
 use NormCache\Console\FlushCommand;
-use NormCache\Debug\NormCacheCollector;
-use NormCache\Debug\NormCacheDebugBarCollector;
-use NormCache\Planning\CachePlanner;
-use NormCache\Planning\CachePlanSpaceValidator;
-use NormCache\Planning\QueryEligibility;
-use NormCache\Spaces\CacheSpaceRegistry;
-use NormCache\Spaces\CacheSpaceResolver;
+use NormCache\Debug\DebugBarCollector;
+use NormCache\Payload\ChangeRecordCodec;
+use NormCache\Payload\MembershipCodec;
+use NormCache\Payload\RawResultCodec;
+use NormCache\Planning\DeleteDependencyResolver;
+use NormCache\Planning\DependencyAnalyzer;
+use NormCache\Planning\MutationKeyExtractor;
+use NormCache\Planning\QueryPlanner;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
-use NormCache\Support\CacheReporter;
+use NormCache\Support\CacheSerializer;
+use NormCache\Support\FailureReporter;
+use NormCache\Support\QueryIdentity;
+use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
+use NormCache\Values\CacheConfig;
 
-class CacheServiceProvider extends ServiceProvider
+final class CacheServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/normcache.php', 'normcache');
 
-        $this->app->singleton(CacheSpaceRegistry::class, function () {
-            $metadataStore = new RedisStore((string) config('normcache.connection'), (int) config('normcache.stampede_wake_tokens', 64));
+        $this->app->singleton(CacheConfig::class, fn() => CacheConfig::fromArray(
+            (array) config('normcache', []),
+        ));
+        $this->app->singleton(CacheKeyBuilder::class, fn($app) => new CacheKeyBuilder(
+            $app->make(CacheConfig::class)->keyPrefix,
+        ));
+        $this->app->singleton(RedisStore::class, fn($app) => new RedisStore(
+            $app->make(CacheConfig::class)->connection,
+        ));
+        $this->app->singleton(CacheSerializer::class, fn($app) => new CacheSerializer(
+            $app->make(CacheConfig::class)->serializer,
+        ));
+        $this->app->singleton(RawResultCodec::class);
+        $this->app->singleton(ChangeRecordCodec::class);
+        $this->app->singleton(MembershipCodec::class);
+        $this->app->singleton(QueryIdentity::class);
+        $this->app->singleton(QueryPlanner::class);
+        $this->app->singleton(MutationKeyExtractor::class);
+        $this->app->scoped(QueryObserver::class, function ($app): QueryObserver {
+            $config = $app->make(CacheConfig::class);
+            $collector = null;
 
-            return new CacheSpaceRegistry(
-                maxPerModel: (int) config('normcache.spaces.max_per_model', 16),
-                placement: (array) config('normcache.spaces.placement', []),
-                metadataStore: $metadataStore,
-                metadataKeyPrefix: (string) config('normcache.key_prefix', ''),
-            );
+            if ($config->debugbar && $app->bound('debugbar') && class_exists(TimeDataCollector::class)) {
+                $debugbar = $app->make('debugbar');
+
+                if (!method_exists($debugbar, 'isEnabled') || $debugbar->isEnabled()) {
+                    $collector = new DebugBarCollector;
+                    $debugbar->addCollector($collector);
+                }
+            }
+
+            return new QueryObserver($config, $collector, $app->make(FailureReporter::class));
         });
 
-        $this->app->singleton(CacheSpaceResolver::class, function ($app) {
-            return new CacheSpaceResolver($app->make(CacheSpaceRegistry::class));
-        });
+        $this->app->singleton(TableIdentityResolver::class);
+        $this->app->singleton(DeleteDependencyResolver::class);
+        $this->app->singleton(DependencyAnalyzer::class);
 
-        $this->app->singleton(QueryEligibility::class);
-
-        $this->app->singleton(CachePlanSpaceValidator::class, function ($app) {
-            return new CachePlanSpaceValidator(
-                registry: $app->make(CacheSpaceRegistry::class),
-                resolver: $app->make(CacheSpaceResolver::class),
-                crossSpaceBehavior: (string) config('normcache.spaces.cross_space_behavior', 'bypass'),
-                debug: (bool) config('app.debug', false),
-                logger: $app->make('log'),
-                eligibility: $app->make(QueryEligibility::class),
-            );
-        });
-
-        $this->app->scoped(CachePlanner::class, function ($app) {
-            return new CachePlanner(
-                eligibility: $app->make(QueryEligibility::class),
-                spaceValidator: $app->make(CachePlanSpaceValidator::class),
-                config: $app->make(CacheManager::class)->config(),
-            );
-        });
-
-        $this->app->singleton(CacheManagerFactory::class, function ($app) {
-            return new CacheManagerFactory(
-                $app->make(CacheSpaceRegistry::class),
-                $app->make(CacheSpaceResolver::class),
-            );
-        });
-
-        $this->app->scoped(CacheManager::class, fn($app) => $app->make(CacheManagerFactory::class)->make());
-
+        $this->app->scoped(FailureReporter::class);
+        $this->app->scoped(CacheRuntime::class);
+        $this->app->scoped(CacheStateResolver::class);
+        $this->app->scoped(BuildLeaseCoordinator::class);
+        $this->app->scoped(RowRepairer::class);
+        $this->app->scoped(CanonicalRowRepository::class);
+        $this->app->scoped(QueryEntryRepository::class);
+        $this->app->singleton(MembershipRevalidator::class);
+        $this->app->scoped(Invalidator::class);
+        $this->app->scoped(Engine::class);
+        $this->app->scoped(CacheManager::class);
         $this->app->alias(CacheManager::class, 'normcache');
-
-        CacheReporter::configureEvents(
-            fn(): bool => $this->app->make(CacheManager::class)->config()->dispatchEvents,
-        );
     }
 
     public function boot(): void
     {
-        if (config('normcache.enabled', true)) {
-            Event::listen(TransactionCommitted::class, function (TransactionCommitted $event) {
-                if ($event->connection->transactionLevel() === 0) {
-                    $this->app->make(CacheManager::class)->commitPending($event->connection->getName());
-                }
-            });
+        Event::listen(TransactionBeginning::class, function (TransactionBeginning $event): void {
+            $name = (string) $event->connection->getName();
 
-            Event::listen(TransactionRolledBack::class, function (TransactionRolledBack $event) {
-                if ($event->connection->transactionLevel() === 0) {
-                    $this->app->make(CacheManager::class)->discardPending($event->connection->getName());
-                }
-            });
-
-            $resetManager = function () {
-                CacheKeyBuilder::reset();
-                $this->app->make(CacheSpaceRegistry::class)->resetMetadataMemo();
-
-                $manager = $this->app->make(CacheManager::class);
-                $manager->discardAllPending();
-                $manager->enable();
-            };
-
-            Event::listen(JobProcessed::class, $resetManager);
-            Event::listen(Looping::class, $resetManager);
-
-            // Reset request-scoped runtime state between Octane requests and tasks.
-            foreach (['RequestReceived', 'TaskReceived'] as $event) {
-                $octaneEvent = "Laravel\\Octane\\Events\\$event";
-                if (class_exists($octaneEvent)) {
-                    Event::listen($octaneEvent, $resetManager);
-                }
+            // A thrown commit emits no completion event and may have reached the database.
+            if ($event->connection->transactionLevel() === 1) {
+                $this->app->make(Invalidator::class)->commit($name);
             }
 
-            if (config('normcache.debugbar', false) && $this->debugbarIsEnabled()) {
-                $this->registerDebugbarCollector();
+            try {
+                $event->connection->afterCommit(function () use ($name): void {
+                    $this->app->make(Invalidator::class)->commit($name);
+                });
+            } catch (\Throwable $exception) {
+                $this->app->make(FailureReporter::class)->cacheUnavailable($exception);
             }
-        }
+        });
+        Event::listen(TransactionCommitted::class, function (TransactionCommitted $event): void {
+            if ($event->connection->transactionLevel() === 0) {
+                $this->app->make(Invalidator::class)->commit((string) $event->connection->getName());
+            }
+        });
+        Event::listen(TransactionRolledBack::class, function (TransactionRolledBack $event): void {
+            if ($event->connection->transactionLevel() === 0) {
+                $this->app->make(Invalidator::class)->rollback((string) $event->connection->getName());
+            }
+        });
+        Event::listen(MigrationsEnded::class, function (): void {
+            $this->app->make(CacheManager::class)->flushAll();
+        });
 
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__ . '/../config/normcache.php' => config_path('normcache.php'),
             ], 'normcache-config');
 
-            $this->commands([FlushCommand::class]);
+            $this->commands([FlushCommand::class, DisableCommand::class, EnableCommand::class]);
         }
-    }
-
-    private function registerDebugbarCollector(): void
-    {
-        $collector = new NormCacheDebugBarCollector;
-        NormCacheCollector::register($collector);
-        $this->app->make('debugbar')->addCollector($collector);
-    }
-
-    private function debugbarIsEnabled(): bool
-    {
-        if (!$this->app->bound('debugbar')) {
-            return false;
-        }
-
-        $debugbar = $this->app->make('debugbar');
-
-        return !method_exists($debugbar, 'isEnabled') || $debugbar->isEnabled();
     }
 }

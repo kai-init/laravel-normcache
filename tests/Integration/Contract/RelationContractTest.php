@@ -11,11 +11,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
-/**
- * Contract tests: eager loading operations must return identical results on
- * the native path (withoutCache), cold-cache path, and warm-cache path.
- */
-class RelationContractTest extends TestCase
+final class RelationContractTest extends TestCase
 {
     private function fixtures(): array
     {
@@ -43,8 +39,6 @@ class RelationContractTest extends TestCase
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
 
-    // Eager loading
-
     public function test_with_has_many(): void
     {
         $this->fixtures();
@@ -61,6 +55,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('firstPost')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('firstPost')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -70,6 +65,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Post::with('author')->orderBy('title')->get(),
             fn() => Post::withoutCache()->with('author')->orderBy('title')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -83,6 +79,7 @@ class RelationContractTest extends TestCase
             fn() => Post::withoutCache()->with([
                 'author' => fn($query) => $query->selectRaw('id, upper(name) as upper_name'),
             ])->orderBy('title')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -92,6 +89,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('tags')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('tags')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -101,6 +99,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with('comments')->orderBy('name')->get(),
             fn() => Author::withoutCache()->with('comments')->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -110,6 +109,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Post::with('latestComment')->orderBy('title')->get(),
             fn() => Post::withoutCache()->with('latestComment')->orderBy('title')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -119,6 +119,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Post::with('tags')->orderBy('title')->get(),
             fn() => Post::withoutCache()->with('tags')->orderBy('title')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -128,6 +129,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Country::with('posts')->first(),
             fn() => Country::withoutCache()->with('posts')->first(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -137,6 +139,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Country::with('firstPost')->first(),
             fn() => Country::withoutCache()->with('firstPost')->first(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -146,6 +149,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Comment::with('commentable')->orderBy('id')->get(),
             fn() => Comment::withoutCache()->with('commentable')->orderBy('id')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -162,6 +166,7 @@ class RelationContractTest extends TestCase
             $this->contract(
                 fn() => Comment::with('commentable')->orderBy('id')->get(),
                 fn() => Comment::withoutCache()->with('commentable')->orderBy('id')->get(),
+                expectNoStrayQueries: true,
             );
         } finally {
             Relation::morphMap([], false);
@@ -170,10 +175,11 @@ class RelationContractTest extends TestCase
 
     public function test_with_belongs_to_null_foreign_key(): void
     {
-        ['carol' => $carol] = $this->fixtures(); // Carol has no country_id
+        ['carol' => $carol] = $this->fixtures();
         $this->contract(
             fn() => Author::where('id', $carol->id)->with('country')->first(),
             fn() => Author::withoutCache()->where('id', $carol->id)->with('country')->first(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -183,6 +189,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with(['posts' => fn($q) => $q->where('published', true)])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->where('published', true)])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -202,6 +209,7 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with(['posts' => ['comments']])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts' => ['comments']])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -211,44 +219,54 @@ class RelationContractTest extends TestCase
         $this->contract(
             fn() => Author::with(['posts:id,title,author_id'])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts:id,title,author_id'])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
     public function test_with_has_many_limit_constraint(): void
     {
-        $this->fixtures();
+        ['p1' => $p1] = $this->fixtures();
         $this->contract(
             fn() => Author::with(['posts' => fn($q) => $q->orderBy('title')->limit(1)])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->orderBy('title')->limit(1)])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
+        );
+
+        $this->assertArrayNotHasKey(
+            'laravel_row',
+            Post::query()->findOrFail($p1->getKey())->getAttributes(),
         );
     }
 
     public function test_with_belongs_to_many_limit_in_eager_load(): void
     {
-        $this->fixtures(); // Alice has 2 tags (php, laravel), Bob has 1
+        $this->fixtures();
         $this->contract(
             fn() => Author::with(['tags' => fn($q) => $q->orderBy('name')->limit(1)])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['tags' => fn($q) => $q->orderBy('name')->limit(1)])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
     public function test_with_has_many_through_limit_in_eager_load(): void
     {
-        $this->fixtures(); // Country UK has 3 posts
+        $this->fixtures();
         $this->contract(
             fn() => Country::with(['posts' => fn($q) => $q->orderBy('title')->limit(2)])->first(),
             fn() => Country::withoutCache()->with(['posts' => fn($q) => $q->orderBy('title')->limit(2)])->first(),
+            expectNoStrayQueries: true,
         );
     }
 
     public function test_with_has_many_with_trashed_constraint_includes_deleted(): void
     {
         ['p1' => $p1] = $this->fixtures();
-        $p1->delete(); // soft-delete one of Alice's posts
+        $p1->delete();
 
         $this->contract(
             fn() => Author::with(['posts' => fn($q) => $q->withTrashed()->orderBy('title')])->orderBy('name')->get(),
             fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->withTrashed()->orderBy('title')])->orderBy('name')->get(),
+            expectNoStrayQueries: true,
         );
     }
 
@@ -257,13 +275,13 @@ class RelationContractTest extends TestCase
         $this->fixtures();
         $this->contract(
             fn() => Author::with(['posts' => fn($q) => $q->withCount('comments')])->orderBy('name')->get(),
-            fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->withoutAggregateCache()->withCount('comments')])->orderBy('name')->get(),
+            fn() => Author::withoutCache()->with(['posts' => fn($q) => $q->withCount('comments')])->orderBy('name')->get(),
         );
     }
 
     public function test_with_has_one_of_many_latest(): void
     {
-        $this->fixtures(); // Alice: A1(views=10), A2(views=20); Bob: B1(views=30)
+        $this->fixtures();
 
         $this->contract(
             fn() => Author::with('latestPost')->orderBy('name')->get(),
@@ -272,9 +290,40 @@ class RelationContractTest extends TestCase
         );
     }
 
+    public function test_with_has_one_of_many_latest_invalidates_when_related_table_changes(): void
+    {
+        ['alice' => $alice] = $this->fixtures();
+        $query = fn() => Author::with('latestPost')->findOrFail($alice->id);
+
+        $this->assertSame('A2', $query()->latestPost?->title);
+        $this->assertSame('A2', $query()->latestPost?->title);
+
+        Post::create([
+            'title' => 'A3',
+            'author_id' => $alice->id,
+            'views' => 40,
+            'published' => true,
+        ]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        try {
+            $this->assertSame('A3', $query()->latestPost?->title);
+            $this->assertCount(1, DB::getQueryLog());
+
+            DB::flushQueryLog();
+
+            $this->assertSame('A3', $query()->latestPost?->title);
+            $this->assertSame([], DB::getQueryLog());
+        } finally {
+            DB::disableQueryLog();
+        }
+    }
+
     public function test_with_has_one_through_of_many_latest(): void
     {
-        $this->fixtures(); // UK: latest post is B1 through Bob
+        $this->fixtures();
 
         $this->contract(
             fn() => Country::with('latestPost')->orderBy('name')->get(),
@@ -285,7 +334,7 @@ class RelationContractTest extends TestCase
 
     public function test_with_has_one_of_many_aggregate_column(): void
     {
-        $this->fixtures(); // Alice: mostViewed=A2(20), Bob: mostViewed=B1(30), Carol: null
+        $this->fixtures();
 
         $this->contract(
             fn() => Author::with('mostViewedPost')->orderBy('name')->get(),
@@ -293,8 +342,6 @@ class RelationContractTest extends TestCase
             expectNoStrayQueries: true,
         );
     }
-
-    // Collection loading (load, loadMissing, loadCount, loadSum, loadMax, loadMin)
 
     public function test_load_on_collection_returns_same_relations(): void
     {
@@ -353,11 +400,20 @@ class RelationContractTest extends TestCase
     public function test_load_count_excludes_soft_deleted_models(): void
     {
         ['p1' => $p1] = $this->fixtures();
-        $p1->delete(); // soft-delete one of Alice's posts
+        $p1->delete();
 
         $this->contract(
             fn() => tap(Author::orderBy('name')->get(), fn($c) => $c->loadCount('posts')),
             fn() => tap(Author::withoutCache()->orderBy('name')->get(), fn($c) => $c->loadCount('posts')),
+        );
+    }
+
+    public function test_load_sum_multiple_relations_simultaneously(): void
+    {
+        $this->fixtures();
+        $this->contract(
+            fn() => tap(Author::orderBy('name')->get(), fn($c) => $c->loadSum('posts', 'views')),
+            fn() => tap(Author::withoutCache()->orderBy('name')->get(), fn($c) => $c->loadSum('posts', 'views')),
         );
     }
 
@@ -377,51 +433,5 @@ class RelationContractTest extends TestCase
             fn() => tap(Author::orderBy('name')->get(), fn($c) => $c->loadMin('posts', 'views')),
             fn() => tap(Author::withoutCache()->orderBy('name')->get(), fn($c) => $c->loadMin('posts', 'views')),
         );
-    }
-
-    // Complex relation queries with raw expressions and custom selects
-
-    private function rawExpressionFixtures(): void
-    {
-        $country = Country::create(['name' => 'USA']);
-
-        $author = Author::create(['name' => 'John', 'country_id' => $country->id]);
-
-        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
-        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 20]);
-
-        $fiction = Tag::create(['name' => 'fiction']);
-        $science = Tag::create(['name' => 'science']);
-
-        $author->tags()->attach([$fiction->id, $science->id]);
-    }
-
-    public function test_belongs_to_many_with_where_raw(): void
-    {
-        $this->rawExpressionFixtures();
-
-        $query = fn() => Author::with(['tags' => fn($q) => $q->whereRaw('LOWER(name) = ?', ['fiction'])])->get();
-        $nativeQuery = fn() => Author::withoutCache()->with(['tags' => fn($q) => $q->whereRaw('LOWER(name) = ?', ['fiction'])])->get();
-
-        $this->contract($query, $nativeQuery);
-    }
-
-    public function test_has_many_through_with_custom_select_raw(): void
-    {
-        $this->rawExpressionFixtures();
-
-        $query = fn() => Country::with(['posts' => fn($q) => $q->select('posts.*', DB::raw('posts.id * 2 as doubled_id'))])->get();
-        $nativeQuery = fn() => Country::withoutCache()->with(['posts' => fn($q) => $q->select('posts.*', DB::raw('posts.id * 2 as doubled_id'))])->get();
-
-        $this->contract($query, $nativeQuery);
-
-        // Also verify the custom attribute is present and correct
-        $warm = $query();
-        $this->assertCount(1, $warm);
-        $posts = $warm->first()->posts;
-        $this->assertCount(2, $posts);
-        foreach ($posts as $post) {
-            $this->assertEquals($post->id * 2, $post->doubled_id);
-        }
     }
 }

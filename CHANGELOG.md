@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] — 2026-08-04
+
+### Added
+
+- **Membership revalidation:** a cached membership survives a version bump when every version in the gap was a precise `UPDATE` whose columns are disjoint from the query's predicate and order columns. Configure with `revalidation`, and declare `protected array $volatileColumns` for columns the database writes without the statement naming them.
+- **Automatic result overlays:** eligible canonical queries store a complete result payload for faster warm reads and rebuild it from canonical rows when the overlay is missing.
+- **Unified query controls:** `dependsOn()` accepts models and table names, `tag()` groups related queries, `NormCache::invalidate()` accepts model or table targets, and `NormCache::withoutCache()` runs a whole callback, eager loads included, against the database.
+- **Runtime cache switch:** `normcache:disable` and `normcache:enable`, plus their facade equivalents, pause and safely resume caching across application nodes.
+- **Database source scopes:** `database.connections.<name>.normcache_scope` isolates shards or tenants and allows aliases for the same source to share cache state deliberately.
+- **Serializer selection:** choose `auto`, `php`, or `igbinary` payload serialization.
+
+### Changed
+
+- **BREAKING cache layout:** cache spaces were removed and Redis placement is now derived from physical tables and query groups. Cache keys changed, so v3 and v4 must not serve traffic together. Run `normcache:disable`, deploy every web and worker node, then run `normcache:enable`.
+- **BREAKING API consolidation:** replace `dependsOnTables()` with `dependsOn()`, legacy invalidation methods with `NormCache::invalidate()`, and model-scoped tag flushing with `flushTag('name')`.
+- **BREAKING flush behavior:** `normcache:flush` now always performs a global invalidation; `--model` and `--space` were removed.
+- Model attribute lifetime is configured with `row_ttl` / `NORMCACHE_ROW_TTL` rather than `ttl` / `NORMCACHE_TTL`, and the key-prefix variable is now `NORMCACHE_KEY_PREFIX` rather than `NORMCACHE_PREFIX`.
+
+### Fixed
+
+- Improved cache isolation for connection aliases, shards, tenants, and runtime database switching.
+- Manual and automatic invalidation now handle connection-aware table names, unknown write targets, and writes that throw after reaching the database safely.
+- Improved build-lock and Redis reconnect behavior when responses are lost or operations are retried.
+
+### Removed
+
+- Cache spaces, `$normCacheSpaces`, `space()`, the `spaces` configuration, and space-targeted flushing.
+- Legacy `cooldown`, `fallback`, and `fire_retrieved` options, `Builder::explain()`, and the cache-manager facade accessors (`modelCache()`, `resultCache()`, `versionStore()`, and friends).
+- The `ModelCacheHit`, `ModelCacheMiss`, and `CacheMetricRecorded` events.
+- The `stampede_wake_tokens` option and `NORMCACHE_STAMPEDE_WAKE_TOKENS`; the wake-token count is now fixed.
+- Environment overrides for build-lock tuning: set `building_lock_ttl` and `stampede_wait_ms` in the published config file, not `NORMCACHE_BUILDING_LOCK_TTL` / `NORMCACHE_STAMPEDE_WAIT_MS`.
+- The relation-specific cache classes; relation and pivot reads are cached through the same query path as everything else.
+
+---
+
 ## [3.1.0] — 2026-07-23
 
 ### Added
