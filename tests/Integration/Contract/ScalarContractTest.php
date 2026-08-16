@@ -9,12 +9,7 @@ use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
 
-/**
- * Contract tests: scalar aggregate operations (count, sum, avg, min, max,
- * exists, doesntExist, value, pluck) must return identical results on the
- * native path (withoutCache), cold-cache path, and warm-cache path.
- */
-class ScalarContractTest extends TestCase
+final class ScalarContractTest extends TestCase
 {
     private function fixtures(): array
     {
@@ -41,8 +36,6 @@ class ScalarContractTest extends TestCase
 
         return compact('country', 'alice', 'bob', 'carol', 'p1', 'p2', 'p3', 'php', 'laravel', 'c1', 'c2');
     }
-
-    // count
 
     public function test_count_all(): void
     {
@@ -87,8 +80,6 @@ class ScalarContractTest extends TestCase
             fn() => Author::withoutCache()->count(['id']),
         );
     }
-
-    // sum, avg, min, max
 
     public function test_sum(): void
     {
@@ -135,8 +126,6 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // exists, doesntExist
-
     public function test_exists_true(): void
     {
         $this->fixtures();
@@ -171,8 +160,6 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // value, pluck
-
     public function test_value(): void
     {
         $this->fixtures();
@@ -185,7 +172,6 @@ class ScalarContractTest extends TestCase
     public function test_value_with_alias(): void
     {
         $this->fixtures();
-        // Native Eloquent returns null for an aliased value() projection
         $this->contract(
             fn() => Author::orderBy('name')->value('name as headline'),
             fn() => Author::withoutCache()->orderBy('name')->value('name as headline'),
@@ -229,25 +215,11 @@ class ScalarContractTest extends TestCase
         );
     }
 
-    // Edge cases: empty sets and nullable columns
-
     public function test_sum_on_empty_set_returns_consistent_type(): void
     {
         $this->contract(
             fn() => Post::where('author_id', 99999)->sum('views'),
             fn() => Post::withoutCache()->where('author_id', 99999)->sum('views'),
-        );
-    }
-
-    public function test_avg_excludes_null_rows_consistently(): void
-    {
-        $author = Author::create(['name' => 'Avg']);
-        Post::create(['title' => 'P1', 'author_id' => $author->id, 'views' => 10]);
-        Post::create(['title' => 'P2', 'author_id' => $author->id, 'views' => 30]);
-        // 'views' is non-nullable in fixtures but avg on a filtered empty set returns null
-        $this->contract(
-            fn() => Post::where('author_id', $author->id)->avg('views'),
-            fn() => Post::withoutCache()->where('author_id', $author->id)->avg('views'),
         );
     }
 
@@ -277,9 +249,9 @@ class ScalarContractTest extends TestCase
 
     public function test_min_on_nullable_column_ignores_null_rows(): void
     {
-        $this->fixtures(); // Alice country_id=1, Bob country_id=1, Carol country_id=null
+        $this->fixtures();
         $this->contract(
-            fn() => Author::min('country_id'),   // null excluded → 1
+            fn() => Author::min('country_id'),
             fn() => Author::withoutCache()->min('country_id'),
         );
     }

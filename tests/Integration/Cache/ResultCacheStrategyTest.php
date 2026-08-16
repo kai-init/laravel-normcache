@@ -1,0 +1,514 @@
+<?php
+
+namespace NormCache\Tests\Integration\Cache;
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Redis;
+use NormCache\Events\QueryCacheHit;
+use NormCache\Events\QueryCacheRepaired;
+use NormCache\Payload\MembershipCodec;
+use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
+use NormCache\Tests\TestCase;
+use NormCache\Values\CacheConfig;
+
+final class ResultCacheStrategyTest extends TestCase
+{
+    private int $authorId;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $author = Author::query()->create(['name' => 'Author']);
+        $this->authorId = (int) $author->getKey();
+
+        foreach (range(1, 6) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Post {$index}",
+                'views' => $index * 10,
+                'published' => $index !== 5,
+                'metadata' => json_encode(['index' => $index]),
+                'author_id' => $author->getKey(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    public function test_small_canonical_result_automatically_materializes_an_overlay(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->where(function ($query): void {
+                $query->whereBetween('views', [10, 60])
+                    ->where(function ($query): void {
+                        $query->where('title', 'like', 'Post%')
+                            ->orWhereNull('metadata');
+                    });
+            })
+            ->orderByDesc('views')
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $cold = $query();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertSame(
+            $cold->map(static fn(object $row): array => (array) $row)->all(),
+            $warm->map(static fn(object $row): array => (array) $row)->all(),
+        );
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_unlimited_small_canonical_result_automatically_materializes_an_overlay(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->get();
+
+        $cold = $query();
+
+        $this->assertCount(5, $cold);
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+
+        Event::fake([QueryCacheHit::class]);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertSame(
+            $cold->map(static fn(object $row): array => (array) $row)->all(),
+            $warm->map(static fn(object $row): array => (array) $row)->all(),
+        );
+        $this->assertSame([], DB::getQueryLog());
+        Event::assertDispatched(
+            QueryCacheHit::class,
+            static fn(QueryCacheHit $event): bool => $event->route === 'canonical'
+                && $event->reason === 'result_overlay',
+        );
+    }
+
+    public function test_one_row_allowance_applies_to_non_paginated_results(): void
+    {
+        foreach (range(1, 45) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => RawPost::query()->toBase()
+            ->orderBy('id')
+            ->get();
+
+        $this->assertCount(51, $query());
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(51, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_query_builder_simple_pagination_uses_the_one_row_lookahead_allowance(): void
+    {
+        foreach (range(1, 45) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => RawPost::query()->toBase()
+            ->orderBy('id')
+            ->simplePaginate(50);
+
+        $cold = $query();
+
+        $this->assertCount(50, $cold->items());
+        $this->assertTrue($cold->hasMorePages());
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(50, $warm->items());
+        $this->assertTrue($warm->hasMorePages());
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_pagination_lookahead_row_still_counts_toward_the_payload_size_limit(): void
+    {
+        foreach (range(1, 45) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'metadata' => $index === 45
+                    ? json_encode(['payload' => str_repeat('x', 192 * 1024)])
+                    : null,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => RawPost::query()->toBase()
+            ->orderBy('id')
+            ->simplePaginate(50);
+
+        $cold = $query();
+
+        $this->assertCount(50, $cold->items());
+        $this->assertTrue($cold->hasMorePages());
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(50, $warm->items());
+        $this->assertTrue($warm->hasMorePages());
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+    }
+
+    public function test_eloquent_forwards_use_result_cache_to_the_query_builder(): void
+    {
+        $query = fn() => Post::query()
+            ->where('published', true)
+            ->orderByDesc('views')
+            ->limit(3)
+            ->get();
+
+        $cold = $query();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertSame($cold->modelKeys(), $warm->modelKeys());
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_zero_row_limit_disables_automatic_result_overlays(): void
+    {
+        $originalConfig = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['auto_overlay_max_rows'] = 0;
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            $query = fn() => RawPost::query()->toBase()
+                ->where('published', true)
+                ->orderBy('id')
+                ->limit(4)
+                ->get();
+
+            $this->assertCount(4, $query());
+            $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+            $membershipKey = $this->cacheQueryKeysWithField('m')[0] ?? null;
+            $this->assertIsString($membershipKey);
+            $membership = $this->cacheStore()->readHashField($membershipKey, 'm');
+            $this->assertIsString($membership);
+            $this->assertFalse(app(MembershipCodec::class)->decode($membership)->overlayRejected);
+
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->assertCount(4, $query());
+            DB::disableQueryLog();
+
+            $this->assertSame([], DB::getQueryLog());
+            $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+        } finally {
+            $this->app->instance(CacheConfig::class, $originalConfig);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
+    public function test_zero_row_limit_disables_overlays_for_results_inside_the_lookahead_allowance(): void
+    {
+        $originalConfig = $this->app->make(CacheConfig::class);
+        $config = (array) config('normcache');
+        $config['auto_overlay_max_rows'] = 0;
+        $this->app->instance(CacheConfig::class, CacheConfig::fromArray($config));
+        $this->app->forgetScopedInstances();
+
+        try {
+            foreach ([1, 0] as $expected) {
+                Redis::connection('normcache-test')->flushdb();
+
+                $query = fn() => RawPost::query()->toBase()
+                    ->where('published', true)
+                    ->where('views', $expected === 1 ? '=' : '>', $expected === 1 ? 10 : 10_000)
+                    ->orderBy('id')
+                    ->get();
+
+                $this->assertCount($expected, $query());
+                $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+
+                $this->assertCount($expected, $query());
+                $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+            }
+        } finally {
+            $this->app->instance(CacheConfig::class, $originalConfig);
+            $this->app->forgetScopedInstances();
+        }
+    }
+
+    public function test_result_larger_than_the_row_limit_plus_allowance_is_not_promoted(): void
+    {
+        $rows = $this->app->make(CacheConfig::class)->maxAutoOverlayRows + 2;
+        $existing = RawPost::query()->toBase()->where('published', true)->count();
+
+        foreach (range($existing + 1, $rows) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Extra {$index}",
+                'views' => $index,
+                'published' => true,
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        // Remove the aggregate entry created while seeding.
+        Redis::connection('normcache-test')->flushdb();
+
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit($rows)
+            ->get();
+
+        $this->assertCount($rows, $query());
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount($rows, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_result_larger_than_the_payload_limit_is_not_promoted(): void
+    {
+        RawPost::query()->toBase()
+            ->where('id', 1)
+            ->update([
+                'metadata' => json_encode([
+                    'payload' => str_repeat('x', 192 * 1024),
+                ]),
+            ]);
+
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $this->assertCount(4, $query());
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertCount(4, $query());
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+    }
+
+    public function test_many_mid_sized_rows_under_the_payload_limit_are_still_promoted(): void
+    {
+        foreach (range(1, 45) as $index) {
+            RawPost::query()->toBase()->insert([
+                'title' => "Wide {$index}",
+                'views' => $index,
+                'published' => true,
+                'metadata' => json_encode(['blob' => bin2hex(random_bytes(150))]),
+                'author_id' => $this->authorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(45)
+            ->get();
+
+        $this->assertCount(45, $query());
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $warm = $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(45, $warm);
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $expected = $query()->pluck('id')->all();
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $this->cacheStore()->deleteHashField($resultKey, 'r');
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = $query()->pluck('id')->all();
+        DB::disableQueryLog();
+
+        $this->assertSame($expected, $actual);
+        $this->assertSame([], DB::getQueryLog());
+        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+    }
+
+    public function test_corrupt_result_overlay_falls_back_to_canonical_and_self_heals(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $expected = $query()->pluck('id')->all();
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $this->cacheStore()->writeHashField($resultKey, 'r', 'corrupt');
+        Event::fake([QueryCacheRepaired::class]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = $query()->pluck('id')->all();
+        DB::disableQueryLog();
+
+        $this->assertSame($expected, $actual);
+        $this->assertSame([], DB::getQueryLog());
+        $payload = $this->cacheStore()->readHashField($resultKey, 'r');
+        $this->assertIsString($payload);
+        $this->assertNotSame('corrupt', $payload);
+        Event::assertDispatched(
+            QueryCacheRepaired::class,
+            static fn(QueryCacheRepaired $event): bool => $event->reason === 'result_overlay_rebuilt',
+        );
+    }
+
+    public function test_write_invalidates_the_materialized_overlay(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $before = $query();
+        $id = (int) $before->first()->id;
+        RawPost::query()->toBase()->where('id', $id)->update(['title' => 'Changed']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $after = $query();
+        DB::disableQueryLog();
+
+        $this->assertSame('Changed', $after->firstWhere('id', $id)->title);
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_tag_flush_invalidates_the_materialized_overlay(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->tag('homepage')
+            ->get();
+
+        $query();
+        $query();
+        $this->assertTrue($this->cacheManager()->flushTag('homepage'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_dependency_version_invalidates_the_materialized_overlay(): void
+    {
+        $query = fn() => RawPost::query()->toBase()
+            ->dependsOn(['authors'])
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->get();
+
+        $query();
+        $query();
+        Author::query()->toBase()->update(['name' => 'Changed']);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $query();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, DB::getQueryLog());
+    }
+
+    public function test_query_ttl_applies_to_membership_and_result_overlay(): void
+    {
+        RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->limit(4)
+            ->ttl(30)
+            ->get();
+
+        $connection = Redis::connection('normcache-test');
+        $membershipKey = $this->cacheQueryKeysWithField('m')[0];
+        $resultKey = $this->cacheQueryKeysWithField('r')[0];
+        $membershipTtl = (int) $connection->ttl($membershipKey);
+        $resultTtl = (int) $connection->ttl($resultKey);
+
+        $this->assertGreaterThan(0, $membershipTtl);
+        $this->assertLessThanOrEqual(30, $membershipTtl);
+        $this->assertGreaterThan(0, $resultTtl);
+        $this->assertLessThanOrEqual(30, $resultTtl);
+    }
+}

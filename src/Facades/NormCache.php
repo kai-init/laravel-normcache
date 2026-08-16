@@ -2,23 +2,21 @@
 
 namespace NormCache\Facades;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Facade;
-use NormCache\CacheManager;
 
 /**
- * @mixin CacheManager
- *
- * @method static \NormCache\Cache\ModelIndexCache modelIndexes()
- * @method static \NormCache\Cache\ResultCache resultCache()
- * @method static \NormCache\Cache\RelationIndexCache relationIndexes()
- * @method static \NormCache\Cache\ModelCache modelCache()
- * @method static \NormCache\Cache\VersionStore versionStore()
- * @method static \NormCache\Cache\Invalidator invalidator()
- * @method static \NormCache\Support\RedisStore store()
- * @method static \NormCache\Support\CacheKeyBuilder keys()
- * @method static \NormCache\Values\CacheConfig config()
+ * @method static bool invalidate(Model|string|array $targets, ?string $connection = null)
+ * @method static bool invalidateTable(string $connection, string $table)
+ * @method static bool invalidateTables(string $connection, array $tables)
+ * @method static bool flushTag(string $tag)
+ * @method static bool flushAll()
+ * @method static mixed withoutCache(callable $callback)
+ * @method static bool disableCache()
+ * @method static int|null enableCache()
+ * @method static bool cacheDisabled()
  */
-class NormCache extends Facade
+final class NormCache extends Facade
 {
     protected static function getFacadeAccessor(): string
     {
