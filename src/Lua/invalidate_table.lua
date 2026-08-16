@@ -21,9 +21,19 @@ end
 
 if mode == 'precise' then
     local generation = redis.call('GET', KEYS[2]) or '0'
+    local batch = {}
 
     for i = 4, #ARGV do
-        redis.call('DEL', KEYS[3] .. generation .. ':' .. ARGV[i])
+        batch[#batch + 1] = KEYS[3] .. generation .. ':' .. ARGV[i]
+
+        if #batch == 100 then
+            redis.call('UNLINK', unpack(batch))
+            batch = {}
+        end
+    end
+
+    if #batch > 0 then
+        redis.call('UNLINK', unpack(batch))
     end
 end
 

@@ -16,6 +16,14 @@ final class RedisStore
 {
     private const WAKE_TOKENS = 64;
 
+    // Redis runs a script atomically on its single thread, so one call must never
+    // carry an unbounded row batch. Narrow rows are bound by count and wide rows
+    // by size; both limits are measured to stall near two milliseconds, and a
+    // slice ends at whichever is reached first.
+    private const ROW_PUBLISH_CHUNK = 250;
+
+    private const ROW_PUBLISH_CHUNK_BYTES = 1_048_576;
+
     private ?Connection $connection = null;
 
     /** @var array<string, string> */
@@ -259,6 +267,89 @@ final class RedisStore
             [$versionKey, $generationKey, $tablePrefix],
             [$namespace, $resultQueryHash, $canonicalQueryHash],
         );
+    }
+
+    /**
+     * @param  list<string>  $rowKeys
+     * @param  list<string>  $rowPayloads
+     */
+    public function publishRows(
+        string $versionKey,
+        string $generationKey,
+        string $buildingKey,
+        array $rowKeys,
+        array $rowPayloads,
+        string $expectedVersion,
+        string $expectedGeneration,
+        int $rowTtl,
+        string $token,
+        int $leaseTtl,
+    ): bool {
+        if (count($rowKeys) !== count($rowPayloads)) {
+            throw new \InvalidArgumentException(
+                'NormCache canonical row keys and payloads must have the same length.',
+            );
+        }
+
+        foreach ($this->rowSlices($rowKeys, $rowPayloads) as [$keys, $payloads]) {
+            $published = (bool) $this->script(
+                RedisScripts::get('publish_rows'),
+                [$versionKey, $generationKey, $buildingKey, ...$keys],
+                [
+                    $expectedVersion,
+                    $expectedGeneration,
+                    (string) $rowTtl,
+                    $token,
+                    (string) $leaseTtl,
+                    ...$payloads,
+                ],
+            );
+
+            if (!$published) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  list<string>  $rowKeys
+     * @param  list<string>  $rowPayloads
+     * @return list<array{0: list<string>, 1: list<string>}>
+     */
+    private function rowSlices(array $rowKeys, array $rowPayloads): array
+    {
+        $slices = [];
+        $keys = [];
+        $payloads = [];
+        $bytes = 0;
+
+        foreach ($rowKeys as $index => $key) {
+            $payload = $rowPayloads[$index];
+
+            // Never emit an empty slice, so an oversized row still publishes alone.
+            if (
+                $keys !== []
+                && (count($keys) >= self::ROW_PUBLISH_CHUNK
+                    || $bytes + strlen($payload) > self::ROW_PUBLISH_CHUNK_BYTES)
+            ) {
+                $slices[] = [$keys, $payloads];
+                $keys = [];
+                $payloads = [];
+                $bytes = 0;
+            }
+
+            $keys[] = $key;
+            $payloads[] = $payload;
+            $bytes += strlen($payload);
+        }
+
+        if ($keys !== []) {
+            $slices[] = [$keys, $payloads];
+        }
+
+        return $slices;
     }
 
     /**

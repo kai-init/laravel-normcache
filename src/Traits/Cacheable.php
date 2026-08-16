@@ -29,7 +29,7 @@ trait Cacheable
         );
     }
 
-    /** Laravel 12 does not expose Model::isSoftDeletable(). */
+    // Laravel 12 does not expose Model::isSoftDeletable().
     private function normCacheDeletedAtColumn(): ?string
     {
         if (!isset(class_uses_recursive($this::class)[SoftDeletes::class])) {

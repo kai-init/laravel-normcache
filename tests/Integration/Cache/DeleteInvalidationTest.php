@@ -330,6 +330,10 @@ final class DeleteInvalidationTest extends TestCase
 
     public function test_truncate_invalidates_children_whose_foreign_key_does_not_cascade(): void
     {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('InnoDB refuses to truncate a table a foreign key references.');
+        }
+
         $this->restrictedNote();
 
         $noteTable = $this->identity('restricted_delete_notes');
@@ -360,6 +364,10 @@ final class DeleteInvalidationTest extends TestCase
 
     public function test_case_insensitive_string_key_delete_invalidates_the_cached_row(): void
     {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('The nocase collation is built into SQLite and named differently elsewhere.');
+        }
+
         Schema::create('nocase_items', function (Blueprint $table): void {
             $table->string('id', 36)->collation('nocase')->primary();
             $table->string('name');
@@ -376,6 +384,12 @@ final class DeleteInvalidationTest extends TestCase
 
     public function test_unavailable_delete_metadata_falls_back_to_the_global_epoch(): void
     {
+        // The stub connection opens the database name as a SQLite file, which on a
+        // server driver is a name rather than a path.
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('The unavailable-metadata stub is a SQLite connection.');
+        }
+
         $name = 'delete-metadata-unavailable';
         $database = (string) DB::connection()->getDatabaseName();
 

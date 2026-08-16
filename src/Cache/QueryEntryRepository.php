@@ -23,6 +23,8 @@ final readonly class QueryEntryRepository
 
     private const PAGINATION_LOOKAHEAD_ROWS = 1;
 
+    private const ESTIMATE_PROBE_MIN_ROWS = 32;
+
     public function __construct(
         private CacheConfig $config,
         private CacheRuntime $runtime,
@@ -230,12 +232,28 @@ final readonly class QueryEntryRepository
             rootVersion: $state->version,
         );
 
+        // Rows publish in guarded slices; membership follows once they are durable.
+        if (!$this->store->publishRows(
+            versionKey: $this->keys->version($plan->root),
+            generationKey: $this->keys->generation($plan->root),
+            buildingKey: $lease->buildingKey,
+            rowKeys: $rowKeys,
+            rowPayloads: $rowPayloads,
+            expectedVersion: $state->version,
+            expectedGeneration: $state->generation,
+            rowTtl: $this->config->rowTtl,
+            token: (string) $lease->token,
+            leaseTtl: $this->config->buildingLockTtl,
+        )) {
+            return false;
+        }
+
         return $this->store->publishCanonical(
             versionKey: $this->keys->version($plan->root),
             generationKey: $this->keys->generation($plan->root),
             membershipKey: $state->key,
-            rowKeys: $rowKeys,
-            rowPayloads: $rowPayloads,
+            rowKeys: [],
+            rowPayloads: [],
             expectedVersion: $state->version,
             expectedGeneration: $state->generation,
             membershipPayload: $membership,
@@ -478,7 +496,10 @@ final readonly class QueryEntryRepository
             return null;
         }
 
-        if ($this->resultExceedsEstimate($rows, $state, $count)) {
+        if (
+            $count > self::ESTIMATE_PROBE_MIN_ROWS
+            && $this->resultExceedsEstimate($rows, $state, $count)
+        ) {
             return null;
         }
 

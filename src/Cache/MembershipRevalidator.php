@@ -63,11 +63,6 @@ final readonly class MembershipRevalidator
         }
 
         $records = $this->store->mget($keys);
-
-        if (count($records) !== count($keys)) {
-            return false;
-        }
-
         $guarded = array_flip($predicate);
 
         foreach ($records as $payload) {

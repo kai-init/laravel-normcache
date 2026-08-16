@@ -18,10 +18,15 @@ use NormCache\Values\TableIdentity;
 
 final class QueryObserver
 {
+    // A failed operation observes nothing, so its span is never closed. Capping the
+    // stack bounds what an unbalanced begin() can retain.
+    private const MAX_SPANS = 8;
+
     /** @var array<string, true> */
     private array $observedCorruptions = [];
 
-    private ?float $startedAt = null;
+    /** @var list<float> */
+    private array $spans = [];
 
     public function __construct(
         private readonly CacheConfig $config,
@@ -40,16 +45,28 @@ final class QueryObserver
 
     public function begin(): void
     {
-        if ($this->enabled()) {
-            $this->startedAt = microtime(true);
+        if (!$this->enabled()) {
+            return;
         }
+
+        if (count($this->spans) >= self::MAX_SPANS) {
+            array_shift($this->spans);
+        }
+
+        $this->spans[] = microtime(true);
     }
 
+    /**
+     * Closes the innermost span, so a nested observation cannot consume the span
+     * of the read enclosing it.
+     *
+     * @return array{0: float, 1: float}
+     */
     private function elapsed(): array
     {
         $endedAt = microtime(true);
 
-        return [$this->startedAt ?? $endedAt, $endedAt];
+        return [array_pop($this->spans) ?? $endedAt, $endedAt];
     }
 
     public function hit(
@@ -229,19 +246,50 @@ final class QueryObserver
     public function invalidated(TableIdentity $table, string $mode, array $tokens): void
     {
         $this->guard('invalidation', function () use ($table, $mode, $tokens): void {
-            $this->recordInvalidation($table, $mode, $tokens);
+            if (!$this->enabled()) {
+                return;
+            }
+
+            [$startedAt, $endedAt] = $this->elapsed();
+
+            $this->recordInvalidation($table, $mode, $tokens, $startedAt, $endedAt);
+        });
+    }
+
+    /**
+     * One batched call invalidated every table, so all of them report its span.
+     *
+     * @param  list<array{table: TableIdentity, mode: string, tokens: list<string>}>  $invalidations
+     */
+    public function invalidatedMany(array $invalidations): void
+    {
+        $this->guard('invalidation', function () use ($invalidations): void {
+            if (!$this->enabled()) {
+                return;
+            }
+
+            [$startedAt, $endedAt] = $this->elapsed();
+
+            foreach ($invalidations as $invalidation) {
+                $this->recordInvalidation(
+                    $invalidation['table'],
+                    $invalidation['mode'],
+                    $invalidation['tokens'],
+                    $startedAt,
+                    $endedAt,
+                );
+            }
         });
     }
 
     /** @param list<string> $tokens */
-    private function recordInvalidation(TableIdentity $table, string $mode, array $tokens): void
-    {
-        if (!$this->enabled()) {
-            return;
-        }
-
-        [$startedAt, $endedAt] = $this->elapsed();
-
+    private function recordInvalidation(
+        TableIdentity $table,
+        string $mode,
+        array $tokens,
+        float $startedAt,
+        float $endedAt,
+    ): void {
         $record = new ObservationRecord(
             outcome: 'invalidation',
             tableHash: $table->hash,

@@ -215,8 +215,9 @@ final class Invalidator
 
     public function invalidateTables(array $tables): bool
     {
+        // A deliberate kill switch is not a failure to report to the caller.
         if ($tables === [] || !$this->runtime->invalidating()) {
-            return $tables === [];
+            return true;
         }
 
         $immediate = [];
@@ -388,13 +389,17 @@ final class Invalidator
         try {
             $this->store->invalidateTableStates($states);
 
+            $observed = [];
+
             foreach ($invalidations as $index => $invalidation) {
-                $this->observer->invalidated(
-                    $invalidation['table'],
-                    $states[$index]['mode'],
-                    $invalidation['tokens'],
-                );
+                $observed[] = [
+                    'table' => $invalidation['table'],
+                    'mode' => $states[$index]['mode'],
+                    'tokens' => $invalidation['tokens'],
+                ];
             }
+
+            $this->observer->invalidatedMany($observed);
 
             return true;
         } catch (\Throwable $exception) {

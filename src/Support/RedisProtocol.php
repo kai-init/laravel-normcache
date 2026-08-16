@@ -10,6 +10,8 @@ final class RedisProtocol
 
     public const HIT = 'hit';
 
+    public const MISS = 'miss';
+
     /** @param array<int, mixed> $reply */
     public static function status(array $reply): ?string
     {
@@ -42,5 +44,17 @@ final class RedisProtocol
     public static function canonicalPayload(array $reply): mixed
     {
         return self::value($reply, 3);
+    }
+
+    /** @param array<int, mixed> $reply */
+    public static function resultGeneration(array $reply): string
+    {
+        return self::version($reply, 3);
+    }
+
+    /** @param array<int, mixed> $reply */
+    public static function resultMembership(array $reply): mixed
+    {
+        return self::value($reply, 4);
     }
 }

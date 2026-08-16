@@ -27,6 +27,12 @@ final class SqlVolatilityScanner
     private const NOW_ARGUMENT =
         '/\b(?:date|time|datetime|julianday|unixepoch|strftime)\s*\([^)]*[\'"]now[\'"]/';
 
+    // Quoted text cannot call a function or read a session variable. Backslash is
+    // deliberately not an escape: SQLite and PostgreSQL end the literal at 'a\', so
+    // honouring it would swallow the SQL after it and hide a volatile call. Reading
+    // it as ordinary only over-consumes on MySQL, which fails closed.
+    private const QUOTED_TEXT = '/\'(?:[^\']|\'\')*\'|"(?:[^"]|"")*"|`[^`]*`/s';
+
     private const MEMO_LIMIT = 512;
 
     /** @var array<string, bool> */
@@ -48,9 +54,20 @@ final class SqlVolatilityScanner
     private function scan(string $sql): bool
     {
         $sql = strtolower($sql);
+        // An unterminated quote leaves the text intact, and a PCRE limit failure
+        // returns null. Both fall back to scanning the raw SQL, which fails closed.
+        $unquoted = preg_replace(self::QUOTED_TEXT, ' ', $sql) ?? $sql;
 
-        return preg_match(self::VOLATILE_CALLS, $sql) === 1
-            || preg_match(self::VOLATILE_KEYWORDS, $sql) === 1
-            || preg_match(self::NOW_ARGUMENT, $sql) === 1;
+        return $this->matches(self::VOLATILE_CALLS, $unquoted)
+            || $this->matches(self::VOLATILE_KEYWORDS, $unquoted)
+            // This one reads the literal itself, as in date('now').
+            || $this->matches(self::NOW_ARGUMENT, $sql);
+    }
+
+    private function matches(string $pattern, string $sql): bool
+    {
+        // preg_match answers false, not 0, when PCRE gives up, so testing against
+        // no-match keeps an exhausted limit on the volatile side.
+        return preg_match($pattern, $sql) !== 0;
     }
 }

@@ -17,7 +17,7 @@ use NormCache\Values\TableIdentity;
 
 final readonly class RowRepairer
 {
-    /** SQLite's traditional variable limit is 999. */
+    // SQLite's traditional variable limit is 999.
     private const REPAIR_BATCH_SIZE = 900;
 
     public function __construct(
@@ -159,9 +159,25 @@ final readonly class RowRepairer
             $rowPayloads[] = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
         }
 
+        if (!$this->store->publishRows(
+            versionKey: $this->keys->version($plan->root),
+            generationKey: $this->keys->generation($plan->root),
+            buildingKey: $lease->buildingKey,
+            rowKeys: $rowKeys,
+            rowPayloads: $rowPayloads,
+            expectedVersion: $state->version,
+            expectedGeneration: $state->generation,
+            rowTtl: $this->config->rowTtl,
+            token: (string) $lease->token,
+            leaseTtl: $this->config->buildingLockTtl,
+        )) {
+            return null;
+        }
+
+        // Waiters only wake once every repaired row is durable.
         if (!$this->store->publishVersionedEntries(
-            entryKeys: $rowKeys,
-            entryPayloads: $rowPayloads,
+            entryKeys: [],
+            entryPayloads: [],
             ttl: $this->config->rowTtl,
             versionKeys: [
                 $this->keys->version($plan->root),

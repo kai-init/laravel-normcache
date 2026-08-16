@@ -28,9 +28,19 @@ for key = 1, #KEYS, 4 do
         redis.call('INCR', KEYS[key + 1])
     elseif mode == 'precise' then
         local generation = redis.call('GET', KEYS[key + 1]) or '0'
+        local batch = {}
 
         for token = 1, token_count do
-            redis.call('DEL', KEYS[key + 2] .. generation .. ':' .. ARGV[argument + token - 1])
+            batch[#batch + 1] = KEYS[key + 2] .. generation .. ':' .. ARGV[argument + token - 1]
+
+            if #batch == 100 then
+                redis.call('UNLINK', unpack(batch))
+                batch = {}
+            end
+        end
+
+        if #batch > 0 then
+            redis.call('UNLINK', unpack(batch))
         end
     end
 

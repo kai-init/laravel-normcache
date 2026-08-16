@@ -15,7 +15,7 @@ final readonly class CacheState
         public ?string $tagKey,
     ) {}
 
-    /** Readonly objects still use identity under ===. */
+    // Readonly objects still use identity under ===.
     public function equals(self $other): bool
     {
         return $this == $other;

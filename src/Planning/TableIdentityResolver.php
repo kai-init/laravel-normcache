@@ -7,7 +7,15 @@ use NormCache\Values\TableIdentity;
 
 final class TableIdentityResolver
 {
-    /** @var \WeakMap<Connection, array{signature: string, identities: array<string, TableIdentity>}> */
+    private const UNRESOLVABLE_LIMIT = 256;
+
+    /**
+     * @var \WeakMap<Connection, array{
+     *     signature: string,
+     *     identities: array<string, TableIdentity>,
+     *     unresolvable: array<string, true>
+     * }>
+     */
     private \WeakMap $connections;
 
     public function __construct()
@@ -33,12 +41,25 @@ final class TableIdentityResolver
             return $metadata['identities'][$from];
         }
 
+        if (isset($metadata['unresolvable'][$from])) {
+            return null;
+        }
+
         $identity = $this->resolveIdentity($connection, $from, $sourceScope);
 
-        if ($identity !== null) {
+        if ($identity === null) {
+            // Raw expressions and subquery SQL land here, so unlike the identity map
+            // this one is not bounded by the number of real tables.
+            if (count($metadata['unresolvable']) >= self::UNRESOLVABLE_LIMIT) {
+                $metadata['unresolvable'] = [];
+            }
+
+            $metadata['unresolvable'][$from] = true;
+        } else {
             $metadata['identities'][$from] = $identity;
-            $this->connections[$connection] = $metadata;
         }
+
+        $this->connections[$connection] = $metadata;
 
         return $identity;
     }
@@ -165,7 +186,13 @@ final class TableIdentityResolver
         return realpath($database) ?: $database;
     }
 
-    /** @return array{signature: string, identities: array<string, TableIdentity>} */
+    /**
+     * @return array{
+     *     signature: string,
+     *     identities: array<string, TableIdentity>,
+     *     unresolvable: array<string, true>
+     * }
+     */
     private function metadata(Connection $connection, string $sourceScope): array
     {
         $signature = TableIdentity::encodeFields([
@@ -177,7 +204,7 @@ final class TableIdentityResolver
         $metadata = $this->connections[$connection] ?? null;
 
         if ($metadata === null || $metadata['signature'] !== $signature) {
-            $metadata = ['signature' => $signature, 'identities' => []];
+            $metadata = ['signature' => $signature, 'identities' => [], 'unresolvable' => []];
             $this->connections[$connection] = $metadata;
         }
 

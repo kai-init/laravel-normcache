@@ -2,7 +2,7 @@
 
 namespace NormCache\Support;
 
-/** Normalizes columns only; table identifier case is identity-bearing. */
+// Normalizes columns only; table identifier case is identity-bearing.
 final class ColumnName
 {
     /**

@@ -79,7 +79,7 @@ final class PredicateColumnExtractor
         return true;
     }
 
-    /** Subquery and between expressions are stored inline in `values`. */
+    // Subquery and between expressions are stored inline in `values`.
     private function isLiteralValueList(mixed $values): bool
     {
         if (!is_iterable($values)) {

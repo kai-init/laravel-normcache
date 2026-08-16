@@ -105,6 +105,8 @@ final class CacheServiceProvider extends ServiceProvider
                 $this->app->make(Invalidator::class)->commit($name);
             }
 
+            // Registering per level keeps invalidation ahead of any afterCommit
+            // callback the application adds at that same nesting level.
             try {
                 $event->connection->afterCommit(function () use ($name): void {
                     $this->app->make(Invalidator::class)->commit($name);

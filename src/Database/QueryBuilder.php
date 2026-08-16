@@ -337,7 +337,9 @@ final class QueryBuilder extends Builder
 
         if ($bypass) {
             if ($reason !== null) {
-                app(QueryObserver::class)->bypass($this, $reason, $statement);
+                $observer = app(QueryObserver::class);
+                $observer->begin();
+                $observer->bypass($this, $reason, $statement);
             }
 
             return $this->connection->select(
@@ -542,7 +544,9 @@ final class QueryBuilder extends Builder
         ?string $reason,
     ): array {
         if ($reason !== null) {
-            app(QueryObserver::class)->bypass($this, $reason, $statement);
+            $observer = app(QueryObserver::class);
+            $observer->begin();
+            $observer->bypass($this, $reason, $statement);
         }
 
         return $this->connection->select(

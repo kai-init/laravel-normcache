@@ -211,7 +211,7 @@ final class DependencyAnalyzer
         $this->scanRaw($sql, $dependencies);
     }
 
-    /** Scans raw fragments so function-like identifiers remain cacheable. */
+    // Scans raw fragments so function-like identifiers remain cacheable.
     private function scanRaw(string $sql, DependencyCollection $dependencies): void
     {
         if ($this->rawMayReferenceSource($sql)) {

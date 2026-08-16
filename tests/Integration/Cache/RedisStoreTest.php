@@ -264,7 +264,7 @@ final class RedisStoreTest extends TestCase
             ));
 
             $this->assertSame(
-                ['result', '0', 'result-payload'],
+                ['result', '0', 'result-payload', '0', 'membership-payload'],
                 $store->fetchResultOrCanonical(
                     $versionKey,
                     $generationKey,
@@ -572,7 +572,7 @@ final class RedisStoreTest extends TestCase
             'canonical-query',
         );
 
-        $this->assertSame(['result', '0', 'result-payload'], $result);
+        $this->assertSame(['result', '0', 'result-payload', '0', $membership], $result);
 
         $store->deleteHashField($resultKey, 'r');
         $canonical = $store->fetchResultOrCanonical(

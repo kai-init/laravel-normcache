@@ -417,9 +417,11 @@ final readonly class Engine
             }
 
             $overlayReason = $result->reason;
-            $canonicalResult = $this->readCanonical(
+            $canonicalResult = $this->readCanonicalHead(
                 $context,
                 $queryHash,
+                $this->canonicalHeadFrom($head, $version),
+                true,
             );
 
             if ($canonicalResult->promotable()) {
@@ -506,21 +508,30 @@ final readonly class Engine
             return $result->withReason('result_overlay');
         }
 
-        $canonicalHead = $this->store->fetchCanonical(
-            versionKey: $this->keys->version($context->plan->root),
-            generationKey: $this->keys->generation($context->plan->root),
-            tablePrefix: $this->keys->tablePrefix($context->plan->root),
-            namespace: $context->namespace,
-            queryHash: $canonicalQueryHash,
-        );
-
         return $this->readCanonicalProjectionFallback(
             $context,
             $queryHash,
             $canonicalQueryHash,
-            $canonicalHead,
+            $this->canonicalHeadFrom($head, $version, RedisProtocol::MEMBERSHIP),
             $result->reason,
         );
+    }
+
+    /**
+     * @param  array<int, mixed>  $head
+     * @return array<int, mixed>
+     */
+    private function canonicalHeadFrom(
+        array $head,
+        string $version,
+        string $status = RedisProtocol::HIT,
+    ): array {
+        $generation = RedisProtocol::resultGeneration($head);
+        $membership = RedisProtocol::resultMembership($head);
+
+        return is_string($membership)
+            ? [$status, $version, $generation, $membership]
+            : [RedisProtocol::MISS, $version, $generation];
     }
 
     private function readCanonicalProjectionFallback(

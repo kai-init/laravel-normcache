@@ -39,6 +39,9 @@ final class SqlVolatilityScannerTest extends TestCase
             'PostgreSQL connection state' => ['current_setting(\'application_name\')'],
             'SQL Server connection state' => ['SESSION_CONTEXT(N\'tenant\')'],
             'argument-dependent function' => ['datetime(\'now\', \'+1 day\')'],
+            'literal ending in a backslash' => ["select * from t where path = 'a\\' and r = random()"],
+            'windows path before a lock call' => ["select * from t where path = 'c:\\' and x = get_lock('nc', 1)"],
+            'unterminated literal' => ["select * from t where note = 'oops and r = random()"],
         ];
     }
 
@@ -79,6 +82,9 @@ final class SqlVolatilityScannerTest extends TestCase
             'PostgreSQL lateral join' => [
                 'select "authors".* from "authors" left join lateral (select "posts".* from "posts") as "latest" on true',
             ],
+            'literal at-sign address' => ['select * from users where email like \'%@gmail.com\''],
+            'literal at-sign handle' => ['select * from users where handle = \'@laravelphp\''],
+            'volatile name inside a doubled-quote literal' => ['select * from t where note = \'it\'\'s random()\''],
         ];
     }
 }
