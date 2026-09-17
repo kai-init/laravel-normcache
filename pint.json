@@ -1,15 +1,14 @@
 {
     "preset": "laravel",
-    "exclude": [
-        "docs",
-        "tests/Benchmark",
-        "tests/Concerns",
-        "tests/Fixtures/database"
-    ],
+    "exclude": [],
     "rules": {
         "not_operator_with_successor_space": false,
         "phpdoc_single_line_var_spacing": false,
-        "concat_space": {"spacing": "one"},
-        "function_declaration": {"closure_fn_spacing": "none"}
+        "concat_space": {
+            "spacing": "one"
+        },
+        "function_declaration": {
+            "closure_fn_spacing": "none"
+        }
     }
 }

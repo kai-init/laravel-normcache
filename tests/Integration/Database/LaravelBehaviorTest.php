@@ -10,7 +10,6 @@ use NormCache\Tests\Fixtures\Models\NewFromBuilderOverridingPost;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\Tag;
 use NormCache\Tests\TestCase;
-use PDO;
 
 final class LaravelBehaviorTest extends TestCase
 {
@@ -83,27 +82,29 @@ final class LaravelBehaviorTest extends TestCase
         $originalPdo = $connection->getPdo();
         $resolver = $this->app->make(TableIdentityResolver::class);
         $firstIdentity = $resolver->resolve($connection, 'posts');
-        $this->assertSame('Tenant one', DB::table('posts')->where('id', $post->getKey())->first()?->title);
+        $this->assertSame(
+            'Tenant one',
+            Post::query()->toBase()->where('id', $post->getKey())->first()?->title,
+        );
 
         $database = sys_get_temp_dir() . '/normcache-tenant-' . getmypid() . '.sqlite';
         copy($originalDatabase, $database);
-        $tenantPdo = new PDO('sqlite:' . $database);
+        $tenantPdo = new \PDO('sqlite:' . $database);
         $tenantPdo->exec("update posts set title = 'Tenant two' where id = {$post->getKey()}");
 
         try {
             $connection->setDatabaseName($database);
             $connection->setPdo($tenantPdo);
-            $resolver->clear();
             $secondIdentity = $resolver->resolve($connection, 'posts');
 
             $this->assertNotSame($firstIdentity?->hash, $secondIdentity?->hash);
             $this->assertSame(
                 'Tenant two',
-                DB::table('posts')->withoutCache()->where('id', $post->getKey())->first()?->title,
+                Post::query()->toBase()->withoutCache()->where('id', $post->getKey())->first()?->title,
             );
             $this->assertSame(
                 'Tenant two',
-                DB::table('posts')->where('id', $post->getKey())->first()?->title,
+                Post::query()->toBase()->where('id', $post->getKey())->first()?->title,
             );
         } finally {
             $connection->setDatabaseName($originalDatabase);

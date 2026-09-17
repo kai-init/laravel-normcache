@@ -45,9 +45,9 @@ final class SubquerySafetyContractTest extends TestCase
         $alice = Author::create(['name' => 'Alice']);
         Author::create(['name' => 'Bob']);
 
-        $query = static fn(bool $declared = false) => DB::table('authors')
+        $query = static fn(bool $declared = false) => Author::query()->toBase()
             ->fromSub(
-                DB::table('authors')->select([
+                Author::query()->toBase()->select([
                     'id',
                     'name',
                     'country_id',
@@ -160,7 +160,6 @@ final class SubquerySafetyContractTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $author->id]);
         DB::statement('create view post_titles as select id, title from posts');
-        $this->cacheManager()->clearSchema();
 
         try {
             $query = static fn() => Author::query()
@@ -173,17 +172,6 @@ final class SubquerySafetyContractTest extends TestCase
                 ->first();
 
             $this->bypassContract($query, $native, reason: 'unidentifiable_dependency');
-
-            $viewOnly = static fn() => Author::query()
-                ->selectRaw('(select count(*) from post_titles) as post_count')
-                ->dependsOn(['post_titles'])
-                ->whereKey($author->id)
-                ->first();
-            $this->bypassContract(
-                $viewOnly,
-                $native,
-                reason: 'unresolvable_declared_dependency',
-            );
 
             $physical = static fn() => Author::query()
                 ->selectRaw('(select count(*) from post_titles) as post_count')
@@ -201,11 +189,10 @@ final class SubquerySafetyContractTest extends TestCase
             );
         } finally {
             DB::statement('drop view if exists post_titles');
-            $this->cacheManager()->clearSchema();
         }
     }
 
-    public function test_builder_backed_nested_view_requires_physical_base_table_dependencies(): void
+    public function test_builder_backed_nested_view_supports_physical_base_table_dependencies(): void
     {
         if (DB::connection()->getDriverName() !== 'sqlite') {
             $this->markTestSkipped('Portable view-safety contract currently uses SQLite syntax.');
@@ -214,15 +201,8 @@ final class SubquerySafetyContractTest extends TestCase
         $author = Author::create(['name' => 'Alice']);
         Post::create(['title' => 'P1', 'author_id' => $author->id]);
         DB::statement('create view post_titles as select id, title from posts');
-        $this->cacheManager()->clearSchema();
 
         try {
-            $query = static fn() => Author::query()
-                ->addSelect([
-                    'post_count' => DB::table('post_titles')->selectRaw('count(*)'),
-                ])
-                ->whereKey($author->id)
-                ->first();
             $native = static fn() => Author::withoutCache()
                 ->addSelect([
                     'post_count' => DB::table('post_titles')->selectRaw('count(*)'),
@@ -230,7 +210,6 @@ final class SubquerySafetyContractTest extends TestCase
                 ->whereKey($author->id)
                 ->first();
 
-            $this->bypassContract($query, $native, reason: 'unidentifiable_dependency');
             $cached = static fn() => Author::query()
                 ->addSelect([
                     'post_count' => DB::table('post_titles')->selectRaw('count(*)'),
@@ -249,7 +228,6 @@ final class SubquerySafetyContractTest extends TestCase
             );
         } finally {
             DB::statement('drop view if exists post_titles');
-            $this->cacheManager()->clearSchema();
         }
     }
 

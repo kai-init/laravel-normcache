@@ -106,18 +106,6 @@ final class CacheKeyBuilder
         return $this->keyPrefix . '{ncm}:disabled';
     }
 
-    public function schemaEpoch(): string
-    {
-        return $this->keyPrefix . '{ncm}:schema-epoch';
-    }
-
-    public function schema(string $connection, string $epoch): string
-    {
-        $hash = hash('xxh128', $connection);
-
-        return $this->keyPrefix . "{ncm:c:{$hash}}:schema:v{$epoch}";
-    }
-
     public function tablePrefix(TableIdentity $table): string
     {
         return $this->keyPrefix . "{nc:t:{$table->hash}}";

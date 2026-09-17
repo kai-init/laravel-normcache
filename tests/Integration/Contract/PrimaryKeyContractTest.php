@@ -2,6 +2,7 @@
 
 namespace NormCache\Tests\Integration\Contract;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -9,6 +10,16 @@ use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
+use NormCache\Traits\Cacheable;
+
+final class UnsignedRecord extends Model
+{
+    use Cacheable;
+
+    public $timestamps = false;
+
+    protected $table = 'unsigned_records';
+}
 
 /**
  * Contract tests: primary-key lookups (find, whereKey, where id) must return identical
@@ -78,8 +89,8 @@ final class PrimaryKeyContractTest extends TestCase
         try {
             $id = '18446744073709551615';
             DB::table('unsigned_records')->insert(['id' => $id, 'name' => 'Original']);
-            $direct = static fn() => DB::table('unsigned_records')->where('id', $id)->first();
-            $canonical = static fn() => DB::table('unsigned_records')->orderBy('id')->get();
+            $direct = static fn() => UnsignedRecord::query()->toBase()->where('id', $id)->first();
+            $canonical = static fn() => UnsignedRecord::query()->toBase()->orderBy('id')->get();
 
             $this->assertSame('Original', $direct()?->name);
 
@@ -109,12 +120,11 @@ final class PrimaryKeyContractTest extends TestCase
             $this->assertSame($id, (string) $repaired->first()?->id);
             $this->assertCount(1, DB::getQueryLog());
 
-            DB::table('unsigned_records')->where('id', $id)->update(['name' => 'Updated']);
+            UnsignedRecord::query()->toBase()->where('id', $id)->update(['name' => 'Updated']);
 
             $this->assertSame('Updated', $direct()?->name);
         } finally {
             Schema::dropIfExists('unsigned_records');
-            app(TableIdentityResolver::class)->clear();
         }
     }
 }

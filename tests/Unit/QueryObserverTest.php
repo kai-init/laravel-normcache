@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Unit;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use NormCache\Database\QueryStatement;
 use NormCache\Events\QueryCacheHit;
@@ -10,6 +9,7 @@ use NormCache\Events\QueryCacheMiss;
 use NormCache\Events\QueryCacheRepaired;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryObserver;
+use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\QueryPlan;
@@ -33,7 +33,7 @@ final class QueryObserverTest extends UnitTestCase
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = QueryPlan::queryGroup($table, [$table]);
-        $query = DB::table('posts');
+        $query = Post::query()->toBase();
         $sql = 'select * from posts where id = ?';
         $bindings = [42];
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
@@ -82,7 +82,7 @@ final class QueryObserverTest extends UnitTestCase
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
         $plan = QueryPlan::result($table, []);
-        $query = DB::query()->from('posts');
+        $query = Post::query()->toBase();
         $statement = new QueryStatement(static fn(): array => ['select * from posts', []]);
 
         // Same corrupted key observed twice (e.g. a concurrent request racing the

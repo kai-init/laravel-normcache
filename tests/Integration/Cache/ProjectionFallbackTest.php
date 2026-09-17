@@ -11,12 +11,12 @@ use NormCache\Events\QueryCacheRepaired;
 use NormCache\Facades\NormCache;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\DependencyAnalyzer;
-use NormCache\Planning\PrimaryKeyResolver;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\QueryIdentity;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 
 final class ProjectionFallbackTest extends TestCase
@@ -28,7 +28,7 @@ final class ProjectionFallbackTest extends TestCase
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
-        $this->postId = (int) DB::table('posts')->insertGetId([
+        $this->postId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Canonical',
             'views' => 10,
             'published' => true,
@@ -40,11 +40,11 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_falls_back_to_warm_row_cache_without_db_query(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -55,7 +55,7 @@ final class ProjectionFallbackTest extends TestCase
     {
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -80,11 +80,11 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_bypasses_on_extra_predicates(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')
+        $row = RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->where('published', false)
             ->select('title')
@@ -97,12 +97,12 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_reflects_precise_write(): void
     {
-        DB::table('posts')->orderBy('id')->get();
-        DB::table('posts')->where('id', $this->postId)->update(['title' => 'Updated']);
+        RawPost::query()->toBase()->orderBy('id')->get();
+        RawPost::query()->toBase()->where('id', $this->postId)->update(['title' => 'Updated']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Updated', $row->title);
@@ -111,8 +111,8 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_serves_unrelated_rows_after_collateral_invalidation(): void
     {
-        $authorId = DB::table('posts')->where('id', $this->postId)->value('author_id');
-        $secondId = (int) DB::table('posts')->insertGetId([
+        $authorId = RawPost::query()->toBase()->where('id', $this->postId)->value('author_id');
+        $secondId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Second',
             'views' => 0,
             'published' => true,
@@ -121,12 +121,12 @@ final class ProjectionFallbackTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        DB::table('posts')->orderBy('id')->get();
-        DB::table('posts')->where('id', $secondId)->update(['title' => 'Second Updated']);
+        RawPost::query()->toBase()->orderBy('id')->get();
+        RawPost::query()->toBase()->where('id', $secondId)->update(['title' => 'Second Updated']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -135,12 +135,12 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_misses_after_global_epoch_flush(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         NormCache::flushAll();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -149,7 +149,7 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_declines_when_projected_column_is_missing(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         $codec = $this->app->make(RawResultCodec::class);
         $epoch = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
@@ -162,7 +162,7 @@ final class ProjectionFallbackTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -172,9 +172,9 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_aliased_source_does_not_accept_original_table_projection_qualifier(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
-        $query = fn(bool $cached) => DB::table('posts as p')
+        $query = fn(bool $cached) => RawPost::query()->toBase()->from('posts as p')
             ->when(!$cached, fn($builder) => $builder->withoutCache())
             ->where('p.id', $this->postId)
             ->select('posts.title')
@@ -186,9 +186,9 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_aliased_source_does_not_accept_original_table_wildcard(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
-        $query = fn(bool $cached) => DB::table('posts as p')
+        $query = fn(bool $cached) => RawPost::query()->toBase()->from('posts as p')
             ->when(!$cached, fn($builder) => $builder->withoutCache())
             ->where('p.id', $this->postId)
             ->select('posts.*')
@@ -200,9 +200,9 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_unrelated_primary_key_qualifier_does_not_use_row_fallback(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
-        $query = fn(bool $cached) => DB::table('posts')
+        $query = fn(bool $cached) => RawPost::query()->toBase()
             ->when(!$cached, fn($builder) => $builder->withoutCache())
             ->where('authors.id', $this->postId)
             ->select('title')
@@ -238,14 +238,14 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_canonical_row_repair_is_reported_separately_when_this_process_queries_database(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         $this->deleteResultOverlays();
         $this->cacheStore()->delete($this->postRowKey());
 
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class, QueryCacheRepaired::class]);
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')->orderBy('id')->get();
+        $rows = RawPost::query()->toBase()->orderBy('id')->get();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $rows->firstWhere('id', $this->postId)->title);
@@ -260,13 +260,13 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_corrupt_canonical_row_remains_when_projection_fallback_declines(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
         $rowKey = $this->postRowKey();
         $this->cacheStore()->setRawForever($rowKey, 'not-a-valid-row-payload');
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -285,16 +285,14 @@ final class ProjectionFallbackTest extends TestCase
             $this->markTestSkipped('Requires pcntl and standalone PhpRedis.');
         }
 
-        $query = DB::table('posts')->where('id', $this->postId)->select('title')->limit(1);
+        $query = RawPost::query()->toBase()->where('id', $this->postId)->select('title')->limit(1);
         $connection = $query->getConnection();
         $table = $this->app->make(TableIdentityResolver::class)->resolve($connection, $query->from);
         $this->assertNotNull($table);
         $analysis = $this->app->make(DependencyAnalyzer::class)->analyze($connection, $query);
-        $primaryKey = $this->app->make(PrimaryKeyResolver::class)->resolve($query, $connection, $table);
         $plan = $this->app->make(QueryPlanner::class)->plan(
             $query,
             $table,
-            fn() => $primaryKey,
             $analysis->tables,
         );
         $identity = $this->app->make(QueryIdentity::class);
@@ -358,11 +356,11 @@ final class ProjectionFallbackTest extends TestCase
 
     public function test_fallback_is_reported_as_cache_hit(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class]);
 
-        DB::table('posts')->where('id', $this->postId)->select('title')->first();
+        RawPost::query()->toBase()->where('id', $this->postId)->select('title')->first();
 
         Event::assertDispatched(
             QueryCacheHit::class,

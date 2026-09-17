@@ -3,9 +3,9 @@
 namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\DB;
-use NormCache\Database\QueryBuilder;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
@@ -28,27 +28,25 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_root_wildcard_uses_canonical_rows_with_automatic_overlay_admission(): void
     {
         $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-        $query = DB::query()->from('posts');
+        $query = RawPost::query()->toBase()->from('posts');
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
-        $this->assertSame($primaryKey, $plan->primaryKey);
+        $this->assertEquals($primaryKey, $plan->primaryKey);
     }
 
     public function test_limited_root_wildcard_uses_an_automatic_result_overlay(): void
     {
-        $query = DB::query()->from('posts')->limit(20);
+        $query = RawPost::query()->toBase()->from('posts')->limit(20);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -57,19 +55,18 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_bare_alias_wildcard_uses_canonical_rows(): void
     {
-        $query = DB::query()->from('posts p')->select('p.*');
+        $query = RawPost::query()->toBase()->from('posts p')->select('p.*');
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
     }
 
-    public function test_dependency_backed_view_uses_vector_validated_result_storage(): void
+    public function test_explicitly_dependency_backed_source_uses_vector_validated_canonical_storage(): void
     {
         $view = TableIdentity::fromParts(
             'sqlite',
@@ -78,28 +75,25 @@ final class QueryPlannerTest extends UnitTestCase
             '',
             '',
             'post_titles',
-            true,
         );
-        $query = DB::query()->from('post_titles')->select('*');
+        $query = RawPost::query()->toBase()->from('post_titles')->select('*');
 
         $plan = $this->planner->plan(
             $query,
             $view,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$view, $this->posts],
         );
 
-        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
     }
 
     public function test_limited_wildcard_query_materializes_result_overlay(): void
     {
-        $query = DB::query()->from('posts')->limit(20);
+        $query = RawPost::query()->toBase()->from('posts')->limit(20);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -108,7 +102,7 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_primary_key_query_uses_direct_row_route(): void
     {
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->where('id', 42)
             ->limit(1);
@@ -116,7 +110,6 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -126,8 +119,7 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_cache_context_uses_full_result_storage_without_shared_rows(): void
     {
-        $primaryKeyRequested = false;
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->where('id', 42)
             ->limit(1)
@@ -136,27 +128,20 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            function () use (&$primaryKeyRequested): PrimaryKeyMetadata {
-                $primaryKeyRequested = true;
-
-                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-            },
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKey);
-        $this->assertFalse($primaryKeyRequested);
     }
 
     public function test_narrow_projection_uses_result_route(): void
     {
-        $query = DB::query()->from('posts')->select(['id', 'title as heading']);
+        $query = RawPost::query()->toBase()->from('posts')->select(['id', 'title as heading']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -166,28 +151,26 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_scalar_primary_key_wildcard_uses_direct_row(): void
     {
         $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-        $query = DB::query()->from('posts')->where('id', 42)->limit(1);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->limit(1);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::DIRECT_PK, $plan->route);
-        $this->assertSame($primaryKey, $plan->primaryKey);
+        $this->assertEquals($primaryKey, $plan->primaryKey);
         $this->assertSame('i:42', $plan->primaryKeyToken);
     }
 
     public function test_exists_never_uses_a_canonical_row_route(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
             operation: 'exists',
         );
@@ -195,73 +178,14 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_primary_key_metadata_is_not_requested_for_result_only_shapes(): void
-    {
-        $aggregate = DB::query()->from('posts');
-        $aggregate->aggregate = ['function' => 'count', 'columns' => ['*']];
-
-        $this->assertFalse($this->wasPrimaryKeyRequested($aggregate));
-        $this->assertFalse($this->wasPrimaryKeyRequested(
-            DB::query()->from('posts')->join('authors', 'authors.id', '=', 'posts.author_id'),
-        ));
-        $this->assertFalse($this->wasPrimaryKeyRequested(
-            DB::query()->from('posts')->selectRaw('lower(title)'),
-        ));
-    }
-
-    public function test_primary_key_metadata_is_requested_for_canonical_and_row_fallback_shapes(): void
-    {
-        $this->assertTrue($this->wasPrimaryKeyRequested(DB::query()->from('posts')));
-        $this->assertTrue($this->wasPrimaryKeyRequested(
-            DB::query()->from('posts')->select(['id', 'title']),
-        ));
-    }
-
-    public function test_primary_key_metadata_is_requested_at_most_once_per_plan(): void
-    {
-        $calls = 0;
-
-        $this->planner->plan(
-            DB::query()->from('posts')->where('id', 1),
-            $this->posts,
-            function () use (&$calls): PrimaryKeyMetadata {
-                $calls++;
-
-                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-            },
-            [$this->posts],
-        );
-
-        $this->assertSame(1, $calls);
-    }
-
-    private function wasPrimaryKeyRequested(QueryBuilder $query): bool
-    {
-        $requested = false;
-
-        $this->planner->plan(
-            $query,
-            $this->posts,
-            function () use (&$requested): PrimaryKeyMetadata {
-                $requested = true;
-
-                return new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-            },
-            [$this->posts],
-        );
-
-        return $requested;
-    }
-
     public function test_primary_key_aggregate_never_uses_a_canonical_row_route(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42);
         $query->aggregate = ['function' => 'count', 'columns' => ['*']];
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -271,29 +195,27 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_narrow_primary_key_projection_with_bare_columns_is_eligible_for_row_fallback(): void
     {
         $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-        $query = DB::query()->from('posts')->where('id', 42)->select(['id', 'title']);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['id', 'title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertSame($primaryKey, $plan->primaryKey);
+        $this->assertEquals($primaryKey, $plan->primaryKey);
         $this->assertSame('i:42', $plan->primaryKeyToken);
         $this->assertSame(['id', 'title'], $plan->projectedColumns);
     }
 
     public function test_narrow_primary_key_projection_with_root_qualified_columns_is_eligible(): void
     {
-        $query = DB::query()->from('posts')->where('posts.id', 42)->select(['posts.id', 'posts.title']);
+        $query = RawPost::query()->toBase()->from('posts')->where('posts.id', 42)->select(['posts.id', 'posts.title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -303,12 +225,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_with_aliased_from_and_qualified_columns_is_eligible(): void
     {
-        $query = DB::query()->from('posts as p')->where('p.id', 42)->select(['p.id', 'p.title']);
+        $query = RawPost::query()->toBase()->from('posts as p')->where('p.id', 42)->select(['p.id', 'p.title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -318,12 +239,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_aliased_from_rejects_projection_qualified_by_original_table(): void
     {
-        $query = DB::query()->from('posts as p')->where('p.id', 42)->select(['posts.title']);
+        $query = RawPost::query()->toBase()->from('posts as p')->where('p.id', 42)->select(['posts.title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -333,12 +253,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_aliased_from_rejects_wildcard_qualified_by_original_table(): void
     {
-        $query = DB::query()->from('posts as p')->where('p.id', 42)->select(['posts.*']);
+        $query = RawPost::query()->toBase()->from('posts as p')->where('p.id', 42)->select(['posts.*']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -348,12 +267,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_primary_key_predicate_with_unrelated_qualifier_rejects_direct_row_but_keeps_membership_fallback(): void
     {
-        $query = DB::query()->from('posts')->where('authors.id', 42)->select(['title']);
+        $query = RawPost::query()->toBase()->from('posts')->where('authors.id', 42)->select(['title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -363,12 +281,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_with_column_alias_keeps_result_route_without_token(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->select(['id', 'title as heading']);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['id', 'title as heading']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -379,12 +296,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_with_raw_expression_keeps_result_route_without_token(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->select(['id', DB::raw('UPPER(title)')]);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['id', DB::raw('UPPER(title)')]);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -395,12 +311,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_extra_predicate_rejects_direct_row_but_keeps_membership_fallback(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->where('published', true)->select(['title']);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->where('published', true)->select(['title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -410,12 +325,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_incompatible_direct_limit_keeps_membership_fallback(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->limit(5)->select(['title']);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->limit(5)->select(['title']);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -426,7 +340,7 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_multi_row_plain_projection_is_eligible_for_canonical_membership_fallback(): void
     {
         $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->where('published', true)
             ->orderBy('id')
@@ -435,19 +349,18 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => $primaryKey,
             [$this->posts],
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertSame($primaryKey, $plan->primaryKey);
+        $this->assertEquals($primaryKey, $plan->primaryKey);
         $this->assertNull($plan->primaryKeyToken);
         $this->assertSame(['id', 'title'], $plan->projectedColumns);
     }
 
     public function test_aliased_or_raw_projection_is_not_eligible_for_canonical_membership_fallback(): void
     {
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->where('published', true)
             ->selectRaw('id, upper(title) as heading');
@@ -455,7 +368,6 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -465,13 +377,12 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_group_limited_queries_do_not_publish_canonical_rows(): void
     {
-        $query = DB::query()->from('posts');
+        $query = RawPost::query()->toBase()->from('posts');
         $query->groupLimit = ['value' => 1, 'column' => 'author_id'];
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -481,12 +392,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_with_tag_override_uses_membership_not_direct_row_fallback(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->select(['title'])->tag('reports');
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])->tag('reports');
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -496,12 +406,11 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_with_ttl_override_uses_membership_not_direct_row_fallback(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->select(['title'])->ttl(60);
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])->ttl(60);
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -511,13 +420,12 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_narrow_primary_key_projection_computes_soft_delete_mode(): void
     {
-        $query = DB::query()->from('posts')->where('id', 42)->select(['title'])
+        $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])
             ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -528,7 +436,7 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_multiple_soft_delete_predicates_disable_direct_row_but_keep_membership_fallback(): void
     {
-        $query = DB::query()->from('posts')
+        $query = RawPost::query()->toBase()->from('posts')
             ->where('id', 42)
             ->whereNull('posts.deleted_at')
             ->whereNotNull('posts.deleted_at')
@@ -538,7 +446,6 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -548,7 +455,7 @@ final class QueryPlannerTest extends UnitTestCase
 
     public function test_unsafe_soft_delete_direct_candidate_still_uses_canonical_membership(): void
     {
-        $query = DB::query()->from('posts')
+        $query = RawPost::query()->toBase()->from('posts')
             ->where('id', 42)
             ->whereNull('posts.deleted_at')
             ->whereNotNull('posts.deleted_at')
@@ -557,7 +464,6 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts],
         );
 
@@ -565,17 +471,84 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertNull($plan->primaryKeyToken);
     }
 
+    public function test_soft_delete_predicate_with_unrelated_qualifier_rejects_direct_row_but_keeps_membership_fallback(): void
+    {
+        $query = RawPost::query()->toBase()->from('posts')
+            ->where('id', 42)
+            ->whereNull('wrong.deleted_at')
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+        $this->assertNull($plan->primaryKeyToken);
+    }
+
+    public function test_aliased_from_rejects_soft_delete_predicate_qualified_by_original_table(): void
+    {
+        $query = RawPost::query()->toBase()->from('posts as p')
+            ->where('p.id', 42)
+            ->whereNull('posts.deleted_at')
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+        $this->assertNull($plan->primaryKeyToken);
+    }
+
+    public function test_root_qualified_soft_delete_predicate_uses_direct_row_route(): void
+    {
+        $query = RawPost::query()->toBase()->from('posts')
+            ->where('id', 42)
+            ->whereNull('posts.deleted_at')
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::DIRECT_PK, $plan->route);
+        $this->assertSame('default', $plan->softDeleteMode);
+    }
+
+    public function test_alias_qualified_soft_delete_predicate_uses_direct_row_route(): void
+    {
+        $query = RawPost::query()->toBase()->from('posts as p')
+            ->where('p.id', 42)
+            ->whereNull('p.deleted_at')
+            ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            [$this->posts],
+        );
+
+        $this->assertSame(QueryPlan::DIRECT_PK, $plan->route);
+        $this->assertSame('default', $plan->softDeleteMode);
+    }
+
     public function test_join_query_group_does_not_collapse(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->join('comments', 'comments.post_id', '=', 'posts.id');
 
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts, $comments],
         );
 
@@ -585,7 +558,7 @@ final class QueryPlannerTest extends UnitTestCase
     public function test_any_sql_join_uses_query_group(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
-        $query = DB::query()
+        $query = RawPost::query()->toBase()
             ->from('posts')
             ->join('comments', 'comments.post_id', '=', 'posts.id')
             ->select('posts.*');
@@ -593,7 +566,6 @@ final class QueryPlannerTest extends UnitTestCase
         $plan = $this->planner->plan(
             $query,
             $this->posts,
-            fn(): PrimaryKeyMetadata => new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
             [$this->posts, $comments],
         );
 

@@ -47,6 +47,17 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertFalse($codec->decode('not-a-payload')->valid);
     }
 
+    public function test_unmarked_payloads_are_rejected(): void
+    {
+        $serializer = new CacheSerializer('php');
+        $codec = new RawResultCodec($serializer);
+        $encoded = $codec->encode([(object) ['id' => 1]], '0');
+
+        $this->assertTrue($codec->decode($encoded)->valid);
+        $this->assertFalse($codec->decode(substr($encoded, 1))->valid);
+        $this->assertNull($serializer->decode(''));
+    }
+
     public function test_row_codec_returns_exactly_one_object_for_every_valid_payload(): void
     {
         $codec = new RawResultCodec(new CacheSerializer);

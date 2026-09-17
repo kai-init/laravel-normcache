@@ -59,7 +59,7 @@ final readonly class QueryEntryRepository
         );
 
         if (!is_string($rawMembership)) {
-            return $miss($status === RedisProtocol::CORRUPT ? 'corrupt_payload' : null);
+            return $miss(null);
         }
 
         $membership = $this->memberships->decode($rawMembership);

@@ -7,6 +7,7 @@ use NormCache\Facades\NormCache;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\TableIdentity;
 
@@ -19,7 +20,7 @@ final class ResultOverlayStalenessTest extends TestCase
         $author = Author::query()->create(['name' => 'Author']);
 
         for ($i = 0; $i < 3; $i++) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'title' => 'Post ' . $i,
                 'views' => $i,
                 'published' => true,
@@ -49,8 +50,8 @@ final class ResultOverlayStalenessTest extends TestCase
 
     public function test_rejected_overlay_admission_is_recorded_in_the_membership(): void
     {
-        DB::table('posts')->delete();
-        $authorId = (int) DB::table('authors')->value('id');
+        RawPost::query()->toBase()->delete();
+        $authorId = (int) Author::query()->toBase()->value('id');
         $rows = [];
 
         for ($index = 0; $index < 40; $index++) {
@@ -69,8 +70,8 @@ final class ResultOverlayStalenessTest extends TestCase
             ];
         }
 
-        DB::table('posts')->insert($rows);
-        $query = static fn() => DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->insert($rows);
+        $query = static fn() => RawPost::query()->toBase()->orderBy('id')->get();
         $this->assertCount(40, $query());
         $membershipKey = $this->cacheQueryKeysWithField('m')[0] ?? null;
         $postsPrefix = $this->cacheKeys()->tablePrefix($this->postsIdentity());
@@ -106,7 +107,7 @@ final class ResultOverlayStalenessTest extends TestCase
 
     public function test_an_overlay_is_not_served_after_a_dependency_is_invalidated(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->join('authors', 'authors.id', '=', 'posts.author_id')
             ->dependsOn(['posts', 'authors'])
             ->select('posts.*')
@@ -129,7 +130,7 @@ final class ResultOverlayStalenessTest extends TestCase
 
     public function test_an_overlay_is_not_served_after_its_tag_is_flushed(): void
     {
-        $query = fn() => DB::table('posts')->tag('homepage')->orderBy('id')->get();
+        $query = fn() => RawPost::query()->toBase()->tag('homepage')->orderBy('id')->get();
 
         $query();
         $query();
@@ -178,7 +179,7 @@ final class ResultOverlayStalenessTest extends TestCase
 
     private function overlayQuery(): callable
     {
-        return static fn() => DB::table('posts')->orderBy('id')->get();
+        return static fn() => RawPost::query()->toBase()->orderBy('id')->get();
     }
 
     private function assertServedFromDatabase(): void

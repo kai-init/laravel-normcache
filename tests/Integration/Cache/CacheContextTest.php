@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Support\Facades\DB;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 
 final class CacheContextTest extends TestCase
@@ -82,6 +83,6 @@ final class CacheContextTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('NormCache cache context');
 
-        DB::table('posts')->cacheContext('');
+        RawPost::query()->toBase()->cacheContext('');
     }
 }

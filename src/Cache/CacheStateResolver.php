@@ -15,12 +15,6 @@ final readonly class CacheStateResolver
         private CacheKeyBuilder $keys,
     ) {}
 
-    /**
-     * Feed the values back to resolve() as $prefetched; unmatched arguments there
-     * would silently resolve missing keys to version '0'.
-     *
-     * @return list<string>
-     */
     public function pendingStateKeys(QueryPlan $plan, string $namespace): array
     {
         return $this->pendingKeys($plan, $namespace)['all'];

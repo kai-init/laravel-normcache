@@ -2,7 +2,7 @@
 
 namespace NormCache\Support;
 
-use NormCache\Exceptions\CascadeException;
+use NormCache\Enums\MutationType;
 use NormCache\Values\TableIdentity;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
@@ -16,8 +16,13 @@ final class FailureReporter
 
     public function cacheUnavailable(\Throwable $exception): void
     {
-        if ($this->claim('cache', $exception)) {
+        if (!$this->claim('cache_unavailable', $exception)) {
+            return;
+        }
+
+        try {
             report($exception);
+        } catch (\Throwable) {
         }
     }
 
@@ -30,14 +35,13 @@ final class FailureReporter
     ): void {
         $this->log(
             LogLevel::CRITICAL,
-            'invalidation',
-            'NormCache invalidation failed; cached reads may be stale.',
+            'invalidation_failed',
+            'Invalidation failed; cached reads may be stale.',
             $exception,
             [
-                'exception' => $exception,
-                'table' => $this->name($table),
+                ...$this->tableContext($table),
                 'mode' => $mode,
-                'tokens' => $tokens,
+                'token_count' => count($tokens),
             ],
             [$table->hash, $mode],
         );
@@ -47,31 +51,28 @@ final class FailureReporter
     {
         $this->log(
             LogLevel::WARNING,
-            'opaque-write',
-            'NormCache globally invalidated after an intercepted write target could not be resolved.',
+            'opaque_write_global_invalidation',
+            'Globally invalidated after an intercepted write target could not be resolved.',
             null,
             ['connection' => $connection],
             [$connection],
         );
     }
 
-    public function cascadeGlobalInvalidation(
-        ?TableIdentity $table,
-        CascadeException $failure,
+    public function deleteDependencyGlobalInvalidation(
+        TableIdentity $table,
+        MutationType $mutation,
     ): void {
-        $tableHash = $table === null ? '' : $table->hash;
-        $tableName = $table === null ? null : $this->name($table);
-
         $this->log(
             LogLevel::WARNING,
-            'cascade-metadata',
-            'NormCache globally invalidated because database cascade metadata could not be resolved.',
-            $failure,
+            'delete_dependency_global_invalidation',
+            'Globally invalidated because delete dependencies could not be resolved.',
+            null,
             [
-                'table' => $tableName,
-                ...$failure->context(),
+                ...$this->tableContext($table),
+                'mutation' => strtolower($mutation->name),
             ],
-            [$tableHash, ...$failure->fingerprint()],
+            [$table->hash, $mutation->name],
         );
     }
 
@@ -79,13 +80,10 @@ final class FailureReporter
     {
         $this->log(
             LogLevel::CRITICAL,
-            'global-invalidation',
-            'NormCache global invalidation failed; cached reads may be stale.',
+            'global_invalidation_failed',
+            'Global invalidation failed; cached reads may be stale.',
             $exception,
-            [
-                'exception' => $exception,
-                'reason' => $reason,
-            ],
+            ['reason' => $reason],
             [$reason],
         );
     }
@@ -94,13 +92,10 @@ final class FailureReporter
     {
         $this->log(
             LogLevel::WARNING,
-            'observation',
-            'NormCache diagnostics failed; the query itself was unaffected.',
+            'observation_failed',
+            'Diagnostics failed; the query itself was unaffected.',
             $exception,
-            [
-                'exception' => $exception,
-                'outcome' => $outcome,
-            ],
+            ['outcome' => $outcome],
             [$outcome],
         );
     }
@@ -108,17 +103,16 @@ final class FailureReporter
     public function repairUnreachable(
         \Throwable $exception,
         TableIdentity $table,
-        int $tokens,
+        int $tokenCount,
     ): void {
         $this->log(
             LogLevel::WARNING,
-            'repair',
-            'NormCache could not reload rows from the database to repair a membership.',
+            'repair_unreachable',
+            'Could not reload rows from the database to repair a membership.',
             $exception,
             [
-                'exception' => $exception,
-                'table' => $this->name($table),
-                'tokens' => $tokens,
+                ...$this->tableContext($table),
+                'token_count' => $tokenCount,
             ],
             [$table->hash],
         );
@@ -140,7 +134,26 @@ final class FailureReporter
             return;
         }
 
-        $this->logger->log($level, $message, $context);
+        $context = [
+            'component' => 'normcache',
+            'event' => $category,
+            ...$context,
+            ...($exception === null ? [] : ['exception' => $exception]),
+        ];
+
+        try {
+            $this->logger->log($level, $message, $context);
+        } catch (\Throwable) {
+        }
+    }
+
+    private function tableContext(TableIdentity $table): array
+    {
+        return [
+            'connection' => $table->connection,
+            'table' => $table->qualifiedTable(),
+            'table_hash' => $table->hash,
+        ];
     }
 
     private function claim(string $category, ?\Throwable $exception, string ...$context): bool
@@ -156,10 +169,5 @@ final class FailureReporter
         }
 
         return $this->recorded[$fingerprint] = true;
-    }
-
-    private function name(TableIdentity $table): string
-    {
-        return $table->connection . ':' . $table->qualifiedTable();
     }
 }

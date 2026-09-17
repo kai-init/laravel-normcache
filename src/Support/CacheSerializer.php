@@ -37,11 +37,6 @@ final readonly class CacheSerializer
             : $serializer;
     }
 
-    public static function native(): self
-    {
-        return new self(self::AUTO);
-    }
-
     public function encode(mixed $value): string
     {
         return $this->serializer === self::IGBINARY
@@ -58,18 +53,8 @@ final readonly class CacheSerializer
             self::IGBINARY_MARKER => $this->igbinaryAvailable
                 ? $this->decodeIgbinary(substr($payload, 1))
                 : null,
-            default => $this->decodeLegacy($payload),
+            default => null,
         };
-    }
-
-    private function decodeLegacy(string $payload): mixed
-    {
-        if ($this->serializer === self::IGBINARY) {
-            return $this->decodeIgbinary($payload) ?? $this->decodePhp($payload);
-        }
-
-        return $this->decodePhp($payload)
-            ?? ($this->igbinaryAvailable ? $this->decodeIgbinary($payload) : null);
     }
 
     private function decodePhp(string $payload): mixed

@@ -17,8 +17,6 @@ final class CacheRuntime
 
     private ?float $epochReadAt = null;
 
-    private ?string $schemaEpoch = null;
-
     private ?bool $runtimeDisabled = null;
 
     public function __construct(
@@ -123,39 +121,16 @@ final class CacheRuntime
         $this->failures->cacheUnavailable($exception);
     }
 
-    public function schemaEpoch(): string
-    {
-        if ($this->schemaEpoch !== null) {
-            return $this->schemaEpoch;
-        }
-
-        $this->resolveState();
-
-        return $this->schemaEpoch ??= $this->store->getRaw($this->keys->schemaEpoch()) ?? '0';
-    }
-
-    public function rememberSchemaEpoch(string $epoch): void
-    {
-        $this->schemaEpoch = $epoch;
-    }
-
-    public function forgetSchemaEpoch(): void
-    {
-        $this->schemaEpoch = null;
-    }
-
     /** @return array{0: string, 1: bool} */
     private function resolveState(): array
     {
         if ($this->epoch === null || $this->epochExpired()) {
             $epochKey = $this->keys->epoch();
             $disabledKey = $this->keys->disabled();
-            $schemaEpochKey = $this->keys->schemaEpoch();
-            $values = $this->store->mget([$epochKey, $disabledKey, $schemaEpochKey]);
+            $values = $this->store->mget([$epochKey, $disabledKey]);
             $this->epoch = $values[$epochKey] ?? '0';
             $this->epochReadAt = microtime(true);
             $this->runtimeDisabled ??= ($values[$disabledKey] ?? null) !== null;
-            $this->schemaEpoch ??= $values[$schemaEpochKey] ?? '0';
         }
 
         return [$this->epoch, $this->runtimeDisabled ?? false];

@@ -4,13 +4,14 @@ namespace NormCache;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\MutationType;
-use NormCache\Exceptions\CascadeException;
 use NormCache\Exceptions\TableInvalidationException;
+use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\MutationKeyExtractor;
-use NormCache\Planning\SchemaCatalog;
+use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryObserver;
@@ -32,7 +33,8 @@ final class Invalidator
         private readonly CacheRuntime $runtime,
         private readonly RedisStore $store,
         private readonly CacheKeyBuilder $keys,
-        private readonly SchemaCatalog $schema,
+        private readonly TableIdentityResolver $tables,
+        private readonly DeleteDependencyResolver $deleteDependencies,
         private readonly MutationKeyExtractor $mutationKeys,
         private readonly QueryObserver $observer,
         private readonly FailureReporter $failures,
@@ -52,62 +54,45 @@ final class Invalidator
 
         $connection = $query->getConnection();
         $connectionName = (string) $connection->getName();
-
-        if ($mutation === MutationType::TRUNCATE) {
-            $this->applyGlobal('truncate');
-
-            if ($connection->transactionLevel() > 0) {
-                $this->pendingGlobalInvalidations[$connectionName] = 'transaction_truncate';
-            }
-
-            return;
-        }
-
         $from = $query->from;
 
         if ($from instanceof Expression) {
             $from = $from->getValue($query->getGrammar());
         }
 
-        $table = $this->schema->resolveTable($connection, $from);
+        $table = $this->tables->resolve($connection, $from);
 
         if ($table === null) {
-            $this->failures->opaqueWriteGlobalInvalidation($connectionName);
             $this->applyOrQueueGlobal($connection, 'opaque_write');
+            $this->failures->opaqueWriteGlobalInvalidation($connectionName);
 
             return;
         }
 
-        $cascadeTables = [];
+        $truncating = $mutation === MutationType::TRUNCATE;
+        $affectedByDelete = [];
 
-        if ($mutation === MutationType::DELETE) {
-            try {
-                $cascadeTables = $this->schema->affectedByDelete($connection, $table);
-            } catch (CascadeException $failure) {
-                $this->failures->cascadeGlobalInvalidation($table, $failure);
-                $this->applyOrQueueGlobal($connection, 'cascade_metadata_unavailable');
+        if ($truncating || $mutation === MutationType::DELETE) {
+            $resolved = $truncating
+                ? $this->deleteDependencies->affectedByTruncate($connection, $table)
+                : $this->deleteDependencies->affectedByDelete($connection, $table);
 
-                return;
-            }
-
-            if ($cascadeTables === null) {
-                $this->applyOrQueueGlobal($connection, 'cascade_graph_cold');
-
-                try {
-                    $this->schema->warm($connection);
-                } catch (CascadeException $failure) {
-                    $this->failures->cascadeGlobalInvalidation($table, $failure);
-                }
+            if ($resolved === null) {
+                $reason = strtolower($mutation->name) . '_dependencies_unavailable';
+                $this->applyOrQueueGlobal($connection, $reason);
+                $this->failures->deleteDependencyGlobalInvalidation($table, $mutation);
 
                 return;
             }
+
+            $affectedByDelete = $resolved;
         }
 
         $broad = $forceBroadInvalidation;
         $tokens = [];
 
         if ($mayAffectExistingRows && !$forceBroadInvalidation) {
-            $primaryKey = $this->schema->resolvePrimaryKey($query, $connection, $table);
+            $primaryKey = $query->primaryKey();
             $extracted = $primaryKey !== null
                 && $primaryKey->family === PrimaryKeyMetadata::INTEGER
                 ? $this->mutationKeys->extractMutation($query, $primaryKey, $assigned)
@@ -123,44 +108,40 @@ final class Invalidator
             }
         }
 
-        if ($connection->transactionLevel() > 0) {
-            $this->queueInvalidation($table, $broad, $tokens);
-
-            foreach ($cascadeTables as $cascadeTable) {
-                $this->queueInvalidation($cascadeTable, true, []);
-            }
-
-            return;
-        }
-
-        foreach ($cascadeTables as $cascadeTable) {
-            if ($cascadeTable->hash === $table->hash) {
-                $broad = true;
-
-                break;
-            }
-        }
-
-        if ($cascadeTables === []) {
-            $this->apply($table, $broad, $tokens);
-
-            return;
-        }
-
         $invalidations = [[
             'table' => $table,
             'broad' => $broad,
             'tokens' => $tokens,
         ]];
 
-        foreach ($cascadeTables as $cascadeTable) {
-            if ($cascadeTable->hash !== $table->hash) {
-                $invalidations[] = [
-                    'table' => $cascadeTable,
-                    'broad' => true,
-                    'tokens' => [],
-                ];
+        foreach ($affectedByDelete as $affected) {
+            if ($affected->hash === $table->hash) {
+                $invalidations[0]['broad'] = true;
+
+                continue;
             }
+
+            $invalidations[] = [
+                'table' => $affected,
+                'broad' => true,
+                'tokens' => [],
+            ];
+        }
+
+        if ($connection->transactionLevel() > 0) {
+            if ($truncating) {
+                $this->applyMany($invalidations);
+            }
+
+            foreach ($invalidations as $invalidation) {
+                $this->queueInvalidation(
+                    $invalidation['table'],
+                    $invalidation['broad'],
+                    $invalidation['tokens'],
+                );
+            }
+
+            return;
         }
 
         $this->applyMany($invalidations);
@@ -180,12 +161,10 @@ final class Invalidator
         $invalidations = [];
 
         foreach ($this->pullInvalidations($connection) as $pending) {
-            $tokens = array_keys($pending['tokens']);
             $invalidations[] = [
                 'table' => $pending['table'],
-                'broad' => $pending['broad']
-                    || count($tokens) > $this->config->maxPreciseInvalidationKeys,
-                'tokens' => $tokens,
+                'broad' => $pending['broad'],
+                'tokens' => array_keys($pending['tokens']),
             ];
         }
 
@@ -211,29 +190,52 @@ final class Invalidator
             return $tables === [];
         }
 
-        return $this->applyMany(array_map(
-            static fn(TableIdentity $table): array => [
+        $immediate = [];
+
+        foreach ($tables as $table) {
+            if (DB::connection($table->connection)->transactionLevel() > 0) {
+                $this->queueInvalidation($table, true, []);
+
+                continue;
+            }
+
+            $immediate[] = [
                 'table' => $table,
                 'broad' => true,
                 'tokens' => [],
-            ],
-            $tables,
-        ));
+            ];
+        }
+
+        return $this->applyMany($immediate);
     }
 
     /** @param list<string> $tokens */
     private function queueInvalidation(TableIdentity $table, bool $broad, array $tokens): void
     {
-        $current = $this->pendingInvalidations[$table->connection][$table->hash] ?? null;
-        $tokenSet = $current['tokens'] ?? [];
+        if (isset($this->pendingGlobalInvalidations[$table->connection])) {
+            return;
+        }
 
-        foreach ($tokens as $token) {
-            $tokenSet[$token] = true;
+        $current = $this->pendingInvalidations[$table->connection][$table->hash] ?? null;
+        $broad = $broad || ($current['broad'] ?? false);
+        $tokenSet = $broad ? [] : ($current['tokens'] ?? []);
+
+        if (!$broad) {
+            foreach ($tokens as $token) {
+                $tokenSet[$token] = true;
+
+                if (count($tokenSet) > $this->config->maxPreciseInvalidationKeys) {
+                    $broad = true;
+                    $tokenSet = [];
+
+                    break;
+                }
+            }
         }
 
         $this->pendingInvalidations[$table->connection][$table->hash] = [
             'table' => $table,
-            'broad' => $broad || ($current['broad'] ?? false),
+            'broad' => $broad,
             'tokens' => $tokenSet,
         ];
     }
@@ -252,6 +254,7 @@ final class Invalidator
         if ($connection->transactionLevel() > 0) {
             $connectionName = (string) $connection->getName();
             $this->pendingGlobalInvalidations[$connectionName] = 'transaction_' . $reason;
+            unset($this->pendingInvalidations[$connectionName]);
 
             return;
         }

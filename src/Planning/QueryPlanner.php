@@ -13,12 +13,10 @@ final class QueryPlanner
 {
     /**
      * @param  list<TableIdentity>  $dependencies
-     * @param  callable(): ?PrimaryKeyMetadata  $resolvePrimaryKey
      */
     public function plan(
         QueryBuilder $query,
         TableIdentity $root,
-        callable $resolvePrimaryKey,
         array $dependencies,
         bool $forceQueryGroup = false,
         string $operation = 'select',
@@ -39,7 +37,7 @@ final class QueryPlanner
         $plainColumns = $wildcard ? null : $this->plainColumns($query, $root);
         $primaryKey = $this->canUseRowShape($query, $operation)
             && ($wildcard || $plainColumns !== null)
-                ? $resolvePrimaryKey()
+                ? $query->primaryKey()
                 : null;
 
         $direct = $this->directPlan(
@@ -58,7 +56,6 @@ final class QueryPlanner
         if (
             $primaryKey !== null
             && $wildcard
-            && !$root->isView
         ) {
             return QueryPlan::canonical(
                 $root,
@@ -93,7 +90,6 @@ final class QueryPlanner
     ): ?QueryPlan {
         if (
             $primaryKey === null
-            || $root->isView
             || count($dependencies) !== 1
             || !$this->allowsDirectControls($query)
             || (!$wildcard && $plainColumns === null)
@@ -107,7 +103,7 @@ final class QueryPlanner
             return null;
         }
 
-        [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query);
+        [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query, $root);
 
         if (!$softDeleteSafe) {
             return null;
@@ -251,7 +247,7 @@ final class QueryPlanner
         $primaryWhere = null;
 
         foreach ($query->wheres as $where) {
-            if ($this->isSoftDeleteWhere($query, $where)) {
+            if ($this->isSoftDeleteWhere($query, $root, $where)) {
                 continue;
             }
 
@@ -278,29 +274,15 @@ final class QueryPlanner
             return null;
         }
 
-        $column = trim((string) $where['column']);
-        $parts = explode('.', $column);
-        $unqualified = trim((string) array_pop($parts), '`"[]');
-
-        if (strtolower($unqualified) !== strtolower($primaryKey->column)) {
+        if (!$this->resolvesToColumn($query, $root, (string) $where['column'], $primaryKey->column)) {
             return null;
-        }
-
-        if ($parts !== []) {
-            $qualifier = strtolower(trim((string) array_pop($parts), '`"[]'));
-            $table = strtolower($root->table);
-            $alias = $this->fromAlias($query);
-
-            if ($parts !== [] || !$this->isValidQualifier($qualifier, $table, $alias)) {
-                return null;
-            }
         }
 
         return $primaryKey->token($where['value'] ?? null);
     }
 
     /** @return array{0: bool, 1: ?string} */
-    private function softDeleteMode(QueryBuilder $query): array
+    private function softDeleteMode(QueryBuilder $query, TableIdentity $root): array
     {
         if ($query->deletedAtColumn() === null) {
             return [true, null];
@@ -309,7 +291,7 @@ final class QueryPlanner
         $modes = [];
 
         foreach ($query->wheres as $where) {
-            if (!$this->isDeletedAtColumn($query, $where['column'] ?? null)) {
+            if (!$this->isDeletedAtColumn($query, $root, $where['column'] ?? null)) {
                 continue;
             }
 
@@ -333,11 +315,11 @@ final class QueryPlanner
     }
 
     /** @param array<string, mixed> $where */
-    private function isSoftDeleteWhere(QueryBuilder $query, array $where): bool
+    private function isSoftDeleteWhere(QueryBuilder $query, TableIdentity $root, array $where): bool
     {
         return in_array($where['type'] ?? null, ['Null', 'NotNull'], true)
             && strtolower((string) ($where['boolean'] ?? 'and')) === 'and'
-            && $this->isDeletedAtColumn($query, $where['column'] ?? null);
+            && $this->isDeletedAtColumn($query, $root, $where['column'] ?? null);
     }
 
     private function isValidQualifier(string $qualifier, string $table, ?string $alias): bool
@@ -347,16 +329,38 @@ final class QueryPlanner
             : $qualifier === $table;
     }
 
-    private function isDeletedAtColumn(QueryBuilder $query, mixed $column): bool
+    private function isDeletedAtColumn(QueryBuilder $query, TableIdentity $root, mixed $column): bool
     {
-        if (!is_string($column) || !is_string($query->deletedAtColumn())) {
+        $deletedAt = $query->deletedAtColumn();
+
+        return is_string($column)
+            && is_string($deletedAt)
+            && $this->resolvesToColumn($query, $root, $column, $deletedAt);
+    }
+
+    private function resolvesToColumn(
+        QueryBuilder $query,
+        TableIdentity $root,
+        string $column,
+        string $expected,
+    ): bool {
+        $parts = explode('.', trim($column));
+        $unqualified = trim((string) array_pop($parts), '`"[]');
+
+        if (strtolower($unqualified) !== strtolower($expected)) {
             return false;
         }
 
-        if (str_contains($column, '.')) {
-            $column = substr($column, strrpos($column, '.') + 1);
+        if ($parts === []) {
+            return true;
         }
 
-        return strtolower($column) === strtolower($query->deletedAtColumn());
+        $qualifier = strtolower(trim((string) array_pop($parts), '`"[]'));
+
+        return $parts === [] && $this->isValidQualifier(
+            $qualifier,
+            strtolower($root->table),
+            $this->fromAlias($query),
+        );
     }
 }

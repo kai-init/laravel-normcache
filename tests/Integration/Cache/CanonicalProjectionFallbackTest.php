@@ -10,6 +10,7 @@ use NormCache\Events\QueryCacheMiss;
 use NormCache\Events\QueryCacheRepaired;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 
 final class CanonicalProjectionFallbackTest extends TestCase
@@ -26,7 +27,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
             [3, 'Three', 30, false],
             [4, 'Four', 40, true],
         ] as [$id, $title, $views, $published]) {
-            DB::table('posts')->insert([
+            RawPost::query()->toBase()->insert([
                 'id' => $id,
                 'title' => $title,
                 'views' => $views,
@@ -40,7 +41,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_plain_projection_reuses_wildcard_membership_without_sql(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderByDesc('id')
             ->limit(2)
@@ -48,7 +49,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')
+        $rows = RawPost::query()->toBase()
             ->where('published', true)
             ->orderByDesc('id')
             ->limit(2)
@@ -65,13 +66,13 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_projection_fallback_promotes_compact_result_payload(): void
     {
-        $wildcard = DB::table('posts')
+        $wildcard = RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id');
         $wildcard->get();
         $this->deleteResultOverlays();
 
-        $projected = fn() => DB::table('posts')
+        $projected = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->select(['id', 'title'])
@@ -104,13 +105,13 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_corrupt_projected_result_falls_back_to_canonical_and_rebuilds(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->get();
         $this->deleteResultOverlays();
 
-        $projected = fn() => DB::table('posts')
+        $projected = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->select(['id', 'title'])
@@ -139,14 +140,14 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_where_in_projection_reuses_the_same_canonical_membership(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->whereIn('id', [1, 2, 4])
             ->orderByDesc('id')
             ->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')
+        $rows = RawPost::query()->toBase()
             ->whereIn('id', [1, 2, 4])
             ->orderByDesc('id')
             ->select(['id', 'title'])
@@ -159,7 +160,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_projection_fallback_preserves_membership_order_limit_and_offset(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('views')
             ->offset(1)
@@ -168,7 +169,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')
+        $rows = RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('views')
             ->offset(1)
@@ -186,7 +187,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_qualified_wildcard_and_projection_share_normalized_membership_identity(): void
     {
-        DB::table('posts as p')
+        RawPost::query()->toBase()->from('posts as p')
             ->where('p.published', true)
             ->orderBy('p.id')
             ->select('p.*')
@@ -194,7 +195,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts as p')
+        $rows = RawPost::query()->toBase()->from('posts as p')
             ->where('p.published', true)
             ->orderBy('p.id')
             ->select(['p.id', 'p.title'])
@@ -232,11 +233,11 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_empty_canonical_membership_is_a_projection_hit(): void
     {
-        DB::table('posts')->where('views', '>', 1000)->get();
+        RawPost::query()->toBase()->where('views', '>', 1000)->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')
+        $rows = RawPost::query()->toBase()
             ->where('views', '>', 1000)
             ->select(['id', 'title'])
             ->get();
@@ -248,14 +249,14 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_result_payload_wins_before_canonical_membership_fallback(): void
     {
-        $projected = fn() => DB::table('posts')
+        $projected = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->select(['id', 'title'])
             ->get();
 
         $projected();
-        DB::table('posts')->where('published', true)->orderBy('id')->get();
+        RawPost::query()->toBase()->where('published', true)->orderBy('id')->get();
         $this->cacheStore()->delete($this->rowKeyFor(2));
 
         DB::flushQueryLog();
@@ -269,7 +270,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_missing_canonical_row_declines_projection_fallback_without_repair(): void
     {
-        $query = fn() => DB::table('posts')
+        $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id');
 
@@ -297,11 +298,11 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_raw_or_aliased_projection_does_not_use_canonical_membership(): void
     {
-        DB::table('posts')->where('published', true)->orderBy('id')->get();
+        RawPost::query()->toBase()->where('published', true)->orderBy('id')->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $rows = DB::table('posts')
+        $rows = RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->selectRaw('id, upper(title) as heading')
@@ -314,12 +315,12 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_missing_selected_column_preserves_native_error_without_deleting_valid_rows(): void
     {
-        DB::table('posts')->where('published', true)->orderBy('id')->get();
+        RawPost::query()->toBase()->where('published', true)->orderBy('id')->get();
         $rowKey = $this->rowKeyFor(1);
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
 
         try {
-            DB::table('posts')
+            RawPost::query()->toBase()
                 ->where('published', true)
                 ->orderBy('id')
                 ->select(['posts.id', 'posts.missing_column'])
@@ -334,7 +335,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_projection_membership_respects_tag_namespace(): void
     {
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->tag('homepage')
@@ -342,7 +343,7 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->select(['id', 'title'])
@@ -354,10 +355,10 @@ final class CanonicalProjectionFallbackTest extends TestCase
 
     public function test_projection_fallback_reports_a_hit_without_a_miss(): void
     {
-        DB::table('posts')->where('published', true)->orderBy('id')->get();
+        RawPost::query()->toBase()->where('published', true)->orderBy('id')->get();
         Event::fake([QueryCacheHit::class, QueryCacheMiss::class]);
 
-        DB::table('posts')
+        RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->select(['id', 'title'])

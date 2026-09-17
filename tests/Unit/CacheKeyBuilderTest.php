@@ -28,11 +28,6 @@ final class CacheKeyBuilderTest extends UnitTestCase
         $keys = new CacheKeyBuilder('app:');
 
         $this->assertSame('app:{ncm}:epoch', $keys->epoch());
-        $this->assertSame('app:{ncm}:schema-epoch', $keys->schemaEpoch());
-        $this->assertSame(
-            'app:{ncm:c:' . hash('xxh128', 'mysql') . '}:schema:v4',
-            $keys->schema('mysql', '4'),
-        );
         $this->assertSame('app:{nc:g:taghash}:ver', $keys->tagVersion('taghash'));
         $this->assertSame(
             'app:{nc:x:queryhash}:q:gabc',

@@ -62,7 +62,7 @@ final readonly class BuildLeaseCoordinator
         );
     }
 
-    public function release(BuildLease $lease, bool $wakeWaiters = true): void
+    public function release(BuildLease $lease): void
     {
         if (!$lease->owner || $lease->token === null) {
             return;
@@ -71,7 +71,7 @@ final readonly class BuildLeaseCoordinator
         try {
             $this->store->releaseBuilding(
                 $lease->buildingKey,
-                $wakeWaiters ? (string) $lease->wakeKey : '',
+                (string) $lease->wakeKey,
                 $lease->token,
                 $this->config->wakeTtl(),
             );

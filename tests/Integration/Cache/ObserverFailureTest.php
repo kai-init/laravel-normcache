@@ -2,7 +2,6 @@
 
 namespace NormCache\Tests\Integration\Cache;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
@@ -25,7 +24,7 @@ final class ObserverFailureTest extends TestCase
             throw new \RuntimeException('diagnostics exploded');
         });
 
-        $authors = DB::table('authors')->orderBy('id')->get();
+        $authors = Author::query()->toBase()->orderBy('id')->get();
 
         $this->assertCount(1, $authors, 'a broken listener must not cost the caller its rows');
     }
@@ -37,7 +36,7 @@ final class ObserverFailureTest extends TestCase
         });
 
         try {
-            DB::table('authors')->orderBy('id')->get();
+            Author::query()->toBase()->orderBy('id')->get();
         } catch (\Throwable) {
             // The lease assertion below is the point of this test.
         }
@@ -51,13 +50,13 @@ final class ObserverFailureTest extends TestCase
 
     public function test_a_throwing_hit_listener_does_not_abort_the_query(): void
     {
-        DB::table('authors')->orderBy('id')->get();
+        Author::query()->toBase()->orderBy('id')->get();
 
         Event::listen(QueryCacheHit::class, static function (): void {
             throw new \RuntimeException('diagnostics exploded');
         });
 
-        $authors = DB::table('authors')->orderBy('id')->get();
+        $authors = Author::query()->toBase()->orderBy('id')->get();
 
         $this->assertCount(1, $authors);
     }
@@ -68,7 +67,7 @@ final class ObserverFailureTest extends TestCase
             throw new \RuntimeException('diagnostics exploded');
         });
 
-        $authors = DB::table('authors')->whereRaw('1 = 1 /* opaque */')->get();
+        $authors = Author::query()->toBase()->whereRaw('1 = 1 /* opaque */')->get();
 
         $this->assertCount(1, $authors);
     }

@@ -22,8 +22,10 @@ final class SqlVolatilityScanner
         . 'system_user|current_role|current_schema|current_database|current_catalog|current_path)\b'
         . '|\bnext\s+value\s+for\b|@{1,2}[a-z_][a-z0-9_$]*/';
 
-    private const NOW_ARGUMENT =
-        '/\b(?:date|time|datetime|julianday|unixepoch|strftime)\s*\([^)]*[\'"]now[\'"]/';
+    private const CLOCK_ARGUMENT =
+        '/\b(?:date|time|datetime|julianday|unixepoch|strftime)\s*\('
+        . '(?:\s*\)|[^)]*(?:\?|[\'"](?:now|subsec|subsecond)[\'"]))'
+        . '|\bstrftime\s*\(\s*(?:\'[^\']*\'|"[^"]*")\s*\)/';
 
     private const MEMO_LIMIT = 512;
 
@@ -49,6 +51,6 @@ final class SqlVolatilityScanner
 
         return preg_match(self::VOLATILE_CALLS, $sql) === 1
             || preg_match(self::VOLATILE_KEYWORDS, $sql) === 1
-            || preg_match(self::NOW_ARGUMENT, $sql) === 1;
+            || preg_match(self::CLOCK_ARGUMENT, $sql) === 1;
     }
 }

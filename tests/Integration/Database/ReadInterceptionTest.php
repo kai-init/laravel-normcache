@@ -30,7 +30,7 @@ final class ReadInterceptionTest extends TestCase
         ]);
     }
 
-    public function test_db_table_returns_fresh_stdclass_rows_without_warm_sql(): void
+    public function test_db_table_reads_always_execute_sql_and_create_no_cache_entry(): void
     {
         $cold = DB::table('posts')->where('id', $this->postId)->get();
 
@@ -43,7 +43,8 @@ final class ReadInterceptionTest extends TestCase
         $this->assertInstanceOf(\stdClass::class, $warm[0]);
         $this->assertNotSame($cold[0], $warm[0]);
         $this->assertSame((array) $cold[0], (array) $warm[0]);
-        $this->assertSame([], DB::getQueryLog());
+        $this->assertCount(1, DB::getQueryLog());
+        $this->assertSame([], $this->cacheKeysMatching(':q:'));
     }
 
     public function test_opted_in_eloquent_is_cached_but_traitless_and_unmarked_reads_are_live(): void
@@ -91,10 +92,10 @@ final class ReadInterceptionTest extends TestCase
         $connection->setQueryGrammar($grammar);
 
         try {
-            DB::table('posts')->where('id', $this->postId)->first();
+            Post::query()->toBase()->where('id', $this->postId)->first();
             $grammar->postSelectCompilations = 0;
 
-            DB::table('posts')->where('id', $this->postId)->first();
+            Post::query()->toBase()->where('id', $this->postId)->first();
 
             $this->assertSame(0, $grammar->postSelectCompilations);
         } finally {
@@ -110,7 +111,7 @@ final class ReadInterceptionTest extends TestCase
         $afterCalls = 0;
 
         $run = function () use (&$beforeCalls, &$afterCalls) {
-            return DB::table('posts')
+            return Post::query()->toBase()
                 ->beforeQuery(function ($query) use (&$beforeCalls) {
                     $beforeCalls++;
                     $query->where('views', 7);
@@ -133,7 +134,7 @@ final class ReadInterceptionTest extends TestCase
 
     public function test_exists_uses_the_cache_and_conditional_variants_delegate_to_it(): void
     {
-        $query = fn() => DB::table('posts')->where('id', $this->postId);
+        $query = fn() => Post::query()->toBase()->where('id', $this->postId);
 
         $this->assertTrue($query()->exists());
 
@@ -151,7 +152,7 @@ final class ReadInterceptionTest extends TestCase
 
     public function test_exists_cannot_poison_the_canonical_primary_key_row(): void
     {
-        $query = fn() => DB::table('posts')->where('id', $this->postId);
+        $query = fn() => Post::query()->toBase()->where('id', $this->postId);
 
         $this->assertTrue($query()->exists());
         $row = $query()->first();
@@ -162,7 +163,7 @@ final class ReadInterceptionTest extends TestCase
 
     public function test_count_cannot_poison_the_canonical_primary_key_row(): void
     {
-        $query = fn() => DB::table('posts')->where('id', $this->postId);
+        $query = fn() => Post::query()->toBase()->where('id', $this->postId);
 
         $this->assertSame(1, $query()->count());
         $row = $query()->first();
@@ -173,14 +174,14 @@ final class ReadInterceptionTest extends TestCase
 
     public function test_explicit_and_execution_safety_bypasses_remain_live(): void
     {
-        DB::table('posts')->where('id', $this->postId)->get();
+        Post::query()->toBase()->where('id', $this->postId)->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
 
-        DB::table('posts')->where('id', $this->postId)->withoutCache()->get();
-        DB::table('posts')->where('id', $this->postId)->useWritePdo()->get();
-        DB::transaction(fn() => DB::table('posts')->where('id', $this->postId)->get());
+        Post::query()->toBase()->where('id', $this->postId)->withoutCache()->get();
+        Post::query()->toBase()->where('id', $this->postId)->useWritePdo()->get();
+        DB::transaction(fn() => Post::query()->toBase()->where('id', $this->postId)->get());
 
         DB::disableQueryLog();
 

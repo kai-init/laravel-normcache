@@ -16,7 +16,6 @@ final readonly class TableIdentity
         public string $table,
         public string $encoded,
         public string $hash,
-        public bool $isView = false,
     ) {}
 
     public static function fromParts(
@@ -26,7 +25,6 @@ final readonly class TableIdentity
         string $schema,
         string $prefix,
         string $table,
-        bool $isView = false,
         ?string $sourceScope = null,
     ): self {
         $sourceScope ??= $connection;
@@ -55,23 +53,6 @@ final readonly class TableIdentity
             table: $table,
             encoded: $encoded,
             hash: hash('xxh128', $encoded),
-            isView: $isView,
-        );
-    }
-
-    public function asView(): self
-    {
-        return new self(
-            driver: $this->driver,
-            connection: $this->connection,
-            sourceScope: $this->sourceScope,
-            database: $this->database,
-            schema: $this->schema,
-            prefix: $this->prefix,
-            table: $this->table,
-            encoded: $this->encoded,
-            hash: $this->hash,
-            isView: true,
         );
     }
 

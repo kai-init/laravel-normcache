@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Closure;
+use Illuminate\Database\QueryException;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
@@ -11,9 +12,9 @@ use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
+use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
-use ReflectionClass;
 
 final class CanonicalReadTest extends TestCase
 {
@@ -24,7 +25,7 @@ final class CanonicalReadTest extends TestCase
         parent::setUp();
 
         $author = Author::query()->create(['name' => 'Author']);
-        $this->postId = (int) DB::table('posts')->insertGetId([
+        $this->postId = (int) RawPost::query()->toBase()->insertGetId([
             'title' => 'Canonical',
             'views' => 10,
             'published' => true,
@@ -36,11 +37,11 @@ final class CanonicalReadTest extends TestCase
 
     public function test_canonical_list_populates_rows_reused_by_direct_pk_reads(): void
     {
-        DB::table('posts')->orderBy('id')->get();
+        RawPost::query()->toBase()->orderBy('id')->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $row = DB::table('posts')->where('id', $this->postId)->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->first();
         DB::disableQueryLog();
 
         $this->assertSame('Canonical', $row->title);
@@ -49,11 +50,11 @@ final class CanonicalReadTest extends TestCase
 
     public function test_implicit_and_explicit_wildcards_share_the_canonical_cache_entry(): void
     {
-        $expected = DB::table('posts')->orderBy('id')->get();
+        $expected = RawPost::query()->toBase()->orderBy('id')->get();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $actual = DB::table('posts')->select('*')->orderBy('id')->get();
+        $actual = RawPost::query()->toBase()->select('*')->orderBy('id')->get();
         DB::disableQueryLog();
 
         $this->assertSame(
@@ -65,31 +66,31 @@ final class CanonicalReadTest extends TestCase
 
     public function test_canonical_row_payload_must_match_the_primary_key_in_its_key(): void
     {
-        $secondId = DB::table('posts')->insertGetId([
+        $secondId = RawPost::query()->toBase()->insertGetId([
             'title' => 'Second',
             'views' => 20,
             'published' => true,
-            'author_id' => DB::table('authors')->value('id'),
+            'author_id' => Author::query()->toBase()->value('id'),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('posts')->where('id', $this->postId)->first();
+        RawPost::query()->toBase()->where('id', $this->postId)->first();
 
-        $query = DB::table('posts');
+        $query = RawPost::query()->toBase();
         $table = $this->app->make(TableIdentityResolver::class)
             ->resolve($query->getConnection(), $query->from);
         $this->assertNotNull($table);
         $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
         $epoch = $this->cacheStore()->getRaw($this->cacheKeys()->epoch()) ?? '0';
         $rowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->postId);
-        $second = DB::table('posts')->withoutCache()->where('id', $secondId)->first();
+        $second = RawPost::query()->toBase()->withoutCache()->where('id', $secondId)->first();
         $this->assertNotNull($second);
         $this->cacheStore()->setRawForever(
             $rowKey,
             $this->app->make(RawResultCodec::class)->encodeRow($second, $epoch),
         );
 
-        $row = DB::table('posts')->where('id', $this->postId)->first();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->first();
 
         $this->assertSame($this->postId, $row?->id);
         $this->assertSame('Canonical', $row?->title);
@@ -97,9 +98,9 @@ final class CanonicalReadTest extends TestCase
 
     public function test_canonical_membership_tokens_must_match_the_primary_key_family(): void
     {
-        $expected = DB::table('posts')->orderBy('id')->get();
+        $expected = RawPost::query()->toBase()->orderBy('id')->get();
         $this->deleteResultOverlays();
-        $query = DB::table('posts');
+        $query = RawPost::query()->toBase();
         $table = $this->app->make(TableIdentityResolver::class)
             ->resolve($query->getConnection(), $query->from);
         $this->assertNotNull($table);
@@ -129,7 +130,7 @@ final class CanonicalReadTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $actual = DB::table('posts')->orderBy('id')->get();
+        $actual = RawPost::query()->toBase()->orderBy('id')->get();
         DB::disableQueryLog();
 
         $this->assertSame(
@@ -159,7 +160,7 @@ final class CanonicalReadTest extends TestCase
                     deleted_at TEXT NULL
                 )
                 SQL);
-            DB::table('tenant.posts')->insert([
+            RawPost::query()->toBase()->from('tenant.posts')->insert([
                 'id' => 1,
                 'title' => 'Tenant',
                 'views' => 20,
@@ -169,7 +170,7 @@ final class CanonicalReadTest extends TestCase
                 'updated_at' => now(),
             ]);
 
-            $read = fn() => DB::table('tenant.posts')->orderBy('id')->get();
+            $read = fn() => RawPost::query()->toBase()->from('tenant.posts')->orderBy('id')->get();
             $expected = $read();
             $this->deleteResultOverlays();
 
@@ -196,7 +197,6 @@ final class CanonicalReadTest extends TestCase
                 strtolower(DB::getQueryLog()[0]['query']),
             );
         } finally {
-            $this->app->make(TableIdentityResolver::class)->clear();
             DB::statement('DETACH DATABASE tenant');
 
             if (is_file($path)) {
@@ -210,12 +210,12 @@ final class CanonicalReadTest extends TestCase
         $timestamp = now();
 
         foreach (array_chunk(range(1, 1_000), 200) as $indexes) {
-            DB::table('posts')->insert(array_map(
+            RawPost::query()->toBase()->insert(array_map(
                 static fn(int $index): array => [
                     'title' => "Post {$index}",
                     'views' => $index,
                     'published' => true,
-                    'author_id' => DB::table('authors')->value('id'),
+                    'author_id' => Author::query()->toBase()->value('id'),
                     'created_at' => $timestamp,
                     'updated_at' => $timestamp,
                 ],
@@ -223,7 +223,7 @@ final class CanonicalReadTest extends TestCase
             ));
         }
 
-        $rows = DB::table('posts')->orderBy('id')->get();
+        $rows = RawPost::query()->toBase()->orderBy('id')->get();
 
         $this->assertCount(1_001, $rows);
         $this->assertCount(1, $this->cacheQueryKeysWithField('m'));
@@ -232,14 +232,14 @@ final class CanonicalReadTest extends TestCase
 
     public function test_narrow_projection_uses_a_result_payload_without_widening_sql(): void
     {
-        $cold = DB::table('posts')
+        $cold = RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->select('title as heading')
             ->first();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $warm = DB::table('posts')
+        $warm = RawPost::query()->toBase()
             ->where('id', $this->postId)
             ->select('title as heading')
             ->first();
@@ -252,7 +252,7 @@ final class CanonicalReadTest extends TestCase
 
     public function test_missing_canonical_rows_are_repaired_by_primary_key_batch(): void
     {
-        $expected = DB::table('posts')->orderBy('id')->get();
+        $expected = RawPost::query()->toBase()->orderBy('id')->get();
         $this->deleteResultOverlays();
         $rowKey = $this->cacheKeysMatching(':r:g')[0] ?? null;
 
@@ -261,7 +261,7 @@ final class CanonicalReadTest extends TestCase
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $actual = DB::table('posts')->orderBy('id')->get();
+        $actual = RawPost::query()->toBase()->orderBy('id')->get();
         DB::disableQueryLog();
 
         $this->assertSame($expected->map(fn($row) => (array) $row)->all(), $actual->map(fn($row) => (array) $row)->all());
@@ -271,7 +271,7 @@ final class CanonicalReadTest extends TestCase
 
     public function test_precise_invalidation_between_canonical_phases_cannot_mix_membership_and_row_versions(): void
     {
-        $read = fn() => DB::table('posts')
+        $read = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->get();
@@ -282,13 +282,13 @@ final class CanonicalReadTest extends TestCase
 
         $postId = $this->postId;
         $store = $this->cacheStore();
-        $storeReflection = new ReflectionClass($store);
+        $storeReflection = new \ReflectionClass($store);
         $connectionProperty = $storeReflection->getProperty('connection');
         $connection = $connectionProperty->getValue($store);
 
         $beforeFirstMget = function () use ($postId): void {
-            DB::table('posts')->where('id', $postId)->update(['published' => false]);
-            DB::table('posts')->where('id', $postId)->first();
+            RawPost::query()->toBase()->where('id', $postId)->update(['published' => false]);
+            RawPost::query()->toBase()->where('id', $postId)->first();
         };
 
         if ($connection instanceof PhpRedisConnection) {
@@ -346,7 +346,7 @@ final class CanonicalReadTest extends TestCase
             $connectionProperty->setValue($store, $connection);
         }
 
-        $currentRows = DB::table('posts')
+        $currentRows = RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
             ->withoutCache()
@@ -378,7 +378,7 @@ final class CanonicalReadTest extends TestCase
             'title' => 'Second',
             'views' => 0,
             'published' => true,
-            'author_id' => DB::table('authors')->value('id'),
+            'author_id' => Author::query()->toBase()->value('id'),
         ]);
 
         $read = fn() => Post::withTrashed()
@@ -396,6 +396,22 @@ final class CanonicalReadTest extends TestCase
         $this->assertContains($this->postId, $ids);
         $this->assertContains($second->getKey(), $ids);
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_foreign_qualified_deleted_at_predicate_is_not_misclassified_as_a_direct_lookup(): void
+    {
+        $read = fn() => Post::withTrashed()
+            ->where('id', $this->postId)
+            ->whereNull('wrong.deleted_at')
+            ->first();
+
+        // A warm direct row would answer this from the plan alone, without ever
+        // compiling the SQL the database rejects.
+        $this->assertSame('Canonical', Post::withTrashed()->find($this->postId)?->title);
+        $this->assertSame('Canonical', Post::withTrashed()->find($this->postId)?->title);
+
+        $this->expectException(QueryException::class);
+        $read();
     }
 
     public function test_string_primary_keys_share_canonical_rows_with_direct_reads(): void

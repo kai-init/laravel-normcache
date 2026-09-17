@@ -10,21 +10,28 @@ use NormCache\Database\QueryBuilder;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\UnitTestCase;
+use NormCache\Traits\Cacheable;
 
-class ReportingUser extends Model
+final class ReportingUser extends Model
 {
+    use Cacheable;
+
     protected $connection = 'reporting';
 
     protected $table = 'users';
 }
 
-class AmbientUser extends Model
+final class AmbientUser extends Model
 {
+    use Cacheable;
+
     protected $table = 'users';
 }
 
-class ConnectionAwareTableUser extends Model
+final class ConnectionAwareTableUser extends Model
 {
+    use Cacheable;
+
     protected $connection = 'reporting';
 
     public function getTable()
@@ -84,7 +91,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
             'the two connections must resolve to distinct identities for this test to mean anything',
         );
 
-        $query = DB::connection('primary')->query()
+        $query = ReportingUser::on('primary')->toBase()
             ->from('users')
             ->dependsOn([ReportingUser::class]);
         $this->assertInstanceOf(QueryBuilder::class, $query);
@@ -105,7 +112,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
         $reporting = app(TableIdentityResolver::class)
             ->resolve(DB::connection('reporting'), 'users');
 
-        $query = DB::connection('reporting')->query()
+        $query = AmbientUser::on('reporting')->toBase()
             ->from('users')
             ->dependsOn([AmbientUser::class]);
         $this->assertInstanceOf(QueryBuilder::class, $query);
@@ -117,7 +124,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
 
     public function test_cross_database_eloquent_subquery_captures_laravel_normalized_builder(): void
     {
-        $outer = DB::connection('primary')->query()->from('users');
+        $outer = AmbientUser::on('primary')->toBase()->from('users');
         $this->assertInstanceOf(QueryBuilder::class, $outer);
 
         $outer->selectSub(ReportingUser::query(), 'reporting_user');
@@ -144,7 +151,7 @@ final class DependencyAnalyzerTest extends UnitTestCase
 
         $resolver = app(TableIdentityResolver::class);
         $primary = $resolver->resolve(DB::connection('primary'), 'primary_users');
-        $query = DB::connection('primary')->query()
+        $query = ConnectionAwareTableUser::on('primary')->toBase()
             ->fromRaw('(select 1) as derived')
             ->dependsOn([ConnectionAwareTableUser::class]);
         $this->assertInstanceOf(QueryBuilder::class, $query);
@@ -152,6 +159,22 @@ final class DependencyAnalyzerTest extends UnitTestCase
             ->analyze(DB::connection('primary'), $query);
 
         $this->assertSame($primary?->hash, $analysis->root?->hash);
+    }
+
+    public function test_raw_source_without_a_model_is_unidentifiable_rather_than_fatal(): void
+    {
+        $this->createUsersTables();
+
+        $derived = AmbientUser::on('primary')->toBase()->newQuery();
+        $this->assertInstanceOf(QueryBuilder::class, $derived);
+        $this->assertNull($derived->modelClass());
+
+        $derived->fromRaw('(select 1) as derived');
+        $analysis = app(DependencyAnalyzer::class)
+            ->analyze(DB::connection('primary'), $derived);
+
+        $this->assertNull($analysis->root);
+        $this->assertSame('unidentifiable_dependency', $analysis->bypassReason);
     }
 
     private function createUsersTables(): void

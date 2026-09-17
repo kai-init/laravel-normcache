@@ -35,6 +35,16 @@ final class SqlVolatilityScannerTest extends TestCase
             'PostgreSQL connection state' => ['current_setting(\'application_name\')'],
             'SQL Server connection state' => ['SESSION_CONTEXT(N\'tenant\')'],
             'argument-dependent function' => ['datetime(\'now\', \'+1 day\')'],
+            'omitted date argument' => ['date()'],
+            'omitted time argument' => ['time( )'],
+            'omitted datetime argument' => ['datetime()'],
+            'omitted Julian day argument' => ['julianday()'],
+            'omitted Unix epoch argument' => ['unixepoch()'],
+            'format without time argument' => ["strftime('%Y-%m-%d %H:%M:%f')"],
+            'bound date argument' => ['datetime(?)'],
+            'bound formatted time argument' => ["strftime('%Y-%m-%d %H:%M:%f', ?)"],
+            'subsecond current time' => ["unixepoch('subsec')"],
+            'subsecond current datetime' => ["datetime('subsecond')"],
         ];
     }
 
@@ -68,6 +78,8 @@ final class SqlVolatilityScannerTest extends TestCase
         return [
             'deterministic functions' => ['ROUND(AVG(order_items.price), 2)'],
             'fixed date argument' => ['date(\'2026-08-04\')'],
+            'formatted fixed date' => ["strftime('%Y', '2026-08-04')"],
+            'date column predicate' => ['date(created_at) = ?'],
             'ordinary query' => ['select * from "posts" where "published" = ? order by "created_at" asc'],
             'MySQL parenthesized union all' => [
                 '(select * from `authors` where `name` = ?) union all (select * from `authors` where `name` = ?)',

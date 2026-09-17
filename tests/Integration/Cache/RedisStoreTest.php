@@ -54,7 +54,7 @@ final class RecordingPredisClusterConnection extends PredisClusterConnection
     }
 }
 
-final class RedisProtocolTest extends TestCase
+final class RedisStoreTest extends TestCase
 {
     public function test_predis_cluster_cross_slot_reads_use_one_pipeline(): void
     {
