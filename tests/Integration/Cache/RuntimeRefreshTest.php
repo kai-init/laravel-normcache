@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\RawPost;
@@ -43,8 +44,7 @@ final class RuntimeRefreshTest extends TestCase
         // Simulates another process disabling the cache without touching this scope.
         $this->cacheStore()->setRawForever($this->cacheKeys()->disabled(), '1');
         DB::connection()->getPdo()->exec("update posts set title = 'Changed' where id = 1");
-
-        usleep(1_050_000);
+        $this->expireRuntimeState();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -67,7 +67,7 @@ final class RuntimeRefreshTest extends TestCase
         $this->assertSame('Before', $read());
 
         $this->cacheStore()->enableCache($epochKey, $disabledKey);
-        usleep(1_050_000);
+        $this->expireRuntimeState();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -87,11 +87,17 @@ final class RuntimeRefreshTest extends TestCase
 
         // Simulates another process disabling the cache after this scope memoized "enabled".
         $this->cacheStore()->setRawForever($this->cacheKeys()->disabled(), '1');
-        usleep(1_050_000);
+        $this->expireRuntimeState();
 
         RawPost::query()->toBase()->where('id', 1)->update(['title' => 'After']);
 
         $this->assertSame($before, $this->cacheStore()->getRaw($versionKey) ?? '0');
+    }
+
+    private function expireRuntimeState(): void
+    {
+        (new \ReflectionProperty(CacheRuntime::class, 'epochReadAt'))
+            ->setValue($this->app->make(CacheRuntime::class), microtime(true) - 2);
     }
 
     private function postsTable()
