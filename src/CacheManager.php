@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
-use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
@@ -23,7 +22,6 @@ final readonly class CacheManager
         private CacheKeyBuilder $keys,
         private Invalidator $invalidator,
         private TableIdentityResolver $tables,
-        private DeleteDependencyResolver $deleteDependencies,
         private QueryIdentity $identity,
     ) {}
 
@@ -99,7 +97,6 @@ final readonly class CacheManager
 
     public function flushAll(): bool
     {
-        $this->deleteDependencies->clear();
         $this->runtime->forgetEpoch();
 
         return $this->increment($this->keys->epoch(), force: true);

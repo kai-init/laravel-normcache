@@ -20,7 +20,7 @@ final class CacheStateResolverTest extends TestCase
 
         $state = $resolver->resolve($plan, 'n', 'hash');
 
-        $this->assertTrue($resolver->isCurrent($plan, $state));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
     public function test_a_state_stops_being_current_after_its_table_is_invalidated(): void
@@ -31,22 +31,22 @@ final class CacheStateResolverTest extends TestCase
         $state = $resolver->resolve($plan, 'n', 'hash');
         $this->cacheStore()->increment($this->cacheKeys()->version($plan->root));
 
-        $this->assertFalse($resolver->isCurrent($plan, $state));
+        $this->assertFalse($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
-    public function test_a_state_stops_being_current_after_an_epoch_flush_it_has_already_memoized(): void
+    public function test_the_next_scope_resolves_an_external_epoch_flush(): void
     {
         $resolver = $this->app->make(CacheStateResolver::class);
         $plan = $this->canonicalPlan();
 
         $state = $resolver->resolve($plan, 'n', 'hash');
-        $this->assertTrue($resolver->isCurrent($plan, $state));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash')));
 
-        // The epoch is memoized for this scope by now, so isCurrent() must still
-        // re-read it rather than trusting the remembered value.
         $this->cacheStore()->increment($this->cacheKeys()->epoch());
+        $this->app->forgetScopedInstances();
+        $resolver = $this->app->make(CacheStateResolver::class);
 
-        $this->assertFalse($resolver->isCurrent($plan, $state));
+        $this->assertFalse($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
     public function test_a_dependency_bump_invalidates_a_multi_table_state(): void
@@ -61,11 +61,11 @@ final class CacheStateResolverTest extends TestCase
         );
 
         $state = $resolver->resolve($plan, 'n', 'hash');
-        $this->assertTrue($resolver->isCurrent($plan, $state));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash')));
 
         $this->cacheStore()->increment($this->cacheKeys()->version($dependency));
 
-        $this->assertFalse($resolver->isCurrent($plan, $state));
+        $this->assertFalse($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
     #[DataProvider('generationlessPlans')]
@@ -77,11 +77,11 @@ final class CacheStateResolverTest extends TestCase
 
         $state = $resolver->resolve($plan, 'n', 'hash');
         $this->assertSame('0', $state->generation);
-        $this->assertTrue($resolver->isCurrent($plan, $state));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash')));
 
         $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
 
-        $this->assertTrue($resolver->isCurrent($plan, $state));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
     public static function generationlessPlans(): array
@@ -100,7 +100,7 @@ final class CacheStateResolverTest extends TestCase
         $state = $resolver->resolve($plan, 'n', 'hash');
         $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
 
-        $this->assertFalse($resolver->isCurrent($plan, $state));
+        $this->assertFalse($state->equals($resolver->resolve($plan, 'n', 'hash')));
     }
 
     public function test_a_canonical_result_overlay_can_resolve_without_row_generation(): void
@@ -113,7 +113,7 @@ final class CacheStateResolverTest extends TestCase
 
         $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
 
-        $this->assertTrue($resolver->isCurrent($plan, $state, usesGeneration: false));
+        $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash', usesGeneration: false)));
     }
 
     private function resultPlan(): QueryPlan
@@ -123,7 +123,6 @@ final class CacheStateResolverTest extends TestCase
         return QueryPlan::result(
             $root,
             [$root],
-            new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER),
         );
     }
 

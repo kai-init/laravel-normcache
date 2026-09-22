@@ -85,29 +85,6 @@ final class ConcurrencyTest extends TestCase
         $this->assertTrue($owner->owner);
     }
 
-    public function test_matching_row_repairs_share_one_lease(): void
-    {
-        $leases = $this->app->make(BuildLeaseCoordinator::class);
-        $root = $this->table();
-
-        $owner = $leases->claimRepair($root, '4', 'batch');
-        $waiter = $leases->claimRepair($root, '4', 'batch');
-
-        $this->assertTrue($owner->owner);
-        $this->assertFalse($waiter->owner);
-        $this->assertSame($owner->buildingKey, $waiter->buildingKey);
-        $this->assertSame($owner->wakeKey, $waiter->wakeKey);
-    }
-
-    public function test_row_repairs_from_different_generations_do_not_share_a_lease(): void
-    {
-        $leases = $this->app->make(BuildLeaseCoordinator::class);
-        $root = $this->table();
-
-        $this->assertTrue($leases->claimRepair($root, '4', 'batch')->owner);
-        $this->assertTrue($leases->claimRepair($root, '5', 'batch')->owner);
-    }
-
     public function test_a_request_that_loses_the_lease_race_serves_from_the_database(): void
     {
         Author::create(['name' => 'Alice']);
@@ -127,7 +104,7 @@ final class ConcurrencyTest extends TestCase
         ]);
 
         // Stand in for another node that claimed the lease and has not published yet.
-        $this->cacheStore()->setNxEx($buildKey, str_repeat('f', 32), 5);
+        $this->claimBuildForTest($buildKey, str_repeat('f', 32), 5);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -175,7 +152,7 @@ final class ConcurrencyTest extends TestCase
         $buildKey = $keys->queryBuild($table, '1', 'n', 'hash');
         $entryKey = $keys->queryEntry($table, '1', 'n', 'hash');
         $owner = str_repeat('a', 32);
-        $this->cacheStore()->setNxEx($buildKey, $owner, 30);
+        $this->claimBuildForTest($buildKey, $owner, 30);
 
         $published = $this->cacheStore()->publishVersionedEntries(
             entryKeys: [$entryKey],
@@ -199,6 +176,29 @@ final class ConcurrencyTest extends TestCase
             $this->cacheStore()->getRaw($entryKey),
             'nothing may be published while another claimant holds the lease',
         );
+    }
+
+    public function test_matching_row_repairs_share_one_lease(): void
+    {
+        $leases = $this->app->make(BuildLeaseCoordinator::class);
+        $root = $this->table();
+
+        $owner = $leases->claimRepair($root, '4', 'batch');
+        $waiter = $leases->claimRepair($root, '4', 'batch');
+
+        $this->assertTrue($owner->owner);
+        $this->assertFalse($waiter->owner);
+        $this->assertSame($owner->buildingKey, $waiter->buildingKey);
+        $this->assertSame($owner->wakeKey, $waiter->wakeKey);
+    }
+
+    public function test_row_repairs_from_different_generations_do_not_share_a_lease(): void
+    {
+        $leases = $this->app->make(BuildLeaseCoordinator::class);
+        $root = $this->table();
+
+        $this->assertTrue($leases->claimRepair($root, '4', 'batch')->owner);
+        $this->assertTrue($leases->claimRepair($root, '5', 'batch')->owner);
     }
 
     private function plan(): QueryPlan

@@ -14,7 +14,6 @@ final readonly class MembershipPayload
         public ?string $generation = null,
         public array $versions = [],
         public ?string $tagVersion = null,
-        public bool $overlayRejected = false,
     ) {}
 
     public static function corrupt(): self

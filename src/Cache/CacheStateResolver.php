@@ -27,23 +27,22 @@ final readonly class CacheStateResolver
         ?string $knownGeneration = null,
         ?bool $usesGeneration = null,
     ): array {
-        $versionKeys = [];
+        $keys = $this->stateKeys(
+            $plan,
+            $this->tagKey($namespace),
+            $this->unknownEpochKey(),
+            $usesGeneration,
+        );
+        $rootVersionKey = $keys['version'];
+        $versionKeys = [$plan->root->hash => $rootVersionKey, ...$keys['dependencies']];
 
-        foreach ($plan->dependencies as $dependency) {
-            $versionKeys[$dependency->hash] = $this->keys->version($dependency);
-        }
-
-        $rootVersionKey = $versionKeys[$plan->root->hash] ?? null;
-
-        if ($knownVersion !== null && $rootVersionKey !== null) {
+        if ($knownVersion !== null) {
             unset($versionKeys[$plan->root->hash]);
         }
 
-        $generationKey = $knownGeneration === null && ($usesGeneration ?? $plan->usesGeneration())
-            ? $this->keys->generation($plan->root)
-            : null;
-        $tagKey = $this->tagKey($namespace);
-        $epochKey = $this->unknownEpochKey();
+        $generationKey = $knownGeneration === null ? $keys['generation'] : null;
+        $tagKey = $keys['tag'];
+        $epochKey = $keys['epoch'];
 
         return [
             'versions' => $versionKeys,
@@ -87,7 +86,6 @@ final readonly class CacheStateResolver
 
         if (
             $knownVersion !== null
-            && $rootVersionKey !== null
             && !array_key_exists($rootVersionKey, $values)
         ) {
             $versionKeys[$plan->root->hash] = $rootVersionKey;
@@ -188,13 +186,12 @@ final readonly class CacheStateResolver
     public function isCurrent(
         QueryPlan $plan,
         CacheState $expected,
-        ?bool $usesGeneration = null,
     ): bool {
         $keys = $this->stateKeys(
             $plan,
             $expected->tagKey,
             $this->keys->epoch(),
-            $usesGeneration,
+            usesGeneration: true,
         );
         $values = $this->store->mget($keys['all']);
         $current = static fn(string $key): string => $values[$key] ?? '0';

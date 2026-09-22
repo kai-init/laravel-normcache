@@ -6,7 +6,6 @@ use Illuminate\Support\Facades\Event;
 use NormCache\Database\QueryStatement;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
-use NormCache\Events\QueryCacheRepaired;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryObserver;
 use NormCache\Tests\Fixtures\Models\Post;
@@ -23,7 +22,6 @@ final class QueryObserverTest extends UnitTestCase
         Event::fake([
             QueryCacheHit::class,
             QueryCacheMiss::class,
-            QueryCacheRepaired::class,
         ]);
 
         $observer = new QueryObserver(
@@ -38,9 +36,8 @@ final class QueryObserverTest extends UnitTestCase
         $bindings = [42];
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        $observer->hit($query, $plan, 'hit-hash', $statement, 'row_cache_fallback');
+        $observer->hit($query, $plan, 'hit-hash', $statement, 'result_overlay');
         $observer->miss($query, $plan, 'miss-hash', $statement);
-        $observer->repaired($query, $plan, 'repair-hash', $statement, 'row_repair');
 
         Event::assertDispatched(
             QueryCacheHit::class,
@@ -49,7 +46,7 @@ final class QueryObserverTest extends UnitTestCase
                 && $event->tableHash === $table->hash
                 && $event->sql === $sql
                 && $event->bindings === $bindings
-                && $event->reason === 'row_cache_fallback',
+                && $event->reason === 'result_overlay',
         );
         Event::assertDispatched(
             QueryCacheMiss::class,
@@ -59,15 +56,6 @@ final class QueryObserverTest extends UnitTestCase
                 && $event->sql === $sql
                 && $event->bindings === $bindings
                 && $event->reason === null,
-        );
-        Event::assertDispatched(
-            QueryCacheRepaired::class,
-            fn(QueryCacheRepaired $event): bool => $event->route === 'query_group'
-                && $event->queryHash === 'repair-hash'
-                && $event->tableHash === $table->hash
-                && $event->sql === $sql
-                && $event->bindings === $bindings
-                && $event->reason === 'row_repair',
         );
     }
 

@@ -23,6 +23,7 @@ final class QueryPlanner
     ): QueryPlan {
         if (
             $forceQueryGroup
+            || $query->dependencies() !== []
             || $query->joins !== null && $query->joins !== []
             || $this->hasCrossTableUnion($root, $dependencies, $query)
         ) {
@@ -34,9 +35,8 @@ final class QueryPlanner
         }
 
         $wildcard = $this->isWildcard($query, $root);
-        $plainColumns = $wildcard ? null : $this->plainColumns($query, $root);
         $primaryKey = $this->canUseRowShape($query, $operation)
-            && ($wildcard || $plainColumns !== null)
+            && $wildcard
                 ? $query->primaryKey()
                 : null;
 
@@ -45,18 +45,13 @@ final class QueryPlanner
             $root,
             $dependencies,
             $primaryKey,
-            $wildcard,
-            $plainColumns,
         );
 
         if ($direct !== null) {
             return $direct;
         }
 
-        if (
-            $primaryKey !== null
-            && $wildcard
-        ) {
+        if ($primaryKey !== null) {
             return QueryPlan::canonical(
                 $root,
                 $dependencies,
@@ -64,35 +59,22 @@ final class QueryPlanner
             );
         }
 
-        if ($primaryKey !== null && $plainColumns !== null) {
-            return QueryPlan::projectedResult(
-                $root,
-                $dependencies,
-                $primaryKey,
-                $plainColumns,
-            );
-        }
-
-        return QueryPlan::result($root, $dependencies, $primaryKey);
+        return QueryPlan::result($root, $dependencies);
     }
 
     /**
      * @param  list<TableIdentity>  $dependencies
-     * @param  list<string>|null  $plainColumns
      */
     private function directPlan(
         QueryBuilder $query,
         TableIdentity $root,
         array $dependencies,
         ?PrimaryKeyMetadata $primaryKey,
-        bool $wildcard,
-        ?array $plainColumns,
     ): ?QueryPlan {
         if (
             $primaryKey === null
             || count($dependencies) !== 1
             || !$this->allowsDirectControls($query)
-            || (!$wildcard && $plainColumns === null)
         ) {
             return null;
         }
@@ -111,24 +93,14 @@ final class QueryPlanner
 
         $deletedAtColumn = $query->deletedAtColumn();
 
-        return $wildcard
-            ? QueryPlan::directPrimaryKey(
-                $root,
-                $dependencies,
-                $primaryKey,
-                $directToken,
-                $softDeleteMode,
-                $deletedAtColumn,
-            )
-            : QueryPlan::projectedRow(
-                $root,
-                $dependencies,
-                $primaryKey,
-                $directToken,
-                (array) $plainColumns,
-                $softDeleteMode,
-                $deletedAtColumn,
-            );
+        return QueryPlan::directPrimaryKey(
+            $root,
+            $dependencies,
+            $primaryKey,
+            $directToken,
+            $softDeleteMode,
+            $deletedAtColumn,
+        );
     }
 
     private function allowsDirectControls(QueryBuilder $query): bool
@@ -148,7 +120,18 @@ final class QueryPlanner
 
     private function canUseRowShape(QueryBuilder $query, string $operation): bool
     {
-        return $operation === 'select' && $this->isSingleRowShape($query);
+        if ($operation !== 'select' || !$this->isSingleRowShape($query)) {
+            return false;
+        }
+
+        // Replacing the wildcard can change positional ordering in raw expressions.
+        foreach ($query->orders ?? [] as $order) {
+            if (($order['type'] ?? null) === 'Raw' || $order['column'] instanceof Expression) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function hasCrossTableUnion(
@@ -189,46 +172,6 @@ final class QueryPlanner
         }
 
         return null;
-    }
-
-    /** @return list<string>|null */
-    private function plainColumns(QueryBuilder $query, TableIdentity $root): ?array
-    {
-        if ($query->columns === null || $query->columns === ['*']) {
-            return null;
-        }
-
-        $table = strtolower($root->table);
-        $alias = $this->fromAlias($query);
-        $columns = [];
-
-        foreach ($query->columns as $column) {
-            if (!is_string($column)) {
-                return null;
-            }
-
-            $normalized = trim($column);
-
-            if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $normalized) === 1) {
-                $columns[] = $normalized;
-
-                continue;
-            }
-
-            if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)$/', $normalized, $matches) !== 1) {
-                return null;
-            }
-
-            $qualifier = strtolower($matches[1]);
-
-            if (!$this->isValidQualifier($qualifier, $table, $alias)) {
-                return null;
-            }
-
-            $columns[] = $matches[2];
-        }
-
-        return $columns === [] ? null : $columns;
     }
 
     private function directPrimaryKeyToken(

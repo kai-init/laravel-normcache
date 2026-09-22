@@ -105,7 +105,7 @@ final class PublicInvalidationTest extends TestCase
         RawPost::query()->toBase()->get();
         DB::disableQueryLog();
 
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertCount(2, DB::getQueryLog());
     }
 
     public function test_invalidate_accepts_table_names_models_and_model_classes(): void
@@ -132,7 +132,7 @@ final class PublicInvalidationTest extends TestCase
         Post::query()->get();
         DB::disableQueryLog();
 
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertCount(2, DB::getQueryLog());
     }
 
     /**
@@ -169,7 +169,7 @@ final class PublicInvalidationTest extends TestCase
         Post::query()->get();
         DB::disableQueryLog();
 
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertCount(2, DB::getQueryLog());
     }
 
     public function test_model_invalidation_applies_the_connection_before_resolving_the_table(): void

@@ -72,20 +72,6 @@ final class RedisStore
         });
     }
 
-    public function writeHashField(string $key, string $field, string $value): void
-    {
-        $this->withRawValues(static function (Connection $connection) use ($key, $field, $value): void {
-            $connection->hset($key, $field, $value);
-        });
-    }
-
-    public function deleteHashField(string $key, string $field): void
-    {
-        $this->withRawValues(static function (Connection $connection) use ($key, $field): void {
-            $connection->hdel($key, $field);
-        });
-    }
-
     public function setRawForever(string $key, string $value): void
     {
         $this->withRawValues(static function (Connection $connection) use ($key, $value): void {
@@ -93,17 +79,11 @@ final class RedisStore
         });
     }
 
-    public function setNxEx(string $key, string $value, int $ttl): bool
+    public function setRaw(string $key, string $value, int $ttl): void
     {
-        return $this->withRawValues(static function (Connection $connection) use ($key, $value, $ttl): bool {
-            if ($connection instanceof PhpRedisConnection) {
-                return $connection->client()->set($key, $value, ['nx', 'ex' => $ttl]) !== false;
-            }
-
-            $result = $connection->command('set', [$key, $value, 'EX', $ttl, 'NX']);
-
-            return $result !== null && $result !== false;
-        }, retry: false);
+        $this->withRawValues(static function (Connection $connection) use ($key, $value, $ttl): void {
+            $connection->setex($key, $ttl, $value);
+        });
     }
 
     /** @return array{0: bool, 1: ?string} */
@@ -263,13 +243,12 @@ final class RedisStore
         string $generationKey,
         string $tablePrefix,
         string $namespace,
-        string $resultQueryHash,
-        string $canonicalQueryHash,
+        string $queryHash,
     ): array {
         return (array) $this->script(
             RedisScripts::get('fetch_result_or_canonical'),
             [$versionKey, $generationKey, $tablePrefix],
-            [$namespace, $resultQueryHash, $canonicalQueryHash],
+            [$namespace, $queryHash],
         );
     }
 
@@ -463,6 +442,8 @@ final class RedisStore
             } else {
                 $result = $connection->command('evalsha', [$sha, $keyCount, ...$arguments]);
             }
+
+            return $this->scriptResult($connection, $result);
         } catch (\Throwable $exception) {
             if (
                 !str_contains(strtolower($exception->getMessage()), 'noscript')
@@ -471,34 +452,23 @@ final class RedisStore
             ) {
                 throw $exception;
             }
-
-            if ($connection instanceof PhpRedisConnection) {
-                return $connection->eval(
-                    $script,
-                    $keyCount,
-                    ...$arguments,
-                );
-            }
-
-            return $connection->command(
-                'eval',
-                [$script, $keyCount, ...$arguments],
-            );
         }
 
-        if ($result === false && $connection instanceof PhpRedisConnection) {
+        $result = $connection instanceof PhpRedisConnection
+            ? $connection->eval($script, $keyCount, ...$arguments)
+            : $connection->command('eval', [$script, $keyCount, ...$arguments]);
+
+        return $this->scriptResult($connection, $result);
+    }
+
+    private function scriptResult(Connection $connection, mixed $result): mixed
+    {
+        if ($connection instanceof PhpRedisConnection && $result === false) {
             $client = $connection->client();
-            $lastError = strtolower((string) ($client->getLastError() ?? ''));
+            $error = $client->getLastError();
+            $client->clearLastError();
 
-            if (str_contains($lastError, 'noscript')) {
-                $client->clearLastError();
-
-                return $connection->eval(
-                    $script,
-                    $keyCount,
-                    ...$arguments,
-                );
-            }
+            throw new \RuntimeException($error ?: 'Redis script execution failed.');
         }
 
         return $result;

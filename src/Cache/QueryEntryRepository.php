@@ -13,9 +13,7 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
-use NormCache\Values\OverlayAdmission;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RowRepair;
 
 final readonly class QueryEntryRepository
 {
@@ -25,25 +23,20 @@ final readonly class QueryEntryRepository
 
     public function __construct(
         private CacheConfig $config,
-        private CacheRuntime $runtime,
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private CacheStateResolver $states,
         private RawResultCodec $codec,
         private MembershipCodec $memberships,
-        private BuildLeaseCoordinator $leases,
+        private RowRepairer $repairer,
     ) {}
 
-    /**
-     * @param  \Closure(CacheState, list<string>): ?RowRepair  $repair
-     */
     public function readCanonical(
+        QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
         array $head,
-        bool $repairMissing,
-        \Closure $repair,
     ): CacheRead {
         $status = RedisProtocol::status($head);
         $version = RedisProtocol::version($head);
@@ -94,24 +87,62 @@ final readonly class QueryEntryRepository
             return new CacheRead($state, ReadOutcome::MISS);
         }
 
-        if ($membership->ids === []) {
-            return new CacheRead(
-                $state,
-                ReadOutcome::HIT,
-                overlayRejected: $membership->overlayRejected,
-            );
+        return $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
+    }
+
+    /** @return list<\stdClass>|null */
+    public function loadCanonical(QueryBuilder $query, QueryPlan $plan, CacheState $state): ?array
+    {
+        $idsQuery = $query->clone()->select($plan->primaryKey->column);
+        $ids = $query->getConnection()->select($idsQuery->toSql(), $idsQuery->getBindings(), false);
+        $tokens = [];
+        $rowKeys = [];
+
+        foreach ($ids as $id) {
+            $token = $plan->primaryKey->token($id->{$plan->primaryKey->column});
+
+            if ($token === null) {
+                return null;
+            }
+
+            $tokens[] = $token;
+            $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
         }
 
+        $result = $this->assembleRows(
+            $query,
+            $plan,
+            $state,
+            $tokens,
+            $this->store->mget(array_values($rowKeys)),
+        );
+
+        return $result->served() && $this->states->isCurrent($plan, $state)
+            ? $result->rows
+            : null;
+    }
+
+    /**
+     * @param  list<string>  $tokens
+     * @param  array<string, ?string>  $fetched
+     */
+    private function assembleRows(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        CacheState $state,
+        array $tokens,
+        array $fetched,
+    ): CacheRead {
+        $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
         $rows = [];
-        $missingAt = [];
+        $missing = [];
         $corrupt = false;
 
-        foreach ($membership->ids as $index => $token) {
-            $rowKey = $rowPrefix . $token;
-            $rawRow = $fetched[$rowKey] ?? null;
+        foreach ($tokens as $index => $token) {
+            $rawRow = $fetched[$rowPrefix . $token] ?? null;
 
             if ($rawRow === null) {
-                $missingAt[$index] = $token;
+                $missing[$index] = $token;
 
                 continue;
             }
@@ -119,8 +150,8 @@ final readonly class QueryEntryRepository
             $row = $this->codec->decodeRowObject($rawRow, $state->epoch, $plan->primaryKey, $token);
 
             if ($row === null) {
+                $missing[$index] = $token;
                 $corrupt = true;
-                $missingAt[$index] = $token;
 
                 continue;
             }
@@ -130,40 +161,26 @@ final readonly class QueryEntryRepository
 
         $outcome = ReadOutcome::HIT;
 
-        if ($missingAt !== []) {
-            if (!$repairMissing) {
-                return new CacheRead($state, ReadOutcome::MISS);
+        if ($missing !== []) {
+            $repair = $this->repairer->repair($query, $plan, $state, array_values($missing));
+
+            if ($repair === null) {
+                return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
             }
 
-            $repairResult = $repair($state, array_values($missingAt));
-
-            if ($repairResult === null) {
-                return new CacheRead($state, ReadOutcome::MISS);
-            }
-
-            $repaired = $repairResult->rows;
-            $outcome = $repairResult->outcome;
-
-            foreach ($missingAt as $index => $token) {
-                if (!isset($repaired[$token])) {
-                    return new CacheRead($state, ReadOutcome::MISS);
-                }
-
-                $rows[$index] = $repaired[$token];
+            foreach ($missing as $index => $token) {
+                $rows[$index] = $repair->rows[$token];
             }
 
             ksort($rows);
-            $rows = array_values($rows);
+            $outcome = $repair->outcome;
         }
 
         return new CacheRead(
             $state,
             $outcome,
-            $rows,
-            $corrupt
-                ? 'corrupt_payload'
-                : ($outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
-            $membership->overlayRejected,
+            array_values($rows),
+            $corrupt ? 'corrupt_payload' : ($outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
         );
     }
 
@@ -178,7 +195,6 @@ final readonly class QueryEntryRepository
         BuildLease $lease,
         int $wakeTtl,
         ?string $resultOverlay = null,
-        bool $overlayRejected = false,
     ): bool {
         $ids = [];
         $rowKeys = [];
@@ -198,6 +214,11 @@ final readonly class QueryEntryRepository
             }
 
             $encoded = $this->codec->encodeRow($row, $state->epoch);
+
+            if ($encoded === null) {
+                return false;
+            }
+
             $ids[] = $token;
 
             if (array_key_exists($token, $positions)) {
@@ -219,7 +240,6 @@ final readonly class QueryEntryRepository
             ids: $ids,
             versions: $state->versions,
             tagVersion: $state->tag,
-            overlayRejected: $overlayRejected,
         );
 
         return $this->store->publishCanonical(
@@ -276,6 +296,10 @@ final readonly class QueryEntryRepository
             $state->tag,
         );
 
+        if ($encoded === null) {
+            return false;
+        }
+
         $versionKeys = $plan->isResult()
             ? [$this->keys->version($plan->root)]
             : [];
@@ -298,109 +322,7 @@ final readonly class QueryEntryRepository
     }
 
     /** @param array<int, mixed> $rows */
-    public function promoteResult(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        CacheState $sourceState,
-        string $namespace,
-        string $queryHash,
-        array $rows,
-    ): bool {
-        $lease = null;
-
-        try {
-            $encoded = $this->encodeResultWithinLimits($rows, $sourceState);
-
-            if ($encoded === null) {
-                return false;
-            }
-
-            $ttl = $query->configuredTtl() ?? $this->config->queryTtl;
-            $resultState = new CacheState(
-                key: $this->keys->queryEntry(
-                    $plan->root,
-                    $sourceState->version,
-                    $namespace,
-                    $queryHash,
-                ),
-                epoch: $sourceState->epoch,
-                version: $sourceState->version,
-                generation: $plan->usesGeneration() ? $sourceState->generation : '0',
-                versions: $sourceState->versions,
-                tag: $sourceState->tag,
-                tagKey: $sourceState->tagKey,
-            );
-            $lease = $this->leases->claim($plan, $resultState, $namespace, $queryHash);
-
-            if (!$lease->owner) {
-                return false;
-            }
-
-            $current = $this->states->resolve($plan, $namespace, $queryHash);
-
-            if (!$current->equals($resultState)) {
-                $this->leases->release($lease);
-
-                return false;
-            }
-
-            return $this->store->publishVersionedEntries(
-                entryKeys: [$resultState->key],
-                entryPayloads: [$encoded],
-                ttl: $ttl,
-                versionKeys: [$this->keys->version($plan->root)],
-                expectedVersions: [$resultState->version],
-                buildingKey: $lease->buildingKey,
-                wakeKey: $lease->wakeKey,
-                token: $lease->token,
-                wakeTtl: $this->config->wakeTtl(),
-                entryFields: ['r'],
-            );
-        } catch (\Throwable $exception) {
-            if ($lease !== null && $lease->owner) {
-                $this->leases->release($lease);
-            }
-
-            // Promotion is an optimisation: a failure here must not cost the
-            // caller the rows it already read.
-            $this->runtime->fail($exception);
-
-            return false;
-        }
-    }
-
-    /**
-     * @param  array<int, mixed>  $rows
-     */
-    public function inlineResult(CacheState $state, array $rows): OverlayAdmission
-    {
-        if ($this->config->maxAutoOverlayRows === 0) {
-            return OverlayAdmission::notAttempted();
-        }
-
-        try {
-            $encoded = $this->encodeResultWithinLimits($rows, $state);
-        } catch (\Throwable $exception) {
-            // The canonical rows still publish; only the overlay is skipped.
-            $this->runtime->fail($exception);
-
-            return OverlayAdmission::notAttempted();
-        }
-
-        return $encoded === null
-            ? OverlayAdmission::rejected()
-            : OverlayAdmission::accepted($encoded);
-    }
-
-    public function rebuiltResultOutcome(CacheRead $read, bool $promoted): CacheRead
-    {
-        return $promoted
-            ? $read->asRepaired('result_overlay_rebuilt')
-            : $read->withReason('corrupt_result_overlay_fallback');
-    }
-
-    /** @param array<int, mixed> $rows */
-    private function encodeResultWithinLimits(array $rows, CacheState $state): ?string
+    public function inlineResult(CacheState $state, array $rows): ?string
     {
         $count = count($rows);
 
@@ -411,10 +333,6 @@ final readonly class QueryEntryRepository
             return null;
         }
 
-        if ($this->resultExceedsEstimate($rows, $state, $count)) {
-            return null;
-        }
-
         $encoded = $this->codec->encode(
             $rows,
             $state->epoch,
@@ -422,26 +340,6 @@ final readonly class QueryEntryRepository
             $state->tag,
         );
 
-        return strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES ? null : $encoded;
-    }
-
-    /** @param array<int, mixed> $rows */
-    private function resultExceedsEstimate(array $rows, CacheState $state, int $count): bool
-    {
-        $first = $this->encodedResultLength($rows, $state, 1);
-        $marginal = $count < 2 ? 0 : $this->encodedResultLength($rows, $state, 2) - $first;
-
-        return $first + $marginal * ($count - 1) > self::MAX_AUTO_OVERLAY_BYTES;
-    }
-
-    /** @param array<int, mixed> $rows */
-    private function encodedResultLength(array $rows, CacheState $state, int $take): int
-    {
-        return strlen($this->codec->encode(
-            array_slice($rows, 0, $take),
-            $state->epoch,
-            $state->versions,
-            $state->tag,
-        ));
+        return $encoded === null || strlen($encoded) > self::MAX_AUTO_OVERLAY_BYTES ? null : $encoded;
     }
 }

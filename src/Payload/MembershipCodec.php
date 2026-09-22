@@ -6,7 +6,7 @@ use NormCache\Values\MembershipPayload;
 
 final class MembershipCodec
 {
-    private const FORMAT = 4;
+    private const FORMAT = 5;
 
     /**
      * @param  list<string>  $ids
@@ -18,7 +18,6 @@ final class MembershipCodec
         array $ids,
         array $versions = [],
         ?string $tagVersion = null,
-        bool $overlayRejected = false,
     ): string {
         ksort($versions, SORT_STRING);
 
@@ -32,10 +31,6 @@ final class MembershipCodec
 
         if ($tagVersion !== null) {
             $envelope['tv'] = $tagVersion;
-        }
-
-        if ($overlayRejected) {
-            $envelope['or'] = true;
         }
 
         return json_encode($envelope, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
@@ -57,7 +52,6 @@ final class MembershipCodec
             || !is_string($envelope['ids'] ?? null)
             || !is_array($envelope['vec'] ?? null)
             || (array_key_exists('tv', $envelope) && !is_string($envelope['tv']))
-            || (array_key_exists('or', $envelope) && !is_bool($envelope['or']))
         ) {
             return MembershipPayload::corrupt();
         }
@@ -82,7 +76,6 @@ final class MembershipCodec
             generation: $envelope['g'],
             versions: $versions,
             tagVersion: $envelope['tv'] ?? null,
-            overlayRejected: $envelope['or'] ?? false,
         );
     }
 }

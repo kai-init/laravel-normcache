@@ -14,7 +14,6 @@ final readonly class QueryPlan
 
     /**
      * @param  list<TableIdentity>  $dependencies
-     * @param  list<string>|null  $projectedColumns
      */
     private function __construct(
         public string $route,
@@ -24,7 +23,6 @@ final readonly class QueryPlan
         public ?string $primaryKeyToken = null,
         public ?string $softDeleteMode = null,
         public ?string $deletedAtColumn = null,
-        public ?array $projectedColumns = null,
     ) {}
 
     /** @param list<TableIdentity> $dependencies */
@@ -71,53 +69,8 @@ final readonly class QueryPlan
     public static function result(
         TableIdentity $root,
         array $dependencies,
-        ?PrimaryKeyMetadata $primaryKey = null,
     ): self {
-        return new self(self::RESULT, $root, $dependencies, $primaryKey);
-    }
-
-    /**
-     * @param  list<TableIdentity>  $dependencies
-     * @param  list<string>  $projectedColumns
-     */
-    public static function projectedResult(
-        TableIdentity $root,
-        array $dependencies,
-        PrimaryKeyMetadata $primaryKey,
-        array $projectedColumns,
-    ): self {
-        return new self(
-            self::RESULT,
-            $root,
-            $dependencies,
-            $primaryKey,
-            projectedColumns: $projectedColumns,
-        );
-    }
-
-    /**
-     * @param  list<TableIdentity>  $dependencies
-     * @param  list<string>  $projectedColumns
-     */
-    public static function projectedRow(
-        TableIdentity $root,
-        array $dependencies,
-        PrimaryKeyMetadata $primaryKey,
-        string $primaryKeyToken,
-        array $projectedColumns,
-        ?string $softDeleteMode,
-        ?string $deletedAtColumn,
-    ): self {
-        return new self(
-            self::RESULT,
-            $root,
-            $dependencies,
-            $primaryKey,
-            $primaryKeyToken,
-            $softDeleteMode,
-            $deletedAtColumn,
-            $projectedColumns,
-        );
+        return new self(self::RESULT, $root, $dependencies);
     }
 
     public function isCanonical(): bool
@@ -143,21 +96,5 @@ final readonly class QueryPlan
     public function usesGeneration(): bool
     {
         return $this->isCanonical() || $this->isDirectPrimaryKey();
-    }
-
-    public function supportsRowFallback(): bool
-    {
-        return $this->isResult()
-            && $this->primaryKey !== null
-            && $this->projectedColumns !== null
-            && $this->primaryKeyToken !== null;
-    }
-
-    public function supportsCanonicalProjectionFallback(): bool
-    {
-        return $this->isResult()
-            && $this->primaryKey !== null
-            && $this->projectedColumns !== null
-            && $this->primaryKeyToken === null;
     }
 }

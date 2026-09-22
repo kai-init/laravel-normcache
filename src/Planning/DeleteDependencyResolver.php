@@ -3,49 +3,35 @@
 namespace NormCache\Planning;
 
 use Illuminate\Database\Connection;
+use NormCache\Support\SchemaCache;
 use NormCache\Values\TableIdentity;
 
-final class DeleteDependencyResolver
+final readonly class DeleteDependencyResolver
 {
-    /**
-     * @var \WeakMap<Connection, array{
-     *     signature: string,
-     *     graph: array<string, list<array{table: string, action: string}>>
-     * }>
-     */
-    private \WeakMap $connections;
-
-    public function __construct(private readonly TableIdentityResolver $tables)
-    {
-        $this->connections = new \WeakMap;
-    }
-
-    public function clear(): void
-    {
-        $this->connections = new \WeakMap;
-    }
+    public function __construct(private TableIdentityResolver $tables, private SchemaCache $schema) {}
 
     private const RESTRICTING = 'restrict';
 
     /** @return list<TableIdentity>|null */
-    public function affectedByDelete(Connection $connection, TableIdentity $parent): ?array
+    public function affectedByDelete(Connection $connection, TableIdentity $parent, string $epoch): ?array
     {
-        return $this->reachable($connection, $parent, everyReference: false);
+        return $this->reachable($connection, $parent, $epoch, everyReference: false);
     }
 
     /** @return list<TableIdentity>|null */
-    public function affectedByTruncate(Connection $connection, TableIdentity $parent): ?array
+    public function affectedByTruncate(Connection $connection, TableIdentity $parent, string $epoch): ?array
     {
-        return $this->reachable($connection, $parent, everyReference: true);
+        return $this->reachable($connection, $parent, $epoch, everyReference: true);
     }
 
     /** @return list<TableIdentity>|null */
     private function reachable(
         Connection $connection,
         TableIdentity $parent,
+        string $epoch,
         bool $everyReference,
     ): ?array {
-        $graph = $this->graph($connection);
+        $graph = $this->graph($connection, $epoch);
 
         if ($graph === null) {
             return null;
@@ -83,38 +69,13 @@ final class DeleteDependencyResolver
     }
 
     /** @return array<string, list<array{table: string, action: string}>>|null */
-    private function graph(Connection $connection): ?array
+    private function graph(Connection $connection, string $epoch): ?array
     {
-        $sourceScope = ConnectionSourceResolver::resolve($connection);
-
-        if ($sourceScope === null) {
-            return null;
-        }
-
-        $signature = TableIdentity::encodeFields([
-            $sourceScope,
-            (string) $connection->getDriverName(),
-            (string) $connection->getDatabaseName(),
-            (string) $connection->getTablePrefix(),
-        ]);
-        $metadata = $this->connections[$connection] ?? null;
-
-        if ($metadata !== null && $metadata['signature'] === $signature) {
-            return $metadata['graph'];
-        }
-
         try {
-            $graph = $this->inspect($connection);
+            return $this->schema->remember($connection, $epoch, 'deletes', fn(): array => $this->inspect($connection));
         } catch (\Throwable) {
             return null;
         }
-
-        $this->connections[$connection] = [
-            'signature' => $signature,
-            'graph' => $graph,
-        ];
-
-        return $graph;
     }
 
     /** @return array<string, list<array{table: string, action: string}>> */

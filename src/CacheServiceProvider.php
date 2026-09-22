@@ -10,6 +10,7 @@ use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\BuildLeaseCoordinator;
+use NormCache\Cache\CacheReader;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
 use NormCache\Cache\CanonicalRowRepository;
@@ -26,7 +27,6 @@ use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\QueryPlanner;
-use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\CacheSerializer;
@@ -34,6 +34,7 @@ use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
+use NormCache\Support\SchemaCache;
 use NormCache\Values\CacheConfig;
 
 final class CacheServiceProvider extends ServiceProvider
@@ -59,7 +60,6 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->singleton(MembershipCodec::class);
         $this->app->singleton(QueryIdentity::class);
         $this->app->singleton(QueryPlanner::class);
-        $this->app->singleton(SqlVolatilityScanner::class);
         $this->app->singleton(MutationKeyExtractor::class);
         $this->app->scoped(QueryObserver::class, function ($app): QueryObserver {
             $config = $app->make(CacheConfig::class);
@@ -78,6 +78,7 @@ final class CacheServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(TableIdentityResolver::class);
+        $this->app->singleton(SchemaCache::class);
         $this->app->singleton(DeleteDependencyResolver::class);
         $this->app->singleton(DependencyAnalyzer::class);
 
@@ -85,11 +86,12 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->scoped(CacheRuntime::class);
         $this->app->scoped(CacheStateResolver::class);
         $this->app->scoped(BuildLeaseCoordinator::class);
-        $this->app->scoped(RowRepairer::class);
         $this->app->scoped(CanonicalRowRepository::class);
         $this->app->scoped(QueryEntryRepository::class);
+        $this->app->scoped(RowRepairer::class);
         $this->app->scoped(Invalidator::class);
         $this->app->scoped(Engine::class);
+        $this->app->scoped(CacheReader::class);
         $this->app->scoped(CacheManager::class);
         $this->app->alias(CacheManager::class, 'normcache');
     }

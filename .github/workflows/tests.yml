@@ -164,4 +164,5 @@ jobs:
         run: >-
           vendor/bin/phpunit
           tests/Integration/Contract
-          tests/Integration/Cache/CascadeInvalidationTest.php
+          tests/Integration/Cache/DeleteInvalidationTest.php
+          tests/Integration/Cache/CacheSafetyTest.php

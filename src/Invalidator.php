@@ -73,9 +73,14 @@ final class Invalidator
         $affectedByDelete = [];
 
         if ($truncating || $mutation === MutationType::DELETE) {
-            $resolved = $truncating
-                ? $this->deleteDependencies->affectedByTruncate($connection, $table)
-                : $this->deleteDependencies->affectedByDelete($connection, $table);
+            try {
+                $epoch = $this->runtime->epoch();
+                $resolved = $truncating
+                    ? $this->deleteDependencies->affectedByTruncate($connection, $table, $epoch)
+                    : $this->deleteDependencies->affectedByDelete($connection, $table, $epoch);
+            } catch (\Throwable) {
+                $resolved = null;
+            }
 
             if ($resolved === null) {
                 $reason = strtolower($mutation->name) . '_dependencies_unavailable';
@@ -177,11 +182,6 @@ final class Invalidator
             $this->pendingInvalidations[$connection],
             $this->pendingGlobalInvalidations[$connection],
         );
-    }
-
-    public function invalidateTable(TableIdentity $table): bool
-    {
-        return $this->invalidateTables([$table]);
     }
 
     public function invalidateTables(array $tables): bool

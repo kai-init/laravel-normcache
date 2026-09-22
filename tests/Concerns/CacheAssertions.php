@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -18,6 +19,26 @@ use Predis\Client;
 
 trait CacheAssertions
 {
+    protected function writeCacheField(string $key, string $field, string $value): void
+    {
+        $connection = Redis::connection('normcache-test');
+        $write = static fn() => $connection->hset($key, $field, $value);
+
+        $connection instanceof PhpRedisConnection
+            ? $connection->withoutSerializationOrCompression($write)
+            : $write();
+    }
+
+    protected function deleteCacheField(string $key, string $field): void
+    {
+        Redis::connection('normcache-test')->hdel($key, $field);
+    }
+
+    protected function claimBuildForTest(string $key, string $token, int $ttl): bool
+    {
+        return $this->cacheStore()->claimBuild($key, $token, $ttl)[0];
+    }
+
     /** @return list<string> */
     protected function cacheKeysMatching(string $needle): array
     {
@@ -45,7 +66,7 @@ trait CacheAssertions
     protected function deleteResultOverlays(): void
     {
         foreach ($this->cacheQueryKeysWithField('r') as $key) {
-            $this->cacheStore()->deleteHashField($key, 'r');
+            $this->deleteCacheField($key, 'r');
         }
     }
 

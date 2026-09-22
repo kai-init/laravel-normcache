@@ -48,36 +48,7 @@ final class QueryPlanTest extends UnitTestCase
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
         $this->assertTrue($plan->isCanonical());
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertNull($plan->projectedColumns);
         $this->assertTrue($plan->usesGeneration());
-    }
-
-    public function test_result_capabilities_are_orthogonal_to_the_storage_strategy(): void
-    {
-        $table = $this->table();
-        $primaryKey = $this->primaryKey();
-        $projectedResult = QueryPlan::projectedResult(
-            $table,
-            [$table],
-            $primaryKey,
-            ['id'],
-        );
-        $projectedRow = QueryPlan::projectedRow(
-            $table,
-            [$table],
-            $primaryKey,
-            'i:1',
-            ['id'],
-            null,
-            null,
-        );
-
-        $this->assertSame(QueryPlan::RESULT, $projectedResult->route);
-        $this->assertTrue($projectedResult->supportsCanonicalProjectionFallback());
-        $this->assertFalse($projectedResult->supportsRowFallback());
-        $this->assertTrue($projectedRow->supportsRowFallback());
-        $this->assertFalse($projectedRow->supportsCanonicalProjectionFallback());
-        $this->assertFalse($projectedRow->usesGeneration());
     }
 
     private function table(): TableIdentity

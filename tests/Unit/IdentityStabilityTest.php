@@ -44,7 +44,7 @@ final class IdentityStabilityTest extends UnitTestCase
 
         $this->assertSame('70cf626fa4c84d4ae1d3931451bf301c', $identity->tagHash('homepage'));
         $this->assertSame(
-            '06a3bba515102093afe9de576d942169',
+            'ea39c04ed574bbcf1e021af790415455',
             TableIdentity::fromParts(
                 driver: 'mysql',
                 connection: 'conn',

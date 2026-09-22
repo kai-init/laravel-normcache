@@ -19,8 +19,6 @@ final class CacheKeyBuilderTest extends UnitTestCase
         $this->assertSame('app:' . $expectedTag . ':gen', $keys->generation($table));
         $this->assertStringContainsString($expectedTag, $keys->queryEntry($table, '12', 'u', 'abc'));
         $this->assertStringContainsString($expectedTag, $keys->row($table, '4', 'i:42'));
-        $this->assertStringContainsString($expectedTag, $keys->repairBuild($table, '4', 'batch'));
-        $this->assertStringContainsString($expectedTag, $keys->repairWake($table, '4', 'batch', 'token'));
     }
 
     public function test_global_tag_and_query_group_keys_have_independent_groups(): void

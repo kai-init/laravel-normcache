@@ -48,7 +48,7 @@ final class ResultOverlayStalenessTest extends TestCase
         $this->assertCount(3, $rows);
     }
 
-    public function test_rejected_overlay_admission_is_recorded_in_the_membership(): void
+    public function test_large_results_use_membership_without_retrying_overlay_admission(): void
     {
         RawPost::query()->toBase()->delete();
         $authorId = (int) Author::query()->toBase()->value('id');
@@ -83,7 +83,7 @@ final class ResultOverlayStalenessTest extends TestCase
         $this->assertIsString($membershipKey);
         $raw = $this->cacheStore()->readHashField($membershipKey, 'm');
         $this->assertIsString($raw);
-        $this->assertTrue(app(MembershipCodec::class)->decode($raw)->overlayRejected);
+        $this->assertTrue(app(MembershipCodec::class)->decode($raw)->valid);
         $this->assertSame([], $postResults());
 
         DB::flushQueryLog();

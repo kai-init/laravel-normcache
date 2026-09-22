@@ -8,18 +8,14 @@ use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\QueryPlanner;
-use NormCache\Planning\SqlVolatilityScanner;
-use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
-use NormCache\Support\RedisProtocol;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RowRepair;
 use NormCache\Values\TableIdentity;
 
 final readonly class Engine
@@ -28,16 +24,14 @@ final readonly class Engine
         private CacheConfig $config,
         private CacheRuntime $runtime,
         private RedisStore $store,
-        private CacheKeyBuilder $keys,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private DependencyAnalyzer $dependencies,
-        private SqlVolatilityScanner $volatility,
         private QueryObserver $observer,
         private CacheStateResolver $states,
         private QueryEntryRepository $entries,
         private BuildLeaseCoordinator $leases,
-        private RowRepairer $repairer,
+        private CacheReader $reader,
         private CanonicalRowRepository $rows,
     ) {}
 
@@ -72,6 +66,7 @@ final readonly class Engine
         }
 
         $dependencies = $analysis->tables;
+
         $plan = $this->planner->plan(
             $query,
             $table,
@@ -80,25 +75,11 @@ final readonly class Engine
             $operation,
         );
 
-        if (
-            !$plan->isDirectPrimaryKey()
-            && $this->volatility->isVolatile($statement->sql())
-        ) {
-            return $this->bypass(
-                $query,
-                'volatile_expression',
-                $statement,
-                $database,
-                $plan,
-            );
-        }
-
         $namespace = $this->identity->namespace(
             $query->configuredTag(),
             $query->configuredCacheContext(),
         );
         $context = new ReadContext($query, $plan, $namespace);
-        $canonicalQueryHash = null;
         $dependencyHashes = array_map(
             static fn(TableIdentity $dependency): string => $dependency->hash,
             $dependencies,
@@ -112,17 +93,7 @@ final readonly class Engine
         );
 
         try {
-            $canonicalQueryHash = $this->resultOverlayCanonicalHash(
-                $context,
-                $connection,
-                $dependencyHashes,
-                $statement,
-            );
-            $cached = $this->readCache(
-                $context,
-                $hash,
-                $canonicalQueryHash,
-            );
+            $cached = $this->reader->read($context, $hash);
 
             if ($cached->served()) {
                 if ($this->observer->observing()) {
@@ -174,11 +145,7 @@ final readonly class Engine
                         $lease->wakeKey,
                         $this->config->stampedeWaitMs / 1000,
                     );
-                    $retry = $this->read(
-                        $context,
-                        $queryHash,
-                        $canonicalQueryHash,
-                    );
+                    $retry = $this->reader->read($context, $hash);
 
                     if ($retry->served()) {
                         $this->reportRead(
@@ -200,12 +167,29 @@ final readonly class Engine
             return $primaryDatabase();
         }
 
-        try {
-            $rows = $primaryDatabase();
-        } catch (\Throwable $exception) {
-            $this->leases->release($lease);
+        if ($plan->isCanonical() && $cached->reason === null) {
+            try {
+                $rows = $this->entries->loadCanonical($query, $plan, $cached->state);
+            } catch (\Throwable $exception) {
+                $this->leases->release($lease);
+                $this->runtime->fail($exception);
 
-            throw $exception;
+                return $primaryDatabase();
+            }
+
+            if ($rows === null) {
+                $this->leases->release($lease);
+
+                return $primaryDatabase();
+            }
+        } else {
+            try {
+                $rows = $primaryDatabase();
+            } catch (\Throwable $exception) {
+                $this->leases->release($lease);
+
+                throw $exception;
+            }
         }
 
         try {
@@ -247,15 +231,6 @@ final readonly class Engine
         string $operation,
         QueryStatement $statement,
     ): QueryHashResolver {
-        if ($context->plan->isCanonical()) {
-            return new QueryHashResolver(fn(): string => $this->canonicalQueryHash(
-                $context,
-                $connection,
-                $dependencyHashes,
-                $statement,
-            ));
-        }
-
         return new QueryHashResolver(fn(): string => $this->identity->hash(
             route: $context->plan->route,
             rootHash: $context->plan->root->hash,
@@ -265,36 +240,6 @@ final readonly class Engine
             namespace: $context->namespace,
             operation: $operation,
         ));
-    }
-
-    /** @param list<string> $dependencyHashes */
-    private function resultOverlayCanonicalHash(
-        ReadContext $context,
-        Connection $connection,
-        array $dependencyHashes,
-        QueryStatement $statement,
-    ): ?string {
-        if (!$context->plan->supportsCanonicalProjectionFallback()) {
-            return null;
-        }
-
-        return $this->canonicalQueryHash($context, $connection, $dependencyHashes, $statement);
-    }
-
-    private function readCache(
-        ReadContext $context,
-        QueryHashResolver $hash,
-        ?string $canonicalQueryHash,
-    ): CacheRead {
-        if ($context->plan->isDirectPrimaryKey()) {
-            return $this->readDirect($context, $hash);
-        }
-
-        return $this->read(
-            $context,
-            $hash->value(),
-            $canonicalQueryHash,
-        );
     }
 
     private function reportRead(
@@ -324,380 +269,6 @@ final readonly class Engine
         );
     }
 
-    private function read(
-        ReadContext $context,
-        string $queryHash,
-        ?string $canonicalQueryHash = null,
-    ): CacheRead {
-        if ($context->plan->isCanonical()) {
-            return $this->config->maxAutoOverlayRows > 0
-                ? $this->readCanonicalWithResultOverlay(
-                    $context,
-                    $queryHash,
-                )
-                : $this->readCanonical($context, $queryHash);
-        }
-
-        if ($context->plan->isQueryGroup()) {
-            $entryKey = $this->keys->queryGroupEntry($queryHash, $context->namespace);
-            [$raw, $values] = $this->store->readHashFieldWithValues(
-                $entryKey,
-                'r',
-                $this->states->pendingStateKeys($context->plan, $context->namespace),
-            );
-            $state = $this->states->resolve(
-                $context->plan,
-                $context->namespace,
-                $queryHash,
-                prefetched: $values,
-            );
-
-            return $this->entries->readResult($state, $raw);
-        }
-
-        if ($canonicalQueryHash !== null && $context->plan->supportsCanonicalProjectionFallback()) {
-            return $this->readResultOrCanonicalProjection(
-                $context,
-                $queryHash,
-                $canonicalQueryHash,
-            );
-        }
-
-        $entry = $this->store->fetchResult(
-            $this->keys->version($context->plan->root),
-            $this->keys->tablePrefix($context->plan->root),
-            $context->namespace,
-            $queryHash,
-        );
-        $version = RedisProtocol::version($entry, 0);
-        $raw = RedisProtocol::value($entry, 1);
-
-        if (!is_string($raw) && $context->plan->supportsRowFallback()) {
-            $fallback = $this->readResultRowFallback($context->plan);
-
-            if ($fallback !== null) {
-                return $fallback;
-            }
-        }
-
-        $state = $this->states->resolve($context->plan, $context->namespace, $queryHash, $version);
-
-        return $this->entries->readResult($state, $raw);
-    }
-
-    private function readCanonicalWithResultOverlay(
-        ReadContext $context,
-        string $queryHash,
-    ): CacheRead {
-        $head = $this->store->fetchResultOrCanonical(
-            versionKey: $this->keys->version($context->plan->root),
-            generationKey: $this->keys->generation($context->plan->root),
-            tablePrefix: $this->keys->tablePrefix($context->plan->root),
-            namespace: $context->namespace,
-            resultQueryHash: $queryHash,
-            canonicalQueryHash: $queryHash,
-        );
-        $status = RedisProtocol::status($head);
-        $version = RedisProtocol::version($head);
-
-        if ($status === RedisProtocol::RESULT) {
-            $state = $this->states->resolve(
-                $context->plan,
-                $context->namespace,
-                $queryHash,
-                $version,
-                usesGeneration: false,
-            );
-            $result = $this->entries->readResult($state, RedisProtocol::resultPayload($head));
-
-            if ($result->served()) {
-                return $result->withReason('result_overlay');
-            }
-
-            $overlayReason = $result->reason;
-            $canonicalResult = $this->readCanonical(
-                $context,
-                $queryHash,
-            );
-
-            if ($canonicalResult->promotable()) {
-                $promoted = $this->entries->promoteResult(
-                    $context->query,
-                    $context->plan,
-                    $canonicalResult->state,
-                    $context->namespace,
-                    $queryHash,
-                    $canonicalResult->rows,
-                );
-
-                if ($overlayReason === 'corrupt_payload') {
-                    $canonicalResult = $this->entries->rebuiltResultOutcome(
-                        $canonicalResult,
-                        $promoted,
-                    );
-                }
-            }
-
-            return $canonicalResult;
-        }
-
-        $generation = RedisProtocol::version($head, 2);
-        $canonicalHead = $status === RedisProtocol::MEMBERSHIP
-            ? [
-                RedisProtocol::HIT,
-                $version,
-                $generation,
-                RedisProtocol::canonicalPayload($head),
-            ]
-            : [$status, $version, $generation];
-        $result = $this->readCanonicalHead(
-            $context,
-            $queryHash,
-            $canonicalHead,
-            true,
-        );
-
-        if ($result->promotable()) {
-            $this->entries->promoteResult(
-                $context->query,
-                $context->plan,
-                $result->state,
-                $context->namespace,
-                $queryHash,
-                $result->rows,
-            );
-        }
-
-        return $result;
-    }
-
-    private function readResultOrCanonicalProjection(
-        ReadContext $context,
-        string $queryHash,
-        string $canonicalQueryHash,
-    ): CacheRead {
-        $head = $this->store->fetchResultOrCanonical(
-            versionKey: $this->keys->version($context->plan->root),
-            generationKey: $this->keys->generation($context->plan->root),
-            tablePrefix: $this->keys->tablePrefix($context->plan->root),
-            namespace: $context->namespace,
-            resultQueryHash: $queryHash,
-            canonicalQueryHash: $canonicalQueryHash,
-        );
-        $status = RedisProtocol::status($head);
-        $version = RedisProtocol::version($head);
-
-        if ($status !== RedisProtocol::RESULT) {
-            return $this->readCanonicalProjectionFallback(
-                $context,
-                $queryHash,
-                $canonicalQueryHash,
-                $head,
-                null,
-            );
-        }
-
-        $state = $this->states->resolve($context->plan, $context->namespace, $queryHash, $version);
-        $result = $this->entries->readResult($state, RedisProtocol::resultPayload($head));
-
-        if ($result->served()) {
-            return $result->withReason('result_overlay');
-        }
-
-        $canonicalHead = $this->store->fetchCanonical(
-            versionKey: $this->keys->version($context->plan->root),
-            generationKey: $this->keys->generation($context->plan->root),
-            tablePrefix: $this->keys->tablePrefix($context->plan->root),
-            namespace: $context->namespace,
-            queryHash: $canonicalQueryHash,
-        );
-
-        return $this->readCanonicalProjectionFallback(
-            $context,
-            $queryHash,
-            $canonicalQueryHash,
-            $canonicalHead,
-            $result->reason,
-        );
-    }
-
-    private function readCanonicalProjectionFallback(
-        ReadContext $context,
-        string $queryHash,
-        string $canonicalQueryHash,
-        array $head,
-        ?string $fallbackReason,
-    ): CacheRead {
-        $status = RedisProtocol::status($head);
-        $version = RedisProtocol::version($head);
-
-        if ($status === RedisProtocol::MEMBERSHIP || $status === RedisProtocol::HIT) {
-            $generation = RedisProtocol::version($head, 2);
-            $result = $this->readCanonicalHead(
-                $context,
-                $canonicalQueryHash,
-                [
-                    RedisProtocol::HIT,
-                    $version,
-                    $generation,
-                    RedisProtocol::canonicalPayload($head),
-                ],
-                false,
-            );
-
-            if ($result->served()) {
-                $projected = $this->projectRows(
-                    $result->rows,
-                    (array) $context->plan->projectedColumns,
-                );
-
-                if ($projected !== null) {
-                    $result = $result->withRows($projected);
-                    $promoted = $this->entries->promoteResult(
-                        $context->query,
-                        $context->plan,
-                        $result->state,
-                        $context->namespace,
-                        $queryHash,
-                        $projected,
-                    );
-
-                    return $fallbackReason === 'corrupt_payload'
-                        ? $this->entries->rebuiltResultOutcome($result, $promoted)
-                        : $result->withReason('canonical_projection_fallback');
-                }
-            }
-
-            $fallbackReason = $result->reason ?? $fallbackReason;
-        }
-
-        $state = $this->states->resolve($context->plan, $context->namespace, $queryHash, $version);
-
-        return new CacheRead($state, ReadOutcome::MISS, [], $fallbackReason);
-    }
-
-    /** @param list<mixed> $rows
-     * @param  list<string>  $columns
-     * @return list<\stdClass>|null
-     */
-    private function projectRows(array $rows, array $columns): ?array
-    {
-        $projectedRows = [];
-
-        foreach ($rows as $row) {
-            $projected = new \stdClass;
-
-            foreach ($columns as $column) {
-                if (!property_exists($row, $column)) {
-                    return null;
-                }
-
-                $projected->{$column} = $row->{$column};
-            }
-
-            $projectedRows[] = $projected;
-        }
-
-        return $projectedRows;
-    }
-
-    private function readDirect(ReadContext $context, QueryHashResolver $hash): CacheRead
-    {
-        $cached = $this->rows->read($context->plan);
-
-        $resolve = fn(): CacheState => $this->states->resolve(
-            $context->plan,
-            $context->namespace,
-            $hash->value(),
-            knownGeneration: $cached->generation,
-        );
-
-        if ($cached->row === null) {
-            return new CacheRead($resolve(), ReadOutcome::MISS, [], $cached->reason);
-        }
-
-        $rows = $this->rows->visibleRows($context->plan, $cached->row);
-
-        if ($rows === null) {
-            return new CacheRead($resolve(), ReadOutcome::MISS, [], 'corrupt_payload');
-        }
-
-        return new CacheRead(
-            $this->rows->state($context->plan, $cached->generation, (string) $cached->epoch),
-            ReadOutcome::HIT,
-            $rows,
-        );
-    }
-
-    private function readResultRowFallback(QueryPlan $plan): ?CacheRead
-    {
-        $cached = $this->rows->read($plan);
-
-        if ($cached->row === null) {
-            return null;
-        }
-
-        $rows = $this->rows->visibleRows($plan, $cached->row);
-
-        if ($rows === null) {
-            return null;
-        }
-
-        $rows = $this->projectRows($rows, (array) $plan->projectedColumns);
-
-        if ($rows === null) {
-            return null;
-        }
-
-        return new CacheRead(
-            $this->rows->state($plan, $cached->generation, (string) $cached->epoch),
-            ReadOutcome::HIT,
-            $rows,
-            'row_cache_fallback',
-        );
-    }
-
-    private function readCanonical(
-        ReadContext $context,
-        string $queryHash,
-    ): CacheRead {
-        $head = $this->store->fetchCanonical(
-            versionKey: $this->keys->version($context->plan->root),
-            generationKey: $this->keys->generation($context->plan->root),
-            tablePrefix: $this->keys->tablePrefix($context->plan->root),
-            namespace: $context->namespace,
-            queryHash: $queryHash,
-        );
-
-        return $this->readCanonicalHead(
-            $context,
-            $queryHash,
-            $head,
-            true,
-        );
-    }
-
-    private function readCanonicalHead(
-        ReadContext $context,
-        string $queryHash,
-        array $head,
-        bool $repairMissing,
-    ): CacheRead {
-        return $this->entries->readCanonical(
-            $context->plan,
-            $context->namespace,
-            $queryHash,
-            $head,
-            $repairMissing,
-            fn(CacheState $state, array $tokens): ?RowRepair => $this->repairer->repair(
-                $context->query,
-                $context->plan,
-                $state,
-                $tokens,
-            ),
-        );
-    }
-
     /** @param array<int, mixed> $rows */
     private function publish(
         ReadContext $context,
@@ -705,23 +276,28 @@ final readonly class Engine
         array $rows,
         BuildLease $lease,
     ): void {
-        match (true) {
-            $context->plan->isCanonical() => $this->publishCanonical(
-                $context,
-                $state,
-                $rows,
-                $lease,
-            ),
-            $context->plan->isDirectPrimaryKey() => $this->rows->publish($context->plan, $state, $rows, $lease),
-            default => $this->entries->publishResult(
-                $context->query,
-                $context->plan,
-                $state,
-                $rows,
-                $lease,
-                $this->config->wakeTtl(),
-            ),
-        };
+        if ($context->plan->isCanonical()) {
+            $this->publishCanonical($context, $state, $rows, $lease);
+
+            return;
+        }
+
+        if ($context->plan->isDirectPrimaryKey()) {
+            $this->rows->publish($context->plan, $state, $rows, $lease);
+
+            return;
+        }
+
+        if (!$this->entries->publishResult(
+            $context->query,
+            $context->plan,
+            $state,
+            $rows,
+            $lease,
+            $this->config->wakeTtl(),
+        )) {
+            $this->leases->release($lease);
+        }
     }
 
     private function publishCanonical(
@@ -739,47 +315,9 @@ final readonly class Engine
             $rows,
             $lease,
             $this->config->wakeTtl(),
-            $overlay->payload,
-            $overlay->rejected,
+            $overlay,
         )) {
             $this->leases->release($lease);
         }
-    }
-
-    /** @param list<string> $dependencyHashes */
-    private function canonicalQueryHash(
-        ReadContext $context,
-        Connection $connection,
-        array $dependencyHashes,
-        QueryStatement $statement,
-    ): string {
-        $query = $context->query;
-        $preparedBindings = $statement->preparedBindings($connection);
-
-        if ($query->columns === null || $query->columns === ['*']) {
-            return $this->identity->hash(
-                route: QueryPlan::CANONICAL,
-                rootHash: $context->plan->root->hash,
-                dependencyHashes: $dependencyHashes,
-                sql: $statement->sql(),
-                bindings: $preparedBindings,
-                namespace: $context->namespace,
-                operation: 'select',
-            );
-        }
-
-        $canonical = $query->clone()->select('*');
-
-        return $this->identity->hash(
-            route: QueryPlan::CANONICAL,
-            rootHash: $context->plan->root->hash,
-            dependencyHashes: $dependencyHashes,
-            sql: $canonical->toSql(),
-            bindings: $query->bindings['select'] === []
-                ? $preparedBindings
-                : $connection->prepareBindings($canonical->getBindings()),
-            namespace: $context->namespace,
-            operation: 'select',
-        );
     }
 }

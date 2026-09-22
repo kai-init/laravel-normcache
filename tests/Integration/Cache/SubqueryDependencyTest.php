@@ -202,9 +202,9 @@ final class SubqueryDependencyTest extends TestCase
         );
     }
 
-    public function test_a_volatile_subquery_projection_still_bypasses(): void
+    public function test_a_volatile_subquery_requires_explicit_cache_opt_out(): void
     {
-        $build = fn() => Author::query()
+        $build = fn() => Author::query()->withoutCache()
             ->addSelect([
                 'sampled' => Post::query()
                     ->selectRaw('random()')

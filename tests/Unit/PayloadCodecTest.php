@@ -7,9 +7,38 @@ use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheSerializer;
 use NormCache\Tests\UnitTestCase;
 use NormCache\Values\PrimaryKeyMetadata;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class PayloadCodecTest extends UnitTestCase
 {
+    #[DataProvider('serializers')]
+    public function test_stream_columns_are_not_encoded(string $serializer): void
+    {
+        if ($serializer === 'igbinary' && !extension_loaded('igbinary')) {
+            $this->markTestSkipped('igbinary is not installed.');
+        }
+
+        $stream = fopen('php://memory', 'w+');
+        fwrite($stream, "binary\0payload");
+        rewind($stream);
+        $row = (object) ['id' => 1, 'payload' => $stream];
+        $codec = new RawResultCodec(new CacheSerializer($serializer));
+
+        try {
+            $this->assertNull($codec->encodeRow($row, '0'));
+            $this->assertNull($codec->encode([(object) ['id' => 2], $row], '0'));
+            $this->assertSame(0, ftell($stream));
+            $this->assertSame("binary\0payload", stream_get_contents($stream));
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    public static function serializers(): array
+    {
+        return [['php'], ['igbinary']];
+    }
+
     public function test_raw_result_codec_owns_native_row_conversion(): void
     {
         $row = new \stdClass;
@@ -90,7 +119,6 @@ final class PayloadCodecTest extends UnitTestCase
             ids: ['i:42', 'i:7', 'i:42'],
             versions: ['b' => '2', 'a' => '1'],
             tagVersion: '3',
-            overlayRejected: true,
         );
         $decoded = $codec->decode($encoded);
 
@@ -100,7 +128,6 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertSame('7', $decoded->epoch);
         $this->assertSame('4', $decoded->generation);
         $this->assertSame('3', $decoded->tagVersion);
-        $this->assertTrue($decoded->overlayRejected);
         $this->assertFalse($codec->decode('{"f":3}')->valid);
     }
 
@@ -108,7 +135,7 @@ final class PayloadCodecTest extends UnitTestCase
     {
         $codec = new MembershipCodec;
         $integerVersion = json_encode([
-            'f' => 4,
+            'f' => 5,
             'ep' => '0',
             'g' => '0',
             'ids' => 'i:1',
@@ -125,14 +152,13 @@ final class PayloadCodecTest extends UnitTestCase
         $decoded = $codec->decode($codec->encode('7', '4', []));
 
         $this->assertSame([], $decoded->ids);
-        $this->assertFalse($decoded->overlayRejected);
     }
 
     public function test_membership_codec_rejects_the_previous_array_id_layout(): void
     {
         $codec = new MembershipCodec;
         $previous = json_encode([
-            'f' => 4,
+            'f' => 5,
             'ep' => '7',
             'g' => '4',
             'ids' => ['i:42', 'i:7'],

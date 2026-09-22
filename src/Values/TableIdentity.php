@@ -4,7 +4,7 @@ namespace NormCache\Values;
 
 final readonly class TableIdentity
 {
-    private const FORMAT = 'nc-table';
+    public const FORMAT = 'nc-table';
 
     public function __construct(
         public string $driver,
@@ -39,8 +39,7 @@ final readonly class TableIdentity
             $driver,
             $database,
             $schema,
-            $prefix,
-            $table,
+            $driver === 'sqlite' ? strtolower($prefix . $table) : $prefix . $table,
         ]);
 
         return new self(

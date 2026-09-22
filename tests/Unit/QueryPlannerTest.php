@@ -66,7 +66,19 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::CANONICAL, $plan->route);
     }
 
-    public function test_explicitly_dependency_backed_source_uses_vector_validated_canonical_storage(): void
+    public function test_raw_ordering_preserves_the_full_result_shape(): void
+    {
+        foreach ([
+            RawPost::query()->toBase()->orderByRaw('2'),
+            RawPost::query()->toBase()->orderBy(DB::raw('2')),
+        ] as $query) {
+            $plan = $this->planner->plan($query, $this->posts, [$this->posts]);
+
+            $this->assertSame(QueryPlan::RESULT, $plan->route);
+        }
+    }
+
+    public function test_explicitly_dependency_backed_source_uses_full_result_storage(): void
     {
         $view = TableIdentity::fromParts(
             'sqlite',
@@ -76,7 +88,7 @@ final class QueryPlannerTest extends UnitTestCase
             '',
             'post_titles',
         );
-        $query = RawPost::query()->toBase()->from('post_titles')->select('*');
+        $query = RawPost::query()->toBase()->from('post_titles')->select('*')->dependsOn(['posts']);
 
         $plan = $this->planner->plan(
             $query,
@@ -84,7 +96,7 @@ final class QueryPlannerTest extends UnitTestCase
             [$view, $this->posts],
         );
 
-        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
     }
 
     public function test_limited_wildcard_query_materializes_result_overlay(): void
@@ -192,9 +204,8 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_narrow_primary_key_projection_with_bare_columns_is_eligible_for_row_fallback(): void
+    public function test_narrow_primary_key_projection_with_bare_columns_uses_result_storage(): void
     {
-        $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['id', 'title']);
 
         $plan = $this->planner->plan(
@@ -204,12 +215,11 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertEquals($primaryKey, $plan->primaryKey);
-        $this->assertSame('i:42', $plan->primaryKeyToken);
-        $this->assertSame(['id', 'title'], $plan->projectedColumns);
+        $this->assertNull($plan->primaryKey);
+        $this->assertNull($plan->primaryKeyToken);
     }
 
-    public function test_narrow_primary_key_projection_with_root_qualified_columns_is_eligible(): void
+    public function test_narrow_primary_key_projection_with_root_qualified_columns_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('posts.id', 42)->select(['posts.id', 'posts.title']);
 
@@ -219,11 +229,11 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
-        $this->assertSame('i:42', $plan->primaryKeyToken);
-        $this->assertSame(['id', 'title'], $plan->projectedColumns);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertNull($plan->primaryKeyToken);
     }
 
-    public function test_narrow_primary_key_projection_with_aliased_from_and_qualified_columns_is_eligible(): void
+    public function test_narrow_primary_key_projection_with_aliased_from_and_qualified_columns_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts as p')->where('p.id', 42)->select(['p.id', 'p.title']);
 
@@ -233,8 +243,8 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
-        $this->assertSame('i:42', $plan->primaryKeyToken);
-        $this->assertSame(['id', 'title'], $plan->projectedColumns);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertNull($plan->primaryKeyToken);
     }
 
     public function test_aliased_from_rejects_projection_qualified_by_original_table(): void
@@ -247,8 +257,8 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertNull($plan->projectedColumns);
     }
 
     public function test_aliased_from_rejects_wildcard_qualified_by_original_table(): void
@@ -265,7 +275,7 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertNull($plan->primaryKeyToken);
     }
 
-    public function test_primary_key_predicate_with_unrelated_qualifier_rejects_direct_row_but_keeps_membership_fallback(): void
+    public function test_primary_key_predicate_with_unrelated_qualifier_rejects_direct_row_and_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('authors.id', 42)->select(['title']);
 
@@ -275,8 +285,8 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
     public function test_narrow_primary_key_projection_with_column_alias_keeps_result_route_without_token(): void
@@ -291,7 +301,6 @@ final class QueryPlannerTest extends UnitTestCase
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertNull($plan->projectedColumns);
     }
 
     public function test_narrow_primary_key_projection_with_raw_expression_keeps_result_route_without_token(): void
@@ -306,10 +315,9 @@ final class QueryPlannerTest extends UnitTestCase
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertNull($plan->projectedColumns);
     }
 
-    public function test_extra_predicate_rejects_direct_row_but_keeps_membership_fallback(): void
+    public function test_extra_predicate_rejects_direct_row_and_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->where('published', true)->select(['title']);
 
@@ -319,11 +327,11 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
-    public function test_incompatible_direct_limit_keeps_membership_fallback(): void
+    public function test_incompatible_direct_limit_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->limit(5)->select(['title']);
 
@@ -333,13 +341,12 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
-    public function test_multi_row_plain_projection_is_eligible_for_canonical_membership_fallback(): void
+    public function test_multi_row_plain_projection_uses_result_storage(): void
     {
-        $primaryKey = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
         $query = RawPost::query()->toBase()
             ->from('posts')
             ->where('published', true)
@@ -353,12 +360,11 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertEquals($primaryKey, $plan->primaryKey);
+        $this->assertNull($plan->primaryKey);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['id', 'title'], $plan->projectedColumns);
     }
 
-    public function test_aliased_or_raw_projection_is_not_eligible_for_canonical_membership_fallback(): void
+    public function test_aliased_or_raw_projection_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()
             ->from('posts')
@@ -372,7 +378,6 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertNull($plan->projectedColumns);
     }
 
     public function test_group_limited_queries_do_not_publish_canonical_rows(): void
@@ -387,10 +392,9 @@ final class QueryPlannerTest extends UnitTestCase
         );
 
         $this->assertSame(QueryPlan::RESULT, $plan->route);
-        $this->assertNull($plan->projectedColumns);
     }
 
-    public function test_narrow_primary_key_projection_with_tag_override_uses_membership_not_direct_row_fallback(): void
+    public function test_narrow_primary_key_projection_with_tag_override_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])->tag('reports');
 
@@ -400,11 +404,11 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
-    public function test_narrow_primary_key_projection_with_ttl_override_uses_membership_not_direct_row_fallback(): void
+    public function test_narrow_primary_key_projection_with_ttl_override_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])->ttl(60);
 
@@ -414,11 +418,11 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
-    public function test_narrow_primary_key_projection_computes_soft_delete_mode(): void
+    public function test_narrow_primary_key_projection_leaves_soft_delete_filtering_to_sql(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->where('id', 42)->select(['title'])
             ->enableCachingForModel(Post::class, 'id', 'int', 'deleted_at');
@@ -429,12 +433,13 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
-        $this->assertSame('i:42', $plan->primaryKeyToken);
-        $this->assertSame('with', $plan->softDeleteMode);
-        $this->assertSame('deleted_at', $plan->deletedAtColumn);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertNull($plan->primaryKeyToken);
+        $this->assertNull($plan->softDeleteMode);
+        $this->assertNull($plan->deletedAtColumn);
     }
 
-    public function test_multiple_soft_delete_predicates_disable_direct_row_but_keep_membership_fallback(): void
+    public function test_multiple_soft_delete_predicates_disable_direct_row_and_use_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')
             ->where('id', 42)
@@ -449,8 +454,8 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts],
         );
 
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
         $this->assertNull($plan->primaryKeyToken);
-        $this->assertSame(['title'], $plan->projectedColumns);
     }
 
     public function test_unsafe_soft_delete_direct_candidate_still_uses_canonical_membership(): void
@@ -471,7 +476,7 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertNull($plan->primaryKeyToken);
     }
 
-    public function test_soft_delete_predicate_with_unrelated_qualifier_rejects_direct_row_but_keeps_membership_fallback(): void
+    public function test_soft_delete_predicate_with_unrelated_qualifier_rejects_direct_row_and_uses_result_storage(): void
     {
         $query = RawPost::query()->toBase()->from('posts')
             ->where('id', 42)

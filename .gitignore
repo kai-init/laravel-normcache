@@ -1,10 +1,10 @@
 vendor/
-benchmark/
+/benchmark/
 composer.lock
 package-lock.json
 .phpunit.result.cache
 .phpunit.cache/
-tests/Benchmark/
+tests/Benchmark/*
 tests/Performance/
 docs
 .worktrees/

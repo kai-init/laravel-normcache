@@ -8,7 +8,6 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
 use NormCache\Planning\DependencyAnalyzer;
-use NormCache\Planning\SqlVolatilityScanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\AbstractComment;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -18,7 +17,6 @@ use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\Fixtures\Models\UncachedPost;
 use NormCache\Tests\TestCase;
 use NormCache\Traits\Cacheable;
-use PHPUnit\Framework\Attributes\DataProvider;
 
 trait SplitsPipelineAroundInvalidation
 {
@@ -536,7 +534,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_volatile_projection_is_never_cached(): void
+    public function test_volatile_projection_is_cached_when_the_caller_opts_in(): void
     {
         $read = fn() => RawPost::query()->toBase()
             ->selectRaw('random() as value')
@@ -551,16 +549,17 @@ final class DependencyVectorTest extends TestCase
         $read();
         DB::disableQueryLog();
 
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_random_bytes_projection_is_never_cached(): void
+    public function test_without_cache_keeps_random_bytes_fresh(): void
     {
         $this->createSqliteFunction(
             'random_bytes',
             static fn(int $length): string => bin2hex(\random_bytes($length)),
         );
         $read = fn(): string => (string) RawPost::query()->toBase()
+            ->withoutCache()
             ->selectRaw('random_bytes(16) as value')
             ->where('id', $this->postId)
             ->value('value');
@@ -576,49 +575,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    #[DataProvider('previouslyUncoveredVolatileExpressions')]
-    public function test_connection_and_random_state_expressions_are_volatile(string $expression): void
-    {
-        $query = RawPost::query()->toBase()->selectRaw("{$expression} as observed_value");
-        $this->assertTrue(
-            $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
-        );
-    }
-
-    public static function previouslyUncoveredVolatileExpressions(): array
-    {
-        return [
-            ['RANDOM_BYTES(16)'],
-            ['GEN_RANDOM_BYTES(16)'],
-            ['CRYPT_GEN_RANDOM(16)'],
-            ['CURRENT_ROLE'],
-            ['USER()'],
-            ['DATABASE()'],
-            ['CURRENT_SCHEMA()'],
-        ];
-    }
-
-    #[DataProvider('driverTimeExpressions')]
-    public function test_driver_time_expressions_are_volatile(string $expression): void
-    {
-        $query = RawPost::query()->toBase()->selectRaw("{$expression} as observed_at");
-        $this->assertTrue(
-            $this->app->make(SqlVolatilityScanner::class)->isVolatile($query->toSql()),
-        );
-    }
-
-    public static function driverTimeExpressions(): array
-    {
-        return [
-            ['UTC_TIMESTAMP()'],
-            ['UTC_DATE()'],
-            ['UTC_TIME()'],
-            ['CURDATE()'],
-            ['CURTIME()'],
-        ];
-    }
-
-    public function test_volatile_raw_source_is_never_cached_even_with_dependencies(): void
+    public function test_volatile_raw_source_is_cached_with_declared_dependencies(): void
     {
         $read = fn() => Author::query()
             ->fromRaw('(select random() as value) as sample')
@@ -632,16 +589,16 @@ final class DependencyVectorTest extends TestCase
         $read();
         DB::disableQueryLog();
 
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_eloquent_now_function_is_never_cached(): void
+    public function test_without_cache_keeps_time_functions_fresh(): void
     {
         $this->createSqliteFunction(
             'now',
             static fn(): string => (string) hrtime(true),
         );
-        $read = fn() => Author::query()->selectRaw('now() as value')->value('value');
+        $read = fn() => Author::query()->withoutCache()->selectRaw('now() as value')->value('value');
 
         $read();
 

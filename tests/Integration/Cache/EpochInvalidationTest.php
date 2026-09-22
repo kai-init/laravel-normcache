@@ -8,7 +8,6 @@ use NormCache\Cache\CacheRuntime;
 use NormCache\CacheManager;
 use NormCache\Facades\NormCache;
 use NormCache\Invalidator;
-use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\FailureReporter;
@@ -87,7 +86,6 @@ final class EpochInvalidationTest extends TestCase
             $keys,
             $this->app->make(Invalidator::class),
             $this->app->make(TableIdentityResolver::class),
-            new DeleteDependencyResolver(new TableIdentityResolver),
             $this->app->make(QueryIdentity::class),
         );
     }

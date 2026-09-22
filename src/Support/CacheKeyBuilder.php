@@ -101,6 +101,11 @@ final class CacheKeyBuilder
         return $this->keyPrefix . '{ncm}:epoch';
     }
 
+    public function schema(string $signature, string $kind): string
+    {
+        return $this->keyPrefix . "{nc:s:{$signature}}:{$kind}";
+    }
+
     public function disabled(): string
     {
         return $this->keyPrefix . '{ncm}:disabled';

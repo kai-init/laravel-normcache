@@ -4,8 +4,7 @@
 -- KEYS[2] = generation key
 -- KEYS[3] = table key prefix
 -- ARGV[1] = query namespace
--- ARGV[2] = result query hash
--- ARGV[3] = canonical query hash
+-- ARGV[2] = query hash
 --
 -- Returns:
 --   {'result', ver, payload}
@@ -21,8 +20,7 @@ if result then
 end
 
 local generation = redis.call('GET', KEYS[2]) or '0'
-local membership_key = KEYS[3] .. ':q:v' .. version .. ':' .. ARGV[1] .. ':' .. ARGV[3]
-local membership = redis.call('HGET', membership_key, 'm')
+local membership = redis.call('HGET', result_key, 'm')
 
 if not membership then
     return {'miss', version, generation}

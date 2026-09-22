@@ -117,8 +117,9 @@ final class CanonicalReadTest extends TestCase
         $validRow = $this->cacheStore()->getRaw($validRowKey);
         $this->assertNotNull($validRow);
         $this->cacheStore()->setRawForever($invalidRowKey, $validRow);
-        $this->cacheStore()->setRawForever(
+        $this->writeCacheField(
             $membershipKey,
+            'm',
             $this->app->make(MembershipCodec::class)->encode(
                 $membership->epoch,
                 $membership->generation,
@@ -266,7 +267,10 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertSame($expected->map(fn($row) => (array) $row)->all(), $actual->map(fn($row) => (array) $row)->all());
         $this->assertCount(1, DB::getQueryLog());
-        $this->assertStringContainsString('where "id" in', strtolower(DB::getQueryLog()[0]['query']));
+        $this->assertStringContainsString(' in (?)', DB::getQueryLog()[0]['query']);
+        $this->assertSame([$this->postId], DB::getQueryLog()[0]['bindings']);
+        $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
+        $this->assertWarmCacheHit(fn() => RawPost::query()->toBase()->orderBy('id')->get());
     }
 
     public function test_precise_invalidation_between_canonical_phases_cannot_mix_membership_and_row_versions(): void

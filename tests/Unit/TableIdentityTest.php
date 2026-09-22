@@ -20,7 +20,7 @@ final class TableIdentityTest extends UnitTestCase
 
         $encoded = implode('', array_map(
             static fn(string $value): string => strlen($value) . ':' . $value,
-            ['nc-table', 'tenant', 'pgsql', 'app', 'public', 'acme_', 'posts'],
+            ['nc-table', 'tenant', 'pgsql', 'app', 'public', 'acme_posts'],
         ));
 
         $this->assertSame($encoded, $identity->encoded);
@@ -52,6 +52,18 @@ final class TableIdentityTest extends UnitTestCase
 
         $this->assertNotSame($one->hash, $two->hash);
         $this->assertSame($one->hash, $alias->hash);
+    }
+
+    public function test_physical_table_identity_is_independent_of_prefix_spelling(): void
+    {
+        $prefixed = TableIdentity::fromParts('mysql', 'one', 'app', 'app', 'pre_', 'posts', 'shared');
+        $plain = TableIdentity::fromParts('mysql', 'two', 'app', 'app', '', 'pre_posts', 'shared');
+        $other = TableIdentity::fromParts('mysql', 'two', 'app', 'app', '', 'posts', 'shared');
+
+        $this->assertSame($prefixed->hash, $plain->hash);
+        $this->assertNotSame($prefixed->hash, $other->hash);
+        $this->assertSame('app.posts', $prefixed->qualifiedTable());
+        $this->assertSame('app.pre_posts', $plain->qualifiedTable());
     }
 
     public function test_sqlite_repair_source_keeps_attached_schema(): void

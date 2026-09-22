@@ -6,8 +6,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Events\QueryCacheHit;
-use NormCache\Events\QueryCacheRepaired;
-use NormCache\Payload\MembershipCodec;
+use NormCache\Events\QueryCacheMiss;
+use NormCache\Facades\NormCache;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\Post;
 use NormCache\Tests\Fixtures\Models\RawPost;
@@ -236,7 +236,6 @@ final class ResultCacheStrategyTest extends TestCase
             $this->assertIsString($membershipKey);
             $membership = $this->cacheStore()->readHashField($membershipKey, 'm');
             $this->assertIsString($membership);
-            $this->assertFalse(app(MembershipCodec::class)->decode($membership)->overlayRejected);
 
             DB::flushQueryLog();
             DB::enableQueryLog();
@@ -281,7 +280,7 @@ final class ResultCacheStrategyTest extends TestCase
         }
     }
 
-    public function test_result_larger_than_the_row_limit_plus_allowance_is_not_promoted(): void
+    public function test_result_larger_than_the_row_limit_plus_allowance_has_no_inline_overlay(): void
     {
         // One row past the lookahead allowance, so the row cap rejects regardless of size.
         $rows = $this->app->make(CacheConfig::class)->maxAutoOverlayRows + 2;
@@ -318,7 +317,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_result_larger_than_the_payload_limit_is_not_promoted(): void
+    public function test_result_larger_than_the_payload_limit_has_no_inline_overlay(): void
     {
         RawPost::query()->toBase()
             ->where('id', 1)
@@ -346,7 +345,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], $this->cacheQueryKeysWithField('r'));
     }
 
-    public function test_many_mid_sized_rows_under_the_payload_limit_are_still_promoted(): void
+    public function test_many_mid_sized_rows_under_the_payload_limit_receive_an_inline_overlay(): void
     {
         foreach (range(1, 45) as $index) {
             RawPost::query()->toBase()->insert([
@@ -378,7 +377,7 @@ final class ResultCacheStrategyTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_missing_result_overlay_falls_back_to_canonical_and_repromotes(): void
+    public function test_missing_result_overlay_reads_canonical_rows_without_promotion(): void
     {
         $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
@@ -388,7 +387,7 @@ final class ResultCacheStrategyTest extends TestCase
 
         $expected = $query()->pluck('id')->all();
         $resultKey = $this->cacheQueryKeysWithField('r')[0];
-        $this->cacheStore()->deleteHashField($resultKey, 'r');
+        $this->deleteCacheField($resultKey, 'r');
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -397,11 +396,12 @@ final class ResultCacheStrategyTest extends TestCase
 
         $this->assertSame($expected, $actual);
         $this->assertSame([], DB::getQueryLog());
-        $this->assertCount(1, $this->cacheQueryKeysWithField('r'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
     }
 
-    public function test_corrupt_result_overlay_falls_back_to_canonical_and_self_heals(): void
+    public function test_corrupt_result_overlay_rebuilds_the_original_query(): void
     {
+        NormCache::invalidate(['posts']);
         $query = fn() => RawPost::query()->toBase()
             ->where('published', true)
             ->orderBy('id')
@@ -410,8 +410,8 @@ final class ResultCacheStrategyTest extends TestCase
 
         $expected = $query()->pluck('id')->all();
         $resultKey = $this->cacheQueryKeysWithField('r')[0];
-        $this->cacheStore()->writeHashField($resultKey, 'r', 'corrupt');
-        Event::fake([QueryCacheRepaired::class]);
+        $this->writeCacheField($resultKey, 'r', 'corrupt');
+        Event::fake([QueryCacheMiss::class]);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
@@ -419,13 +419,14 @@ final class ResultCacheStrategyTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame($expected, $actual);
-        $this->assertSame([], DB::getQueryLog());
+        $this->assertCount(1, DB::getQueryLog());
         $payload = $this->cacheStore()->readHashField($resultKey, 'r');
         $this->assertIsString($payload);
         $this->assertNotSame('corrupt', $payload);
+        $this->assertWarmCacheHit($query);
         Event::assertDispatched(
-            QueryCacheRepaired::class,
-            static fn(QueryCacheRepaired $event): bool => $event->reason === 'result_overlay_rebuilt',
+            QueryCacheMiss::class,
+            static fn(QueryCacheMiss $event): bool => $event->reason === 'corrupt_payload',
         );
     }
 
@@ -447,7 +448,8 @@ final class ResultCacheStrategyTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertSame('Changed', $after->firstWhere('id', $id)->title);
-        $this->assertCount(1, DB::getQueryLog());
+        $this->assertCount(2, DB::getQueryLog());
+        $this->assertSame([$id], DB::getQueryLog()[1]['bindings']);
     }
 
     public function test_tag_flush_invalidates_the_materialized_overlay(): void

@@ -8,6 +8,7 @@ use NormCache\Events\CacheInvalidated;
 use NormCache\Events\QueryBypassed;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
+use NormCache\Events\QueryCacheRepaired;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
@@ -133,7 +134,7 @@ final class DiagnosticsTest extends TestCase
         $key = $this->cacheQueryKeysWithField('r')[0] ?? null;
 
         $this->assertIsString($key);
-        $this->cacheStore()->writeHashField($key, 'r', 'corrupt');
+        $this->writeCacheField($key, 'r', 'corrupt');
         Event::fake([QueryCacheMiss::class]);
 
         $query();
@@ -149,20 +150,23 @@ final class DiagnosticsTest extends TestCase
         );
     }
 
-    public function test_absent_canonical_row_repairs_without_reporting_corruption(): void
+    public function test_absent_canonical_row_repairs_without_reporting_a_miss(): void
     {
         RawPost::query()->toBase()->orderBy('id')->get();
         $rowKey = $this->cacheKeysMatching(':r:g')[0] ?? null;
 
         $this->assertIsString($rowKey);
+        $this->deleteResultOverlays();
         $this->cacheStore()->delete($rowKey);
-        Event::fake([QueryCacheMiss::class]);
+        Event::fake([QueryCacheMiss::class, QueryCacheRepaired::class]);
 
         RawPost::query()->toBase()->orderBy('id')->get();
 
-        Event::assertNotDispatched(
-            QueryCacheMiss::class,
-            fn(QueryCacheMiss $event): bool => $event->reason === 'corrupt_payload',
+        Event::assertDispatched(
+            QueryCacheRepaired::class,
+            fn(QueryCacheRepaired $event): bool => $event->reason === 'row_repair',
         );
+        $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
+        Event::assertNotDispatched(QueryCacheMiss::class);
     }
 }

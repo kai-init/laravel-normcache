@@ -23,13 +23,19 @@ final readonly class RawResultCodec
         string $epoch,
         array $versions = [],
         ?string $tagVersion = null,
-    ): string {
+    ): ?string {
         ksort($versions, SORT_STRING);
 
         $nativeRows = [];
 
         foreach ($rows as $row) {
-            $nativeRows[] = (array) $row;
+            $attributes = $this->cacheableAttributes($row);
+
+            if ($attributes === null) {
+                return null;
+            }
+
+            $nativeRows[] = $attributes;
         }
 
         $envelope = [
@@ -77,13 +83,32 @@ final readonly class RawResultCodec
         );
     }
 
-    public function encodeRow(\stdClass $row, string $epoch): string
+    public function encodeRow(\stdClass $row, string $epoch): ?string
     {
+        $attributes = $this->cacheableAttributes($row);
+
+        if ($attributes === null) {
+            return null;
+        }
+
         return $this->serializer->encode([
             'f' => self::FORMAT,
             'ep' => $epoch,
-            'row' => (array) $row,
+            'row' => $attributes,
         ]);
+    }
+
+    private function cacheableAttributes(\stdClass $row): ?array
+    {
+        $attributes = (array) $row;
+
+        foreach ($attributes as $value) {
+            if (is_resource($value)) {
+                return null;
+            }
+        }
+
+        return $attributes;
     }
 
     public function decodeRow(

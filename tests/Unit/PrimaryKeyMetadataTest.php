@@ -21,32 +21,16 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
             $metadata->token('9223372036854775807'),
         );
         $this->assertSame(
-            9223372036854775807,
-            $metadata->valueFromToken('i:9223372036854775807'),
-        );
-        $this->assertSame(
             'i:-9223372036854775808',
             $metadata->token('-9223372036854775808'),
-        );
-        $this->assertSame(
-            -9223372036854775807 - 1,
-            $metadata->valueFromToken('i:-9223372036854775808'),
         );
         $this->assertSame(
             'i:9223372036854775808',
             $metadata->token('9223372036854775808'),
         );
         $this->assertSame(
-            '9223372036854775808',
-            $metadata->valueFromToken('i:9223372036854775808'),
-        );
-        $this->assertSame(
             'i:18446744073709551615',
             $metadata->token('18446744073709551615'),
-        );
-        $this->assertSame(
-            '18446744073709551615',
-            $metadata->valueFromToken('i:18446744073709551615'),
         );
     }
 
@@ -58,6 +42,18 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
         $this->assertSame('s:AP9hOnt9', $metadata->token("\x00\xffa:{}"));
         $this->assertSame('42', $metadata->valueFromToken('s:NDI'));
         $this->assertSame("\x00\xffa:{}", $metadata->valueFromToken('s:AP9hOnt9'));
+    }
+
+    public function test_repair_values_preserve_integer_precision(): void
+    {
+        $metadata = new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER);
+
+        $this->assertSame(42, $metadata->valueFromToken('i:42'));
+        $this->assertSame('18446744073709551615', $metadata->valueFromToken('i:18446744073709551615'));
+        $this->assertSame('9223372036854775808', $metadata->valueFromToken('i:9223372036854775808'));
+        $this->assertNull($metadata->valueFromToken('i:0042'));
+        $this->assertNull($metadata->valueFromToken('i:4e2'));
+        $this->assertNull($metadata->valueFromToken('s:NDI'));
     }
 
     public function test_tokens_must_match_the_canonical_value_representation(): void
@@ -77,6 +73,10 @@ final class PrimaryKeyMetadataTest extends UnitTestCase
     {
         $metadata = new PrimaryKeyMetadata('uuid', PrimaryKeyMetadata::STRING);
 
+        $this->assertFalse($metadata->matchesToken('42', 'i:42'));
+        $this->assertFalse($metadata->matchesToken('42', 's:*'));
+        $this->assertFalse($metadata->matchesToken('42', 's:NDI='));
+        $this->assertFalse($metadata->matchesToken('42', 's:ND'));
         $this->assertNull($metadata->valueFromToken('i:42'));
         $this->assertNull($metadata->valueFromToken('s:*'));
         $this->assertNull($metadata->valueFromToken('s:NDI='));

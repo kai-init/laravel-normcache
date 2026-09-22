@@ -198,7 +198,7 @@ final class RedisStoreTest extends TestCase
             $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_PHP);
             $store = app(RedisStore::class);
 
-            $this->assertTrue($store->setNxEx($buildingKey, $token, 60));
+            $this->assertTrue($this->claimBuildForTest($buildingKey, $token, 60));
             $this->assertTrue($store->releaseBuilding($buildingKey, $wakeKey, $token));
             $this->assertNull($store->getRaw($buildingKey));
             $this->assertSame(
@@ -238,7 +238,7 @@ final class RedisStoreTest extends TestCase
         try {
             $client->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_PHP);
 
-            $this->assertTrue($store->setNxEx($buildKey, $token, 30));
+            $this->assertTrue($this->claimBuildForTest($buildKey, $token, 30));
             $this->assertTrue($store->publishCanonical(
                 versionKey: $versionKey,
                 generationKey: $generationKey,
@@ -265,7 +265,6 @@ final class RedisStoreTest extends TestCase
                     $keys->tablePrefix($table),
                     'u',
                     'serializer-query',
-                    'serializer-query',
                 ),
             );
             $this->assertSame('membership-payload', $store->readHashField($entryKey, 'm'));
@@ -290,7 +289,7 @@ final class RedisStoreTest extends TestCase
         $token = str_repeat('a', 32);
 
         try {
-            $this->assertTrue($store->setNxEx($buildingKey, $token, 60));
+            $this->assertTrue($this->claimBuildForTest($buildingKey, $token, 60));
             $this->assertTrue($store->releaseBuilding($buildingKey, $wakeKey, $token));
             $this->assertSame(3, $connection->llen($wakeKey));
         } finally {
@@ -355,7 +354,7 @@ final class RedisStoreTest extends TestCase
         $wakeKey = $keys->wake($table, 'q', 'query', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
-        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $this->assertTrue($this->claimBuildForTest($buildKey, $token, 5));
         $this->assertTrue($store->publishCanonical(
             versionKey: $versionKey,
             generationKey: $generationKey,
@@ -410,7 +409,7 @@ final class RedisStoreTest extends TestCase
         $wakeKey = $keys->wake($table, 'q', 'query', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
-        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $this->assertTrue($this->claimBuildForTest($buildKey, $token, 5));
         $this->assertTrue($store->publishCanonical(
             versionKey: $versionKey,
             generationKey: $generationKey,
@@ -437,8 +436,7 @@ final class RedisStoreTest extends TestCase
                 generationKey: $generationKey,
                 tablePrefix: $keys->tablePrefix($table),
                 namespace: 'u',
-                resultQueryHash: 'query',
-                canonicalQueryHash: 'query',
+                queryHash: 'query',
             ), 0, 3),
         );
         $this->assertSame('hit', $store->fetchCanonical(
@@ -467,7 +465,7 @@ final class RedisStoreTest extends TestCase
         $wakeKey = $keys->wake($table, 'q', 'guarded', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
-        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $this->assertTrue($this->claimBuildForTest($buildKey, $token, 5));
         $store->increment($generationKey);
 
         $this->assertFalse($store->publishCanonical(
@@ -507,7 +505,7 @@ final class RedisStoreTest extends TestCase
         $wakeKey = $keys->wake($table, 'q', 'changed', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
 
-        $this->assertTrue($store->setNxEx($buildKey, $token, 5));
+        $this->assertTrue($this->claimBuildForTest($buildKey, $token, 5));
         $store->increment($versionKey);
 
         $this->assertFalse($store->publishCanonical(
@@ -540,11 +538,11 @@ final class RedisStoreTest extends TestCase
         $generationKey = $keys->generation($table);
         $prefix = $keys->tablePrefix($table);
         $resultKey = $keys->queryEntry($table, '0', 'u', 'result-query');
-        $membershipKey = $keys->queryEntry($table, '0', 'u', 'canonical-query');
+        $membershipKey = $resultKey;
         $membership = '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}';
 
-        $store->writeHashField($membershipKey, 'm', $membership);
-        $store->writeHashField($resultKey, 'r', 'result-payload');
+        $this->writeCacheField($membershipKey, 'm', $membership);
+        $this->writeCacheField($resultKey, 'r', 'result-payload');
 
         $result = $store->fetchResultOrCanonical(
             $versionKey,
@@ -552,19 +550,17 @@ final class RedisStoreTest extends TestCase
             $prefix,
             'u',
             'result-query',
-            'canonical-query',
         );
 
         $this->assertSame(['result', '0', 'result-payload'], $result);
 
-        $store->deleteHashField($resultKey, 'r');
+        $this->deleteCacheField($resultKey, 'r');
         $canonical = $store->fetchResultOrCanonical(
             $versionKey,
             $generationKey,
             $prefix,
             'u',
             'result-query',
-            'canonical-query',
         );
 
         $this->assertSame('membership', $canonical[0]);
@@ -579,7 +575,6 @@ final class RedisStoreTest extends TestCase
             $prefix,
             'u',
             'result-query',
-            'canonical-query',
         )[0]);
     }
 

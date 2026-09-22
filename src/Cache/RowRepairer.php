@@ -54,7 +54,7 @@ final readonly class RowRepairer
             $rows = $this->readRepaired($plan, $state, $tokens);
 
             return $rows !== null
-                && $this->states->isCurrent($plan, $state, usesGeneration: true)
+                && $this->states->isCurrent($plan, $state)
                     ? new RowRepair($rows, ReadOutcome::HIT)
                     : null;
         }
@@ -64,7 +64,7 @@ final readonly class RowRepairer
         if ($repaired !== null) {
             $this->leases->release($lease);
 
-            return $this->states->isCurrent($plan, $state, usesGeneration: true)
+            return $this->states->isCurrent($plan, $state)
                 ? new RowRepair($repaired, ReadOutcome::HIT)
                 : null;
         }
@@ -142,7 +142,7 @@ final readonly class RowRepairer
             return null;
         }
 
-        if (!$this->states->isCurrent($plan, $state, usesGeneration: true)) {
+        if (!$this->states->isCurrent($plan, $state)) {
             return null;
         }
 
@@ -155,8 +155,14 @@ final readonly class RowRepairer
                 return null;
             }
 
+            $encoded = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
+
+            if ($encoded === null) {
+                return null;
+            }
+
             $rowKeys[] = $rowPrefix . $token;
-            $rowPayloads[] = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
+            $rowPayloads[] = $encoded;
         }
 
         if (!$this->store->publishVersionedEntries(
@@ -179,7 +185,7 @@ final readonly class RowRepairer
             return null;
         }
 
-        return $this->states->isCurrent($plan, $state, usesGeneration: true) ? $rowsByToken : null;
+        return $this->states->isCurrent($plan, $state) ? $rowsByToken : null;
     }
 
     /**

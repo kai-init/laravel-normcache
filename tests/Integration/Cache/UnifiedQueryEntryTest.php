@@ -61,8 +61,8 @@ final class UnifiedQueryEntryTest extends TestCase
         try {
             // Force a rebuild onto the same key: invalidating would bump the
             // version and publish the membership somewhere else entirely.
-            $this->cacheStore()->writeHashField($entryKey, 'r', 'corrupt');
-            $this->cacheStore()->deleteHashField($entryKey, 'm');
+            $this->writeCacheField($entryKey, 'r', 'corrupt');
+            $this->deleteCacheField($entryKey, 'm');
 
             $query();
 
@@ -123,7 +123,7 @@ final class UnifiedQueryEntryTest extends TestCase
         );
     }
 
-    public function test_promoting_an_overlay_refreshes_the_shared_query_entry_ttl(): void
+    public function test_membership_reads_do_not_promote_or_extend_the_query_entry_ttl(): void
     {
         $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
         $query();
@@ -131,19 +131,15 @@ final class UnifiedQueryEntryTest extends TestCase
         $entryKey = $this->cacheQueryKeysWithField('m')[0];
         $redis = Redis::connection('normcache-test');
 
-        $this->cacheStore()->deleteHashField($entryKey, 'r');
+        $this->deleteCacheField($entryKey, 'r');
         $redis->expire($entryKey, 5);
         $this->assertLessThanOrEqual(5, (int) $redis->ttl($entryKey));
 
         $query();
 
-        $this->assertGreaterThan(
-            5,
-            (int) $redis->ttl($entryKey),
-            'promoting the overlay also extends the membership: both fields share one key TTL',
-        );
+        $this->assertLessThanOrEqual(5, (int) $redis->ttl($entryKey));
         $this->assertNotNull($this->cacheStore()->readHashField($entryKey, 'm'));
-        $this->assertNotNull($this->cacheStore()->readHashField($entryKey, 'r'));
+        $this->assertNull($this->cacheStore()->readHashField($entryKey, 'r'));
     }
 
     public function test_a_warm_overlay_hit_leaves_the_query_entry_ttl_alone(): void
