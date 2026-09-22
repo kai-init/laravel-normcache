@@ -193,9 +193,10 @@ final readonly class Engine
         }
 
         try {
-            $after = $this->states->resolve($context->plan, $context->namespace, $queryHash);
-
-            if ($after->equals($cached->state)) {
+            if (
+                ($cached->state->versions === [] && $cached->state->tagKey === null)
+                || $this->states->resolve($context->plan, $context->namespace, $queryHash)->equals($cached->state)
+            ) {
                 $this->publish($context, $cached->state, $rows, $lease);
             } else {
                 $this->leases->release($lease);
