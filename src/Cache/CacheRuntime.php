@@ -130,7 +130,7 @@ final class CacheRuntime
             $values = $this->store->mget([$epochKey, $disabledKey]);
             $this->epoch = $values[$epochKey] ?? '0';
             $this->epochReadAt = microtime(true);
-            $this->runtimeDisabled ??= ($values[$disabledKey] ?? null) !== null;
+            $this->runtimeDisabled = ($values[$disabledKey] ?? null) !== null;
         }
 
         return [$this->epoch, $this->runtimeDisabled ?? false];
@@ -138,6 +138,10 @@ final class CacheRuntime
 
     private function resolveDisabled(): bool
     {
+        if ($this->epoch === null || $this->epochExpired()) {
+            return $this->resolveState()[1];
+        }
+
         if ($this->runtimeDisabled === true) {
             return $this->runtimeDisabled = $this->readFlag();
         }
