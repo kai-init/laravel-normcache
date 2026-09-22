@@ -82,7 +82,7 @@ final class UnifiedQueryEntryTest extends TestCase
         $this->skipWhenCommandStatsAreSharded();
 
         $calls = $this->commandCallsDuring(
-            fn() => RawPost::query()->toBase()->orderBy('id')->get(),
+            fn() => RawPost::query()->toBase()->select('title')->orderBy('id')->get(),
         );
 
         $this->assertSame(
