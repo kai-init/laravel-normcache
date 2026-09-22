@@ -50,12 +50,12 @@ final readonly class CacheStateResolver
             'generation' => $generationKey,
             'tag' => $tagKey,
             'epoch' => $epochKey,
-            'all' => array_values(array_unique(array_filter([
+            'all' => array_values(array_filter([
                 $epochKey,
                 ...array_values($versionKeys),
                 $generationKey,
                 $tagKey,
-            ]))),
+            ])),
         ];
     }
 
@@ -151,10 +151,10 @@ final readonly class CacheStateResolver
             $this->unknownEpochKey(),
             usesGeneration: true,
         );
-        $values = $this->store->mget(array_values(array_unique([
+        $values = $this->store->mget([
             ...$rowKeys,
             ...$keys['all'],
-        ])));
+        ]);
         $this->rememberEpochFrom($keys['epoch'], $values);
 
         $versions = [];

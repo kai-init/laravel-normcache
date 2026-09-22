@@ -77,6 +77,21 @@ final class UnifiedQueryEntryTest extends TestCase
         }
     }
 
+    public function test_a_single_table_cold_fill_does_not_reread_state_before_guarded_publish(): void
+    {
+        $this->skipWhenCommandStatsAreSharded();
+
+        $calls = $this->commandCallsDuring(
+            fn() => RawPost::query()->toBase()->select('title')->orderBy('id')->get(),
+        );
+
+        $this->assertSame(
+            0,
+            $calls['mget'] ?? 0,
+            'the slot-local publish script already validates the table state',
+        );
+    }
+
     public function test_a_query_group_read_costs_a_single_pipelined_round_trip(): void
     {
         $this->skipWhenCommandStatsAreSharded();

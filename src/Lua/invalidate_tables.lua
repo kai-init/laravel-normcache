@@ -22,7 +22,7 @@ for key = 1, #KEYS, 3 do
         local generation = redis.call('GET', KEYS[key + 1]) or '0'
 
         for token = 1, token_count do
-            redis.call('DEL', KEYS[key + 2] .. generation .. ':' .. ARGV[argument + token - 1])
+            redis.call('UNLINK', KEYS[key + 2] .. generation .. ':' .. ARGV[argument + token - 1])
         end
     end
 
