@@ -18,7 +18,7 @@ if mode == 'precise' then
     local generation = redis.call('GET', KEYS[2]) or '0'
 
     for i = 2, #ARGV do
-        redis.call('DEL', KEYS[3] .. generation .. ':' .. ARGV[i])
+        redis.call('UNLINK', KEYS[3] .. generation .. ':' .. ARGV[i])
     end
 end
 
