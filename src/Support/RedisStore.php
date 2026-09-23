@@ -46,11 +46,43 @@ final class RedisStore
     {
         $connection = $this->connection();
 
-        if (
-            $valueKeys === []
-            || $connection instanceof PredisClusterConnection
-            || $connection instanceof PhpRedisClusterConnection
-        ) {
+        if ($valueKeys === []) {
+            return [$this->readHashField($key, $field), []];
+        }
+
+        if ($connection instanceof PredisClusterConnection && $this->predisClusterPipelineSafe()) {
+            $groups = $this->groupByHashTag($valueKeys);
+
+            try {
+                $replies = $connection->pipeline(static function ($pipeline) use ($key, $field, $groups): void {
+                    $pipeline->hget($key, $field);
+
+                    foreach ($groups as $group) {
+                        $pipeline->mget(...$group);
+                    }
+                });
+
+                $values = [];
+
+                foreach ($groups as $index => $group) {
+                    $values += $this->mapMgetValues($group, $replies[$index + 1] ?? []);
+                }
+
+                return [
+                    is_string($replies[0] ?? null) ? $replies[0] : null,
+                    $values,
+                ];
+            } catch (ServerException $exception) {
+                if (
+                    !str_starts_with($exception->getMessage(), 'MOVED ')
+                    && !str_starts_with($exception->getMessage(), 'ASK ')
+                ) {
+                    throw $exception;
+                }
+            }
+        }
+
+        if ($connection instanceof PhpRedisClusterConnection || $connection instanceof PredisClusterConnection) {
             return [$this->readHashField($key, $field), $this->mget($valueKeys)];
         }
 
@@ -602,6 +634,12 @@ final class RedisStore
     private function connection(): Connection
     {
         return $this->connection ??= Redis::connection($this->redisConnection);
+    }
+
+    private function predisClusterPipelineSafe(): bool
+    {
+        return version_compare(\Predis\Client::VERSION, '3.0.0-RC1', '<')
+            || version_compare(\Predis\Client::VERSION, '3.3.0', '>=');
     }
 
     /**
