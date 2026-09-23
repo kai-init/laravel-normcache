@@ -52,6 +52,36 @@ final class QueryObserver
         return [$this->startedAt ?? $endedAt, $endedAt];
     }
 
+    public function hit(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $hash,
+        QueryStatement $statement,
+        ?string $reason = null,
+    ): void {
+        $this->read(ReadOutcome::HIT, $query, $plan, $hash, $statement, $reason);
+    }
+
+    public function repaired(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $hash,
+        QueryStatement $statement,
+        ?string $reason = null,
+    ): void {
+        $this->read(ReadOutcome::REPAIRED, $query, $plan, $hash, $statement, $reason);
+    }
+
+    public function miss(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $hash,
+        QueryStatement $statement,
+        ?string $reason = null,
+    ): void {
+        $this->read(ReadOutcome::MISS, $query, $plan, $hash, $statement, $reason);
+    }
+
     public function read(
         ReadOutcome $outcome,
         QueryBuilder $query,
