@@ -24,7 +24,7 @@ final class LazyOverlaySentinelTest extends TestCase
 
         for ($index = 1; $index <= 128; $index++) {
             $rows[] = [
-                'title' => str_repeat('x', 48) . $index,
+                'title' => str_repeat('x', 512) . $index,
                 'views' => $index,
                 'published' => true,
                 'author_id' => $author->getKey(),
