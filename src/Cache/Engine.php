@@ -2,6 +2,7 @@
 
 namespace NormCache\Cache;
 
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
@@ -30,7 +31,7 @@ final readonly class Engine
         private QueryObserver $observer,
         private CacheStateResolver $states,
         private QueryEntryRepository $entries,
-        private BuildLeaseCoordinator $leases,
+        private Container $container,
         private CacheReader $reader,
         private CanonicalRowRepository $rows,
     ) {}
@@ -46,7 +47,7 @@ final readonly class Engine
         callable $database,
         callable $primaryDatabase,
     ): array {
-        if (!$this->runtime->readable()) {
+        if (!$this->runtime->locallyReadable()) {
             return $database();
         }
 
@@ -79,6 +80,10 @@ final readonly class Engine
             $query->configuredTag(),
             $query->configuredCacheContext(),
         );
+        if (!$plan->isDirectPrimaryKey() && !$this->runtime->readable()) {
+            return $database();
+        }
+
         $context = new ReadContext($query, $plan, $namespace);
         $dependencyHashes = array_map(
             static fn(TableIdentity $dependency): string => $dependency->hash,
@@ -94,6 +99,10 @@ final readonly class Engine
 
         try {
             $cached = $this->reader->read($context, $hash);
+
+            if ($plan->isDirectPrimaryKey() && !$this->runtime->readable()) {
+                return $database();
+            }
 
             if ($cached->served()) {
                 if ($this->observer->observing()) {
@@ -123,7 +132,7 @@ final readonly class Engine
 
         try {
             $queryHash = $hash->value();
-            $lease = $this->leases->claim($context->plan, $cached->state, $context->namespace, $queryHash);
+            $lease = $this->leases()->claim($context->plan, $cached->state, $context->namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
@@ -171,14 +180,14 @@ final readonly class Engine
             try {
                 $rows = $this->entries->loadCanonical($query, $plan, $cached->state);
             } catch (\Throwable $exception) {
-                $this->leases->release($lease);
+                $this->leases()->release($lease);
                 $this->runtime->fail($exception);
 
                 return $primaryDatabase();
             }
 
             if ($rows === null) {
-                $this->leases->release($lease);
+                $this->leases()->release($lease);
 
                 return $primaryDatabase();
             }
@@ -186,7 +195,7 @@ final readonly class Engine
             try {
                 $rows = $primaryDatabase();
             } catch (\Throwable $exception) {
-                $this->leases->release($lease);
+                $this->leases()->release($lease);
 
                 throw $exception;
             }
@@ -199,14 +208,19 @@ final readonly class Engine
             ) {
                 $this->publish($context, $cached->state, $rows, $lease);
             } else {
-                $this->leases->release($lease);
+                $this->leases()->release($lease);
             }
         } catch (\Throwable $exception) {
-            $this->leases->release($lease);
+            $this->leases()->release($lease);
             $this->runtime->fail($exception);
         }
 
         return $rows;
+    }
+
+    private function leases(): BuildLeaseCoordinator
+    {
+        return $this->container->make(BuildLeaseCoordinator::class);
     }
 
     /**
@@ -297,7 +311,7 @@ final readonly class Engine
             $lease,
             $this->config->wakeTtl(),
         )) {
-            $this->leases->release($lease);
+            $this->leases()->release($lease);
         }
     }
 
@@ -318,7 +332,7 @@ final readonly class Engine
             $this->config->wakeTtl(),
             $overlay,
         )) {
-            $this->leases->release($lease);
+            $this->leases()->release($lease);
         }
     }
 }
