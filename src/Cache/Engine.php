@@ -3,7 +3,6 @@
 namespace NormCache\Cache;
 
 use Illuminate\Contracts\Container\Container;
-use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
