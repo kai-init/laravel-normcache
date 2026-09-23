@@ -52,64 +52,13 @@ final class QueryObserver
         return [$this->startedAt ?? $endedAt, $endedAt];
     }
 
-    public function hit(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        string $hash,
-        QueryStatement $statement,
-        ?string $reason = null,
-    ): void {
-        $this->observe(
-            ReadOutcome::HIT,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
-    }
-
-    public function repaired(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        string $hash,
-        QueryStatement $statement,
-        ?string $reason = null,
-    ): void {
-        $this->observe(
-            ReadOutcome::REPAIRED,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
-    }
-
-    public function miss(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        string $hash,
-        QueryStatement $statement,
-        ?string $reason = null,
-    ): void {
-        $this->observe(
-            ReadOutcome::MISS,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
-    }
-
-    private function observe(
+    public function read(
         ReadOutcome $outcome,
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         QueryStatement $statement,
-        ?string $reason,
+        ?string $reason = null,
     ): void {
         $this->guard($outcome->value, function () use (
             $outcome, $query, $plan, $hash, $statement, $reason,
