@@ -27,7 +27,7 @@ final class RedisScriptFailureTest extends TestCase
         $redis = Redis::connection('normcache-test');
 
         if ($loaded) {
-            $redis->command('script', ['load', RedisScripts::get('invalidate_table')]);
+            $redis->command('script', ['load', RedisScripts::get('invalidate_tables')]);
         } else {
             $redis->command('script', ['flush']);
         }

@@ -11,16 +11,4 @@ final readonly class DependencyAnalysis
         public bool $queryScoped,
         public ?string $bypassReason,
     ) {}
-
-    /** @param list<TableIdentity> $tables */
-    public static function hasExternalTo(TableIdentity $root, array $tables): bool
-    {
-        foreach ($tables as $table) {
-            if ($table->hash !== $root->hash) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

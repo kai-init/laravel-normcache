@@ -14,7 +14,6 @@ use NormCache\Support\QueryObserver;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
-use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
@@ -106,11 +105,13 @@ final readonly class Engine
 
             if ($cached->served()) {
                 if ($this->observer->observing()) {
-                    $this->reportRead(
-                        $context,
+                    $this->observer->read(
+                        $cached->outcome,
+                        $context->query,
+                        $context->plan,
                         $hash->value(),
                         $statement,
-                        $cached,
+                        $cached->reason,
                     );
                 }
 
@@ -139,7 +140,8 @@ final readonly class Engine
             return $database();
         }
 
-        $this->observer->miss(
+        $this->observer->read(
+            ReadOutcome::MISS,
             $context->query,
             $context->plan,
             $queryHash,
@@ -157,11 +159,13 @@ final readonly class Engine
                     $retry = $this->reader->read($context, $hash);
 
                     if ($retry->served()) {
-                        $this->reportRead(
-                            $context,
+                        $this->observer->read(
+                            $retry->outcome,
+                            $context->query,
+                            $context->plan,
                             $queryHash,
                             $statement,
-                            $retry,
+                            $retry->reason,
                         );
 
                         return $retry->rows;
@@ -255,33 +259,6 @@ final readonly class Engine
             namespace: $context->namespace,
             operation: $operation,
         ));
-    }
-
-    private function reportRead(
-        ReadContext $context,
-        string $queryHash,
-        QueryStatement $statement,
-        CacheRead $read,
-    ): void {
-        if ($read->outcome === ReadOutcome::REPAIRED) {
-            $this->observer->repaired(
-                $context->query,
-                $context->plan,
-                $queryHash,
-                $statement,
-                $read->reason,
-            );
-
-            return;
-        }
-
-        $this->observer->hit(
-            $context->query,
-            $context->plan,
-            $queryHash,
-            $statement,
-            $read->reason,
-        );
     }
 
     /** @param array<int, mixed> $rows */

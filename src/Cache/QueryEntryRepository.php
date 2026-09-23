@@ -73,11 +73,15 @@ final readonly class QueryEntryRepository
             $unique[$rowPrefix . $token] = true;
         }
 
-        [$state, $fetched] = $this->states->resolveCanonical(
+        $fetched = $this->store->mget([
+            ...array_keys($unique),
+            ...$this->states->pendingStateKeys($plan, $namespace),
+        ]);
+        $state = $this->states->resolve(
             $plan,
             $namespace,
             $queryHash,
-            array_keys($unique),
+            prefetched: $fetched,
         );
 
         if (

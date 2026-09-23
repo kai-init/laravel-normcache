@@ -59,14 +59,7 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->observe(
-            ReadOutcome::HIT,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
+        $this->read(ReadOutcome::HIT, $query, $plan, $hash, $statement, $reason);
     }
 
     public function repaired(
@@ -76,14 +69,7 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->observe(
-            ReadOutcome::REPAIRED,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
+        $this->read(ReadOutcome::REPAIRED, $query, $plan, $hash, $statement, $reason);
     }
 
     public function miss(
@@ -93,23 +79,16 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        $this->observe(
-            ReadOutcome::MISS,
-            $query,
-            $plan,
-            $hash,
-            $statement,
-            $reason,
-        );
+        $this->read(ReadOutcome::MISS, $query, $plan, $hash, $statement, $reason);
     }
 
-    private function observe(
+    public function read(
         ReadOutcome $outcome,
         QueryBuilder $query,
         QueryPlan $plan,
         string $hash,
         QueryStatement $statement,
-        ?string $reason,
+        ?string $reason = null,
     ): void {
         $this->guard($outcome->value, function () use (
             $outcome, $query, $plan, $hash, $statement, $reason,
