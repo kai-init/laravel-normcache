@@ -9,6 +9,7 @@ use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Exceptions\TableInvalidationException;
+use Predis\Client;
 use Predis\NotSupportedException;
 use Predis\Response\ServerException;
 
@@ -50,7 +51,7 @@ final class RedisStore
             return [$this->readHashField($key, $field), []];
         }
 
-        if ($connection instanceof PredisClusterConnection && self::predisClusterPipelineSafe(\Predis\Client::VERSION)) {
+        if ($connection instanceof PredisClusterConnection && self::predisClusterPipelineSafe(Client::VERSION)) {
             $groups = $this->groupByHashTag($valueKeys);
 
             $queue = static function (mixed $pipe) use ($key, $field, $groups): void {
