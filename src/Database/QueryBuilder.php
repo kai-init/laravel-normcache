@@ -327,9 +327,25 @@ final class QueryBuilder extends Builder
         $this->applyBeforeQueryCallbacks();
         $statement = new QueryStatement(fn(): array => [$this->toSql(), $this->getBindings()]);
 
+        [$bypass, $reason] = $this->bypassDecision();
+
+        if ($bypass) {
+            if ($reason !== null) {
+                app(QueryObserver::class)->bypass($this, $reason, $statement);
+            }
+
+            return $this->connection->select(
+                $statement->sql(),
+                $statement->bindings(),
+                !$this->useWritePdo,
+                $this->fetchUsing,
+            );
+        }
+
         // Compiling SQL is deferred: a direct primary-key hit resolves its row
         // from the plan alone and never reads the statement or its hash.
-        return $this->readWithCache(
+        return app(Engine::class)->select(
+            $this,
             $statement,
             'select',
             fn() => $this->connection->select(
@@ -349,12 +365,16 @@ final class QueryBuilder extends Builder
         $bindings = $this->getBindings();
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        $results = $this->readWithCache(
-            $statement,
-            'exists',
-            fn() => $this->connection->select($statement->sql(), $statement->bindings(), true),
-            fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
-        );
+        [$bypass, $reason] = $this->bypassDecision();
+        $results = $bypass
+            ? $this->runBypassedExists($statement, $reason)
+            : app(Engine::class)->select(
+                $this,
+                $statement,
+                'exists',
+                fn() => $this->connection->select($statement->sql(), $statement->bindings(), true),
+                fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
+            );
 
         if (!isset($results[0])) {
             return false;
@@ -510,32 +530,18 @@ final class QueryBuilder extends Builder
         return [$reason !== null, $reason];
     }
 
-    /**
-     * @param  callable(): array  $database
-     * @param  callable(): array  $primaryDatabase
-     */
-    private function readWithCache(
+    private function runBypassedExists(
         QueryStatement $statement,
-        string $operation,
-        callable $database,
-        callable $primaryDatabase,
+        ?string $reason,
     ): array {
-        [$bypass, $reason] = $this->bypassDecision();
-
-        if ($bypass) {
-            if ($reason !== null) {
-                app(QueryObserver::class)->bypass($this, $reason, $statement);
-            }
-
-            return $database();
+        if ($reason !== null) {
+            app(QueryObserver::class)->bypass($this, $reason, $statement);
         }
 
-        return app(Engine::class)->select(
-            $this,
-            $statement,
-            $operation,
-            $database,
-            $primaryDatabase,
+        return $this->connection->select(
+            $statement->sql(),
+            $statement->bindings(),
+            !$this->useWritePdo,
         );
     }
 
