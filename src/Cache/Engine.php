@@ -3,6 +3,7 @@
 namespace NormCache\Cache;
 
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
@@ -85,26 +86,14 @@ final readonly class Engine
             static fn(TableIdentity $dependency): string => $dependency->hash,
             $dependencies,
         );
-        $queryHash = null;
-        $hash = function () use (
-            &$queryHash,
+        $hash = $this->queryHashResolver(
             $plan,
             $connection,
             $dependencyHashes,
             $namespace,
             $operation,
             $statement,
-        ): string {
-            return $queryHash ??= $this->identity->hash(
-                route: $plan->route,
-                rootHash: $plan->root->hash,
-                dependencyHashes: $dependencyHashes,
-                sql: $statement->sql(),
-                bindings: $statement->preparedBindings($connection),
-                namespace: $namespace,
-                operation: $operation,
-            );
-        };
+        );
 
         try {
             $cached = $this->read($query, $plan, $namespace, $hash);
@@ -119,7 +108,7 @@ final readonly class Engine
                         $cached->outcome,
                         $query,
                         $plan,
-                        $hash(),
+                        $hash->value(),
                         $statement,
                         $cached->reason,
                     );
@@ -142,7 +131,7 @@ final readonly class Engine
         }
 
         try {
-            $queryHash = $hash();
+            $queryHash = $hash->value();
             $lease = $this->leases()->claim($plan, $cached->state, $namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
@@ -232,20 +221,18 @@ final readonly class Engine
         return $rows;
     }
 
-    /** @param \Closure(): string $hash */
-    private function read(
+        private function read(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
-        \Closure $hash,
+        QueryHashResolver $hash,
     ): CacheRead {
         return $plan->isDirectPrimaryKey()
             ? $this->readDirect($plan, $namespace, $hash)
-            : $this->entries->read($query, $plan, $namespace, $hash());
+            : $this->entries->read($query, $plan, $namespace, $hash->value());
     }
 
-    /** @param \Closure(): string $hash */
-    private function readDirect(
+        private function readDirect(
         QueryPlan $plan,
         string $namespace,
         \Closure $hash,
@@ -254,7 +241,7 @@ final readonly class Engine
         $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,
-            $hash(),
+            $hash->value(),
             knownGeneration: $cached->generation,
         );
 
@@ -271,6 +258,26 @@ final readonly class Engine
                 ReadOutcome::HIT,
                 $rows,
             );
+    }
+
+    /** @param list<string> $dependencyHashes */
+    private function queryHashResolver(
+        QueryPlan $plan,
+        Connection $connection,
+        array $dependencyHashes,
+        string $namespace,
+        string $operation,
+        QueryStatement $statement,
+    ): QueryHashResolver {
+        return new QueryHashResolver(fn(): string => $this->identity->hash(
+            route: $plan->route,
+            rootHash: $plan->root->hash,
+            dependencyHashes: $dependencyHashes,
+            sql: $statement->sql(),
+            bindings: $statement->preparedBindings($connection),
+            namespace: $namespace,
+            operation: $operation,
+        ));
     }
 
     private function leases(): BuildLeaseCoordinator
