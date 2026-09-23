@@ -360,10 +360,11 @@ final class RedisStore
         string $rowPrefix,
     ): void {
         $this->script(
-            RedisScripts::get('invalidate_table'),
+            RedisScripts::get('invalidate_tables'),
             [$versionKey, $generationKey, $rowPrefix],
             [
                 $mode,
+                (string) count($tokens),
                 ...$tokens,
             ],
         );
@@ -395,9 +396,13 @@ final class RedisStore
                     try {
                         $this->evaluate(
                             $connection,
-                            RedisScripts::get('invalidate_table'),
+                            RedisScripts::get('invalidate_tables'),
                             [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
-                            [$state['mode'], ...$state['tokens']],
+                            [
+                                $state['mode'],
+                                (string) count($state['tokens']),
+                                ...$state['tokens'],
+                            ],
                         );
                     } catch (\Exception $exception) {
                         throw new TableInvalidationException($index, $exception);
