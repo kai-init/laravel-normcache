@@ -8,10 +8,8 @@ use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\QueryPlanner;
-use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
-use NormCache\Support\RedisProtocol;
 use NormCache\Support\RedisStore;
 use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
@@ -26,7 +24,6 @@ final readonly class Engine
         private CacheConfig $config,
         private CacheRuntime $runtime,
         private RedisStore $store,
-        private CacheKeyBuilder $keys,
         private QueryPlanner $planner,
         private QueryIdentity $identity,
         private DependencyAnalyzer $dependencies,
@@ -242,89 +239,9 @@ final readonly class Engine
         string $namespace,
         \Closure $hash,
     ): CacheRead {
-        if ($plan->isDirectPrimaryKey()) {
-            return $this->readDirect($plan, $namespace, $hash);
-        }
-
-        $queryHash = $hash();
-
-        if ($plan->isCanonical()) {
-            return $this->readCanonical($query, $plan, $namespace, $queryHash);
-        }
-
-        if ($plan->isQueryGroup()) {
-            [$raw, $values] = $this->store->readHashFieldWithValues(
-                $this->keys->queryGroupEntry($queryHash, $namespace),
-                'r',
-                $this->states->pendingStateKeys($plan, $namespace),
-            );
-            $state = $this->states->resolve(
-                $plan,
-                $namespace,
-                $queryHash,
-                prefetched: $values,
-            );
-        } else {
-            $entry = $this->store->fetchResult(
-                $this->keys->version($plan->root),
-                $this->keys->tablePrefix($plan->root),
-                $namespace,
-                $queryHash,
-            );
-            $raw = RedisProtocol::value($entry, 1);
-            $state = $this->states->resolve(
-                $plan,
-                $namespace,
-                $queryHash,
-                RedisProtocol::version($entry, 0),
-            );
-        }
-
-        return $this->entries->readResult($state, $raw);
-    }
-
-    private function readCanonical(
-        QueryBuilder $query,
-        QueryPlan $plan,
-        string $namespace,
-        string $queryHash,
-    ): CacheRead {
-        $arguments = [
-            $this->keys->version($plan->root),
-            $this->keys->generation($plan->root),
-            $this->keys->tablePrefix($plan->root),
-            $namespace,
-            $queryHash,
-        ];
-        $head = $this->config->maxAutoOverlayRows > 0
-            ? $this->store->fetchResultOrCanonical(...$arguments)
-            : $this->store->fetchCanonical(...$arguments);
-
-        if (RedisProtocol::status($head) === RedisProtocol::RESULT) {
-            $state = $this->states->resolve(
-                $plan,
-                $namespace,
-                $queryHash,
-                RedisProtocol::version($head),
-                usesGeneration: false,
-            );
-            $result = $this->entries->readResult($state, RedisProtocol::resultPayload($head));
-
-            return $result->served()
-                ? $result->withReason('result_overlay')
-                : new CacheRead(
-                    $this->states->resolve($plan, $namespace, $queryHash),
-                    ReadOutcome::MISS,
-                    [],
-                    $result->reason,
-                );
-        }
-
-        if (RedisProtocol::status($head) === RedisProtocol::MEMBERSHIP) {
-            $head[0] = RedisProtocol::HIT;
-        }
-
-        return $this->entries->readCanonical($query, $plan, $namespace, $queryHash, $head);
+        return $plan->isDirectPrimaryKey()
+            ? $this->readDirect($plan, $namespace, $hash)
+            : $this->entries->read($query, $plan, $namespace, $hash());
     }
 
     /** @param \Closure(): string $hash */
