@@ -53,14 +53,18 @@ final class RedisStore
         if ($connection instanceof PredisClusterConnection && self::predisClusterPipelineSafe(\Predis\Client::VERSION)) {
             $groups = $this->groupByHashTag($valueKeys);
 
-            try {
-                $replies = $connection->pipeline(static function ($pipeline) use ($key, $field, $groups): void {
-                    $pipeline->hget($key, $field);
+            $queue = static function (mixed $pipe) use ($key, $field, $groups): void {
+                $pipe->hget($key, $field);
 
-                    foreach ($groups as $group) {
-                        $pipeline->mget(...$group);
-                    }
-                });
+                foreach ($groups as $group) {
+                    $pipe->mget(...$group);
+                }
+            };
+
+            try {
+                $replies = (array) $this->withRawValues(
+                    static fn(Connection $retryConnection): mixed => $retryConnection->command('pipeline', [$queue]),
+                );
 
                 $values = [];
 
