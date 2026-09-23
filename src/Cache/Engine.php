@@ -221,7 +221,7 @@ final readonly class Engine
         return $rows;
     }
 
-        private function read(
+    private function read(
         QueryBuilder $query,
         QueryPlan $plan,
         string $namespace,
@@ -232,10 +232,10 @@ final readonly class Engine
             : $this->entries->read($query, $plan, $namespace, $hash->value());
     }
 
-        private function readDirect(
+    private function readDirect(
         QueryPlan $plan,
         string $namespace,
-        \Closure $hash,
+        QueryHashResolver $hash,
     ): CacheRead {
         $cached = $this->rows->read($plan);
         $resolve = fn(): CacheState => $this->states->resolve(
