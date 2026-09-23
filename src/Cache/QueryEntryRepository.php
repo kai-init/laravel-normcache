@@ -2,6 +2,7 @@
 
 namespace NormCache\Cache;
 
+use Illuminate\Contracts\Container\Container;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\MembershipCodec;
@@ -28,7 +29,7 @@ final readonly class QueryEntryRepository
         private CacheStateResolver $states,
         private RawResultCodec $codec,
         private MembershipCodec $memberships,
-        private RowRepairer $repairer,
+        private Container $container,
     ) {}
 
     public function readCanonical(
@@ -162,7 +163,7 @@ final readonly class QueryEntryRepository
         $outcome = ReadOutcome::HIT;
 
         if ($missing !== []) {
-            $repair = $this->repairer->repair($query, $plan, $state, array_values($missing));
+            $repair = $this->container->make(RowRepairer::class)->repair($query, $plan, $state, array_values($missing));
 
             if ($repair === null) {
                 return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
