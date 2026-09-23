@@ -135,53 +135,6 @@ final readonly class CacheStateResolver
         );
     }
 
-    /**
-     * @param  list<string>  $rowKeys
-     * @return array{0: CacheState, 1: array<string, ?string>}
-     */
-    public function resolveCanonical(
-        QueryPlan $plan,
-        string $namespace,
-        string $queryHash,
-        array $rowKeys,
-    ): array {
-        $keys = $this->stateKeys(
-            $plan,
-            $this->tagKey($namespace),
-            $this->unknownEpochKey(),
-            usesGeneration: true,
-        );
-        $values = $this->store->mget([
-            ...$rowKeys,
-            ...$keys['all'],
-        ]);
-        $this->rememberEpochFrom($keys['epoch'], $values);
-
-        $versions = [];
-
-        foreach ($keys['dependencies'] as $hash => $key) {
-            $versions[$hash] = $values[$key] ?? '0';
-        }
-
-        ksort($versions, SORT_STRING);
-        $version = $values[$keys['version']] ?? '0';
-
-        return [
-            new CacheState(
-                key: $this->keys->queryEntry($plan->root, $version, $namespace, $queryHash),
-                epoch: $this->runtime->epoch(),
-                version: $version,
-                generation: $keys['generation'] !== null
-                    ? ($values[$keys['generation']] ?? '0')
-                    : '0',
-                versions: $versions,
-                tag: $keys['tag'] !== null ? ($values[$keys['tag']] ?? '0') : null,
-                tagKey: $keys['tag'],
-            ),
-            $values,
-        ];
-    }
-
     /** @phpstan-impure */
     public function isCurrent(
         QueryPlan $plan,
