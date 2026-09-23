@@ -34,6 +34,82 @@ final readonly class QueryEntryRepository
         private Container $container,
     ) {}
 
+    public function read(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+    ): CacheRead {
+        if ($plan->isCanonical()) {
+            $arguments = [
+                $this->keys->version($plan->root),
+                $this->keys->generation($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                $namespace,
+                $queryHash,
+            ];
+            $head = $this->config->maxAutoOverlayRows > 0
+                ? $this->store->fetchResultOrCanonical(...$arguments)
+                : $this->store->fetchCanonical(...$arguments);
+
+            if (RedisProtocol::status($head) === RedisProtocol::RESULT) {
+                $state = $this->states->resolve(
+                    $plan,
+                    $namespace,
+                    $queryHash,
+                    RedisProtocol::version($head),
+                    usesGeneration: false,
+                );
+                $result = $this->readResult($state, RedisProtocol::resultPayload($head));
+
+                return $result->served()
+                    ? $result->withReason('result_overlay')
+                    : new CacheRead(
+                        $this->states->resolve($plan, $namespace, $queryHash),
+                        ReadOutcome::MISS,
+                        [],
+                        $result->reason,
+                    );
+            }
+
+            if (RedisProtocol::status($head) === RedisProtocol::MEMBERSHIP) {
+                $head[0] = RedisProtocol::HIT;
+            }
+
+            return $this->readCanonical($query, $plan, $namespace, $queryHash, $head);
+        }
+
+        if ($plan->isQueryGroup()) {
+            [$raw, $values] = $this->store->readHashFieldWithValues(
+                $this->keys->queryGroupEntry($queryHash, $namespace),
+                'r',
+                $this->states->pendingStateKeys($plan, $namespace),
+            );
+            $state = $this->states->resolve(
+                $plan,
+                $namespace,
+                $queryHash,
+                prefetched: $values,
+            );
+        } else {
+            $entry = $this->store->fetchResult(
+                $this->keys->version($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                $namespace,
+                $queryHash,
+            );
+            $raw = RedisProtocol::value($entry, 1);
+            $state = $this->states->resolve(
+                $plan,
+                $namespace,
+                $queryHash,
+                RedisProtocol::version($entry, 0),
+            );
+        }
+
+        return $this->readResult($state, $raw);
+    }
+
     public function readCanonical(
         QueryBuilder $query,
         QueryPlan $plan,
