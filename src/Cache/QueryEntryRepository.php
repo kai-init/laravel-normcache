@@ -20,6 +20,8 @@ final readonly class QueryEntryRepository
 {
     private const MAX_AUTO_OVERLAY_BYTES = 128 * 1024;
 
+    private const EAGER_AUTO_OVERLAY_BYTES = 32 * 1024;
+
     private const PAGINATION_LOOKAHEAD_ROWS = 1;
 
     public function __construct(
@@ -45,6 +47,7 @@ final readonly class QueryEntryRepository
         $rawMembership = $status === RedisProtocol::HIT
             ? RedisProtocol::canonicalPayload($head)
             : null;
+        $promote = RedisProtocol::value($head, 4) === '1';
         $miss = fn(?string $reason): CacheRead => new CacheRead(
             $this->states->resolve($plan, $namespace, $queryHash, $version, $generation),
             ReadOutcome::MISS,
@@ -88,7 +91,13 @@ final readonly class QueryEntryRepository
             return new CacheRead($state, ReadOutcome::MISS);
         }
 
-        return $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
+        $result = $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
+
+        if ($result->served() && $promote) {
+            $this->promoteOverlay($plan, $state, $result->rows);
+        }
+
+        return $result;
     }
 
     /** @return list<\stdClass>|null */
@@ -325,15 +334,47 @@ final readonly class QueryEntryRepository
     /** @param array<int, mixed> $rows */
     public function inlineResult(CacheState $state, array $rows): ?string
     {
-        $count = count($rows);
-
         if (
             $this->config->maxAutoOverlayRows === 0
-            || $count > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
+            || count($rows) > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
         ) {
             return null;
         }
 
+        $encoded = $this->encodeOverlay($state, $rows);
+
+        if ($encoded === null) {
+            return null;
+        }
+
+        return $state->versions === []
+            && $state->tagKey === null
+            && strlen($encoded) > self::EAGER_AUTO_OVERLAY_BYTES
+                ? ''
+                : $encoded;
+    }
+
+    /** @param array<int, mixed> $rows */
+    private function promoteOverlay(
+        QueryPlan $plan,
+        CacheState $state,
+        array $rows,
+    ): void {
+        try {
+            $this->store->promoteResultOverlay(
+                generationKey: $this->keys->generation($plan->root),
+                entryKey: $state->key,
+                expectedGeneration: $state->generation,
+                payload: $this->encodeOverlay($state, $rows),
+            );
+        } catch (\Exception) {
+            // Promotion is opportunistic; the canonical hit is already valid.
+        }
+    }
+
+    /** @param array<int, mixed> $rows */
+    private function encodeOverlay(CacheState $state, array $rows): ?string
+    {
         $encoded = $this->codec->encode(
             $rows,
             $state->epoch,
