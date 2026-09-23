@@ -210,6 +210,27 @@ final class RedisStore
         );
     }
 
+    /** @return array<int, mixed>|null null when cluster slots prevent fusion */
+    public function fetchRowWithRuntime(
+        string $epochKey,
+        string $disabledKey,
+        string $generationKey,
+        string $tablePrefix,
+        string $primaryKeyToken,
+    ): ?array {
+        $connection = $this->connection();
+
+        if ($connection instanceof PredisClusterConnection || $connection instanceof PhpRedisClusterConnection) {
+            return null;
+        }
+
+        return (array) $this->script(
+            RedisScripts::get('fetch_row_with_runtime'),
+            [$epochKey, $disabledKey, $generationKey, $tablePrefix],
+            [$primaryKeyToken],
+        );
+    }
+
     /** @return array<int, mixed> */
     public function fetchRow(
         string $generationKey,

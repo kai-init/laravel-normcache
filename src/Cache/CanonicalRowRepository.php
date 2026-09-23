@@ -2,6 +2,7 @@
 
 namespace NormCache\Cache;
 
+use Illuminate\Contracts\Container\Container;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisProtocol;
@@ -20,18 +21,37 @@ final readonly class CanonicalRowRepository
         private RedisStore $store,
         private CacheKeyBuilder $keys,
         private RawResultCodec $codec,
-        private BuildLeaseCoordinator $leases,
+        private Container $container,
     ) {}
 
     public function read(QueryPlan $plan): CachedRow
     {
-        $result = $this->store->fetchRow(
-            $this->keys->generation($plan->root),
-            $this->keys->tablePrefix($plan->root),
-            (string) $plan->primaryKeyToken,
-        );
-        $generation = RedisProtocol::version($result, 0);
-        $raw = RedisProtocol::value($result, 1);
+        $result = $this->runtime->needsRefresh()
+            ? $this->store->fetchRowWithRuntime(
+                $this->keys->epoch(),
+                $this->keys->disabled(),
+                $this->keys->generation($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                (string) $plan->primaryKeyToken,
+            )
+            : null;
+
+        if ($result !== null) {
+            $this->runtime->rememberState(
+                RedisProtocol::version($result, 0),
+                RedisProtocol::value($result, 1) === '1',
+            );
+            $generation = RedisProtocol::version($result, 2);
+            $raw = RedisProtocol::value($result, 3);
+        } else {
+            $result = $this->store->fetchRow(
+                $this->keys->generation($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                (string) $plan->primaryKeyToken,
+            );
+            $generation = RedisProtocol::version($result, 0);
+            $raw = RedisProtocol::value($result, 1);
+        }
 
         if (!is_string($raw)) {
             return new CachedRow($generation);
@@ -106,7 +126,7 @@ final readonly class CanonicalRowRepository
             || $plan->primaryKey->token($rows[0]->{$plan->primaryKey->column})
                 !== $plan->primaryKeyToken
         ) {
-            $this->leases->release($lease);
+            $this->container->make(BuildLeaseCoordinator::class)->release($lease);
 
             return;
         }
@@ -114,7 +134,7 @@ final readonly class CanonicalRowRepository
         $encoded = $this->codec->encodeRow($rows[0], $state->epoch);
 
         if ($encoded === null) {
-            $this->leases->release($lease);
+            $this->container->make(BuildLeaseCoordinator::class)->release($lease);
 
             return;
         }
