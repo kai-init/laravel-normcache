@@ -11,6 +11,7 @@ use NormCache\Tests\UnitTestCase;
 use Predis\Client;
 use Predis\Connection\ConnectionException;
 use Predis\Connection\NodeConnectionInterface;
+use Predis\Response\ServerException;
 
 final class RedisStoreRecoveryTest extends UnitTestCase
 {
@@ -285,6 +286,85 @@ final class RedisStoreRecoveryTest extends UnitTestCase
             $store->getRaw('key');
         } finally {
             $this->assertSame(2, $manager->built);
+        }
+    }
+
+    public function test_predis_cluster_pipeline_avoids_the_affected_3_0_to_3_2_range(): void
+    {
+        $method = new \ReflectionMethod(RedisStore::class, 'predisClusterPipelineSafe');
+
+        $this->assertTrue($method->invoke(null, '2.4.1'));
+        $this->assertFalse($method->invoke(null, '3.0.0-RC1'));
+        $this->assertFalse($method->invoke(null, '3.2.0'));
+        $this->assertTrue($method->invoke(null, '3.3.0'));
+        $this->assertTrue($method->invoke(null, '3.4.2'));
+    }
+
+    public function test_query_group_pipeline_falls_back_after_a_moved_response(): void
+    {
+        $original = $this->app->make('redis');
+        $connection = new class(new Client) extends PredisClusterConnection
+        {
+            public int $pipelines = 0;
+
+            public function command($method, array $parameters = [])
+            {
+                return match (strtolower((string) $method)) {
+                    'pipeline' => $this->moved(),
+                    'hget' => 'query-payload',
+                    'mget' => array_fill(0, count($parameters[0] ?? []), '7'),
+                    default => null,
+                };
+            }
+
+            private function moved(): never
+            {
+                $this->pipelines++;
+
+                throw new ServerException('MOVED 1234 127.0.0.1:7001');
+            }
+        };
+        $manager = new class($connection)
+        {
+            public int $built = 0;
+
+            /** @var list<string> */
+            public array $purged = [];
+
+            public function __construct(private Connection $connection) {}
+
+            public function connection($name = null): Connection
+            {
+                $this->built++;
+
+                return $this->connection;
+            }
+
+            public function purge(string $name): void
+            {
+                $this->purged[] = $name;
+            }
+        };
+
+        try {
+            $this->app->instance('redis', $manager);
+            Redis::clearResolvedInstance('redis');
+
+            $keys = ['test:{state}:v1', 'test:{state}:v2'];
+            [$payload, $values] = (new RedisStore('normcache-test'))
+                ->readHashFieldWithValues('test:{query}:entry', 'r', $keys);
+
+            $this->assertSame('query-payload', $payload);
+            $this->assertSame([
+                $keys[0] => '7',
+                $keys[1] => '7',
+            ], $values);
+            $this->assertSame(2, $connection->pipelines);
+            $this->assertSame(2, $manager->built);
+            $this->assertSame(['normcache-test'], $manager->purged);
+        } finally {
+            $this->app->instance('redis', $original);
+            Redis::clearResolvedInstance('redis');
         }
     }
 
