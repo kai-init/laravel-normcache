@@ -26,9 +26,14 @@ final class CacheRuntime
         private readonly FailureReporter $failures,
     ) {}
 
+    public function locallyReadable(): bool
+    {
+        return $this->readBypassDepth === 0 && $this->config->enabled && $this->available;
+    }
+
     public function readable(): bool
     {
-        if ($this->readBypassDepth > 0 || !$this->config->enabled || !$this->available) {
+        if (!$this->locallyReadable()) {
             return false;
         }
 
@@ -76,6 +81,18 @@ final class CacheRuntime
             $this->epoch = $epoch;
             $this->epochReadAt = microtime(true);
         }
+    }
+
+    public function rememberState(string $epoch, bool $disabled): void
+    {
+        $this->epoch = $epoch;
+        $this->epochReadAt = microtime(true);
+        $this->runtimeDisabled = $disabled;
+    }
+
+    public function needsRefresh(): bool
+    {
+        return $this->epoch === null || $this->epochExpired();
     }
 
     public function forgetEpoch(): void
