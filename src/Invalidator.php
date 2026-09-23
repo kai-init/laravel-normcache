@@ -278,27 +278,6 @@ final class Invalidator
         }
     }
 
-    /** @param list<string> $tokens */
-    private function apply(TableIdentity $table, bool $broad, array $tokens): bool
-    {
-        $state = $this->storeInvalidation($table, $broad, $tokens);
-        $mode = $state['mode'];
-
-        $this->observer->begin();
-
-        try {
-            $this->store->invalidateTableState(...$state);
-            $this->observer->invalidated($table, $mode, $tokens);
-
-            return true;
-        } catch (\Throwable $exception) {
-            $this->runtime->disable();
-            $this->failures->invalidationFailed($exception, $table, $mode, $tokens);
-
-            return false;
-        }
-    }
-
     /**
      * @param  list<array{table: TableIdentity, broad: bool, tokens: list<string>}>  $invalidations
      */
@@ -306,16 +285,6 @@ final class Invalidator
     {
         if ($invalidations === []) {
             return true;
-        }
-
-        if (count($invalidations) === 1) {
-            $invalidation = $invalidations[0];
-
-            return $this->apply(
-                $invalidation['table'],
-                $invalidation['broad'],
-                $invalidation['tokens'],
-            );
         }
 
         $states = [];
