@@ -5,6 +5,8 @@ namespace NormCache\Tests\Integration\Cache;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\BuildLeaseCoordinator;
+use NormCache\Cache\RowRepairer;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
@@ -90,6 +92,48 @@ final class UnifiedQueryEntryTest extends TestCase
             $calls['mget'] ?? 0,
             'the slot-local publish script already validates the table state',
         );
+    }
+
+    public function test_a_fresh_scope_direct_primary_key_hit_fuses_runtime_state_with_the_row_read(): void
+    {
+        $this->skipWhenCommandStatsAreSharded();
+
+        $query = fn() => RawPost::query()->toBase()->where('id', 1)->first();
+        $query();
+        $this->app->forgetScopedInstances();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $calls = $this->commandCallsDuring($query);
+        DB::disableQueryLog();
+
+        $this->assertSame([], DB::getQueryLog(), 'the row must still be served from cache');
+        $this->assertSame(
+            0,
+            $calls['mget'] ?? 0,
+            'runtime state should be read inside the direct-row script on standalone Redis',
+        );
+    }
+
+    public function test_warm_hits_do_not_resolve_cold_path_services(): void
+    {
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
+        $query();
+        $this->app->forgetScopedInstances();
+
+        $leases = 0;
+        $repairs = 0;
+        $this->app->resolving(BuildLeaseCoordinator::class, static function () use (&$leases): void {
+            $leases++;
+        });
+        $this->app->resolving(RowRepairer::class, static function () use (&$repairs): void {
+            $repairs++;
+        });
+
+        $query();
+
+        $this->assertSame(0, $leases);
+        $this->assertSame(0, $repairs);
     }
 
     public function test_a_query_group_read_costs_a_single_pipelined_round_trip(): void
