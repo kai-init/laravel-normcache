@@ -50,7 +50,7 @@ final class RedisStore
             return [$this->readHashField($key, $field), []];
         }
 
-        if ($connection instanceof PredisClusterConnection && $this->predisClusterPipelineSafe()) {
+        if ($connection instanceof PredisClusterConnection && self::predisClusterPipelineSafe(\Predis\Client::VERSION)) {
             $groups = $this->groupByHashTag($valueKeys);
 
             try {
@@ -636,10 +636,10 @@ final class RedisStore
         return $this->connection ??= Redis::connection($this->redisConnection);
     }
 
-    private function predisClusterPipelineSafe(): bool
+    private static function predisClusterPipelineSafe(string $version): bool
     {
-        return version_compare(\Predis\Client::VERSION, '3.0.0-RC1', '<')
-            || version_compare(\Predis\Client::VERSION, '3.3.0', '>=');
+        return version_compare($version, '3.0.0-RC1', '<')
+            || version_compare($version, '3.3.0', '>=');
     }
 
     /**
