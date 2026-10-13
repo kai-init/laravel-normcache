@@ -4,7 +4,6 @@ namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use NormCache\Database\QueryBuilder;
-use NormCache\Values\DependencyAnalysis;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\TableIdentity;
@@ -25,7 +24,7 @@ final class QueryPlanner
             $forceQueryGroup
             || $query->dependencies() !== []
             || $query->joins !== null && $query->joins !== []
-            || $this->hasCrossTableUnion($root, $dependencies, $query)
+            || !empty($query->unions) && count($dependencies) > 1
         ) {
             return QueryPlan::queryGroup($root, $dependencies);
         }
@@ -132,15 +131,6 @@ final class QueryPlanner
         }
 
         return true;
-    }
-
-    private function hasCrossTableUnion(
-        TableIdentity $root,
-        array $dependencies,
-        QueryBuilder $query,
-    ): bool {
-        return !empty($query->unions)
-            && DependencyAnalysis::hasExternalTo($root, $dependencies);
     }
 
     private function isWildcard(QueryBuilder $query, TableIdentity $root): bool

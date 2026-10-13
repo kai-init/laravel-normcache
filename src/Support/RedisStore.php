@@ -74,15 +74,15 @@ final class RedisStore
 
     public function setRawForever(string $key, string $value): void
     {
-        $this->withRawValues(static function (Connection $connection) use ($key, $value): void {
-            $connection->set($key, $value);
+        $this->withRawValues(function (Connection $connection) use ($key, $value): void {
+            $this->phpRedisResult($connection, $connection->set($key, $value));
         });
     }
 
     public function setRaw(string $key, string $value, int $ttl): void
     {
-        $this->withRawValues(static function (Connection $connection) use ($key, $value, $ttl): void {
-            $connection->setex($key, $ttl, $value);
+        $this->withRawValues(function (Connection $connection) use ($key, $value, $ttl): void {
+            $this->phpRedisResult($connection, $connection->setex($key, $ttl, $value));
         });
     }
 
@@ -210,6 +210,43 @@ final class RedisStore
         );
     }
 
+    /** @return array<int, mixed>|null null when cluster slots prevent fusion */
+    public function fetchRowWithRuntime(
+        string $epochKey,
+        string $disabledKey,
+        string $generationKey,
+        string $tablePrefix,
+        string $primaryKeyToken,
+    ): ?array {
+        $connection = $this->connection();
+
+        if ($connection instanceof PredisClusterConnection || $connection instanceof PhpRedisClusterConnection) {
+            return null;
+        }
+
+        return (array) $this->script(
+            RedisScripts::get('fetch_row_with_runtime'),
+            [$epochKey, $disabledKey, $generationKey, $tablePrefix],
+            [$primaryKeyToken],
+        );
+    }
+
+    public function promoteResultOverlay(
+        string $versionKey,
+        string $generationKey,
+        string $entryKey,
+        string $expectedVersion,
+        string $expectedGeneration,
+        string $expectedMembership,
+        ?string $payload,
+    ): bool {
+        return (bool) $this->script(
+            RedisScripts::get('promote_result'),
+            [$versionKey, $generationKey, $entryKey],
+            [$expectedVersion, $expectedGeneration, $expectedMembership, $payload ?? ''],
+        );
+    }
+
     /** @return array<int, mixed> */
     public function fetchRow(
         string $generationKey,
@@ -312,9 +349,11 @@ final class RedisStore
 
     public function increment(string $key): int
     {
-        return (int) $this->withRetryingConnection(
-            static fn(Connection $connection): mixed => $connection->incr($key),
-        );
+        return (int) $this->withRetryingConnection(function (Connection $connection) use ($key): mixed {
+            $result = $connection->incr($key);
+
+            return $this->phpRedisResult($connection, $result);
+        });
     }
 
     /** @param list<string> $tokens */
@@ -326,10 +365,11 @@ final class RedisStore
         string $rowPrefix,
     ): void {
         $this->script(
-            RedisScripts::get('invalidate_table'),
+            RedisScripts::get('invalidate_tables'),
             [$versionKey, $generationKey, $rowPrefix],
             [
                 $mode,
+                (string) count($tokens),
                 ...$tokens,
             ],
         );
@@ -361,9 +401,13 @@ final class RedisStore
                     try {
                         $this->evaluate(
                             $connection,
-                            RedisScripts::get('invalidate_table'),
+                            RedisScripts::get('invalidate_tables'),
                             [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
-                            [$state['mode'], ...$state['tokens']],
+                            [
+                                $state['mode'],
+                                (string) count($state['tokens']),
+                                ...$state['tokens'],
+                            ],
                         );
                     } catch (\Exception $exception) {
                         throw new TableInvalidationException($index, $exception);
@@ -443,7 +487,7 @@ final class RedisStore
                 $result = $connection->command('evalsha', [$sha, $keyCount, ...$arguments]);
             }
 
-            return $this->scriptResult($connection, $result);
+            return $this->phpRedisResult($connection, $result);
         } catch (\Throwable $exception) {
             if (
                 !str_contains(strtolower($exception->getMessage()), 'noscript')
@@ -458,17 +502,17 @@ final class RedisStore
             ? $connection->eval($script, $keyCount, ...$arguments)
             : $connection->command('eval', [$script, $keyCount, ...$arguments]);
 
-        return $this->scriptResult($connection, $result);
+        return $this->phpRedisResult($connection, $result);
     }
 
-    private function scriptResult(Connection $connection, mixed $result): mixed
+    private function phpRedisResult(Connection $connection, mixed $result): mixed
     {
         if ($connection instanceof PhpRedisConnection && $result === false) {
             $client = $connection->client();
             $error = $client->getLastError();
             $client->clearLastError();
 
-            throw new \RuntimeException($error ?: 'Redis script execution failed.');
+            throw new \RuntimeException($error ?: 'Redis command execution failed.');
         }
 
         return $result;

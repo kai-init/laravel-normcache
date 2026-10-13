@@ -10,7 +10,6 @@ use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\BuildLeaseCoordinator;
-use NormCache\Cache\CacheReader;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
 use NormCache\Cache\CanonicalRowRepository;
@@ -91,7 +90,6 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->scoped(RowRepairer::class);
         $this->app->scoped(Invalidator::class);
         $this->app->scoped(Engine::class);
-        $this->app->scoped(CacheReader::class);
         $this->app->scoped(CacheManager::class);
         $this->app->alias(CacheManager::class, 'normcache');
     }

@@ -26,9 +26,14 @@ final class CacheRuntime
         private readonly FailureReporter $failures,
     ) {}
 
+    public function locallyReadable(): bool
+    {
+        return $this->readBypassDepth === 0 && $this->config->enabled && $this->available;
+    }
+
     public function readable(): bool
     {
-        if ($this->readBypassDepth > 0 || !$this->config->enabled || !$this->available) {
+        if (!$this->locallyReadable()) {
             return false;
         }
 
@@ -76,6 +81,18 @@ final class CacheRuntime
             $this->epoch = $epoch;
             $this->epochReadAt = microtime(true);
         }
+    }
+
+    public function rememberState(string $epoch, bool $disabled): void
+    {
+        $this->epoch = $epoch;
+        $this->epochReadAt = microtime(true);
+        $this->runtimeDisabled = $disabled;
+    }
+
+    public function needsRefresh(): bool
+    {
+        return $this->epoch === null || $this->epochExpired();
     }
 
     public function forgetEpoch(): void
@@ -130,7 +147,7 @@ final class CacheRuntime
             $values = $this->store->mget([$epochKey, $disabledKey]);
             $this->epoch = $values[$epochKey] ?? '0';
             $this->epochReadAt = microtime(true);
-            $this->runtimeDisabled ??= ($values[$disabledKey] ?? null) !== null;
+            $this->runtimeDisabled = ($values[$disabledKey] ?? null) !== null;
         }
 
         return [$this->epoch, $this->runtimeDisabled ?? false];
@@ -138,6 +155,10 @@ final class CacheRuntime
 
     private function resolveDisabled(): bool
     {
+        if ($this->epoch === null || $this->epochExpired()) {
+            return $this->resolveState()[1];
+        }
+
         if ($this->runtimeDisabled === true) {
             return $this->runtimeDisabled = $this->readFlag();
         }

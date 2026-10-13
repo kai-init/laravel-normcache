@@ -2,6 +2,7 @@
 
 namespace NormCache\Cache;
 
+use Illuminate\Contracts\Container\Container;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\ReadOutcome;
 use NormCache\Payload\MembershipCodec;
@@ -19,6 +20,8 @@ final readonly class QueryEntryRepository
 {
     private const MAX_AUTO_OVERLAY_BYTES = 128 * 1024;
 
+    private const EAGER_AUTO_OVERLAY_BYTES = 32 * 1024;
+
     private const PAGINATION_LOOKAHEAD_ROWS = 1;
 
     public function __construct(
@@ -28,8 +31,84 @@ final readonly class QueryEntryRepository
         private CacheStateResolver $states,
         private RawResultCodec $codec,
         private MembershipCodec $memberships,
-        private RowRepairer $repairer,
+        private Container $container,
     ) {}
+
+    public function read(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+    ): CacheRead {
+        if ($plan->isCanonical()) {
+            $arguments = [
+                $this->keys->version($plan->root),
+                $this->keys->generation($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                $namespace,
+                $queryHash,
+            ];
+            $head = $this->config->maxAutoOverlayRows > 0
+                ? $this->store->fetchResultOrCanonical(...$arguments)
+                : $this->store->fetchCanonical(...$arguments);
+
+            if (RedisProtocol::status($head) === RedisProtocol::RESULT) {
+                $state = $this->states->resolve(
+                    $plan,
+                    $namespace,
+                    $queryHash,
+                    RedisProtocol::version($head),
+                    usesGeneration: false,
+                );
+                $result = $this->readResult($state, RedisProtocol::resultPayload($head));
+
+                return $result->served()
+                    ? $result->withReason('result_overlay')
+                    : new CacheRead(
+                        $this->states->resolve($plan, $namespace, $queryHash),
+                        ReadOutcome::MISS,
+                        [],
+                        $result->reason,
+                    );
+            }
+
+            if (RedisProtocol::status($head) === RedisProtocol::MEMBERSHIP) {
+                $head[0] = RedisProtocol::HIT;
+            }
+
+            return $this->readCanonical($query, $plan, $namespace, $queryHash, $head);
+        }
+
+        if ($plan->isQueryGroup()) {
+            [$raw, $values] = $this->store->readHashFieldWithValues(
+                $this->keys->queryGroupEntry($queryHash, $namespace),
+                'r',
+                $this->states->pendingStateKeys($plan, $namespace),
+            );
+            $state = $this->states->resolve(
+                $plan,
+                $namespace,
+                $queryHash,
+                prefetched: $values,
+            );
+        } else {
+            $entry = $this->store->fetchResult(
+                $this->keys->version($plan->root),
+                $this->keys->tablePrefix($plan->root),
+                $namespace,
+                $queryHash,
+            );
+            $raw = RedisProtocol::value($entry, 1);
+            $state = $this->states->resolve(
+                $plan,
+                $namespace,
+                $queryHash,
+                RedisProtocol::version($entry, 0),
+            );
+        }
+
+        return $this->readResult($state, $raw);
+    }
 
     public function readCanonical(
         QueryBuilder $query,
@@ -44,6 +123,7 @@ final readonly class QueryEntryRepository
         $rawMembership = $status === RedisProtocol::HIT
             ? RedisProtocol::canonicalPayload($head)
             : null;
+        $promote = RedisProtocol::value($head, 4) === '1';
         $miss = fn(?string $reason): CacheRead => new CacheRead(
             $this->states->resolve($plan, $namespace, $queryHash, $version, $generation),
             ReadOutcome::MISS,
@@ -69,11 +149,15 @@ final readonly class QueryEntryRepository
             $unique[$rowPrefix . $token] = true;
         }
 
-        [$state, $fetched] = $this->states->resolveCanonical(
+        $fetched = $this->store->mget([
+            ...array_keys($unique),
+            ...$this->states->pendingStateKeys($plan, $namespace),
+        ]);
+        $state = $this->states->resolve(
             $plan,
             $namespace,
             $queryHash,
-            array_keys($unique),
+            prefetched: $fetched,
         );
 
         if (
@@ -87,7 +171,13 @@ final readonly class QueryEntryRepository
             return new CacheRead($state, ReadOutcome::MISS);
         }
 
-        return $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
+        $result = $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
+
+        if ($result->served() && $promote) {
+            $this->promoteOverlay($plan, $state, $rawMembership, $result->rows);
+        }
+
+        return $result;
     }
 
     /** @return list<\stdClass>|null */
@@ -162,7 +252,7 @@ final readonly class QueryEntryRepository
         $outcome = ReadOutcome::HIT;
 
         if ($missing !== []) {
-            $repair = $this->repairer->repair($query, $plan, $state, array_values($missing));
+            $repair = $this->container->make(RowRepairer::class)->repair($query, $plan, $state, array_values($missing));
 
             if ($repair === null) {
                 return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
@@ -324,15 +414,51 @@ final readonly class QueryEntryRepository
     /** @param array<int, mixed> $rows */
     public function inlineResult(CacheState $state, array $rows): ?string
     {
-        $count = count($rows);
-
         if (
             $this->config->maxAutoOverlayRows === 0
-            || $count > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
+            || count($rows) > $this->config->maxAutoOverlayRows + self::PAGINATION_LOOKAHEAD_ROWS
         ) {
             return null;
         }
 
+        $encoded = $this->encodeOverlay($state, $rows);
+
+        if ($encoded === null) {
+            return null;
+        }
+
+        return $state->versions === []
+            && $state->tagKey === null
+            && strlen($encoded) > self::EAGER_AUTO_OVERLAY_BYTES
+                ? ''
+                : $encoded;
+    }
+
+    /** @param array<int, mixed> $rows */
+    private function promoteOverlay(
+        QueryPlan $plan,
+        CacheState $state,
+        string $membership,
+        array $rows,
+    ): void {
+        try {
+            $this->store->promoteResultOverlay(
+                versionKey: $this->keys->version($plan->root),
+                generationKey: $this->keys->generation($plan->root),
+                entryKey: $state->key,
+                expectedVersion: $state->version,
+                expectedGeneration: $state->generation,
+                expectedMembership: $membership,
+                payload: $this->encodeOverlay($state, $rows),
+            );
+        } catch (\Exception) {
+            // Promotion is opportunistic; the canonical hit is already valid.
+        }
+    }
+
+    /** @param array<int, mixed> $rows */
+    private function encodeOverlay(CacheState $state, array $rows): ?string
+    {
         $encoded = $this->codec->encode(
             $rows,
             $state->epoch,

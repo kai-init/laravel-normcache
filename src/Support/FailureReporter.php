@@ -88,6 +88,17 @@ final class FailureReporter
         );
     }
 
+    public function invalidationDisableFailed(\Throwable $exception): void
+    {
+        $this->log(
+            LogLevel::CRITICAL,
+            'invalidation_disable_failed',
+            'Could not disable cached reads across processes after an invalidation failure.',
+            $exception,
+            [],
+        );
+    }
+
     public function observationFailed(\Throwable $exception, string $outcome): void
     {
         $this->log(

@@ -544,6 +544,22 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame('default', $plan->softDeleteMode);
     }
 
+    public function test_cross_table_union_uses_query_group_from_dependency_count(): void
+    {
+        $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
+        $query = RawPost::query()->toBase()
+            ->from('posts')
+            ->union(RawPost::query()->toBase()->from('comments'));
+
+        $plan = $this->planner->plan(
+            $query,
+            $this->posts,
+            [$this->posts, $comments],
+        );
+
+        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
+    }
+
     public function test_join_query_group_does_not_collapse(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');

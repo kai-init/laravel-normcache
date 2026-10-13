@@ -59,7 +59,13 @@ final readonly class RowRepairer
                     : null;
         }
 
-        $repaired = $this->readRepaired($plan, $state, $tokens);
+        try {
+            $repaired = $this->readRepaired($plan, $state, $tokens);
+        } catch (\Throwable $exception) {
+            $this->leases->release($lease);
+
+            throw $exception;
+        }
 
         if ($repaired !== null) {
             $this->leases->release($lease);

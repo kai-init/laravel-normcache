@@ -271,29 +271,8 @@ final class Invalidator
 
             return true;
         } catch (\Throwable $exception) {
-            $this->runtime->disable();
+            $this->disableAfterInvalidationFailure();
             $this->failures->globalInvalidationFailed($exception, $reason);
-
-            return false;
-        }
-    }
-
-    /** @param list<string> $tokens */
-    private function apply(TableIdentity $table, bool $broad, array $tokens): bool
-    {
-        $state = $this->storeInvalidation($table, $broad, $tokens);
-        $mode = $state['mode'];
-
-        $this->observer->begin();
-
-        try {
-            $this->store->invalidateTableState(...$state);
-            $this->observer->invalidated($table, $mode, $tokens);
-
-            return true;
-        } catch (\Throwable $exception) {
-            $this->runtime->disable();
-            $this->failures->invalidationFailed($exception, $table, $mode, $tokens);
 
             return false;
         }
@@ -306,16 +285,6 @@ final class Invalidator
     {
         if ($invalidations === []) {
             return true;
-        }
-
-        if (count($invalidations) === 1) {
-            $invalidation = $invalidations[0];
-
-            return $this->apply(
-                $invalidation['table'],
-                $invalidation['broad'],
-                $invalidation['tokens'],
-            );
         }
 
         $states = [];
@@ -349,7 +318,7 @@ final class Invalidator
             $failed = $invalidations[$failedIndex] ?? $invalidations[0];
             $failure = $exception->getPrevious() ?? $exception;
 
-            $this->runtime->disable();
+            $this->disableAfterInvalidationFailure();
             $this->failures->invalidationFailed(
                 $failure,
                 $failed['table'],
@@ -373,5 +342,16 @@ final class Invalidator
             'tokens' => $tokens,
             'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
         ];
+    }
+
+    private function disableAfterInvalidationFailure(): void
+    {
+        $this->runtime->disable();
+
+        try {
+            $this->store->setRawForever($this->keys->disabled(), '1');
+        } catch (\Throwable $exception) {
+            $this->failures->invalidationDisableFailed($exception);
+        }
     }
 }

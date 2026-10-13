@@ -8,14 +8,14 @@
 --
 -- Returns:
 --   {'result', ver, payload}
---   {'membership', ver, gen, membership}
+--   {'membership', ver, gen, membership, deferred}
 --   {'miss', ver, gen}
 
 local version = redis.call('GET', KEYS[1]) or '0'
 local result_key = KEYS[3] .. ':q:v' .. version .. ':' .. ARGV[1] .. ':' .. ARGV[2]
 local result = redis.call('HGET', result_key, 'r')
 
-if result then
+if result and result ~= '' then
     return {'result', version, result}
 end
 
@@ -26,4 +26,4 @@ if not membership then
     return {'miss', version, generation}
 end
 
-return {'membership', version, generation, membership}
+return {'membership', version, generation, membership, result == '' and '1' or ''}
