@@ -15,6 +15,7 @@ use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\QueryPlan;
+use NormCache\Values\RowRepair;
 
 final readonly class QueryEntryRepository
 {
@@ -199,17 +200,34 @@ final readonly class QueryEntryRepository
             $rowKeys[$token] = $this->keys->row($plan->root, $state->generation, $token);
         }
 
+        $atomicMget = $this->store->supportsAtomicMget();
+        $fetched = $this->store->mget([
+            ...array_values($rowKeys),
+            ...($atomicMget ? $this->states->validationKeys($plan, $state) : []),
+        ]);
+
+        if ($atomicMget && !$this->states->isCurrentFrom($plan, $state, $fetched)) {
+            return null;
+        }
+
         $result = $this->assembleRows(
             $query,
             $plan,
             $state,
             $tokens,
-            $this->store->mget(array_values($rowKeys)),
+            $fetched,
+            coldBuild: true,
         );
 
-        return $result->served() && $this->states->isCurrent($plan, $state)
-            ? $result->rows
-            : null;
+        if (!$result->served()) {
+            return null;
+        }
+
+        if ($atomicMget && $result->outcome === ReadOutcome::HIT) {
+            return $result->rows;
+        }
+
+        return $this->states->isCurrent($plan, $state) ? $result->rows : null;
     }
 
     /**
@@ -222,6 +240,7 @@ final readonly class QueryEntryRepository
         CacheState $state,
         array $tokens,
         array $fetched,
+        bool $coldBuild = false,
     ): CacheRead {
         $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
         $rows = [];
@@ -252,18 +271,23 @@ final readonly class QueryEntryRepository
         $outcome = ReadOutcome::HIT;
 
         if ($missing !== []) {
-            $repair = $this->container->make(RowRepairer::class)->repair($query, $plan, $state, array_values($missing));
+            $repairer = $this->container->make(RowRepairer::class);
+            $repair = $coldBuild
+                ? $repairer->loadForCanonicalBuild($query, $plan, array_values($missing))
+                : $repairer->repair($query, $plan, $state, array_values($missing));
 
             if ($repair === null) {
                 return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
             }
 
+            $repairRows = $repair instanceof RowRepair ? $repair->rows : $repair;
+
             foreach ($missing as $index => $token) {
-                $rows[$index] = $repair->rows[$token];
+                $rows[$index] = $repairRows[$token];
             }
 
             ksort($rows);
-            $outcome = $repair->outcome;
+            $outcome = $repair instanceof RowRepair ? $repair->outcome : ReadOutcome::REPAIRED;
         }
 
         return new CacheRead(

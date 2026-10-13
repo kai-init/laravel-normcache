@@ -94,6 +94,20 @@ final class UnifiedQueryEntryTest extends TestCase
         );
     }
 
+    public function test_canonical_fill_with_seeded_rows_uses_one_mget(): void
+    {
+        $this->skipWhenCommandStatsAreSharded();
+
+        foreach (range(1, 4) as $id) {
+            RawPost::query()->toBase()->where('id', $id)->first();
+        }
+
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
+        $calls = $this->commandCallsDuring($query);
+
+        $this->assertSame(1, $calls['mget'] ?? 0);
+    }
+
     public function test_a_fresh_scope_direct_primary_key_hit_fuses_runtime_state_with_the_row_read(): void
     {
         $this->skipWhenCommandStatsAreSharded();

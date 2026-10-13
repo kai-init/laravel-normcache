@@ -75,6 +75,11 @@ final class CacheRuntime
         return $this->epoch;
     }
 
+    public function knownDisabled(): bool
+    {
+        return $this->runtimeDisabled === true && !$this->epochExpired();
+    }
+
     public function rememberEpoch(string $epoch): void
     {
         if ($this->epoch === null) {

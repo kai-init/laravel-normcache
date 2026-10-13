@@ -179,6 +179,28 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
+    public function test_root_only_explicit_table_dependency_uses_table_local_result_entry(): void
+    {
+        $read = fn() => Post::query()
+            ->from('posts')
+            ->dependsOn(['posts'])
+            ->select(['id', 'title'])
+            ->whereKey($this->postId)
+            ->get();
+
+        $this->contract(
+            $read,
+            $read,
+            mutate: fn() => Post::query()->whereKey($this->postId)->update(['title' => 'After']),
+        );
+
+        $resultKeys = $this->cacheQueryKeysWithField('r');
+        $this->assertNotSame([], $resultKeys);
+        $this->assertStringContainsString(':q:v', $resultKeys[0]);
+        $this->assertSame([], $this->cacheKeysMatching('{nc:x:'));
+        $this->assertSame('After', $read()->first()?->title);
+    }
+
     public function test_explicit_model_dependencies_use_the_active_query_connection(): void
     {
         $database = sys_get_temp_dir() . '/normcache-dependency-' . getmypid() . '.sqlite';

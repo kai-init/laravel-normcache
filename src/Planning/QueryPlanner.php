@@ -20,9 +20,20 @@ final class QueryPlanner
         bool $forceQueryGroup = false,
         string $operation = 'select',
     ): QueryPlan {
+        $explicitDependencies = $query->dependencies();
+        $rootOnlyDependencies = $explicitDependencies !== []
+            && !$forceQueryGroup
+            && ($query->joins === null || $query->joins === [])
+            && count($dependencies) === 1
+            && $dependencies[0]->hash === $root->hash;
+
+        if ($rootOnlyDependencies) {
+            return QueryPlan::result($root, $dependencies);
+        }
+
         if (
             $forceQueryGroup
-            || $query->dependencies() !== []
+            || $explicitDependencies !== []
             || $query->joins !== null && $query->joins !== []
             || !empty($query->unions) && count($dependencies) > 1
         ) {

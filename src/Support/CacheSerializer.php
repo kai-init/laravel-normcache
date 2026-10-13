@@ -63,7 +63,7 @@ final readonly class CacheSerializer
             $value = @unserialize($payload, ['allowed_classes' => false]);
 
             return $value === false && $payload !== 'b:0;' ? null : $value;
-        } catch (\Throwable) {
+        } catch (\Throwable) { // @phpstan-ignore catch.neverThrown (custom error handlers may throw)
             return null;
         }
     }

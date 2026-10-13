@@ -7,6 +7,10 @@
 local epoch = redis.call('GET', KEYS[1]) or '0'
 local disabled = redis.call('EXISTS', KEYS[2])
 local generation = redis.call('GET', KEYS[3]) or '0'
+if disabled == 1 then
+    return {epoch, '1', generation}
+end
+
 local row = redis.call('GET', KEYS[4] .. ':r:g' .. generation .. ':' .. ARGV[1])
 
 if row then

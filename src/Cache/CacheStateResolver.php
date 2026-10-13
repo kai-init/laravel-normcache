@@ -147,6 +147,36 @@ final readonly class CacheStateResolver
             usesGeneration: true,
         );
         $values = $this->store->mget($keys['all']);
+
+        return $this->matchesCurrentState($keys, $expected, $values);
+    }
+
+    /** @return list<string> */
+    public function validationKeys(QueryPlan $plan, CacheState $expected): array
+    {
+        return $this->stateKeys(
+            $plan,
+            $expected->tagKey,
+            $this->keys->epoch(),
+            usesGeneration: true,
+        )['all'];
+    }
+
+    /** @param array<string, ?string> $values */
+    public function isCurrentFrom(QueryPlan $plan, CacheState $expected, array $values): bool
+    {
+        $keys = $this->stateKeys(
+            $plan,
+            $expected->tagKey,
+            $this->keys->epoch(),
+            usesGeneration: true,
+        );
+
+        return $this->matchesCurrentState($keys, $expected, $values);
+    }
+
+    private function matchesCurrentState(array $keys, CacheState $expected, array $values): bool
+    {
         $current = static fn(string $key): string => $values[$key] ?? '0';
 
         if (

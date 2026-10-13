@@ -92,6 +92,14 @@ final readonly class RowRepairer
             : new RowRepair($rows, ReadOutcome::REPAIRED);
     }
 
+    /** @param list<string> $tokens
+     * @return array<string, \stdClass>|null
+     */
+    public function loadForCanonicalBuild(QueryBuilder $query, QueryPlan $plan, array $tokens): ?array
+    {
+        return $this->fetchDatabaseRows($query, $plan, $tokens);
+    }
+
     /**
      * @param  list<string>  $tokens
      * @return array<string, \stdClass>|null
@@ -103,48 +111,9 @@ final readonly class RowRepairer
         array $tokens,
         BuildLease $lease,
     ): ?array {
-        $connection = $query->getConnection();
-        $values = [];
+        $rowsByToken = $this->fetchDatabaseRows($query, $plan, $tokens);
 
-        foreach ($tokens as $token) {
-            $value = $plan->primaryKey->valueFromToken($token);
-
-            if ($value === null) {
-                return null;
-            }
-
-            $values[] = $value;
-        }
-
-        $rowsByToken = [];
-
-        try {
-            foreach (array_chunk($values, self::REPAIR_BATCH_SIZE) as $batch) {
-                $rows = $connection
-                    ->query()
-                    ->from($plan->root->qualifiedTable())
-                    ->whereIn($plan->primaryKey->column, $batch)
-                    ->useWritePdo()
-                    ->get();
-
-                foreach ($rows as $row) {
-                    if (!property_exists($row, $plan->primaryKey->column)) {
-                        return null;
-                    }
-
-                    $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
-
-                    if ($token === null) {
-                        return null;
-                    }
-
-                    $rowsByToken[$token] = $row;
-                }
-            }
-        } catch (\Throwable $exception) {
-            // Records without disabling: a database fault is not a cache fault.
-            $this->failures->repairUnreachable($exception, $plan->root, count($tokens));
-
+        if ($rowsByToken === null) {
             return null;
         }
 
@@ -192,6 +161,63 @@ final readonly class RowRepairer
         }
 
         return $this->states->isCurrent($plan, $state) ? $rowsByToken : null;
+    }
+
+    /** @param list<string> $tokens
+     * @return array<string, \stdClass>|null
+     */
+    private function fetchDatabaseRows(QueryBuilder $query, QueryPlan $plan, array $tokens): ?array
+    {
+        $values = [];
+
+        foreach ($tokens as $token) {
+            $value = $plan->primaryKey->valueFromToken($token);
+
+            if ($value === null) {
+                return null;
+            }
+
+            $values[] = $value;
+        }
+
+        $rowsByToken = [];
+
+        try {
+            foreach (array_chunk($values, self::REPAIR_BATCH_SIZE) as $batch) {
+                $rows = $query->getConnection()
+                    ->query()
+                    ->from($plan->root->qualifiedTable())
+                    ->whereIn($plan->primaryKey->column, $batch)
+                    ->useWritePdo()
+                    ->get();
+
+                foreach ($rows as $row) {
+                    if (!property_exists($row, $plan->primaryKey->column)) {
+                        return null;
+                    }
+
+                    $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
+
+                    if ($token === null) {
+                        return null;
+                    }
+
+                    $rowsByToken[$token] = $row;
+                }
+            }
+        } catch (\Throwable $exception) {
+            $this->failures->repairUnreachable($exception, $plan->root, count($tokens));
+
+            return null;
+        }
+
+        foreach ($tokens as $token) {
+            if (!isset($rowsByToken[$token])) {
+                return null;
+            }
+        }
+
+        return $rowsByToken;
     }
 
     /**

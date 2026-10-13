@@ -336,7 +336,9 @@ final class DeleteInvalidationTest extends TestCase
         $noteGeneration = $this->generation($noteTable);
         $epoch = $this->epoch();
 
-        Post::query()->toBase()->truncate();
+        Schema::withoutForeignKeyConstraints(function (): void {
+            Post::query()->toBase()->truncate();
+        });
 
         $this->assertSame($epoch, $this->epoch());
         $this->assertSame(
@@ -360,8 +362,26 @@ final class DeleteInvalidationTest extends TestCase
 
     public function test_case_insensitive_string_key_delete_invalidates_the_cached_row(): void
     {
-        Schema::create('nocase_items', function (Blueprint $table): void {
-            $table->string('id', 36)->collation('nocase')->primary();
+        $driver = DB::connection()->getDriverName();
+
+        if ($driver === 'pgsql') {
+            $this->markTestSkipped('PostgreSQL does not support case-insensitive primary key collations.');
+        }
+
+        $collation = match ($driver) {
+            'sqlite' => 'nocase',
+            'mysql', 'mariadb' => 'utf8mb4_unicode_ci',
+            default => null,
+        };
+
+        Schema::create('nocase_items', function (Blueprint $table) use ($collation): void {
+            $column = $table->string('id', 36);
+
+            if ($collation !== null) {
+                $column->collation($collation);
+            }
+
+            $column->primary();
             $table->string('name');
         });
 
@@ -377,7 +397,11 @@ final class DeleteInvalidationTest extends TestCase
     public function test_unavailable_delete_metadata_falls_back_to_the_global_epoch(): void
     {
         $name = 'delete-metadata-unavailable';
-        $database = (string) DB::connection()->getDatabaseName();
+        $database = sys_get_temp_dir() . '/normcache-unavailable-' . bin2hex(random_bytes(6)) . '.sqlite';
+        touch($database);
+
+        $pdo = new \PDO('sqlite:' . $database);
+        $pdo->exec('CREATE TABLE uuid_items (id VARCHAR(36) PRIMARY KEY, name VARCHAR(255), created_at DATETIME, updated_at DATETIME)');
 
         config()->set("database.connections.{$name}", [
             'driver' => 'sqlite',
@@ -387,7 +411,7 @@ final class DeleteInvalidationTest extends TestCase
             'normcache_scope' => $name,
         ]);
         DB::extend($name, static fn(array $config) => new UnavailableDeleteMetadataConnection(
-            new \PDO('sqlite:' . $database),
+            $pdo,
             $database,
             '',
             $config,
@@ -405,6 +429,9 @@ final class DeleteInvalidationTest extends TestCase
             DB::disconnect($name);
             DB::purge($name);
             DB::forgetExtension($name);
+            if (is_file($database)) {
+                unlink($database);
+            }
         }
     }
 

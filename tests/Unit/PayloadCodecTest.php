@@ -87,6 +87,20 @@ final class PayloadCodecTest extends UnitTestCase
         $this->assertNull($serializer->decode(''));
     }
 
+    public function test_php_serializer_treats_unserialize_warnings_as_invalid_payloads(): void
+    {
+        $serializer = new CacheSerializer('php');
+        set_error_handler(static function (int $severity, string $message): never {
+            throw new \ErrorException($message, 0, $severity);
+        });
+
+        try {
+            $this->assertNull($serializer->decode('Pnot-serialized'));
+        } finally {
+            restore_error_handler();
+        }
+    }
+
     public function test_row_codec_returns_exactly_one_object_for_every_valid_payload(): void
     {
         $codec = new RawResultCodec(new CacheSerializer);

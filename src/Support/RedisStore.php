@@ -571,6 +571,14 @@ final class RedisStore
         });
     }
 
+    public function supportsAtomicMget(): bool
+    {
+        $connection = $this->connection();
+
+        return !$connection instanceof PredisClusterConnection
+            && !$connection instanceof PhpRedisClusterConnection;
+    }
+
     /** @param list<string> $keys */
     private function del(array $keys): void
     {

@@ -73,6 +73,11 @@ final readonly class Engine
             $analysis->queryScoped,
             $operation,
         );
+
+        if ($plan->isDirectPrimaryKey() && $this->runtime->knownDisabled() && !$this->runtime->readable()) {
+            return $database();
+        }
+
         $namespace = $this->identity->namespace(
             $query->configuredTag(),
             $query->configuredCacheContext(),
@@ -98,7 +103,7 @@ final readonly class Engine
         try {
             $cached = $this->read($query, $plan, $namespace, $hash);
 
-            if ($plan->isDirectPrimaryKey() && !$this->runtime->readable()) {
+            if ($cached === null) {
                 return $database();
             }
 
@@ -157,7 +162,7 @@ final readonly class Engine
                     );
                     $retry = $this->read($query, $plan, $namespace, $hash);
 
-                    if ($retry->served()) {
+                    if ($retry?->served()) {
                         $this->observer->read(
                             $retry->outcome,
                             $query,
@@ -226,7 +231,7 @@ final readonly class Engine
         QueryPlan $plan,
         string $namespace,
         QueryHashResolver $hash,
-    ): CacheRead {
+    ): ?CacheRead {
         return $plan->isDirectPrimaryKey()
             ? $this->readDirect($plan, $namespace, $hash)
             : $this->entries->read($query, $plan, $namespace, $hash->value());
@@ -236,8 +241,12 @@ final readonly class Engine
         QueryPlan $plan,
         string $namespace,
         QueryHashResolver $hash,
-    ): CacheRead {
+    ): ?CacheRead {
         $cached = $this->rows->read($plan);
+
+        if (!$this->runtime->readable()) {
+            return null;
+        }
         $resolve = fn(): CacheState => $this->states->resolve(
             $plan,
             $namespace,

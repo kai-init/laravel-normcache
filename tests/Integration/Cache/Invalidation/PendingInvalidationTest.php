@@ -89,6 +89,34 @@ final class PendingInvalidationTest extends TestCase
         $this->assertSame('Opaque', Author::query()->findOrFail(1)->name);
     }
 
+    public function test_nested_savepoint_rollback_preserves_outer_invalidation_until_commit(): void
+    {
+        $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'authors');
+        $versionKey = $this->cacheKeys()->version($table);
+        $before = $this->cacheStore()->getRaw($versionKey) ?? '0';
+        $this->assertSame('Before', Author::query()->findOrFail(1)->name);
+
+        DB::transaction(function () use ($versionKey, $before): void {
+            Author::query()->whereKey(1)->update(['name' => 'Outer']);
+
+            try {
+                DB::transaction(function (): void {
+                    Author::query()->whereKey(2)->update(['name' => 'Inner']);
+                    throw new \RuntimeException('rollback savepoint');
+                });
+            } catch (\RuntimeException) {
+            }
+
+            $this->assertSame($before, $this->cacheStore()->getRaw($versionKey) ?? '0');
+            $this->assertCount(2, $this->pending()[0]['tokens']);
+        });
+
+        $this->assertSame((string) ((int) $before + 1), $this->cacheStore()->getRaw($versionKey));
+        $this->assertSame('Outer', Author::query()->findOrFail(1)->name);
+        $this->assertSame('Before', Author::query()->findOrFail(2)->name);
+        $this->assertSame([], $this->pending());
+    }
+
     private function pending(): array
     {
         $pending = (new \ReflectionProperty(Invalidator::class, 'pendingInvalidations'))

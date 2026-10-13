@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache\Read;
 
 use Closure;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
@@ -271,6 +272,29 @@ final class CanonicalReadTest extends TestCase
         $this->assertSame([$this->postId], DB::getQueryLog()[0]['bindings']);
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
         $this->assertWarmCacheHit(fn() => RawPost::query()->toBase()->orderBy('id')->get());
+    }
+
+    public function test_cold_canonical_fill_rejects_a_table_change_after_missing_rows_are_selected(): void
+    {
+        $advanced = false;
+        DB::listen(function (QueryExecuted $event) use (&$advanced): void {
+            if ($advanced || !str_contains(strtolower($event->sql), ' in (')) {
+                return;
+            }
+
+            $advanced = true;
+            RawPost::query()->toBase()->where('id', $this->postId)->update(['published' => false]);
+        });
+
+        $rows = RawPost::query()->toBase()
+            ->where('published', true)
+            ->orderBy('id')
+            ->get();
+
+        $this->assertTrue($advanced, 'the cold build must select absent row payloads by primary key');
+        $this->assertCount(0, $rows);
+        $this->assertSame([], $this->cacheQueryKeysWithField('m'));
+        $this->assertCount(0, RawPost::query()->toBase()->where('published', true)->withoutCache()->get());
     }
 
     public function test_precise_invalidation_between_canonical_phases_cannot_mix_membership_and_row_versions(): void

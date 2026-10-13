@@ -40,7 +40,7 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertEquals($primaryKey, $plan->primaryKey);
     }
 
-    public function test_limited_root_wildcard_uses_an_automatic_result_overlay(): void
+    public function test_limited_root_wildcard_uses_canonical_route(): void
     {
         $query = RawPost::query()->toBase()->from('posts')->limit(20);
 
@@ -99,17 +99,13 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
     }
 
-    public function test_limited_wildcard_query_materializes_result_overlay(): void
+    public function test_explicit_root_only_dependency_uses_result_storage(): void
     {
-        $query = RawPost::query()->toBase()->from('posts')->limit(20);
+        $query = RawPost::query()->toBase()->from('posts')->dependsOn(['posts']);
 
-        $plan = $this->planner->plan(
-            $query,
-            $this->posts,
-            [$this->posts],
-        );
+        $plan = $this->planner->plan($query, $this->posts, [$this->posts]);
 
-        $this->assertSame(QueryPlan::CANONICAL, $plan->route);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
     public function test_primary_key_query_uses_direct_row_route(): void

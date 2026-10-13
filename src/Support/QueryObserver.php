@@ -90,6 +90,10 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
+        if (!$this->enabled()) {
+            return;
+        }
+
         $this->guard($outcome->value, function () use (
             $outcome, $query, $plan, $hash, $statement, $reason,
         ): void {
@@ -160,6 +164,10 @@ final class QueryObserver
         QueryStatement $statement,
         ?QueryPlan $plan = null,
     ): void {
+        if (!$this->enabled()) {
+            return;
+        }
+
         $this->guard('bypass', function () use ($query, $reason, $statement, $plan): void {
             $this->recordBypass($query, $reason, $statement, $plan);
         });
@@ -207,6 +215,10 @@ final class QueryObserver
     /** @param list<string> $tokens */
     public function invalidated(TableIdentity $table, string $mode, array $tokens): void
     {
+        if (!$this->enabled()) {
+            return;
+        }
+
         $this->guard('invalidation', function () use ($table, $mode, $tokens): void {
             $this->recordInvalidation($table, $mode, $tokens);
         });

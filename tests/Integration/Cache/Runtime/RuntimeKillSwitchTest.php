@@ -127,6 +127,32 @@ final class RuntimeKillSwitchTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_direct_reads_bypass_while_disabled_and_resume_after_enable_in_same_scope(): void
+    {
+        $read = fn() => RawPost::query()->toBase()->where('id', 1)->first();
+        $this->assertSame('Before', $read()->title);
+
+        $this->assertTrue(NormCache::disableCache());
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Before', $read()->title);
+        DB::disableQueryLog();
+        $this->assertCount(1, DB::getQueryLog());
+
+        $this->assertNotNull(NormCache::enableCache());
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Before', $read()->title);
+        DB::disableQueryLog();
+        $this->assertCount(1, DB::getQueryLog());
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertSame('Before', $read()->title);
+        DB::disableQueryLog();
+        $this->assertSame([], DB::getQueryLog());
+    }
+
     public function test_a_flag_set_by_another_process_is_observed_next_scope(): void
     {
         $read = fn() => RawPost::query()->toBase()->where('id', 1)->value('title');
