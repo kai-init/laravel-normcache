@@ -124,7 +124,6 @@ final readonly class QueryEntryRepository
         $rawMembership = $status === RedisProtocol::HIT
             ? RedisProtocol::canonicalPayload($head)
             : null;
-        $promote = RedisProtocol::value($head, 4) === '1';
         $miss = fn(?string $reason): CacheRead => new CacheRead(
             $this->states->resolve($plan, $namespace, $queryHash, $version, $generation),
             ReadOutcome::MISS,
@@ -173,10 +172,6 @@ final readonly class QueryEntryRepository
         }
 
         $result = $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
-
-        if ($result->served() && $promote) {
-            $this->promoteOverlay($plan, $state, $rawMembership, $result->rows);
-        }
 
         return $result;
     }
@@ -454,30 +449,8 @@ final readonly class QueryEntryRepository
         return $state->versions === []
             && $state->tagKey === null
             && strlen($encoded) > self::EAGER_AUTO_OVERLAY_BYTES
-                ? ''
+                ? null
                 : $encoded;
-    }
-
-    /** @param array<int, mixed> $rows */
-    private function promoteOverlay(
-        QueryPlan $plan,
-        CacheState $state,
-        string $membership,
-        array $rows,
-    ): void {
-        try {
-            $this->store->promoteResultOverlay(
-                versionKey: $this->keys->version($plan->root),
-                generationKey: $this->keys->generation($plan->root),
-                entryKey: $state->key,
-                expectedVersion: $state->version,
-                expectedGeneration: $state->generation,
-                expectedMembership: $membership,
-                payload: $this->encodeOverlay($state, $rows),
-            );
-        } catch (\Exception) {
-            // Promotion is opportunistic; the canonical hit is already valid.
-        }
     }
 
     /** @param array<int, mixed> $rows */

@@ -8,7 +8,7 @@
 --
 -- Returns:
 --   {'result', ver, payload}
---   {'membership', ver, gen, membership, deferred}
+--   {'membership', ver, gen, membership}
 --   {'miss', ver, gen}
 
 local version = redis.call('GET', KEYS[1]) or '0'
@@ -26,4 +26,4 @@ if not membership then
     return {'miss', version, generation}
 end
 
-return {'membership', version, generation, membership, result == '' and '1' or ''}
+return {'membership', version, generation, membership}

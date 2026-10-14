@@ -231,22 +231,6 @@ final class RedisStore
         );
     }
 
-    public function promoteResultOverlay(
-        string $versionKey,
-        string $generationKey,
-        string $entryKey,
-        string $expectedVersion,
-        string $expectedGeneration,
-        string $expectedMembership,
-        ?string $payload,
-    ): bool {
-        return (bool) $this->script(
-            RedisScripts::get('promote_result'),
-            [$versionKey, $generationKey, $entryKey],
-            [$expectedVersion, $expectedGeneration, $expectedMembership, $payload ?? ''],
-        );
-    }
-
     /** @return array<int, mixed> */
     public function fetchRow(
         string $generationKey,
