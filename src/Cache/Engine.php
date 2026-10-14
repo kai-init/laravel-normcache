@@ -199,7 +199,10 @@ final readonly class Engine
 
                 return $primaryDatabase();
             }
+            $reusedTokens = $rows->reusedTokens;
+            $rows = $rows->rows;
         } else {
+            $reusedTokens = [];
             try {
                 $rows = $primaryDatabase();
             } catch (\Throwable $exception) {
@@ -214,7 +217,7 @@ final readonly class Engine
                 ($cached->state->versions === [] && $cached->state->tagKey === null)
                 || $this->states->resolve($plan, $namespace, $queryHash)->equals($cached->state)
             ) {
-                $this->publish($query, $plan, $cached->state, $rows, $lease);
+                $this->publish($query, $plan, $cached->state, $rows, $lease, $reusedTokens);
             } else {
                 $this->leases()->release($lease);
             }
@@ -316,9 +319,10 @@ final readonly class Engine
         CacheState $state,
         array $rows,
         BuildLease $lease,
+        array $reusedTokens = [],
     ): void {
         if ($plan->isCanonical()) {
-            $this->publishCanonical($query, $plan, $state, $rows, $lease);
+            $this->publishCanonical($query, $plan, $state, $rows, $lease, $reusedTokens);
 
             return;
         }
@@ -348,6 +352,7 @@ final readonly class Engine
         CacheState $state,
         array $rows,
         BuildLease $lease,
+        array $reusedTokens = [],
     ): void {
         $overlay = $this->entries->inlineResult($state, $rows);
 
@@ -359,6 +364,7 @@ final readonly class Engine
             $lease,
             $this->config->wakeTtl(),
             $overlay,
+            $reusedTokens,
         )) {
             $this->leases()->release($lease);
         }

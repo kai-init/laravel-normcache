@@ -157,7 +157,7 @@ final class DiagnosticsTest extends TestCase
 
         $this->assertIsString($rowKey);
         $this->deleteResultOverlays();
-        $this->cacheStore()->delete($rowKey);
+        $this->deleteCacheKeys($rowKey);
         Event::fake([QueryCacheMiss::class, QueryCacheRepaired::class]);
 
         RawPost::query()->toBase()->orderBy('id')->get();

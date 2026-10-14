@@ -6,7 +6,6 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
-use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Exceptions\TableInvalidationException;
 use Predis\NotSupportedException;
@@ -99,20 +98,6 @@ final class RedisStore
             : null;
 
         return [(int) ($result[0] ?? 0) === 1, $owner];
-    }
-
-    public function delete(string|array $keys): void
-    {
-        $keys = array_values(array_filter(
-            (array) $keys,
-            static fn(mixed $key): bool => is_string($key) && $key !== '',
-        ));
-
-        if ($keys === []) {
-            return;
-        }
-
-        $this->del($keys);
     }
 
     public function releaseBuilding(
@@ -561,28 +546,6 @@ final class RedisStore
 
         return !$connection instanceof PredisClusterConnection
             && !$connection instanceof PhpRedisClusterConnection;
-    }
-
-    /** @param list<string> $keys */
-    private function del(array $keys): void
-    {
-        $this->withRetryingConnection(function (Connection $connection) use ($keys): void {
-            if ($connection instanceof PredisClusterConnection) {
-                foreach ($this->groupByHashTag($keys) as $group) {
-                    $connection->command('del', $group);
-                }
-
-                return;
-            }
-
-            if ($connection instanceof PredisConnection) {
-                $connection->del($keys);
-
-                return;
-            }
-
-            $connection->unlink($keys);
-        });
     }
 
     private function withRawValues(callable $callback, bool $retry = true): mixed

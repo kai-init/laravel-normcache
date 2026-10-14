@@ -19,6 +19,16 @@ use Predis\Client;
 
 trait CacheAssertions
 {
+    /** @param string|list<string> $keys */
+    protected function deleteCacheKeys(string|array $keys): void
+    {
+        $connection = Redis::connection('normcache-test');
+
+        foreach ((array) $keys as $key) {
+            $connection->del([$key]);
+        }
+    }
+
     protected function writeCacheField(string $key, string $field, string $value): void
     {
         $connection = Redis::connection('normcache-test');

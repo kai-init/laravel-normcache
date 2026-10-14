@@ -8,6 +8,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisConnection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Payload\MembershipCodec;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\TableIdentityResolver;
@@ -47,6 +48,51 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertSame('Canonical', $row->title);
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_new_membership_reuses_valid_rows_and_repairs_corrupt_and_missing_rows(): void
+    {
+        $timestamp = now();
+        $authorId = Author::query()->toBase()->value('id');
+        $rows = [];
+
+        foreach ([2, 3] as $id) {
+            $rows[] = [
+                'title' => "Canonical {$id}", 'views' => $id, 'published' => true,
+                'author_id' => $authorId, 'created_at' => $timestamp, 'updated_at' => $timestamp,
+            ];
+        }
+
+        RawPost::query()->toBase()->insert($rows);
+        RawPost::query()->toBase()->where('id', '<=', 2)->orderBy('id')->get();
+
+        $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'posts');
+        $this->assertNotNull($table);
+        $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
+        $rowKey = fn(int $id): string => $this->cacheKeys()->row($table, $generation, 'i:' . $id);
+        $redis = Redis::connection('normcache-test');
+
+        $this->assertTrue((bool) $redis->expire($rowKey(1), 20));
+        $this->cacheStore()->setRawForever($rowKey(2), 'corrupt');
+
+        $query = fn() => RawPost::query()->toBase()->where('id', '>=', 1)->orderBy('id')->get();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $actual = $query();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertSame([1, 2, 3], $actual->pluck('id')->all());
+        $this->assertGreaterThan(0, (int) $redis->ttl($rowKey(1)));
+        $this->assertLessThanOrEqual(20, (int) $redis->ttl($rowKey(1)));
+        $this->assertNotSame('corrupt', $this->cacheStore()->getRaw($rowKey(2)));
+        $this->assertGreaterThan(20, (int) $redis->ttl($rowKey(2)));
+        $this->assertNotNull($this->cacheStore()->getRaw($rowKey(3)));
+        $this->assertGreaterThan(20, (int) $redis->ttl($rowKey(3)));
+        $this->assertCount(2, $queries);
+        $this->assertStringContainsString(' in (', strtolower($queries[1]['query']));
+        $this->assertSame([2, 3], array_map(intval(...), $queries[1]['bindings']));
+        $this->assertWarmCacheHit($query);
     }
 
     public function test_implicit_and_explicit_wildcards_share_the_canonical_cache_entry(): void
@@ -184,7 +230,7 @@ final class CanonicalReadTest extends TestCase
             ) ?? '0';
             $rowKey = $this->cacheKeys()->row($identity, $generation, 'i:1');
             $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
-            $this->cacheStore()->delete($rowKey);
+            $this->deleteCacheKeys($rowKey);
 
             DB::flushQueryLog();
             DB::enableQueryLog();
@@ -259,7 +305,7 @@ final class CanonicalReadTest extends TestCase
         $rowKey = $this->cacheKeysMatching(':r:g')[0] ?? null;
 
         $this->assertIsString($rowKey);
-        $this->cacheStore()->delete($rowKey);
+        $this->deleteCacheKeys($rowKey);
 
         DB::flushQueryLog();
         DB::enableQueryLog();

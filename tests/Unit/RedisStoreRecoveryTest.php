@@ -220,15 +220,15 @@ final class RedisStoreRecoveryTest extends UnitTestCase
         }
     }
 
-    public function test_rebuilds_the_connection_for_deletes(): void
+    public function test_rebuilds_the_connection_for_raw_writes(): void
     {
         $manager = $this->swapRedisManager([
             new \RuntimeException('Connection lost'),
-            1,
+            true,
         ]);
 
         $store = new RedisStore('normcache-test');
-        $store->delete(['key']);
+        $store->setRawForever('key', 'value');
 
         $this->assertSame(2, $manager->built);
     }

@@ -35,7 +35,7 @@ final class PhysicalTableIdentityTest extends TestCase
             $prefixed->newQuery()->toBase()->where('id', 1)->update(['name' => 'Final']);
             $this->assertSame('Final', $plain->newQuery()->find(1)->name);
             $this->assertWarmCacheHit(fn() => $prefixed->newQuery()->find(1));
-            $this->cacheStore()->delete($this->cacheKeysMatching(':r:g'));
+            $this->deleteCacheKeys($this->cacheKeysMatching(':r:g'));
             $this->assertSame('Final', $prefixed->newQuery()->orderBy('id')->first()->name);
         } finally {
             DB::connection('review_plain')->statement('drop table review_authors');

@@ -38,7 +38,7 @@ final class PartialRowRepairTest extends TestCase
         $expected = $query()->toArray();
         $missingId = $expected[1]['id'];
         $rowKey = $this->authorRowKey($missingId);
-        $this->cacheStore()->delete($rowKey);
+        $this->deleteCacheKeys($rowKey);
         $membershipKey = $this->cacheQueryKeysWithField('m')[0];
         $membership = $this->cacheStore()->readHashField($membershipKey, 'm');
         Redis::connection('normcache-test')->expire($membershipKey, 30);
@@ -67,7 +67,7 @@ final class PartialRowRepairTest extends TestCase
         Author::create(['name' => 'Included']);
         $query = fn() => Author::where('name', 'Included')->orderBy('id')->get();
         $query();
-        $this->cacheStore()->delete($this->authorRowKey($first->id));
+        $this->deleteCacheKeys($this->authorRowKey($first->id));
         $mutated = false;
         DB::listen(function ($event) use (&$mutated, $first): void {
             if (!$mutated && str_contains($event->sql, ' in (')) {
@@ -122,7 +122,7 @@ final class PartialRowRepairTest extends TestCase
             $membership->versions,
             $membership->tagVersion,
         ));
-        $this->cacheStore()->delete($this->authorRowKey($second->id));
+        $this->deleteCacheKeys($this->authorRowKey($second->id));
 
         [$actual, $queries] = $this->observe($query);
 
@@ -138,7 +138,7 @@ final class PartialRowRepairTest extends TestCase
         $second = Author::create(['name' => 'Two']);
         $query = fn() => Author::orderBy('id')->get();
         $query();
-        $this->cacheStore()->delete($this->authorRowKey($first->id));
+        $this->deleteCacheKeys($this->authorRowKey($first->id));
         DB::table('authors')->where('id', $first->id)->delete();
 
         [$actual, $queries] = $this->observe($query);
@@ -157,7 +157,7 @@ final class PartialRowRepairTest extends TestCase
         $author = Author::create(['name' => 'One']);
         $query = fn() => Author::orderBy('id')->tag('repair')->get();
         $query();
-        $this->cacheStore()->delete($this->authorRowKey($author->id));
+        $this->deleteCacheKeys($this->authorRowKey($author->id));
         $changed = false;
         DB::listen(function ($event) use (&$changed, $counter): void {
             if (!$changed && str_contains($event->sql, ' in (')) {
@@ -197,7 +197,7 @@ final class PartialRowRepairTest extends TestCase
         $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'uuid_items');
         $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
         $token = (new PrimaryKeyMetadata('id', 'string'))->token('a:{}');
-        $this->cacheStore()->delete($this->cacheKeys()->row($table, $generation, $token));
+        $this->deleteCacheKeys($this->cacheKeys()->row($table, $generation, $token));
 
         [$actual, $queries] = $this->observe($query);
 
@@ -216,7 +216,7 @@ final class PartialRowRepairTest extends TestCase
         $query = fn() => Author::orderBy('id')->get();
         $expected = $query()->modelKeys();
         $rowKeys = $this->cacheKeysMatching(':r:g');
-        $this->cacheStore()->delete(array_slice($rowKeys, 0, 901));
+        $this->deleteCacheKeys(array_slice($rowKeys, 0, 901));
 
         [$actual, $queries] = $this->observe($query);
 
@@ -234,7 +234,7 @@ final class PartialRowRepairTest extends TestCase
         $query();
         $rowKey = $this->authorRowKey($author->id);
         $payload = $this->cacheStore()->getRaw($rowKey);
-        $this->cacheStore()->delete($rowKey);
+        $this->deleteCacheKeys($rowKey);
         $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'authors');
         $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
         $batch = hash('xxh128', TableIdentity::encodeFields(['i:' . $author->id]));
@@ -271,7 +271,7 @@ final class PartialRowRepairTest extends TestCase
         $author = Author::create(['name' => 'One']);
         $query = fn() => Author::orderBy('id')->get();
         $query();
-        $this->cacheStore()->delete($this->authorRowKey($author->id));
+        $this->deleteCacheKeys($this->authorRowKey($author->id));
         $changed = false;
         DB::listen(function ($event) use (&$changed): void {
             if (!$changed && str_contains($event->sql, ' in (')) {
@@ -294,7 +294,7 @@ final class PartialRowRepairTest extends TestCase
         $author = Author::create(['name' => 'One']);
         $query = fn() => Author::orderBy('id')->get();
         $query();
-        $this->cacheStore()->delete($this->authorRowKey($author->id));
+        $this->deleteCacheKeys($this->authorRowKey($author->id));
         $failed = false;
         DB::connection()->beforeExecuting(function (string $sql) use (&$failed): void {
             if (!$failed && str_contains($sql, ' in (')) {
@@ -315,7 +315,7 @@ final class PartialRowRepairTest extends TestCase
         $query = fn() => Author::orderBy('id')->get();
         $query();
         $rowKey = $this->authorRowKey($author->id);
-        $this->cacheStore()->delete($rowKey);
+        $this->deleteCacheKeys($rowKey);
         $leaseKey = null;
         $newOwner = str_repeat('f', 32);
         $unpublished = false;

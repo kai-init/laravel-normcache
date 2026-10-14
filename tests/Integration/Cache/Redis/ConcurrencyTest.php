@@ -98,7 +98,7 @@ final class ConcurrencyTest extends TestCase
         $query();
         $this->assertIsString($buildKey, 'expected a build lease to be held across the database read');
 
-        $this->cacheStore()->delete([
+        $this->deleteCacheKeys([
             ...$this->cacheKeysMatching(':q:v'),
             ...$this->cacheKeysMatching(':r:g'),
         ]);

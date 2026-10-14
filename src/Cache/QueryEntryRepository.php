@@ -14,6 +14,7 @@ use NormCache\Values\BuildLease;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
+use NormCache\Values\LoadedCanonical;
 use NormCache\Values\QueryPlan;
 use NormCache\Values\RowRepair;
 
@@ -176,8 +177,7 @@ final readonly class QueryEntryRepository
         return $result;
     }
 
-    /** @return list<\stdClass>|null */
-    public function loadCanonical(QueryBuilder $query, QueryPlan $plan, CacheState $state): ?array
+    public function loadCanonical(QueryBuilder $query, QueryPlan $plan, CacheState $state): ?LoadedCanonical
     {
         $idsQuery = $query->clone()->select($plan->primaryKey->column);
         $ids = $query->getConnection()->select($idsQuery->toSql(), $idsQuery->getBindings(), false);
@@ -205,6 +205,7 @@ final readonly class QueryEntryRepository
             return null;
         }
 
+        $reusedTokens = [];
         $result = $this->assembleRows(
             $query,
             $plan,
@@ -212,6 +213,7 @@ final readonly class QueryEntryRepository
             $tokens,
             $fetched,
             coldBuild: true,
+            reusedTokens: $reusedTokens,
         );
 
         if (!$result->served()) {
@@ -219,10 +221,12 @@ final readonly class QueryEntryRepository
         }
 
         if ($atomicMget && $result->outcome === ReadOutcome::HIT) {
-            return $result->rows;
+            return new LoadedCanonical($result->rows, $reusedTokens);
         }
 
-        return $this->states->isCurrent($plan, $state) ? $result->rows : null;
+        return $this->states->isCurrent($plan, $state)
+            ? new LoadedCanonical($result->rows, $reusedTokens)
+            : null;
     }
 
     /**
@@ -236,6 +240,7 @@ final readonly class QueryEntryRepository
         array $tokens,
         array $fetched,
         bool $coldBuild = false,
+        ?array &$reusedTokens = null,
     ): CacheRead {
         $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
         $rows = [];
@@ -261,6 +266,9 @@ final readonly class QueryEntryRepository
             }
 
             $rows[$index] = $row;
+            if ($reusedTokens !== null) {
+                $reusedTokens[$token] = true;
+            }
         }
 
         $outcome = ReadOutcome::HIT;
@@ -304,11 +312,12 @@ final readonly class QueryEntryRepository
         BuildLease $lease,
         int $wakeTtl,
         ?string $resultOverlay = null,
+        array $reusedTokens = [],
     ): bool {
         $ids = [];
         $rowKeys = [];
         $rowPayloads = [];
-        $positions = [];
+        $seenRows = [];
         $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
 
         foreach ($rows as $row) {
@@ -322,25 +331,25 @@ final readonly class QueryEntryRepository
                 return false;
             }
 
-            $encoded = $this->codec->encodeRow($row, $state->epoch);
-
-            if ($encoded === null) {
-                return false;
-            }
-
             $ids[] = $token;
 
-            if (array_key_exists($token, $positions)) {
-                if ($rowPayloads[$positions[$token]] !== $encoded) {
+            if (isset($seenRows[$token])) {
+                if ((array) $seenRows[$token] !== (array) $row) {
                     return false;
                 }
 
                 continue;
             }
 
-            $positions[$token] = count($rowKeys);
-            $rowKeys[] = $rowPrefix . $token;
-            $rowPayloads[] = $encoded;
+            $seenRows[$token] = $row;
+            if (!isset($reusedTokens[$token])) {
+                $encoded = $this->codec->encodeRow($row, $state->epoch);
+                if ($encoded === null) {
+                    return false;
+                }
+                $rowKeys[] = $rowPrefix . $token;
+                $rowPayloads[] = $encoded;
+            }
         }
 
         $membership = $this->memberships->encode(

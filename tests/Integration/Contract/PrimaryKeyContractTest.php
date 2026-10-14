@@ -110,7 +110,7 @@ final class PrimaryKeyContractTest extends TestCase
             ) ?? '0';
             $rowKey = $this->cacheKeys()->row($identity, $generation, 'i:' . $id);
             $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
-            $this->cacheStore()->delete($rowKey);
+            $this->deleteCacheKeys($rowKey);
 
             DB::flushQueryLog();
             DB::enableQueryLog();

@@ -57,7 +57,7 @@ final class LazyOverlaySentinelTest extends TestCase
         $expected = $query()->pluck('id')->all();
         $entryKey = $this->membershipKey();
         $missingId = $expected[63];
-        $this->cacheStore()->delete($this->cacheKeys()->row(
+        $this->deleteCacheKeys($this->cacheKeys()->row(
             $this->postsIdentity(),
             $this->cacheStore()->getRaw($this->cacheKeys()->generation($this->postsIdentity())) ?? '0',
             'i:' . $missingId,
