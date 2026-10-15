@@ -4,6 +4,7 @@ namespace NormCache\Tests\Unit;
 
 use Illuminate\Support\Facades\Event;
 use NormCache\Database\QueryStatement;
+use NormCache\Enums\ReadOutcome;
 use NormCache\Events\QueryCacheHit;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Support\FailureReporter;
@@ -36,8 +37,8 @@ final class QueryObserverTest extends UnitTestCase
         $bindings = [42];
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        $observer->hit($query, $plan, 'hit-hash', $statement, 'result_overlay');
-        $observer->miss($query, $plan, 'miss-hash', $statement);
+        $observer->read(ReadOutcome::HIT, $query, $plan, 'hit-hash', $statement, 'result_overlay');
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'miss-hash', $statement);
 
         Event::assertDispatched(
             QueryCacheHit::class,
@@ -75,15 +76,15 @@ final class QueryObserverTest extends UnitTestCase
 
         // Same corrupted key observed twice (e.g. a concurrent request racing the
         // same still-corrupt payload) must only be reported once.
-        $observer->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
-        $observer->miss($query, $plan, 'hash-a', $statement, 'corrupt_payload');
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'hash-a', $statement, 'corrupt_payload');
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'hash-a', $statement, 'corrupt_payload');
 
         // A different corrupted key is a distinct occurrence and must still report.
-        $observer->miss($query, $plan, 'hash-b', $statement, 'corrupt_payload');
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'hash-b', $statement, 'corrupt_payload');
 
         // Dedup is specific to corrupt_payload; ordinary misses are unaffected.
-        $observer->miss($query, $plan, 'hash-c', $statement);
-        $observer->miss($query, $plan, 'hash-c', $statement);
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'hash-c', $statement);
+        $observer->read(ReadOutcome::MISS, $query, $plan, 'hash-c', $statement);
 
         Event::assertDispatchedTimes(QueryCacheMiss::class, 4);
     }

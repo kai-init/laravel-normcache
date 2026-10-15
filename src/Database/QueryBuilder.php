@@ -23,8 +23,6 @@ final class QueryBuilder extends Builder
 {
     public array $fetchUsing = [];
 
-    private Connection $databaseConnection;
-
     /** @var class-string|null */
     private ?string $modelClass = null;
 
@@ -56,7 +54,6 @@ final class QueryBuilder extends Builder
         ?Processor $processor = null,
     ) {
         parent::__construct($connection, $grammar, $processor);
-        $this->databaseConnection = $connection;
     }
 
     public function selectSub($query, $as)
@@ -152,7 +149,10 @@ final class QueryBuilder extends Builder
 
     public function getConnection(): Connection
     {
-        return $this->databaseConnection;
+        /** @var Connection $connection */
+        $connection = $this->connection;
+
+        return $connection;
     }
 
     /**
@@ -616,12 +616,12 @@ final class QueryBuilder extends Builder
 
     private function connectionPretending(): bool
     {
-        return $this->databaseConnection->pretending();
+        return $this->getConnection()->pretending();
     }
 
     private function hasCustomDefaultFetchMode(): bool
     {
-        $options = (array) $this->databaseConnection->getConfig('options');
+        $options = (array) $this->getConnection()->getConfig('options');
         $mode = $options[\PDO::ATTR_DEFAULT_FETCH_MODE] ?? \PDO::FETCH_OBJ;
 
         return $mode !== \PDO::FETCH_OBJ;
