@@ -182,6 +182,10 @@ final readonly class RawResultCodec
     /** @return array<string, string>|null */
     private function stringMap(array $values): ?array
     {
+        if ($values === []) {
+            return [];
+        }
+
         $result = [];
 
         foreach ($values as $key => $value) {
@@ -200,6 +204,10 @@ final readonly class RawResultCodec
     /** @return list<\stdClass>|null */
     private function rowList(array $rows): ?array
     {
+        if ($rows === []) {
+            return [];
+        }
+
         $result = [];
 
         foreach ($rows as $row) {

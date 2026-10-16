@@ -10,6 +10,8 @@ final class RedisProtocol
 
     public const HIT = 'hit';
 
+    public const MISS = 'miss';
+
     /** @param array<int, mixed> $reply */
     public static function status(array $reply): ?string
     {

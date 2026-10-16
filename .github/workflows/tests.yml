@@ -166,3 +166,9 @@ jobs:
           tests/Integration/Contract
           tests/Integration/Cache/Invalidation/DeleteInvalidationTest.php
           tests/Integration/Database/CrossDatabaseSafetyTest.php
+          tests/Integration/Cache/Read/CacheStateResolverTest.php
+          tests/Integration/Cache/Read/CanonicalReadTest.php
+          tests/Integration/Cache/Read/CanonicalBuildLeaseTest.php
+          tests/Integration/Cache/Read/ResultBuildLeaseTest.php
+          tests/Integration/Cache/Read/KnownPrimaryKeyColdFillTest.php
+          tests/Integration/Cache/Read/KnownPrimaryKeyRawSqlTest.php

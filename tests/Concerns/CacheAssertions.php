@@ -19,6 +19,21 @@ use Predis\Client;
 
 trait CacheAssertions
 {
+    /** @param array{query: string, bindings: array} $query @param list<int> $ids */
+    protected function assertIntegerPrimaryKeyBatch(array $query, array $ids): void
+    {
+        $this->assertSame(1, preg_match('/\bin\s*\(([^)]*)\)/i', $query['query'], $matches));
+
+        if (in_array(DB::connection()->getDriverName(), ['mysql', 'mariadb'], true)) {
+            $this->assertSame([], $query['bindings']);
+            $this->assertSame(array_map('strval', $ids), array_map('trim', explode(',', $matches[1])));
+
+            return;
+        }
+
+        $this->assertSame($ids, $query['bindings']);
+    }
+
     /** @param string|list<string> $keys */
     protected function deleteCacheKeys(string|array $keys): void
     {

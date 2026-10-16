@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache\Read;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\TestCase;
@@ -114,6 +115,76 @@ final class CacheStateResolverTest extends TestCase
         $this->cacheStore()->increment($this->cacheKeys()->generation($plan->root));
 
         $this->assertTrue($state->equals($resolver->resolve($plan, 'n', 'hash', usesGeneration: false)));
+    }
+
+    #[DataProvider('warmReadPlans')]
+    public function test_known_version_warm_reads_match_the_generic_state(
+        string $factory,
+        ?string $knownGeneration,
+        ?bool $usesGeneration,
+    ): void {
+        $resolver = $this->app->make(CacheStateResolver::class);
+        $this->app->make(CacheRuntime::class)->epoch();
+        $plan = $this->{$factory}();
+
+        $warm = $resolver->resolve(
+            $plan,
+            'n',
+            'hash',
+            knownVersion: '4',
+            knownGeneration: $knownGeneration,
+            usesGeneration: $usesGeneration,
+        );
+        $generic = $resolver->resolve(
+            $plan,
+            'n',
+            'hash',
+            knownVersion: '4',
+            knownGeneration: $knownGeneration,
+            usesGeneration: $usesGeneration,
+            prefetched: [],
+        );
+
+        $this->assertTrue($warm->equals($generic));
+    }
+
+    /** @return array<string, array{string, ?string, ?bool}> */
+    public static function warmReadPlans(): array
+    {
+        return [
+            'result explicit generation disabled' => ['resultPlan', null, false],
+            'result default generation setting' => ['resultPlan', null, null],
+            'canonical overlay' => ['canonicalPlan', null, false],
+            'canonical membership generation' => ['canonicalPlan', '7', null],
+        ];
+    }
+
+    public function test_known_version_warm_reads_keep_tag_and_dependency_keys(): void
+    {
+        $resolver = $this->app->make(CacheStateResolver::class);
+        $this->app->make(CacheRuntime::class)->epoch();
+        $root = $this->table('posts');
+        $dependency = $this->table('authors');
+        $multiTable = QueryPlan::result($root, [$root, $dependency]);
+
+        $tagged = $resolver->resolve(
+            $this->resultPlan(),
+            'g' . str_repeat('a', 32),
+            'hash',
+            knownVersion: '0',
+            usesGeneration: false,
+        );
+        $dependent = $resolver->resolve(
+            $multiTable,
+            'n',
+            'hash',
+            knownVersion: '0',
+            usesGeneration: false,
+        );
+
+        $this->assertNotNull($tagged->tagKey);
+        $this->assertSame([$dependency->hash => '0'], $dependent->versions);
+        $this->assertContains($this->cacheKeys()->version($dependency), $resolver->pendingStateKeys($multiTable, 'n'));
     }
 
     private function resultPlan(): QueryPlan

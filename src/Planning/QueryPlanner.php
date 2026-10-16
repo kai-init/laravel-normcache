@@ -72,6 +72,82 @@ final class QueryPlanner
         return QueryPlan::result($root, $dependencies);
     }
 
+    /** @return array{tokens: list<string>, softDeleteMode: ?string}|null */
+    public function knownPrimaryKeys(QueryBuilder $query, QueryPlan $plan): ?array
+    {
+        if (
+            !$plan->isCanonical()
+            || $plan->primaryKey === null
+            || $plan->primaryKey->family !== PrimaryKeyMetadata::INTEGER
+            || count($plan->dependencies) !== 1
+            || $plan->dependencies[0]->hash !== $plan->root->hash
+            || $query->configuredTag() !== null
+            || $query->configuredTtl() !== null
+            || $query->configuredCacheContext() !== null
+            || $query->limit !== null
+            || $query->offset !== null
+            || count($query->orders ?? []) !== 1
+        ) {
+            return null;
+        }
+
+        $order = $query->orders[0];
+        if (
+            ($order['type'] ?? null) === 'Raw'
+            || ($order['direction'] ?? null) === null
+            || !in_array(strtolower((string) $order['direction']), ['asc', 'desc'], true)
+            || !is_string($order['column'] ?? null)
+            || !$this->resolvesToColumn($query, $plan->root, $order['column'], $plan->primaryKey->column)
+        ) {
+            return null;
+        }
+
+        $inWhere = null;
+        foreach ($query->wheres as $where) {
+            if ($this->isSoftDeleteWhere($query, $plan->root, $where)) {
+                continue;
+            }
+            if (
+                $inWhere !== null
+                || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
+                || !in_array($where['type'] ?? null, ['In', 'InRaw'], true)
+                || !is_string($where['column'] ?? null)
+                || !$this->resolvesToColumn($query, $plan->root, $where['column'], $plan->primaryKey->column)
+                || !is_array($where['values'] ?? null)
+            ) {
+                return null;
+            }
+            $inWhere = $where;
+        }
+        if ($inWhere === null) {
+            return null;
+        }
+        [$safe, $mode] = $this->softDeleteMode($query, $plan->root);
+        if (!$safe) {
+            return null;
+        }
+
+        $values = [];
+        foreach ($inWhere['values'] as $value) {
+            if ($value instanceof Expression) {
+                return null;
+            }
+            $token = $plan->primaryKey->token($value);
+            $decoded = $token === null ? null : $plan->primaryKey->valueFromToken($token);
+            if (!is_int($decoded)) {
+                return null;
+            }
+            $values[$token] = $decoded;
+        }
+        if (strtolower((string) $order['direction']) === 'desc') {
+            arsort($values, SORT_REGULAR);
+        } else {
+            asort($values, SORT_REGULAR);
+        }
+
+        return ['tokens' => array_keys($values), 'softDeleteMode' => $mode];
+    }
+
     /**
      * @param  list<TableIdentity>  $dependencies
      */

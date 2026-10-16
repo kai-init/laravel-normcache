@@ -69,6 +69,31 @@ final readonly class CacheStateResolver
         ?bool $usesGeneration = null,
         ?array $prefetched = null,
     ): CacheState {
+        if (
+            $knownVersion !== null
+            && (
+                $knownGeneration === null
+                && ($usesGeneration ?? $plan->usesGeneration()) === false
+                || $knownGeneration !== null && $plan->isCanonical()
+            )
+            && $prefetched === null
+            && !$plan->isQueryGroup()
+            && count($plan->dependencies) === 1
+            && $plan->dependencies[0]->hash === $plan->root->hash
+            && !str_starts_with($namespace, 'g')
+            && $this->runtime->knownEpoch() !== null
+        ) {
+            return new CacheState(
+                key: $this->keys->queryEntry($plan->root, $knownVersion, $namespace, $queryHash),
+                epoch: $this->runtime->epoch(),
+                version: $knownVersion,
+                generation: $knownGeneration ?? '0',
+                versions: [],
+                tag: null,
+                tagKey: null,
+            );
+        }
+
         $pending = $this->pendingKeys(
             $plan,
             $namespace,
@@ -216,9 +241,11 @@ final readonly class CacheStateResolver
     ): array {
         $dependencies = [];
 
-        foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash) {
-                $dependencies[$dependency->hash] = $this->keys->version($dependency);
+        if (count($plan->dependencies) > 1) {
+            foreach ($plan->dependencies as $dependency) {
+                if ($dependency->hash !== $plan->root->hash) {
+                    $dependencies[$dependency->hash] = $this->keys->version($dependency);
+                }
             }
         }
 

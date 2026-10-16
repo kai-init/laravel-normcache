@@ -50,6 +50,26 @@ final class CanonicalReadTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_canonical_limit_one_miss_populates_canonical_row_for_direct_pk_reads(): void
+    {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $post = RawPost::query()->toBase()->where('title', 'Canonical')->first();
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $this->assertCount(1, $queries);
+        $this->assertSame('Canonical', $post->title);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $row = RawPost::query()->toBase()->where('id', $this->postId)->first();
+        DB::disableQueryLog();
+
+        $this->assertSame('Canonical', $row->title);
+        $this->assertSame([], DB::getQueryLog());
+    }
+
     public function test_new_membership_reuses_valid_rows_and_repairs_corrupt_and_missing_rows(): void
     {
         $timestamp = now();
@@ -90,8 +110,7 @@ final class CanonicalReadTest extends TestCase
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey(3)));
         $this->assertGreaterThan(20, (int) $redis->ttl($rowKey(3)));
         $this->assertCount(2, $queries);
-        $this->assertStringContainsString(' in (', strtolower($queries[1]['query']));
-        $this->assertSame([2, 3], array_map(intval(...), $queries[1]['bindings']));
+        $this->assertIntegerPrimaryKeyBatch($queries[1], [2, 3]);
         $this->assertWarmCacheHit($query);
     }
 
@@ -190,6 +209,10 @@ final class CanonicalReadTest extends TestCase
 
     public function test_sqlite_attached_schema_repairs_rows_from_the_qualified_table(): void
     {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('Attached schema repair requires SQLite.');
+        }
+
         $path = sys_get_temp_dir() . '/normcache-attached-' . bin2hex(random_bytes(8)) . '.sqlite';
         touch($path);
         DB::statement('ATTACH DATABASE ? AS tenant', [$path]);
@@ -271,11 +294,27 @@ final class CanonicalReadTest extends TestCase
             ));
         }
 
-        $rows = RawPost::query()->toBase()->orderBy('id')->get();
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $rows = RawPost::query()->toBase()->orderBy('id')->get();
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+
+        $payloadQueries = array_values(array_filter(
+            $queries,
+            static fn(array $entry): bool => str_contains(strtolower($entry['query']), ' in ('),
+        ));
 
         $this->assertCount(1_001, $rows);
         $this->assertCount(1, $this->cacheQueryKeysWithField('m'));
         $this->assertCount(1_001, $this->cacheKeysMatching(':r:g'));
+        $this->assertCount(
+            in_array(DB::connection()->getDriverName(), ['mysql', 'mariadb'], true) ? 1 : 2,
+            $payloadQueries,
+        );
     }
 
     public function test_narrow_projection_uses_a_result_payload_without_widening_sql(): void
@@ -314,8 +353,7 @@ final class CanonicalReadTest extends TestCase
 
         $this->assertSame($expected->map(fn($row) => (array) $row)->all(), $actual->map(fn($row) => (array) $row)->all());
         $this->assertCount(1, DB::getQueryLog());
-        $this->assertStringContainsString(' in (?)', DB::getQueryLog()[0]['query']);
-        $this->assertSame([$this->postId], DB::getQueryLog()[0]['bindings']);
+        $this->assertIntegerPrimaryKeyBatch(DB::getQueryLog()[0], [$this->postId]);
         $this->assertNotNull($this->cacheStore()->getRaw($rowKey));
         $this->assertWarmCacheHit(fn() => RawPost::query()->toBase()->orderBy('id')->get());
     }

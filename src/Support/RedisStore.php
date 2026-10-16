@@ -187,11 +187,13 @@ final class RedisStore
         string $tablePrefix,
         string $namespace,
         string $queryHash,
+        ?string $claimToken = null,
+        int $leaseTtl = 0,
     ): array {
         return (array) $this->script(
             RedisScripts::get('fetch_canonical'),
             [$versionKey, $generationKey, $tablePrefix],
-            [$namespace, $queryHash],
+            [$namespace, $queryHash, $claimToken ?? '', (string) $leaseTtl],
         );
     }
 
@@ -235,11 +237,13 @@ final class RedisStore
         string $tablePrefix,
         string $namespace,
         string $queryHash,
+        ?string $claimToken = null,
+        int $leaseTtl = 0,
     ): array {
         return (array) $this->script(
             RedisScripts::get('fetch_result'),
             [$versionKey, $tablePrefix],
-            [$namespace, $queryHash],
+            [$namespace, $queryHash, $claimToken ?? '', (string) $leaseTtl],
         );
     }
 
@@ -250,11 +254,13 @@ final class RedisStore
         string $tablePrefix,
         string $namespace,
         string $queryHash,
+        ?string $claimToken = null,
+        int $leaseTtl = 0,
     ): array {
         return (array) $this->script(
             RedisScripts::get('fetch_result_or_canonical'),
             [$versionKey, $generationKey, $tablePrefix],
-            [$namespace, $queryHash],
+            [$namespace, $queryHash, $claimToken ?? '', (string) $leaseTtl],
         );
     }
 

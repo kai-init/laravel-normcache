@@ -20,6 +20,8 @@ final readonly class RowRepairer
     /** Keeps WHERE IN bindings below SQLite's traditional variable limit. */
     private const REPAIR_BATCH_SIZE = 900;
 
+    private const MYSQL_REPAIR_BATCH_SIZE = 5000;
+
     public function __construct(
         private CacheConfig $config,
         private RedisStore $store,
@@ -95,9 +97,13 @@ final readonly class RowRepairer
     /** @param list<string> $tokens
      * @return array<string, \stdClass>|null
      */
-    public function loadForCanonicalBuild(QueryBuilder $query, QueryPlan $plan, array $tokens): ?array
-    {
-        return $this->fetchDatabaseRows($query, $plan, $tokens);
+    public function loadForCanonicalBuild(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        array $tokens,
+        bool $allowMissing = false,
+    ): ?array {
+        return $this->fetchDatabaseRows($query, $plan, $tokens, $allowMissing);
     }
 
     /**
@@ -166,9 +172,14 @@ final readonly class RowRepairer
     /** @param list<string> $tokens
      * @return array<string, \stdClass>|null
      */
-    private function fetchDatabaseRows(QueryBuilder $query, QueryPlan $plan, array $tokens): ?array
-    {
+    private function fetchDatabaseRows(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        array $tokens,
+        bool $allowMissing = false,
+    ): ?array {
         $values = [];
+        $nativeIntegersOnly = true;
 
         foreach ($tokens as $token) {
             $value = $plan->primaryKey->valueFromToken($token);
@@ -178,18 +189,22 @@ final readonly class RowRepairer
             }
 
             $values[] = $value;
+            $nativeIntegersOnly = $nativeIntegersOnly && is_int($value);
         }
 
         $rowsByToken = [];
+        $mysqlFamily = in_array($query->getConnection()->getDriverName(), ['mysql', 'mariadb'], true);
+        $batchSize = $mysqlFamily ? self::MYSQL_REPAIR_BATCH_SIZE : self::REPAIR_BATCH_SIZE;
 
         try {
-            foreach (array_chunk($values, self::REPAIR_BATCH_SIZE) as $batch) {
-                $rows = $query->getConnection()
-                    ->query()
-                    ->from($plan->root->qualifiedTable())
-                    ->whereIn($plan->primaryKey->column, $batch)
-                    ->useWritePdo()
-                    ->get();
+            foreach (array_chunk($values, $batchSize) as $batch) {
+                $builder = $query->getConnection()->query()->from($plan->root->qualifiedTable());
+                if ($mysqlFamily && $nativeIntegersOnly) {
+                    $builder->whereIntegerInRaw($plan->primaryKey->column, $batch);
+                } else {
+                    $builder->whereIn($plan->primaryKey->column, $batch);
+                }
+                $rows = $builder->useWritePdo()->get();
 
                 foreach ($rows as $row) {
                     if (!property_exists($row, $plan->primaryKey->column)) {
@@ -211,9 +226,11 @@ final readonly class RowRepairer
             return null;
         }
 
-        foreach ($tokens as $token) {
-            if (!isset($rowsByToken[$token])) {
-                return null;
+        if (!$allowMissing) {
+            foreach ($tokens as $token) {
+                if (!isset($rowsByToken[$token])) {
+                    return null;
+                }
             }
         }
 

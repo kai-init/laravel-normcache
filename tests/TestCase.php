@@ -105,7 +105,7 @@ abstract class TestCase extends OrchestraTestCase
 
     protected function defineDatabaseMigrations(): void
     {
-        if (env('TEST_DB_DRIVER', 'sqlite') !== 'sqlite') {
+        if ($this->app['config']->get('database.connections.testing.driver') !== 'sqlite') {
             Schema::dropAllTables();
         }
 

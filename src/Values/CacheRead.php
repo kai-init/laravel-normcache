@@ -12,6 +12,7 @@ final readonly class CacheRead
         public ReadOutcome $outcome,
         public array $rows = [],
         public ?string $reason = null,
+        public ?BuildLease $lease = null,
     ) {}
 
     public function served(): bool
@@ -21,6 +22,6 @@ final readonly class CacheRead
 
     public function withReason(?string $reason): self
     {
-        return new self($this->state, $this->outcome, $this->rows, $reason);
+        return new self($this->state, $this->outcome, $this->rows, $reason, $this->lease);
     }
 }

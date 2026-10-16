@@ -87,21 +87,17 @@ final readonly class Engine
             return $database();
         }
 
-        $dependencyHashes = array_map(
-            static fn(TableIdentity $dependency): string => $dependency->hash,
-            $dependencies,
-        );
         $hash = $this->queryHashResolver(
             $plan,
             $connection,
-            $dependencyHashes,
+            $dependencies,
             $namespace,
             $operation,
             $statement,
         );
 
         try {
-            $cached = $this->read($query, $plan, $namespace, $hash);
+            $cached = $this->read($query, $plan, $namespace, $hash, claim: true);
 
             if ($cached === null) {
                 return $database();
@@ -137,7 +133,7 @@ final readonly class Engine
 
         try {
             $queryHash = $hash->value();
-            $lease = $this->leases()->claim($plan, $cached->state, $namespace, $queryHash);
+            $lease = $cached->lease ?? $this->leases()->claim($plan, $cached->state, $namespace, $queryHash);
         } catch (\Throwable $exception) {
             $this->runtime->fail($exception);
 
@@ -160,7 +156,7 @@ final readonly class Engine
                         $lease->wakeKey,
                         $this->config->stampedeWaitMs / 1000,
                     );
-                    $retry = $this->read($query, $plan, $namespace, $hash);
+                    $retry = $this->read($query, $plan, $namespace, $hash, claim: false);
 
                     if ($retry?->served()) {
                         $this->observer->read(
@@ -184,7 +180,7 @@ final readonly class Engine
             return $primaryDatabase();
         }
 
-        if ($plan->isCanonical() && $cached->reason === null) {
+        if ($plan->isCanonical() && $cached->reason === null && $query->limit !== 1) {
             try {
                 $rows = $this->entries->loadCanonical($query, $plan, $cached->state);
             } catch (\Throwable $exception) {
@@ -234,10 +230,11 @@ final readonly class Engine
         QueryPlan $plan,
         string $namespace,
         QueryHashResolver $hash,
+        bool $claim,
     ): ?CacheRead {
         return $plan->isDirectPrimaryKey()
             ? $this->readDirect($plan, $namespace, $hash)
-            : $this->entries->read($query, $plan, $namespace, $hash->value());
+            : $this->entries->read($query, $plan, $namespace, $hash->value(), $claim);
     }
 
     private function readDirect(
@@ -272,24 +269,37 @@ final readonly class Engine
             );
     }
 
-    /** @param list<string> $dependencyHashes */
+    /** @param list<TableIdentity> $dependencies */
     private function queryHashResolver(
         QueryPlan $plan,
         Connection $connection,
-        array $dependencyHashes,
+        array $dependencies,
         string $namespace,
         string $operation,
         QueryStatement $statement,
     ): QueryHashResolver {
-        return new QueryHashResolver(fn(): string => $this->identity->hash(
-            route: $plan->route,
-            rootHash: $plan->root->hash,
-            dependencyHashes: $dependencyHashes,
-            sql: $statement->sql(),
-            bindings: $statement->preparedBindings($connection),
-            namespace: $namespace,
-            operation: $operation,
-        ));
+        return new QueryHashResolver(function () use (
+            $plan,
+            $connection,
+            $dependencies,
+            $namespace,
+            $operation,
+            $statement,
+        ): string {
+            $dependencyHashes = count($dependencies) === 1
+                ? [$dependencies[0]->hash]
+                : array_map(static fn(TableIdentity $d): string => $d->hash, $dependencies);
+
+            return $this->identity->hash(
+                route: $plan->route,
+                rootHash: $plan->root->hash,
+                dependencyHashes: $dependencyHashes,
+                sql: $statement->sql(),
+                bindings: $statement->preparedBindings($connection),
+                namespace: $namespace,
+                operation: $operation,
+            );
+        });
     }
 
     private function leases(): BuildLeaseCoordinator
