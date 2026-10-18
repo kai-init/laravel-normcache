@@ -137,7 +137,7 @@ final class ResultBuildLeaseTest extends TestCase
         $fired = false;
         $ownerToken = null;
         $connection->listen(function (CommandExecuted $event) use (&$fired, &$ownerToken, $buildKey): void {
-            if (!$fired && strtolower($event->command) === 'mget') {
+            if (!$fired && in_array(strtolower($event->command), ['mget', 'pipeline'], true)) {
                 $fired = true;
                 $ownerToken = $this->cacheStore()->getRaw($buildKey);
                 throw new \Error('result resolution failed');

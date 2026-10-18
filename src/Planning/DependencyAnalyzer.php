@@ -22,29 +22,7 @@ final class DependencyAnalyzer
     ): DependencyAnalysis {
         $directRoot = $this->tables->resolve($connection, $query->from);
         $dependencies = new DependencyCollection;
-        $declarations = $query->dependencies();
-        $declaredRoot = null;
-        $authoritative = false;
-        $unresolved = false;
-
-        foreach ($declarations as $declaration) {
-            $identity = $declaration->isTable()
-                ? $this->tables->resolve($connection, $declaration->value)
-                : $this->modelIdentity($connection, $declaration->value);
-
-            if ($identity === null) {
-                $unresolved = true;
-
-                continue;
-            }
-
-            if ($declaredRoot === null || $identity->hash < $declaredRoot->hash) {
-                $declaredRoot = $identity;
-            }
-
-            $authoritative = true;
-            $dependencies->add($identity);
-        }
+        $declaredRoot = $this->walk($connection, $query, $dependencies, $directRoot);
 
         $root = $directRoot
             ?? $this->modelRoot($connection, $query)
@@ -60,21 +38,12 @@ final class DependencyAnalyzer
         }
 
         $dependencies->add($root);
-        $this->walk($connection, $query, $dependencies, $directRoot);
-
-        $bypassReason = null;
-
-        if ($unresolved) {
-            $bypassReason = 'unresolvable_declared_dependency';
-        } elseif ($dependencies->isOpaque() && !$authoritative) {
-            $bypassReason = 'unidentifiable_dependency';
-        }
 
         return new DependencyAnalysis(
             root: $root,
             tables: $dependencies->all(),
             queryScoped: $directRoot === null,
-            bypassReason: $bypassReason,
+            bypassReason: $dependencies->bypassReason(),
         );
     }
 
@@ -83,9 +52,32 @@ final class DependencyAnalyzer
         Builder $query,
         DependencyCollection $dependencies,
         ?TableIdentity $resolvedSource = null,
-    ): void {
-        if (!$dependencies->enter($query)) {
-            return;
+        bool $authoritative = false,
+    ): ?TableIdentity {
+        $declaredRoot = null;
+
+        foreach ($query instanceof QueryBuilder ? $query->dependencies() : [] as $declaration) {
+            $identity = $declaration->isTable()
+                ? $this->tables->resolve($connection, $declaration->value)
+                : $this->modelIdentity($connection, $declaration->value);
+
+            if ($identity === null) {
+                $dependencies->markUnresolvedDeclaration();
+
+                continue;
+            }
+
+            if ($declaredRoot === null || $identity->hash < $declaredRoot->hash) {
+                $declaredRoot = $identity;
+            }
+
+            $dependencies->add($identity);
+        }
+
+        $authoritative = $authoritative || $declaredRoot !== null;
+
+        if (!$dependencies->enter($query, $authoritative)) {
+            return $declaredRoot;
         }
 
         if ($resolvedSource !== null) {
@@ -96,10 +88,11 @@ final class DependencyAnalyzer
                 $query,
                 $query->from,
                 $dependencies,
+                $authoritative,
                 source: true,
             );
         } else {
-            $this->resolveSource($connection, $query->from, $dependencies);
+            $this->resolveSource($connection, $query->from, $dependencies, $authoritative);
         }
 
         foreach ($query->joins ?? [] as $join) {
@@ -109,13 +102,14 @@ final class DependencyAnalyzer
                     $query,
                     $join->table,
                     $dependencies,
+                    $authoritative,
                     source: true,
                 );
             } else {
-                $this->resolveSource($connection, $join->table, $dependencies);
+                $this->resolveSource($connection, $join->table, $dependencies, $authoritative);
             }
 
-            $this->walkValues($connection, $query, $join->wheres, $dependencies);
+            $this->walkValues($connection, $query, $join->wheres, $dependencies, $authoritative);
         }
 
         foreach ([
@@ -127,7 +121,7 @@ final class DependencyAnalyzer
             $query->orders ?? [],
             $query->unionOrders ?? [],
         ] as $values) {
-            $this->walkValues($connection, $query, $values, $dependencies);
+            $this->walkValues($connection, $query, $values, $dependencies, $authoritative);
         }
 
         foreach ($query->unions ?? [] as $union) {
@@ -135,11 +129,13 @@ final class DependencyAnalyzer
             $nested = $nested instanceof EloquentBuilder ? $nested->toBase() : $nested;
 
             if ($nested instanceof Builder) {
-                $this->walk($connection, $nested, $dependencies);
-            } else {
+                $this->walk($connection, $nested, $dependencies, authoritative: $authoritative);
+            } elseif (!$authoritative) {
                 $dependencies->markOpaque();
             }
         }
+
+        return $declaredRoot;
     }
 
     /** @param array<mixed> $values */
@@ -148,18 +144,19 @@ final class DependencyAnalyzer
         Builder $query,
         array $values,
         DependencyCollection $dependencies,
+        bool $authoritative,
     ): void {
         foreach ($values as $value) {
             $value = $value instanceof EloquentBuilder ? $value->toBase() : $value;
 
             if ($value instanceof Builder) {
-                $this->walk($connection, $value, $dependencies);
+                $this->walk($connection, $value, $dependencies, authoritative: $authoritative);
 
                 continue;
             }
 
             if ($value instanceof Expression) {
-                $this->walkExpression($connection, $query, $value, $dependencies);
+                $this->walkExpression($connection, $query, $value, $dependencies, $authoritative);
 
                 continue;
             }
@@ -171,12 +168,12 @@ final class DependencyAnalyzer
             if (in_array($value['type'] ?? null, ['raw', 'Raw', 'Expression'], true)) {
                 $sql = $value['sql'] ?? $value['column'] ?? null;
 
-                if (!is_string($sql) || $this->rawMayReferenceSource($sql)) {
+                if (!$authoritative && (!is_string($sql) || $this->rawMayReferenceSource($sql))) {
                     $dependencies->markOpaque();
                 }
             }
 
-            $this->walkValues($connection, $query, array_values($value), $dependencies);
+            $this->walkValues($connection, $query, array_values($value), $dependencies, $authoritative);
         }
     }
 
@@ -185,6 +182,7 @@ final class DependencyAnalyzer
         Builder $query,
         Expression $expression,
         DependencyCollection $dependencies,
+        bool $authoritative,
         bool $source = false,
     ): void {
         $subquery = $query instanceof QueryBuilder
@@ -192,20 +190,22 @@ final class DependencyAnalyzer
             : null;
 
         if ($subquery !== null) {
-            $this->walk($connection, $subquery, $dependencies);
+            $this->walk($connection, $subquery, $dependencies, authoritative: $authoritative);
 
             return;
         }
 
         if ($source) {
-            $dependencies->markOpaque();
+            if (!$authoritative) {
+                $dependencies->markOpaque();
+            }
 
             return;
         }
 
         $sql = (string) $expression->getValue($query->getGrammar());
 
-        if ($this->rawMayReferenceSource($sql)) {
+        if (!$authoritative && $this->rawMayReferenceSource($sql)) {
             $dependencies->markOpaque();
         }
     }
@@ -222,11 +222,14 @@ final class DependencyAnalyzer
         Connection $connection,
         mixed $source,
         DependencyCollection $dependencies,
+        bool $authoritative,
     ): void {
         $identity = $this->tables->resolve($connection, $source);
 
         if ($identity === null) {
-            $dependencies->markOpaque();
+            if (!$authoritative) {
+                $dependencies->markOpaque();
+            }
 
             return;
         }

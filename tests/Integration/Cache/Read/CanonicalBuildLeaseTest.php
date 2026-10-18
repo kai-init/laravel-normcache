@@ -195,7 +195,7 @@ final class CanonicalBuildLeaseTest extends TestCase
         $connection->setEventDispatcher($this->app->make('events'));
         $thrown = false;
         $connection->listen(function (CommandExecuted $event) use (&$thrown): void {
-            if (!$thrown && strtolower($event->command) === 'mget') {
+            if (!$thrown && in_array(strtolower($event->command), ['mget', 'pipeline'], true)) {
                 $thrown = true;
                 throw new \Error('resolution failed');
             }

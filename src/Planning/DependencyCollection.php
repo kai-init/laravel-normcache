@@ -10,19 +10,19 @@ final class DependencyCollection
     /** @var array<string, TableIdentity> */
     private array $tables = [];
 
-    /** @var array<int, true> */
+    /** @var array<string, true> */
     private array $visited = [];
 
-    private bool $opaque = false;
+    private ?string $bypassReason = null;
 
     public function add(TableIdentity $table): void
     {
         $this->tables[$table->hash] = $table;
     }
 
-    public function enter(Builder $query): bool
+    public function enter(Builder $query, bool $authoritative): bool
     {
-        $id = spl_object_id($query);
+        $id = spl_object_id($query) . ':' . (int) $authoritative;
 
         if (isset($this->visited[$id])) {
             return false;
@@ -35,12 +35,17 @@ final class DependencyCollection
 
     public function markOpaque(): void
     {
-        $this->opaque = true;
+        $this->bypassReason ??= 'unidentifiable_dependency';
     }
 
-    public function isOpaque(): bool
+    public function markUnresolvedDeclaration(): void
     {
-        return $this->opaque;
+        $this->bypassReason = 'unresolvable_declared_dependency';
+    }
+
+    public function bypassReason(): ?string
+    {
+        return $this->bypassReason;
     }
 
     /** @return list<TableIdentity> */

@@ -31,6 +31,37 @@ class CacheSafetyModel extends Model
 
 final class CrossDatabaseSafetyTest extends TestCase
 {
+    public function test_postgres_case_distinct_columns_keep_read_and_invalidation_identity(): void
+    {
+        if (DB::connection()->getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('Case-distinct quoted columns require PostgreSQL.');
+        }
+
+        Schema::create('review_case_items', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('ID');
+            $table->string('name');
+        });
+        $model = (new CacheSafetyModel)->setTable('review_case_items');
+
+        try {
+            $model->newQuery()->insert([
+                ['id' => 1, 'ID' => 2, 'name' => 'First'],
+                ['id' => 2, 'ID' => 1, 'name' => 'Second'],
+            ]);
+            $this->assertSame('Second', $model->newQuery()->findOrFail(2)->name);
+            $this->assertSame(1, $model->newQuery()->where('ID', 2)->firstOrFail()->id);
+            $this->assertSame('First', $model->newQuery()->findOrFail(1)->name);
+
+            $model->newQuery()->where('ID', 2)->update(['name' => 'Changed']);
+
+            $this->assertSame('Changed', $model->newQuery()->findOrFail(1)->name);
+            $this->assertWarmCacheHit(fn() => $model->newQuery()->findOrFail(1));
+        } finally {
+            Schema::drop('review_case_items');
+        }
+    }
+
     protected function tearDown(): void
     {
         DB::statement('drop view if exists review_author_view');

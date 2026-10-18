@@ -160,19 +160,10 @@ final class CacheRuntime
 
     private function resolveDisabled(): bool
     {
-        if ($this->epoch === null || $this->epochExpired()) {
-            return $this->resolveState()[1];
+        if ($this->runtimeDisabled !== false) {
+            $this->forgetEpoch();
         }
 
-        if ($this->runtimeDisabled === true) {
-            return $this->runtimeDisabled = $this->readFlag();
-        }
-
-        return $this->runtimeDisabled ??= $this->readFlag();
-    }
-
-    private function readFlag(): bool
-    {
-        return $this->store->getRaw($this->keys->disabled()) !== null;
+        return $this->resolveState()[1];
     }
 }

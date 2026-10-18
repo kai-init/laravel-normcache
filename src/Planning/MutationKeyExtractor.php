@@ -24,7 +24,13 @@ final class MutationKeyExtractor
         }
 
         foreach ($assigned as $column => $value) {
-            if (!$this->isPrimaryKey($column, $primaryKey)) {
+            $column = $this->columnName($column);
+
+            if ($column !== $primaryKey->column) {
+                if ($column !== null && strcasecmp($column, $primaryKey->column) === 0) {
+                    return null;
+                }
+
                 continue;
             }
 
@@ -68,7 +74,7 @@ final class MutationKeyExtractor
                 return null;
             }
 
-            if (!$this->isPrimaryKey($where['column'] ?? null, $primaryKey)) {
+            if ($this->columnName($where['column'] ?? null) !== $primaryKey->column) {
                 continue;
             }
 
@@ -111,10 +117,10 @@ final class MutationKeyExtractor
         return $result;
     }
 
-    private function isPrimaryKey(mixed $column, PrimaryKeyMetadata $primaryKey): bool
+    private function columnName(mixed $column): ?string
     {
         if (!is_string($column)) {
-            return false;
+            return null;
         }
 
         $column = trim($column, '`"[]');
@@ -125,6 +131,6 @@ final class MutationKeyExtractor
 
         $column = trim($column, '`"[]');
 
-        return strtolower($column) === strtolower($primaryKey->column);
+        return $column;
     }
 }

@@ -230,13 +230,13 @@ final class QueryPlanner
             return false;
         }
 
-        $column = strtolower(trim($query->columns[0]));
+        $column = trim($query->columns[0]);
 
         $alias = $this->fromAlias($query);
 
         return $alias !== null
             ? $column === $alias . '.*'
-            : $column === strtolower($root->table) . '.*';
+            : $column === $root->table . '.*';
     }
 
     private function fromAlias(QueryBuilder $query): ?string
@@ -245,7 +245,7 @@ final class QueryPlanner
             is_string($query->from)
             && preg_match('/\\s+(?:as\\s+)?([^\\s]+)$/i', trim($query->from), $matches) === 1
         ) {
-            return strtolower($matches[1]);
+            return $matches[1];
         }
 
         return null;
@@ -367,7 +367,7 @@ final class QueryPlanner
         $parts = explode('.', trim($column));
         $unqualified = trim((string) array_pop($parts), '`"[]');
 
-        if (strtolower($unqualified) !== strtolower($expected)) {
+        if ($unqualified !== $expected) {
             return false;
         }
 
@@ -375,11 +375,11 @@ final class QueryPlanner
             return true;
         }
 
-        $qualifier = strtolower(trim((string) array_pop($parts), '`"[]'));
+        $qualifier = trim((string) array_pop($parts), '`"[]');
 
         return $parts === [] && $this->isValidQualifier(
             $qualifier,
-            strtolower($root->table),
+            $root->table,
             $this->fromAlias($query),
         );
     }

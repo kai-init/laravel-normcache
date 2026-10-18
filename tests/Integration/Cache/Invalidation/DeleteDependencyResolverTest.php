@@ -6,7 +6,6 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Facades\DB;
-use Mockery;
 use NormCache\Planning\ConnectionSourceResolver;
 use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\TableIdentityResolver;
@@ -111,16 +110,17 @@ final class DeleteDependencyResolverTest extends TestCase
 
     public function test_failed_introspection_returns_null_and_is_retried(): void
     {
-        $connection = Mockery::mock(Connection::class);
-        $connection->shouldReceive('getConfig')->withNoArgs()->andReturn(['name' => 'testing']);
-        $connection->shouldReceive('getConfig')->with('search_path')->andReturn(null);
-        $connection->shouldReceive('getConfig')->with('schema')->andReturn(null);
-        $connection->shouldReceive('getDriverName')->twice()->andReturn('sqlite');
-        $connection->shouldReceive('getDatabaseName')->twice()->andReturn('/tmp/database.sqlite');
-        $connection->shouldReceive('getTablePrefix')->times(4)->andReturn('');
-        $connection->shouldReceive('getSchemaBuilder')->twice()->andThrow(
-            new \RuntimeException('Schema metadata is unavailable.'),
-        );
+        $connection = new class(new \PDO('sqlite::memory:'), '/tmp/database.sqlite', 'test_', ['name' => 'testing', 'driver' => 'sqlite']) extends SQLiteConnection
+        {
+            public int $attempts = 0;
+
+            public function getSchemaBuilder()
+            {
+                $this->attempts++;
+
+                throw new \RuntimeException('Schema metadata is unavailable.');
+            }
+        };
         $parent = TableIdentity::fromParts(
             driver: 'sqlite',
             connection: 'testing',
@@ -133,6 +133,8 @@ final class DeleteDependencyResolverTest extends TestCase
 
         $this->assertNull($resolver->affectedByDelete($connection, $parent, '0'));
         $this->assertNull($resolver->affectedByDelete($connection, $parent, '0'));
+        $this->assertSame(2, $connection->attempts);
+        $this->assertSame('test_', $connection->getTablePrefix());
     }
 
     /** @return list<string> */

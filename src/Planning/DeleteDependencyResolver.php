@@ -47,7 +47,9 @@ final readonly class DeleteDependencyResolver
                     continue;
                 }
 
-                $child = $this->tables->resolve($connection, $edge['table']);
+                $child = $connection->withoutTablePrefix(
+                    fn(): ?TableIdentity => $this->tables->resolve($connection, $edge['table']),
+                );
 
                 if ($child === null) {
                     return null;
@@ -72,7 +74,12 @@ final readonly class DeleteDependencyResolver
     private function graph(Connection $connection, string $epoch): ?array
     {
         try {
-            return $this->schema->remember($connection, $epoch, 'deletes', fn(): array => $this->inspect($connection));
+            return $this->schema->remember(
+                $connection,
+                $epoch,
+                'physical-deletes',
+                fn(): array => $connection->withoutTablePrefix(fn(): array => $this->inspect($connection)),
+            );
         } catch (\Throwable) {
             return null;
         }
@@ -81,27 +88,14 @@ final readonly class DeleteDependencyResolver
     /** @return array<string, list<array{table: string, action: string}>> */
     private function inspect(Connection $connection): array
     {
-        $prefix = (string) $connection->getTablePrefix();
         $schema = $connection->getSchemaBuilder();
         $graph = [];
 
         foreach ($schema->getTables() as $table) {
-            $childTable = $this->logicalTable($table['name'], $prefix);
-
-            if ($childTable === null) {
-                continue;
-            }
-
-            $childReference = $this->reference($table['schema'], $childTable);
+            $childReference = $this->reference($table['schema'], $table['name']);
 
             foreach ($schema->getForeignKeys($childReference) as $foreignKey) {
-                $parentTable = $this->logicalTable($foreignKey['foreign_table'], $prefix);
-
-                if ($parentTable === null) {
-                    continue;
-                }
-
-                $parentReference = $this->reference($foreignKey['foreign_schema'], $parentTable);
+                $parentReference = $this->reference($foreignKey['foreign_schema'], $foreignKey['foreign_table']);
                 $action = $this->deleteAction($foreignKey['on_delete']);
 
                 if ($action === null) {
@@ -130,21 +124,6 @@ final readonly class DeleteDependencyResolver
         }
 
         return $graph;
-    }
-
-    private function logicalTable(string $physical, string $prefix): ?string
-    {
-        if ($prefix === '') {
-            return $physical !== '' ? $physical : null;
-        }
-
-        if (!str_starts_with($physical, $prefix)) {
-            return null;
-        }
-
-        $logical = substr($physical, strlen($prefix));
-
-        return $logical !== '' ? $logical : null;
     }
 
     private function reference(?string $schema, string $table): string
