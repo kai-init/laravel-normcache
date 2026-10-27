@@ -257,16 +257,15 @@ final class RedisStoreTest extends TestCase
                 resultPayload: 'result-payload',
             ));
 
-            $this->assertSame(
-                ['result', '0', 'result-payload'],
-                $store->fetchResultOrCanonical(
-                    $versionKey,
-                    $generationKey,
-                    $keys->tablePrefix($table),
-                    'u',
-                    'serializer-query',
-                ),
+            $reply = $store->fetchTableQuery(
+                $versionKey,
+                $generationKey,
+                $keys->tablePrefix($table),
+                'u',
+                'serializer-query',
+                'prefer-result',
             );
+            $this->assertSame(['result', '0', false, 'result-payload', 0, false], $reply);
             $this->assertSame('membership-payload', $store->readHashField($entryKey, 'm'));
             $this->assertSame('result-payload', $store->readHashField($entryKey, 'r'));
             $this->assertSame(
@@ -372,26 +371,27 @@ final class RedisStoreTest extends TestCase
             wakeTtl: 11,
         ));
 
-        $result = $store->fetchCanonical(
+        $result = $store->fetchTableQuery(
             versionKey: $versionKey,
             generationKey: $generationKey,
             tablePrefix: $keys->tablePrefix($table),
             namespace: 'u',
             queryHash: 'query',
+            mode: 'membership',
         );
 
-        $this->assertSame('hit', $result[0]);
-        $this->assertSame('0', $result[1]);
-        $this->assertSame('0', $result[2]);
+        $result = array_map(static fn(mixed $value): mixed => $value ?? false, $result);
+        $this->assertSame(['membership', '0', '0', '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}', 0, false], $result);
 
         // The script resolves the key from ver, so a bump points it at an unwritten key.
         $store->increment($versionKey);
-        $this->assertSame('miss', $store->fetchCanonical(
+        $this->assertSame('miss', $store->fetchTableQuery(
             $versionKey,
             $generationKey,
             $keys->tablePrefix($table),
             'u',
             'query',
+            'membership',
         )[0]);
     }
 
@@ -429,22 +429,25 @@ final class RedisStoreTest extends TestCase
         ));
 
         // One publication, so readers find the overlay ahead of the membership it was built from.
-        $this->assertSame(
-            ['result', '0', 'overlay-payload'],
-            array_slice((array) $store->fetchResultOrCanonical(
-                versionKey: $versionKey,
-                generationKey: $generationKey,
-                tablePrefix: $keys->tablePrefix($table),
-                namespace: 'u',
-                queryHash: 'query',
-            ), 0, 3),
+        $reply = $store->fetchTableQuery(
+            versionKey: $versionKey,
+            generationKey: $generationKey,
+            tablePrefix: $keys->tablePrefix($table),
+            namespace: 'u',
+            queryHash: 'query',
+            mode: 'prefer-result',
         );
-        $this->assertSame('hit', $store->fetchCanonical(
+        $this->assertSame('result', $reply[0]);
+        $this->assertSame('0', $reply[1]);
+        $this->assertSame('overlay-payload', $reply[3]);
+
+        $this->assertSame('membership', $store->fetchTableQuery(
             $versionKey,
             $generationKey,
             $keys->tablePrefix($table),
             'u',
             'query',
+            'membership',
         )[0]);
         // The overlay rides in the membership's own key, under its single TTL.
         $this->assertSame('overlay-payload', $store->readHashField($membershipKey, 'r'));
@@ -544,38 +547,45 @@ final class RedisStoreTest extends TestCase
         $this->writeCacheField($membershipKey, 'm', $membership);
         $this->writeCacheField($resultKey, 'r', 'result-payload');
 
-        $result = $store->fetchResultOrCanonical(
+        $result = $store->fetchTableQuery(
             $versionKey,
             $generationKey,
             $prefix,
             'u',
             'result-query',
+            'prefer-result',
         );
 
-        $this->assertSame(['result', '0', 'result-payload'], $result);
+        $result = array_map(static fn(mixed $value): mixed => $value ?? false, $result);
+        $this->assertSame(['result', '0', false, 'result-payload', 0, false], $result);
 
         $this->deleteCacheField($resultKey, 'r');
-        $canonical = $store->fetchResultOrCanonical(
+        $canonical = $store->fetchTableQuery(
             $versionKey,
             $generationKey,
             $prefix,
             'u',
             'result-query',
+            'prefer-result',
         );
 
-        $this->assertSame('membership', $canonical[0]);
-        $this->assertSame('0', $canonical[1]);
-        $this->assertSame('0', $canonical[2]);
-        $this->assertSame($membership, $canonical[3]);
+        $canonical = array_map(static fn(mixed $value): mixed => $value ?? false, $canonical);
+        $this->assertSame(['membership', '0', '0', $membership, 0, false], $canonical);
 
         $store->increment($versionKey);
-        $this->assertSame('miss', $store->fetchResultOrCanonical(
+        $token = str_repeat('b', 32);
+        $miss = $store->fetchTableQuery(
             $versionKey,
             $generationKey,
             $prefix,
             'u',
             'result-query',
-        )[0]);
+            'prefer-result',
+            $token,
+            30,
+        );
+        $miss = array_map(static fn(mixed $value): mixed => $value ?? false, $miss);
+        $this->assertSame(['miss', '1', '0', false, 1, $token], $miss);
     }
 
     public function test_multiple_table_states_are_invalidated_together(): void

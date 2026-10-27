@@ -7,6 +7,7 @@ use Illuminate\Database\Connection;
 use NormCache\Database\QueryBuilder;
 use NormCache\Database\QueryStatement;
 use NormCache\Enums\ReadOutcome;
+use NormCache\Invalidator;
 use NormCache\Planning\DependencyAnalyzer;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Support\QueryIdentity;
@@ -33,6 +34,7 @@ final readonly class Engine
         private QueryEntryRepository $entries,
         private Container $container,
         private CanonicalRowRepository $rows,
+        private Invalidator $invalidator,
     ) {}
 
     /**
@@ -46,13 +48,20 @@ final readonly class Engine
         callable $database,
         callable $primaryDatabase,
     ): array {
+        $connection = $query->getConnection();
+        $reconciled = $this->invalidator->reconcileOrphaned($connection);
+        if (!$reconciled) {
+            $this->observer->begin();
+
+            return $this->bypass($query, 'transaction_active', $statement, $primaryDatabase);
+        }
+
         if (!$this->runtime->locallyReadable()) {
             return $database();
         }
 
         $this->observer->begin();
 
-        $connection = $query->getConnection();
         $analysis = $this->dependencies->analyze($connection, $query);
         $table = $analysis->root;
 
@@ -343,16 +352,14 @@ final readonly class Engine
             return;
         }
 
-        if (!$this->entries->publishResult(
+        $this->entries->publishResult(
             $query,
             $plan,
             $state,
             $rows,
             $lease,
             $this->config->wakeTtl(),
-        )) {
-            $this->leases()->release($lease);
-        }
+        );
     }
 
     /** @param array<int, mixed> $rows */
@@ -366,7 +373,7 @@ final readonly class Engine
     ): void {
         $overlay = $this->entries->inlineResult($state, $rows);
 
-        if (!$this->entries->publishCanonical(
+        $this->entries->publishCanonical(
             $query,
             $plan,
             $state,
@@ -375,8 +382,6 @@ final readonly class Engine
             $this->config->wakeTtl(),
             $overlay,
             $reusedTokens,
-        )) {
-            $this->leases()->release($lease);
-        }
+        );
     }
 }

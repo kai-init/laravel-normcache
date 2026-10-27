@@ -17,7 +17,7 @@ use NormCache\Values\CacheRead;
 use NormCache\Values\CacheState;
 use NormCache\Values\LoadedCanonical;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\RowRepair;
+use NormCache\Values\TableQueryReply;
 
 final readonly class QueryEntryRepository
 {
@@ -45,31 +45,28 @@ final readonly class QueryEntryRepository
         bool $claim = false,
     ): CacheRead {
         if ($plan->isCanonical()) {
-            $arguments = [
+            $claimToken = $claim ? bin2hex(random_bytes(16)) : null;
+            $reply = $this->store->fetchTableQuery(
                 $this->keys->version($plan->root),
                 $this->keys->generation($plan->root),
                 $this->keys->tablePrefix($plan->root),
                 $namespace,
                 $queryHash,
-            ];
-            $claimToken = $claim ? bin2hex(random_bytes(16)) : null;
-            if ($claimToken !== null) {
-                $arguments[] = $claimToken;
-                $arguments[] = $this->config->buildingLockTtl;
-            }
-            $head = $this->config->maxAutoOverlayRows > 0
-                ? $this->store->fetchResultOrCanonical(...$arguments)
-                : $this->store->fetchCanonical(...$arguments);
+                $this->config->maxAutoOverlayRows > 0 ? 'prefer-result' : 'membership',
+                $claimToken,
+                $claimToken === null ? 0 : $this->config->buildingLockTtl,
+            );
+            $entry = RedisProtocol::decodeTableQuery($reply);
 
-            if (RedisProtocol::status($head) === RedisProtocol::RESULT) {
+            if ($entry->kind === RedisProtocol::RESULT) {
                 $state = $this->states->resolve(
                     $plan,
                     $namespace,
                     $queryHash,
-                    RedisProtocol::version($head),
+                    $entry->version,
                     usesGeneration: false,
                 );
-                $result = $this->readResult($state, RedisProtocol::resultPayload($head));
+                $result = $this->readResult($state, $entry->payload);
 
                 return $result->served()
                     ? $result->withReason('result_overlay')
@@ -81,11 +78,7 @@ final readonly class QueryEntryRepository
                     );
             }
 
-            if (RedisProtocol::status($head) === RedisProtocol::MEMBERSHIP) {
-                $head[0] = RedisProtocol::HIT;
-            }
-
-            return $this->readCanonical($query, $plan, $namespace, $queryHash, $head);
+            return $this->readCanonical($query, $plan, $namespace, $queryHash, $entry);
         }
 
         if ($plan->isQueryGroup()) {
@@ -102,26 +95,19 @@ final readonly class QueryEntryRepository
             );
         } else {
             $claimToken = $claim ? bin2hex(random_bytes(16)) : null;
-            $entry = $this->store->fetchResult(
+            $reply = $this->store->fetchTableQuery(
                 $this->keys->version($plan->root),
+                $this->keys->generation($plan->root),
                 $this->keys->tablePrefix($plan->root),
                 $namespace,
                 $queryHash,
+                'result',
                 $claimToken,
                 $claimToken === null ? 0 : $this->config->buildingLockTtl,
             );
-            $raw = RedisProtocol::value($entry, 1);
-            $version = RedisProtocol::version($entry, 0);
-            $lease = !is_string($raw)
-                && is_string($entry[3] ?? null)
-                && $entry[3] !== ''
-                    ? new BuildLease(
-                        (int) ($entry[2] ?? 0) === 1,
-                        $this->keys->queryBuild($plan->root, $version, $namespace, $queryHash),
-                        $this->keys->wake($plan->root, 'q', $queryHash, $entry[3]),
-                        $entry[3],
-                    )
-                    : null;
+            $entry = RedisProtocol::decodeTableQuery($reply);
+            $version = $entry->version;
+            $lease = $this->queryBuildLease($plan, $namespace, $queryHash, $entry);
             try {
                 $state = $this->states->resolve(
                     $plan,
@@ -130,7 +116,7 @@ final readonly class QueryEntryRepository
                     $version,
                     usesGeneration: false,
                 );
-                $result = $this->readResult($state, $raw);
+                $result = $this->readResult($state, $entry->payload);
             } catch (\Throwable $exception) {
                 if ($lease !== null) {
                     $this->container->make(BuildLeaseCoordinator::class)->release($lease);
@@ -152,24 +138,11 @@ final readonly class QueryEntryRepository
         QueryPlan $plan,
         string $namespace,
         string $queryHash,
-        array $head,
+        TableQueryReply $entry,
     ): CacheRead {
-        $status = RedisProtocol::status($head);
-        $version = RedisProtocol::version($head);
-        $generation = RedisProtocol::version($head, 2);
-        $rawMembership = $status === RedisProtocol::HIT
-            ? RedisProtocol::canonicalPayload($head)
-            : null;
-        $lease = $status === RedisProtocol::MISS
-            && is_string($head[4] ?? null)
-            && $head[4] !== ''
-                ? new BuildLease(
-                    (int) ($head[3] ?? 0) === 1,
-                    $this->keys->queryBuild($plan->root, $version, $namespace, $queryHash),
-                    $this->keys->wake($plan->root, 'q', $queryHash, $head[4]),
-                    $head[4],
-                )
-                : null;
+        $version = $entry->version;
+        $generation = $entry->generation ?? '0';
+        $lease = $this->queryBuildLease($plan, $namespace, $queryHash, $entry);
         $miss = function (?string $reason) use ($plan, $namespace, $queryHash, $version, $generation, $lease): CacheRead {
             try {
                 $state = $this->states->resolve($plan, $namespace, $queryHash, $version, $generation);
@@ -184,11 +157,11 @@ final readonly class QueryEntryRepository
             return new CacheRead($state, ReadOutcome::MISS, [], $reason, $lease);
         };
 
-        if (!is_string($rawMembership)) {
+        if ($entry->kind === RedisProtocol::MISS || $entry->payload === null) {
             return $miss(null);
         }
 
-        $membership = $this->memberships->decode($rawMembership);
+        $membership = $this->memberships->decode($entry->payload);
 
         if (!$membership->valid) {
             return $miss('corrupt_payload');
@@ -224,9 +197,7 @@ final readonly class QueryEntryRepository
             return new CacheRead($state, ReadOutcome::MISS);
         }
 
-        $result = $this->assembleRows($query, $plan, $state, $membership->ids, $fetched);
-
-        return $result;
+        return $this->assembleCanonicalRead($query, $plan, $state, $membership->ids, $fetched);
     }
 
     public function loadCanonical(QueryBuilder $query, QueryPlan $plan, CacheState $state): ?LoadedCanonical
@@ -261,49 +232,44 @@ final readonly class QueryEntryRepository
             return null;
         }
 
-        $reusedTokens = [];
-        $result = $this->assembleRows(
+        $result = $this->assembleCanonicalBuild(
             $query,
             $plan,
             $state,
             $tokens,
             $fetched,
-            coldBuild: true,
-            reusedTokens: $reusedTokens,
             requiredColumn: $known === null ? null : $query->deletedAtColumn(),
             visibilityMode: $known['softDeleteMode'] ?? null,
             allowMissingCandidates: $allowMissingCandidates,
         );
 
-        if (!$result->served()) {
+        if ($result === null) {
             return null;
         }
 
-        if ($atomicMget && $result->outcome === ReadOutcome::HIT) {
-            return new LoadedCanonical($result->rows, $reusedTokens);
+        $allReused = count($result->reusedTokens) === count($tokens);
+
+        if ($atomicMget && $allReused) {
+            return $result;
         }
 
         return $this->states->isCurrent($plan, $state)
-            ? new LoadedCanonical($result->rows, $reusedTokens)
+            ? $result
             : null;
     }
 
     /**
      * @param  list<string>  $tokens
      * @param  array<string, ?string>  $fetched
+     * @return array{0: array<int, \stdClass>, 1: array<int, string>, 2: bool}
      */
-    private function assembleRows(
-        QueryBuilder $query,
+    private function decodeCachedRows(
         QueryPlan $plan,
         CacheState $state,
         array $tokens,
         array $fetched,
-        bool $coldBuild = false,
-        ?array &$reusedTokens = null,
         ?string $requiredColumn = null,
-        ?string $visibilityMode = null,
-        bool $allowMissingCandidates = false,
-    ): CacheRead {
+    ): array {
         $rowPrefix = $this->keys->rowPrefix($plan->root, $state->generation);
         $rows = [];
         $missing = [];
@@ -328,45 +294,106 @@ final readonly class QueryEntryRepository
             }
 
             $rows[$index] = $row;
-            if ($reusedTokens !== null) {
-                $reusedTokens[$token] = true;
-            }
         }
 
-        $outcome = ReadOutcome::HIT;
+        return [$rows, $missing, $corrupt];
+    }
+
+    /**
+     * @param  list<string>  $tokens
+     * @param  array<string, ?string>  $fetched
+     */
+    private function assembleCanonicalRead(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        CacheState $state,
+        array $tokens,
+        array $fetched,
+    ): CacheRead {
+        [$rows, $missing, $corrupt] = $this->decodeCachedRows($plan, $state, $tokens, $fetched);
+
+        if ($missing === []) {
+            return new CacheRead($state, ReadOutcome::HIT, array_values($rows));
+        }
+
+        $repairer = $this->container->make(RowRepairer::class);
+        $repair = $repairer->repair($query, $plan, $state, array_values($missing));
+
+        if ($repair === null) {
+            return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
+        }
+
+        foreach ($missing as $index => $token) {
+            if (!isset($repair->rows[$token])) {
+                return new CacheRead($state, ReadOutcome::MISS, [], 'row_repair_failed');
+            }
+
+            $rows[$index] = $repair->rows[$token];
+        }
+
+        ksort($rows);
+
+        return new CacheRead(
+            $state,
+            $repair->outcome,
+            array_values($rows),
+            $corrupt ? 'corrupt_payload' : ($repair->outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
+        );
+    }
+
+    /**
+     * @param  list<string>  $tokens
+     * @param  array<string, ?string>  $fetched
+     */
+    private function assembleCanonicalBuild(
+        QueryBuilder $query,
+        QueryPlan $plan,
+        CacheState $state,
+        array $tokens,
+        array $fetched,
+        ?string $requiredColumn = null,
+        ?string $visibilityMode = null,
+        bool $allowMissingCandidates = false,
+    ): ?LoadedCanonical {
+        [$rows, $missing] = $this->decodeCachedRows(
+            $plan,
+            $state,
+            $tokens,
+            $fetched,
+            $requiredColumn,
+        );
+        $reused = [];
+        foreach (array_keys($rows) as $index) {
+            $reused[$tokens[$index]] = true;
+        }
 
         if ($missing !== []) {
             $repairer = $this->container->make(RowRepairer::class);
-            $repair = $coldBuild
-                ? $repairer->loadForCanonicalBuild($query, $plan, array_values($missing), $allowMissingCandidates)
-                : $repairer->repair($query, $plan, $state, array_values($missing));
+            $loaded = $repairer->loadForCanonicalBuild($query, $plan, array_values($missing), $allowMissingCandidates);
 
-            if ($repair === null) {
-                return new CacheRead($state, ReadOutcome::MISS, [], $corrupt ? 'corrupt_payload' : 'row_repair_failed');
+            if ($loaded === null) {
+                return null;
             }
 
-            $repairRows = $repair instanceof RowRepair ? $repair->rows : $repair;
-
             foreach ($missing as $index => $token) {
-                if (isset($repairRows[$token])) {
-                    $rows[$index] = $repairRows[$token];
+                if (isset($loaded[$token])) {
+                    $rows[$index] = $loaded[$token];
 
                     continue;
                 }
 
                 if (!$allowMissingCandidates) {
-                    return new CacheRead($state, ReadOutcome::MISS, [], 'row_repair_failed');
+                    return null;
                 }
             }
 
             ksort($rows);
-            $outcome = $repair instanceof RowRepair ? $repair->outcome : ReadOutcome::REPAIRED;
         }
 
         if ($requiredColumn !== null) {
             foreach ($rows as $row) {
                 if (!property_exists($row, $requiredColumn)) {
-                    return new CacheRead($state, ReadOutcome::MISS, [], 'row_repair_failed');
+                    return null;
                 }
             }
 
@@ -377,11 +404,24 @@ final readonly class QueryEntryRepository
             });
         }
 
-        return new CacheRead(
-            $state,
-            $outcome,
-            array_values($rows),
-            $corrupt ? 'corrupt_payload' : ($outcome === ReadOutcome::REPAIRED ? 'row_repair' : null),
+        return new LoadedCanonical(array_values($rows), $reused);
+    }
+
+    private function queryBuildLease(
+        QueryPlan $plan,
+        string $namespace,
+        string $queryHash,
+        TableQueryReply $entry,
+    ): ?BuildLease {
+        if ($entry->kind !== RedisProtocol::MISS || $entry->ownerToken === null) {
+            return null;
+        }
+
+        return new BuildLease(
+            $entry->isOwner,
+            $this->keys->queryBuild($plan->root, $entry->version, $namespace, $queryHash),
+            $this->keys->wake($plan->root, 'q', $queryHash, $entry->ownerToken),
+            $entry->ownerToken,
         );
     }
 
@@ -406,12 +446,16 @@ final readonly class QueryEntryRepository
 
         foreach ($rows as $row) {
             if (!$row instanceof \stdClass || !property_exists($row, $plan->primaryKey->column)) {
+                $this->container->make(BuildLeaseCoordinator::class)->release($lease);
+
                 return false;
             }
 
             $token = $plan->primaryKey->token($row->{$plan->primaryKey->column});
 
             if ($token === null) {
+                $this->container->make(BuildLeaseCoordinator::class)->release($lease);
+
                 return false;
             }
 
@@ -419,6 +463,8 @@ final readonly class QueryEntryRepository
 
             if (isset($seenRows[$token])) {
                 if ((array) $seenRows[$token] !== (array) $row) {
+                    $this->container->make(BuildLeaseCoordinator::class)->release($lease);
+
                     return false;
                 }
 
@@ -429,6 +475,8 @@ final readonly class QueryEntryRepository
             if (!isset($reusedTokens[$token])) {
                 $encoded = $this->codec->encodeRow($row, $state->epoch);
                 if ($encoded === null) {
+                    $this->container->make(BuildLeaseCoordinator::class)->release($lease);
+
                     return false;
                 }
                 $rowKeys[] = $rowPrefix . $token;
@@ -499,6 +547,8 @@ final readonly class QueryEntryRepository
         );
 
         if ($encoded === null) {
+            $this->container->make(BuildLeaseCoordinator::class)->release($lease);
+
             return false;
         }
 

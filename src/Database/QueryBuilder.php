@@ -517,6 +517,10 @@ final class QueryBuilder extends Builder
             return [true, null];
         }
 
+        if (!$this->skipped && !$this->connectionPretending() && $this->connection->transactionLevel() > 0) {
+            app(Invalidator::class)->reconcileOrphaned($this->getConnection());
+        }
+
         $reason = match (true) {
             $this->skipped => 'explicit_without_cache',
             $this->connectionPretending() => 'connection_pretending',

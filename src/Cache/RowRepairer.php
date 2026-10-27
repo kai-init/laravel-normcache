@@ -85,10 +85,6 @@ final readonly class RowRepairer
             throw $exception;
         }
 
-        if ($rows === null) {
-            $this->leases->release($lease);
-        }
-
         return $rows === null
             ? null
             : new RowRepair($rows, ReadOutcome::REPAIRED);
@@ -120,10 +116,14 @@ final readonly class RowRepairer
         $rowsByToken = $this->fetchDatabaseRows($query, $plan, $tokens);
 
         if ($rowsByToken === null) {
+            $this->leases->release($lease);
+
             return null;
         }
 
         if (!$this->states->isCurrent($plan, $state)) {
+            $this->leases->release($lease);
+
             return null;
         }
 
@@ -133,12 +133,16 @@ final readonly class RowRepairer
 
         foreach ($tokens as $token) {
             if (!isset($rowsByToken[$token])) {
+                $this->leases->release($lease);
+
                 return null;
             }
 
             $encoded = $this->codec->encodeRow($rowsByToken[$token], $state->epoch);
 
             if ($encoded === null) {
+                $this->leases->release($lease);
+
                 return null;
             }
 

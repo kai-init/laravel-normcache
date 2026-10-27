@@ -6,6 +6,7 @@ use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use NormCache\Cache\CacheRuntime;
+use NormCache\Cache\PendingInvalidations;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\MutationType;
 use NormCache\Exceptions\TableInvalidationException;
@@ -22,12 +23,6 @@ use NormCache\Values\TableIdentity;
 
 final class Invalidator
 {
-    /** @var array<string, array<string, array{table: TableIdentity, broad: bool, tokens: array<string, true>}>> */
-    private array $pendingInvalidations = [];
-
-    /** @var array<string, string> */
-    private array $pendingGlobalInvalidations = [];
-
     public function __construct(
         private readonly CacheConfig $config,
         private readonly CacheRuntime $runtime,
@@ -38,6 +33,7 @@ final class Invalidator
         private readonly MutationKeyExtractor $mutationKeys,
         private readonly QueryObserver $observer,
         private readonly FailureReporter $failures,
+        private readonly PendingInvalidations $pending,
     ) {}
 
     /** @param array<string, mixed>|null $assigned */
@@ -54,6 +50,12 @@ final class Invalidator
 
         $connection = $query->getConnection();
         $connectionName = (string) $connection->getName();
+        $inPhysicalTx = $this->inPhysicalTransaction($connection);
+
+        if (!$inPhysicalTx && $this->hasPending($connectionName)) {
+            $this->reconcileOrphaned($connection);
+        }
+
         $from = $query->from;
 
         if ($from instanceof Expression) {
@@ -133,7 +135,7 @@ final class Invalidator
             ];
         }
 
-        if ($connection->transactionLevel() > 0) {
+        if ($inPhysicalTx) {
             if ($truncating) {
                 $this->applyMany($invalidations);
             }
@@ -143,6 +145,7 @@ final class Invalidator
                     $invalidation['table'],
                     $invalidation['broad'],
                     $invalidation['tokens'],
+                    $connection,
                 );
             }
 
@@ -154,9 +157,9 @@ final class Invalidator
 
     public function commit(string $connection): void
     {
-        if (isset($this->pendingGlobalInvalidations[$connection])) {
-            $reason = $this->pendingGlobalInvalidations[$connection];
-            unset($this->pendingGlobalInvalidations[$connection]);
+        if (isset($this->pending->global[$connection])) {
+            $reason = $this->pending->global[$connection];
+            unset($this->pending->global[$connection]);
             $this->pullInvalidations($connection);
             $this->applyGlobal($reason);
 
@@ -176,12 +179,69 @@ final class Invalidator
         $this->applyMany($invalidations);
     }
 
+    public function committing(string $connection): void
+    {
+        if ($this->hasPending($connection)) {
+            $this->pending->commitAttempts[$connection] = true;
+        }
+    }
+
     public function rollback(string $connection): void
     {
+        if (isset($this->pending->commitAttempts[$connection]) && $this->hasPending($connection)) {
+            $this->reconcileOrphaned($this->pending->connections[$connection]);
+
+            return;
+        }
+
         unset(
-            $this->pendingInvalidations[$connection],
-            $this->pendingGlobalInvalidations[$connection],
+            $this->pending->tables[$connection],
+            $this->pending->global[$connection],
+            $this->pending->connections[$connection],
+            $this->pending->commitAttempts[$connection],
         );
+    }
+
+    public function hasPending(string $connection): bool
+    {
+        return isset($this->pending->tables[$connection])
+            || isset($this->pending->global[$connection]);
+    }
+
+    public function reconcileOrphaned(Connection $connection): bool
+    {
+        $name = (string) $connection->getName();
+        if (!$this->hasPending($name)) {
+            return true;
+        }
+
+        $origin = $this->pending->connections[$name] ?? $connection;
+        if ($this->inPhysicalTransaction($origin)) {
+            return false;
+        }
+
+        $this->commit($name);
+
+        return true;
+    }
+
+    public function reconcileAllOrphaned(): void
+    {
+        foreach ($this->pending->connections as $connection) {
+            $this->reconcileOrphaned($connection);
+        }
+    }
+
+    public function inPhysicalTransaction(Connection $connection): bool
+    {
+        try {
+            return $connection->getPdo()->inTransaction();
+        } catch (\Throwable $exception) {
+            $this->disableAfterInvalidationFailure();
+            $this->failures->cacheUnavailable($exception);
+
+            return true;
+        }
     }
 
     public function invalidateTables(array $tables): bool
@@ -193,8 +253,9 @@ final class Invalidator
         $immediate = [];
 
         foreach ($tables as $table) {
-            if (DB::connection($table->connection)->transactionLevel() > 0) {
-                $this->queueInvalidation($table, true, []);
+            $connection = DB::connection($table->connection);
+            if ($this->inPhysicalTransaction($connection)) {
+                $this->queueInvalidation($table, true, [], $connection);
 
                 continue;
             }
@@ -210,13 +271,13 @@ final class Invalidator
     }
 
     /** @param list<string> $tokens */
-    private function queueInvalidation(TableIdentity $table, bool $broad, array $tokens): void
+    private function queueInvalidation(TableIdentity $table, bool $broad, array $tokens, Connection $connection): void
     {
-        if (isset($this->pendingGlobalInvalidations[$table->connection])) {
+        if (isset($this->pending->global[$table->connection])) {
             return;
         }
 
-        $current = $this->pendingInvalidations[$table->connection][$table->hash] ?? null;
+        $current = $this->pending->tables[$table->connection][$table->hash] ?? null;
         $broad = $broad || ($current['broad'] ?? false);
         $tokenSet = $broad ? [] : ($current['tokens'] ?? []);
 
@@ -233,7 +294,8 @@ final class Invalidator
             }
         }
 
-        $this->pendingInvalidations[$table->connection][$table->hash] = [
+        $this->pending->connections[$table->connection] ??= $connection;
+        $this->pending->tables[$table->connection][$table->hash] = [
             'table' => $table,
             'broad' => $broad,
             'tokens' => $tokenSet,
@@ -243,18 +305,23 @@ final class Invalidator
     /** @return list<array{table: TableIdentity, broad: bool, tokens: array<string, true>}> */
     private function pullInvalidations(string $connection): array
     {
-        $pending = array_values($this->pendingInvalidations[$connection] ?? []);
-        unset($this->pendingInvalidations[$connection]);
+        $pending = array_values($this->pending->tables[$connection] ?? []);
+        unset(
+            $this->pending->tables[$connection],
+            $this->pending->connections[$connection],
+            $this->pending->commitAttempts[$connection],
+        );
 
         return $pending;
     }
 
     private function applyOrQueueGlobal(Connection $connection, string $reason): void
     {
-        if ($connection->transactionLevel() > 0) {
+        if ($this->inPhysicalTransaction($connection)) {
             $connectionName = (string) $connection->getName();
-            $this->pendingGlobalInvalidations[$connectionName] = 'transaction_' . $reason;
-            unset($this->pendingInvalidations[$connectionName]);
+            $this->pending->global[$connectionName] = 'transaction_' . $reason;
+            $this->pending->connections[$connectionName] ??= $connection;
+            unset($this->pending->tables[$connectionName]);
 
             return;
         }

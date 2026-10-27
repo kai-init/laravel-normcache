@@ -692,6 +692,34 @@ final class WriteInvalidationTest extends TestCase
         $this->assertSame('After', $read());
     }
 
+    public function test_nested_filter_bounded_update_only_invalidates_target_row(): void
+    {
+        $author1 = Author::create(['name' => 'Author One']);
+        $author2 = Author::create(['name' => 'Author Two']);
+
+        $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'authors');
+        $generationKey = $this->cacheKeys()->generation($table);
+
+        $this->assertSame('Author One', Author::find($author1->getKey())->name);
+        $this->assertSame('Author Two', Author::find($author2->getKey())->name);
+
+        $genBefore = $this->cacheStore()->getRaw($generationKey) ?? '0';
+        $row2Before = $this->cacheStore()->getRaw($this->cacheKeys()->row($table, $genBefore, "i:{$author2->getKey()}"));
+        $this->assertNotNull($row2Before);
+
+        Author::query()
+            ->where('id', $author1->getKey())
+            ->where(function ($q): void {
+                $q->where('name', 'Author One')->orWhere('name', 'Alternative');
+            })
+            ->update(['name' => 'Author One Updated']);
+
+        $this->assertSame($genBefore, $this->cacheStore()->getRaw($generationKey) ?? '0');
+        $row2After = $this->cacheStore()->getRaw($this->cacheKeys()->row($table, $genBefore, "i:{$author2->getKey()}"));
+        $this->assertSame($row2Before, $row2After);
+        $this->assertSame('Author One Updated', Author::find($author1->getKey())->name);
+    }
+
     private function tableVersion(): string
     {
         $identity = app(TableIdentityResolver::class)

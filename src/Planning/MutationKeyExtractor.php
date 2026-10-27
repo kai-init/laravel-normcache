@@ -3,6 +3,8 @@
 namespace NormCache\Planning;
 
 use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Query\Builder as IlluminateQueryBuilder;
+use Illuminate\Database\Query\JoinClause;
 use NormCache\Database\QueryBuilder;
 use NormCache\Values\PrimaryKeyMetadata;
 
@@ -59,17 +61,16 @@ final class MutationKeyExtractor
         QueryBuilder $query,
         PrimaryKeyMetadata $primaryKey,
     ): ?array {
-        if (!empty($query->joins)) {
+        if (!empty($query->joins) || $this->containsOpaqueSql($query)) {
             return null;
         }
 
-        $tokens = [];
-        $found = false;
+        $bound = null;
 
         foreach ($query->wheres as $where) {
             if (
                 strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
-                || in_array($where['type'] ?? null, ['Nested', 'Raw', 'Exists', 'NotExists'], true)
+                || strcasecmp((string) ($where['type'] ?? ''), 'raw') === 0
             ) {
                 return null;
             }
@@ -90,7 +91,7 @@ final class MutationKeyExtractor
                 return null;
             }
 
-            $found = true;
+            $currentTokens = [];
 
             foreach ($values as $value) {
                 if ($value instanceof Expression) {
@@ -103,15 +104,19 @@ final class MutationKeyExtractor
                     return null;
                 }
 
-                $tokens[$token] = true;
+                $currentTokens[$token] = true;
             }
+
+            $bound = $bound === null
+                ? $currentTokens
+                : array_intersect_key($bound, $currentTokens);
         }
 
-        if (!$found) {
+        if ($bound === null) {
             return null;
         }
 
-        $result = array_keys($tokens);
+        $result = array_keys($bound);
         sort($result, SORT_STRING);
 
         return $result;
@@ -132,5 +137,56 @@ final class MutationKeyExtractor
         $column = trim($column, '`"[]');
 
         return $column;
+    }
+
+    private function containsOpaqueSql(mixed $value): bool
+    {
+        if ($value instanceof Expression) {
+            return true;
+        }
+
+        if ($value instanceof JoinClause && $this->containsOpaqueSql($value->table)) {
+            return true;
+        }
+
+        if ($value instanceof IlluminateQueryBuilder) {
+            foreach ([
+                $value->columns,
+                $value->from,
+                $value->joins,
+                $value->wheres,
+                $value->groups,
+                $value->havings,
+                $value->orders,
+                $value->unions,
+                $value->unionOrders,
+            ] as $component) {
+                if ($this->containsOpaqueSql($component)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (!is_array($value)) {
+            return false;
+        }
+
+        if (
+            isset($value['type'])
+            && is_string($value['type'])
+            && strcasecmp($value['type'], 'Raw') === 0
+        ) {
+            return true;
+        }
+
+        foreach ($value as $item) {
+            if ($this->containsOpaqueSql($item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -55,7 +55,7 @@ final class RedisStoreRecoveryTest extends UnitTestCase
 
         $this->assertSame(
             ['payload'],
-            $store->fetchResult('version-key', 'prefix', 'namespace', 'query-hash'),
+            $store->fetchTableQuery('version-key', 'gen-key', 'prefix', 'namespace', 'query-hash', 'result'),
         );
         $this->assertSame(2, $manager->built);
     }

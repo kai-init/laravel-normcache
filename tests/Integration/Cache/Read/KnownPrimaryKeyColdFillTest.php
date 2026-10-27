@@ -5,6 +5,7 @@ namespace NormCache\Tests\Integration\Cache\Read;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use NormCache\Payload\RawResultCodec;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -114,16 +115,129 @@ final class KnownPrimaryKeyColdFillTest extends TestCase
         }
     }
 
-    public function test_tagged_candidates_keep_id_discovery(): void
+    public function test_tagged_candidates_use_candidate_fill_without_id_discovery(): void
     {
-        [, $queries] = $this->observe(fn() => RawPost::query()->toBase()
+        [$rows, $queries] = $this->observe(fn() => RawPost::query()->toBase()
             ->whereIn('id', [$this->ids[0], $this->ids[1]])
             ->orderBy('id')
             ->tag('known-candidate-tag')
             ->get());
 
+        $this->assertSame([$this->ids[0], $this->ids[1]], $rows->pluck('id')->all());
+        $this->assertCount(1, $queries);
+        $this->assertIntegerPrimaryKeyBatch($queries[0], [$this->ids[0], $this->ids[1]]);
+
+        [$warmRows, $warmQueries] = $this->observe(fn() => RawPost::query()->toBase()
+            ->whereIn('id', [$this->ids[0], $this->ids[1]])
+            ->orderBy('id')
+            ->tag('known-candidate-tag')
+            ->get());
+        $this->assertSame([$this->ids[0], $this->ids[1]], $warmRows->pluck('id')->all());
+        $this->assertSame([], $warmQueries);
+
+        $this->cacheManager()->flushTag('known-candidate-tag');
+
+        [$reloadedRows, $reloadedQueries] = $this->observe(fn() => RawPost::query()->toBase()
+            ->whereIn('id', [$this->ids[0], $this->ids[1]])
+            ->orderBy('id')
+            ->tag('known-candidate-tag')
+            ->get());
+        $this->assertSame([$this->ids[0], $this->ids[1]], $reloadedRows->pluck('id')->all());
+        $this->assertSame([], $reloadedQueries);
+
+        $this->cacheManager()->invalidate(['posts']);
+        [$coldRows, $coldQueries] = $this->observe(fn() => RawPost::query()->toBase()
+            ->whereIn('id', [$this->ids[0], $this->ids[1]])
+            ->orderBy('id')
+            ->tag('known-candidate-tag')
+            ->get());
+        $this->assertSame([$this->ids[0], $this->ids[1]], $coldRows->pluck('id')->all());
+        $this->assertCount(1, $coldQueries);
+        $this->assertIntegerPrimaryKeyBatch($coldQueries[0], [$this->ids[0], $this->ids[1]]);
+    }
+
+    public function test_custom_ttl_candidates_use_candidate_fill_without_id_discovery(): void
+    {
+        [$rows, $queries] = $this->observe(fn() => RawPost::query()->toBase()
+            ->whereIn('id', [$this->ids[0], $this->ids[1]])
+            ->orderBy('id')
+            ->ttl(120)
+            ->get());
+
+        $this->assertSame([$this->ids[0], $this->ids[1]], $rows->pluck('id')->all());
+        $this->assertCount(1, $queries);
+        $this->assertIntegerPrimaryKeyBatch($queries[0], [$this->ids[0], $this->ids[1]]);
+        $this->assertRequestedQueryEntryTtl($this->cacheQueryKeysWithField('m'), 120);
+    }
+
+    public function test_tagged_and_custom_ttl_combined(): void
+    {
+        [$rows, $queries] = $this->observe(fn() => RawPost::query()->toBase()
+            ->whereIn('id', [$this->ids[0], $this->ids[1]])
+            ->orderBy('id')
+            ->tag('combined-tag')
+            ->ttl(120)
+            ->get());
+
+        $this->assertSame([$this->ids[0], $this->ids[1]], $rows->pluck('id')->all());
+        $this->assertCount(1, $queries);
+        $this->assertIntegerPrimaryKeyBatch($queries[0], [$this->ids[0], $this->ids[1]]);
+        $this->assertRequestedQueryEntryTtl($this->cacheQueryKeysWithField('m'), 120);
+    }
+
+    public function test_custom_ttl_membership_reuses_rows_without_extending_row_ttl(): void
+    {
+        $this->raw([0, 1])->get();
+        $base = RawPost::query()->toBase();
+        $table = app(TableIdentityResolver::class)->resolve($base->getConnection(), $base->from);
+        $this->assertNotNull($table);
+        $generation = $this->cacheStore()->getRaw($this->cacheKeys()->generation($table)) ?? '0';
+        $rowKey = $this->cacheKeys()->row($table, $generation, 'i:' . $this->ids[0]);
+        $redis = Redis::connection('normcache-test');
+        $this->assertTrue((bool) $redis->expire($rowKey, 30));
+        $previousMembershipKeys = $this->cacheQueryKeysWithField('m');
+
+        [$rows, $queries] = $this->observe(fn() => $this->raw([0, 1])->tag('short-row-ttl')->ttl(120)->get());
+
+        $this->assertSame([$this->ids[0], $this->ids[1]], $rows->pluck('id')->all());
+        $this->assertSame([], $queries);
+        $this->assertGreaterThan(0, (int) $redis->ttl($rowKey));
+        $this->assertLessThanOrEqual(30, (int) $redis->ttl($rowKey));
+        $this->assertRequestedQueryEntryTtl(
+            array_values(array_diff($this->cacheQueryKeysWithField('m'), $previousMembershipKeys)),
+            120,
+        );
+    }
+
+    public function test_tag_change_during_candidate_fetch_does_not_publish_old_tag_entry(): void
+    {
+        $flushed = false;
+        DB::listen(function (QueryExecuted $event) use (&$flushed): void {
+            if (!$flushed && str_contains(strtolower($event->sql), ' in (')) {
+                $flushed = true;
+                $this->cacheManager()->flushTag('candidate-race-tag');
+            }
+        });
+
+        [$rows, $queries] = $this->observe(fn() => $this->raw([0, 1])->tag('candidate-race-tag')->get());
+
+        $this->assertTrue($flushed);
+        $this->assertSame([$this->ids[0], $this->ids[1]], $rows->pluck('id')->all());
         $this->assertCount(2, $queries);
-        $this->assertIdOnlyDiscovery($queries[0]);
+        $this->assertIntegerPrimaryKeyBatch($queries[0], [$this->ids[0], $this->ids[1]]);
+        $this->assertSame($this->raw([0, 1])->toSql(), $queries[1]['query']);
+        $this->assertSame([], $this->cacheQueryKeysWithField('m'));
+        $this->assertSame([], $this->cacheQueryKeysWithField('r'));
+
+        [$newRows, $newQueries] = $this->observe(fn() => $this->raw([0, 1])->tag('candidate-race-tag')->get());
+        $this->assertSame([$this->ids[0], $this->ids[1]], $newRows->pluck('id')->all());
+        $this->assertCount(1, $newQueries);
+        $this->assertIntegerPrimaryKeyBatch($newQueries[0], [$this->ids[0], $this->ids[1]]);
+        $this->assertNotEmpty($this->cacheQueryKeysWithField('m'));
+
+        [$warmRows, $warmQueries] = $this->observe(fn() => $this->raw([0, 1])->tag('candidate-race-tag')->get());
+        $this->assertSame([$this->ids[0], $this->ids[1]], $warmRows->pluck('id')->all());
+        $this->assertSame([], $warmQueries);
     }
 
     public function test_context_candidates_keep_the_result_route(): void
@@ -269,6 +383,16 @@ final class KnownPrimaryKeyColdFillTest extends TestCase
         return RawPost::query()->toBase()
             ->whereIn('id', array_map(fn(int $index): int => $this->ids[$index], $indexes))
             ->orderBy('id');
+    }
+
+    /** @param list<string> $entries */
+    private function assertRequestedQueryEntryTtl(array $entries, int $seconds): void
+    {
+        $this->assertCount(1, $entries);
+        $redis = Redis::connection('normcache-test');
+        $ttl = (int) $redis->ttl($entries[0]);
+        $this->assertGreaterThan($seconds - 10, $ttl);
+        $this->assertLessThanOrEqual($seconds, $ttl);
     }
 
     /** @param array{query: string, bindings: array} $query */

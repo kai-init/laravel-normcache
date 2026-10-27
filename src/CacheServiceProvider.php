@@ -3,10 +3,16 @@
 namespace NormCache;
 
 use DebugBar\DataCollector\TimeDataCollector;
+use Illuminate\Database\Connection;
+use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Events\TransactionCommitting;
 use Illuminate\Database\Events\TransactionRolledBack;
+use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\BuildLeaseCoordinator;
@@ -14,6 +20,7 @@ use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
 use NormCache\Cache\CanonicalRowRepository;
 use NormCache\Cache\Engine;
+use NormCache\Cache\PendingInvalidations;
 use NormCache\Cache\QueryEntryRepository;
 use NormCache\Cache\RowRepairer;
 use NormCache\Console\DisableCommand;
@@ -88,7 +95,11 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->scoped(CanonicalRowRepository::class);
         $this->app->scoped(QueryEntryRepository::class);
         $this->app->scoped(RowRepairer::class);
+        $this->app->singleton(PendingInvalidations::class);
         $this->app->scoped(Invalidator::class);
+        $this->app->afterResolving(Invalidator::class, function (Invalidator $invalidator): void {
+            $invalidator->reconcileAllOrphaned();
+        });
         $this->app->scoped(Engine::class);
         $this->app->scoped(CacheManager::class);
         $this->app->alias(CacheManager::class, 'normcache');
@@ -96,6 +107,23 @@ final class CacheServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $registerBeforeTransaction = function (Connection $connection): void {
+            $connection->beforeStartingTransaction(function (Connection $connection): void {
+                $this->app->make(Invalidator::class)->reconcileOrphaned($connection);
+            });
+        };
+
+        foreach (DB::getFacadeRoot()->getConnections() as $connection) {
+            $registerBeforeTransaction($connection);
+        }
+
+        Event::listen(ConnectionEstablished::class, function (ConnectionEstablished $event) use ($registerBeforeTransaction): void {
+            $registerBeforeTransaction($event->connection);
+        });
+
+        Event::listen(TransactionCommitting::class, function (TransactionCommitting $event): void {
+            $this->app->make(Invalidator::class)->committing((string) $event->connection->getName());
+        });
         Event::listen(TransactionBeginning::class, function (TransactionBeginning $event): void {
             $name = (string) $event->connection->getName();
 
@@ -120,6 +148,15 @@ final class CacheServiceProvider extends ServiceProvider
         Event::listen(MigrationsEnded::class, function (): void {
             $this->app->make(CacheManager::class)->flushAll();
         });
+        $reconcile = function (): void {
+            $pending = $this->app->make(PendingInvalidations::class);
+            if ($pending->connections !== []) {
+                $this->app->make(Invalidator::class)->reconcileAllOrphaned();
+            }
+        };
+        $this->app->terminating($reconcile);
+        Event::listen(JobProcessed::class, $reconcile);
+        Event::listen(JobExceptionOccurred::class, $reconcile);
 
         if ($this->app->runningInConsole()) {
             $this->publishes([

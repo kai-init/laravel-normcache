@@ -2,6 +2,8 @@
 
 namespace NormCache\Support;
 
+use NormCache\Values\TableQueryReply;
+
 final class RedisProtocol
 {
     public const RESULT = 'result';
@@ -11,6 +13,23 @@ final class RedisProtocol
     public const HIT = 'hit';
 
     public const MISS = 'miss';
+
+    /** @param array<int, mixed> $reply */
+    public static function decodeTableQuery(array $reply): TableQueryReply
+    {
+        $ownerToken = is_string($reply[5] ?? null) && $reply[5] !== ''
+            ? $reply[5]
+            : null;
+
+        return new TableQueryReply(
+            kind: self::status($reply) ?? self::MISS,
+            version: (string) ($reply[1] ?? '0'),
+            generation: is_string($reply[2] ?? null) && $reply[2] !== '' ? $reply[2] : null,
+            payload: is_string($reply[3] ?? null) && $reply[3] !== '' ? $reply[3] : null,
+            isOwner: ((int) ($reply[4] ?? 0)) === 1,
+            ownerToken: $ownerToken,
+        );
+    }
 
     /** @param array<int, mixed> $reply */
     public static function status(array $reply): ?string
@@ -32,17 +51,5 @@ final class RedisProtocol
     public static function value(array $reply, int $index): mixed
     {
         return $reply[$index] ?? null;
-    }
-
-    /** @param array<int, mixed> $reply */
-    public static function resultPayload(array $reply): mixed
-    {
-        return self::value($reply, 2);
-    }
-
-    /** @param array<int, mixed> $reply */
-    public static function canonicalPayload(array $reply): mixed
-    {
-        return self::value($reply, 3);
     }
 }

@@ -81,8 +81,6 @@ final class QueryPlanner
             || $plan->primaryKey->family !== PrimaryKeyMetadata::INTEGER
             || count($plan->dependencies) !== 1
             || $plan->dependencies[0]->hash !== $plan->root->hash
-            || $query->configuredTag() !== null
-            || $query->configuredTtl() !== null
             || $query->configuredCacheContext() !== null
             || $query->limit !== null
             || $query->offset !== null
