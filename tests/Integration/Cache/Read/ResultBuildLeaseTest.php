@@ -7,7 +7,9 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\QueryEntryRepository;
+use NormCache\Cache\QueryHashResolver;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisScripts;
@@ -116,13 +118,13 @@ final class ResultBuildLeaseTest extends TestCase
         $this->deleteCacheField($entry, 'r');
 
         $plan = app(QueryPlanner::class)->plan($builder, $table, [$table]);
-        $waiter = app(QueryEntryRepository::class)->read($builder, $plan, 'u', $hash, claim: true);
+        $waiter = app(QueryEntryRepository::class)->read($builder, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: true);
         $this->assertNotNull($waiter->lease);
         $this->assertFalse($waiter->lease->owner);
         $this->assertSame($ownerToken, $waiter->lease->token);
         $this->assertSame($keys->wake($table, 'q', $hash, $ownerToken), $waiter->lease->wakeKey);
 
-        $retry = app(QueryEntryRepository::class)->read($builder, $plan, 'u', $hash, claim: false);
+        $retry = app(QueryEntryRepository::class)->read($builder, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: false);
         $this->assertFalse($retry->served());
         $this->assertNull($retry->lease);
         $this->assertSame($ownerToken, $this->cacheStore()->getRaw($buildKey));
@@ -143,6 +145,7 @@ final class ResultBuildLeaseTest extends TestCase
         $version = $this->cacheStore()->getRaw($this->cacheKeys()->version($posts)) ?? '0';
         $buildKey = $this->cacheKeys()->queryBuild($posts, $version, 'u', $hash);
         $repository = $this->app->make(QueryEntryRepository::class);
+        $this->app->make(CacheRuntime::class)->epoch();
         $connection = Redis::connection('normcache-test');
         $connection->setEventDispatcher($this->app->make('events'));
         $fired = false;
@@ -156,7 +159,7 @@ final class ResultBuildLeaseTest extends TestCase
         });
 
         try {
-            $repository->read($builder, $plan, 'u', $hash, claim: true);
+            $repository->read($builder, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: true);
             $this->fail('Expected result state resolution to throw.');
         } catch (\Error $exception) {
             $this->assertSame('result resolution failed', $exception->getMessage());
@@ -183,7 +186,7 @@ final class ResultBuildLeaseTest extends TestCase
         $this->assertTrue($plan->isResult());
         $hash = 'result-pre-lua';
         $repository = app(QueryEntryRepository::class);
-        $read = $repository->read($query, $plan, 'u', $hash, claim: true);
+        $read = $repository->read($query, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: true);
         $this->assertNotNull($read->lease);
         $this->assertTrue($read->lease->owner);
 
@@ -193,13 +196,12 @@ final class ResultBuildLeaseTest extends TestCase
 
         try {
             $row->resource = $stream;
-            $published = $repository->publishResult(
+            $published = $repository->publish(
                 $query,
                 $plan,
                 $read->state,
                 [$row],
                 $read->lease,
-                app(CacheConfig::class)->wakeTtl(),
             );
         } finally {
             fclose($stream);

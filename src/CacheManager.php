@@ -61,8 +61,17 @@ final readonly class CacheManager
 
     private function invalidationIdentity(mixed $target, ?string $connection): ?TableIdentity
     {
+        if (is_string($target) && is_a($target, Model::class, true)) {
+            $target = new $target;
+        }
+
         if ($target instanceof Model) {
-            return $this->modelInvalidationIdentity($target, $connection);
+            if ($connection !== null) {
+                $target = clone $target;
+                $target->setConnection($connection);
+            }
+
+            return $this->tables->resolve($target->getConnection(), $target->getTable());
         }
 
         if (!is_string($target)) {
@@ -71,21 +80,7 @@ final readonly class CacheManager
             );
         }
 
-        if (is_a($target, Model::class, true)) {
-            return $this->modelInvalidationIdentity(new $target, $connection);
-        }
-
         return $this->tables->resolve(DB::connection($connection), $target);
-    }
-
-    private function modelInvalidationIdentity(Model $model, ?string $connection): ?TableIdentity
-    {
-        if ($connection !== null) {
-            $model = clone $model;
-            $model->setConnection($connection);
-        }
-
-        return $this->tables->resolve($model->getConnection(), $model->getTable());
     }
 
     public function flushTag(string $tag): bool

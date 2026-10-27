@@ -123,7 +123,12 @@ final readonly class RawResultCodec
             || ($envelope['f'] ?? null) !== self::FORMAT
             || !is_string($envelope['ep'] ?? null)
             || !is_array($envelope['row'] ?? null)
-            || !$this->matchesToken($envelope['row'], $primaryKey, $expectedToken)
+            || ($primaryKey !== null
+                && $expectedToken !== null
+                && !$primaryKey->matchesToken(
+                    $envelope['row'][$primaryKey->column] ?? null,
+                    $expectedToken,
+                ))
         ) {
             return RawResultPayload::corrupt();
         }
@@ -163,51 +168,23 @@ final readonly class RawResultCodec
         return (object) $envelope['row'];
     }
 
-    private function matchesToken(
-        array $row,
-        ?PrimaryKeyMetadata $primaryKey,
-        ?string $expectedToken,
-    ): bool {
-        if ($primaryKey === null || $expectedToken === null) {
-            return true;
-        }
-
-        if (!array_key_exists($primaryKey->column, $row)) {
-            return false;
-        }
-
-        return $primaryKey->matchesToken($row[$primaryKey->column], $expectedToken);
-    }
-
     /** @return array<string, string>|null */
     private function stringMap(array $values): ?array
     {
-        if ($values === []) {
-            return [];
-        }
-
-        $result = [];
-
         foreach ($values as $key => $value) {
             if (!is_string($key) || !is_string($value)) {
                 return null;
             }
-
-            $result[$key] = $value;
         }
 
-        ksort($result, SORT_STRING);
+        ksort($values, SORT_STRING);
 
-        return $result;
+        return $values;
     }
 
     /** @return list<\stdClass>|null */
     private function rowList(array $rows): ?array
     {
-        if ($rows === []) {
-            return [];
-        }
-
         $result = [];
 
         foreach ($rows as $row) {

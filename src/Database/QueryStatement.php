@@ -6,20 +6,14 @@ use Illuminate\Database\Connection;
 
 final class QueryStatement
 {
-    /** @var \Closure(): array{0: string, 1: list<mixed>} */
-    private \Closure $resolve;
-
     /** @var array{0: string, 1: list<mixed>}|null */
     private ?array $resolved = null;
 
     /** @var list<mixed>|null */
     private ?array $preparedBindings = null;
 
-    /** @param callable(): array{0: string, 1: list<mixed>} $resolve */
-    public function __construct(callable $resolve)
-    {
-        $this->resolve = \Closure::fromCallable($resolve);
-    }
+    /** @param \Closure(): array{0: string, 1: list<mixed>} $resolve */
+    public function __construct(private \Closure $resolve) {}
 
     public function sql(): string
     {

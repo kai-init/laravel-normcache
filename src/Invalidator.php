@@ -85,7 +85,7 @@ final class Invalidator
             }
 
             if ($resolved === null) {
-                $reason = strtolower($mutation->name) . '_dependencies_unavailable';
+                $reason = $mutation->value . '_dependencies_unavailable';
                 $this->applyOrQueueGlobal($connection, $reason);
                 $this->failures->deleteDependencyGlobalInvalidation($table, $mutation);
 
@@ -279,19 +279,11 @@ final class Invalidator
 
         $current = $this->pending->tables[$table->connection][$table->hash] ?? null;
         $broad = $broad || ($current['broad'] ?? false);
-        $tokenSet = $broad ? [] : ($current['tokens'] ?? []);
+        $tokenSet = $broad ? [] : ($current['tokens'] ?? []) + array_fill_keys($tokens, true);
 
-        if (!$broad) {
-            foreach ($tokens as $token) {
-                $tokenSet[$token] = true;
-
-                if (count($tokenSet) > $this->config->maxPreciseInvalidationKeys) {
-                    $broad = true;
-                    $tokenSet = [];
-
-                    break;
-                }
-            }
+        if (!$broad && count($tokenSet) > $this->config->maxPreciseInvalidationKeys) {
+            $broad = true;
+            $tokenSet = [];
         }
 
         $this->pending->connections[$table->connection] ??= $connection;
@@ -357,11 +349,16 @@ final class Invalidator
         $states = [];
 
         foreach ($invalidations as $invalidation) {
-            $states[] = $this->storeInvalidation(
-                $invalidation['table'],
-                $invalidation['broad'],
-                $invalidation['tokens'],
-            );
+            $table = $invalidation['table'];
+            $broad = $invalidation['broad'];
+            $tokens = $invalidation['tokens'];
+            $states[] = [
+                'versionKey' => $this->keys->version($table),
+                'generationKey' => $this->keys->generation($table),
+                'mode' => $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise'),
+                'tokens' => $tokens,
+                'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
+            ];
         }
 
         $this->observer->begin();
@@ -395,20 +392,6 @@ final class Invalidator
 
             return false;
         }
-    }
-
-    private function storeInvalidation(
-        TableIdentity $table,
-        bool $broad,
-        array $tokens,
-    ): array {
-        return [
-            'versionKey' => $this->keys->version($table),
-            'generationKey' => $this->keys->generation($table),
-            'mode' => $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise'),
-            'tokens' => $tokens,
-            'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
-        ];
     }
 
     private function disableAfterInvalidationFailure(): void

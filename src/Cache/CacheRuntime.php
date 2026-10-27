@@ -38,7 +38,9 @@ final class CacheRuntime
         }
 
         try {
-            return !$this->resolveState()[1];
+            $this->resolveState();
+
+            return !$this->runtimeDisabled;
         } catch (\Throwable $exception) {
             $this->fail($exception);
 
@@ -57,7 +59,13 @@ final class CacheRuntime
         }
 
         try {
-            return !$this->resolveDisabled();
+            if ($this->runtimeDisabled !== false) {
+                $this->forgetEpoch();
+            }
+
+            $this->resolveState();
+
+            return !$this->runtimeDisabled;
         } catch (\Throwable) {
             return true;
         }
@@ -67,7 +75,7 @@ final class CacheRuntime
     {
         return $this->epoch !== null && !$this->epochExpired()
             ? $this->epoch
-            : $this->resolveState()[0];
+            : $this->resolveState();
     }
 
     public function knownEpoch(): ?string
@@ -143,8 +151,7 @@ final class CacheRuntime
         $this->failures->cacheUnavailable($exception);
     }
 
-    /** @return array{0: string, 1: bool} */
-    private function resolveState(): array
+    private function resolveState(): string
     {
         if ($this->epoch === null || $this->epochExpired()) {
             $epochKey = $this->keys->epoch();
@@ -155,15 +162,6 @@ final class CacheRuntime
             $this->runtimeDisabled = ($values[$disabledKey] ?? null) !== null;
         }
 
-        return [$this->epoch, $this->runtimeDisabled ?? false];
-    }
-
-    private function resolveDisabled(): bool
-    {
-        if ($this->runtimeDisabled !== false) {
-            $this->forgetEpoch();
-        }
-
-        return $this->resolveState()[1];
+        return $this->epoch;
     }
 }

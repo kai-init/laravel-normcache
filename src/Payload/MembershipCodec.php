@@ -57,14 +57,12 @@ final class MembershipCodec
         }
 
         $ids = $envelope['ids'] === '' ? [] : explode(',', $envelope['ids']);
-        $versions = [];
+        $versions = $envelope['vec'];
 
-        foreach ($envelope['vec'] as $key => $value) {
+        foreach ($versions as $key => $value) {
             if (!is_string($key) || !is_string($value)) {
                 return MembershipPayload::corrupt();
             }
-
-            $versions[$key] = $value;
         }
 
         ksort($versions, SORT_STRING);

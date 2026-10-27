@@ -3,6 +3,7 @@
 namespace NormCache\Tests\Integration\Cache\Runtime;
 
 use Illuminate\Support\Facades\DB;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Facades\NormCache;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Tests\Fixtures\Models\Author;
@@ -151,6 +152,38 @@ final class RuntimeKillSwitchTest extends TestCase
         $this->assertSame('Before', $read()->title);
         DB::disableQueryLog();
         $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_disabled_direct_read_propagates_database_failure_without_retrying(): void
+    {
+        $read = fn() => RawPost::query()->toBase()->where('id', 1)->first();
+        $this->assertSame('Before', $read()->title);
+        $this->assertTrue(NormCache::disableCache());
+
+        $failure = new \RuntimeException('The primary SELECT failed.');
+        $attempts = 0;
+        $active = true;
+        DB::connection()->beforeExecuting(static function (string $sql) use ($failure, &$attempts, &$active): void {
+            $sql = strtolower(ltrim($sql));
+
+            if ($active && str_starts_with($sql, 'select') && str_contains($sql, 'posts')) {
+                $attempts++;
+
+                throw $failure;
+            }
+        });
+
+        try {
+            $read();
+            $this->fail('Expected the database failure to propagate.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame($failure, $exception);
+        } finally {
+            $active = false;
+        }
+
+        $this->assertSame(1, $attempts);
+        $this->assertTrue($this->app->make(CacheRuntime::class)->available());
     }
 
     public function test_a_flag_set_by_another_process_is_observed_next_scope(): void

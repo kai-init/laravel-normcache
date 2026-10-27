@@ -2,10 +2,15 @@
 
 namespace NormCache\Tests\Integration\Cache\Read;
 
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\UuidItem;
 use NormCache\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class IdsFirstReadTest extends TestCase
 {
@@ -187,6 +192,73 @@ final class IdsFirstReadTest extends TestCase
         $this->assertTrue(Author::orderBy('id')->get()->isEmpty());
         $this->assertTrue($deleted);
         $this->assertSame([], $this->cacheQueryKeysWithField('m'));
+        $this->assertSame([], $this->cacheKeysMatching(':build:'));
+    }
+
+    #[DataProvider('failedTwoPhaseSelects')]
+    public function test_two_phase_database_failure_propagates_once_and_releases_the_build_lease(int $failedSelect): void
+    {
+        Author::create(['name' => 'Present']);
+        $failure = new \RuntimeException('The database query failed.');
+        $selects = 0;
+        $active = true;
+        DB::connection()->beforeExecuting(static function (string $sql) use ($failure, $failedSelect, &$selects, &$active): void {
+            if ($active && str_starts_with(strtolower(ltrim($sql)), 'select') && str_contains($sql, 'authors')) {
+                $selects++;
+                if ($selects === $failedSelect) {
+                    throw $failure;
+                }
+            }
+        });
+
+        try {
+            Author::orderBy('id')->get();
+            $this->fail('Expected the database error to propagate.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame($failure, $exception);
+        } finally {
+            $active = false;
+        }
+
+        $this->assertSame($failedSelect, $selects);
+        $this->assertTrue($this->app->make(CacheRuntime::class)->available());
+        $this->assertSame([], $this->cacheKeysMatching(':build:'));
+    }
+
+    public static function failedTwoPhaseSelects(): array
+    {
+        return ['ID query' => [1], 'missing row query' => [2]];
+    }
+
+    public function test_two_phase_redis_failure_falls_back_to_sql_and_releases_the_build_lease(): void
+    {
+        $author = Author::create(['name' => 'Present']);
+        $manager = Redis::getFacadeRoot();
+        $manager->enableEvents();
+        $redis = Redis::connection('normcache-test');
+        $redis->setEventDispatcher($this->app->make('events'));
+        $afterIds = false;
+        DB::listen(static function (QueryExecuted $event) use (&$afterIds): void {
+            if (str_starts_with(strtolower(ltrim($event->sql)), 'select') && str_contains($event->sql, 'authors')) {
+                $afterIds = true;
+            }
+        });
+        $redis->listen(static function (CommandExecuted $event) use (&$afterIds): void {
+            if ($afterIds && strtolower($event->command) === 'mget') {
+                throw new \RuntimeException('The Redis row fetch failed.');
+            }
+        });
+
+        try {
+            [$rows, $queries] = $this->observe(fn() => Author::orderBy('id')->get());
+        } finally {
+            $manager->disableEvents();
+            Redis::connection('normcache-test')->unsetEventDispatcher();
+        }
+
+        $this->assertSame([$author->id], $rows->modelKeys());
+        $this->assertCount(2, $queries);
+        $this->assertFalse($this->app->make(CacheRuntime::class)->available());
         $this->assertSame([], $this->cacheKeysMatching(':build:'));
     }
 

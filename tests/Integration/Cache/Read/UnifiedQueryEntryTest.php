@@ -150,6 +150,30 @@ final class UnifiedQueryEntryTest extends TestCase
         $this->assertSame(0, $repairs);
     }
 
+    public function test_warm_membership_hits_do_not_resolve_cold_path_services(): void
+    {
+        $query = fn() => RawPost::query()->toBase()->orderBy('id')->get();
+        $expected = $query()->map(static fn(\stdClass $row): array => (array) $row)->all();
+        $entryKey = $this->cacheQueryKeysWithField('m')[0];
+        $this->deleteCacheField($entryKey, 'r');
+        $this->app->forgetScopedInstances();
+
+        $leases = 0;
+        $repairs = 0;
+        $this->app->resolving(BuildLeaseCoordinator::class, static function () use (&$leases): void {
+            $leases++;
+        });
+        $this->app->resolving(RowRepairer::class, static function () use (&$repairs): void {
+            $repairs++;
+        });
+
+        $actual = $query()->map(static fn(\stdClass $row): array => (array) $row)->all();
+
+        $this->assertSame($expected, $actual);
+        $this->assertSame(0, $leases);
+        $this->assertSame(0, $repairs);
+    }
+
     public function test_a_query_group_read_costs_a_single_pipelined_round_trip(): void
     {
         $this->skipWhenCommandStatsAreSharded();

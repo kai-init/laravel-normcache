@@ -150,6 +150,24 @@ final class ReadInterceptionTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
+    public function test_exists_bypass_uses_the_requested_read_or_write_connection(): void
+    {
+        $connection = DB::connection();
+        $originalReadPdo = $connection->getRawReadPdo();
+        $connection->setReadPdo(static function (): never {
+            throw new \RuntimeException('The read replica was used.');
+        });
+
+        try {
+            $this->assertTrue(Post::query()->toBase()->where('id', $this->postId)->useWritePdo()->exists());
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('The read replica was used.');
+            Post::query()->toBase()->where('id', $this->postId)->withoutCache()->exists();
+        } finally {
+            $connection->setReadPdo($originalReadPdo);
+        }
+    }
+
     public function test_exists_cannot_poison_the_canonical_primary_key_row(): void
     {
         $query = fn() => Post::query()->toBase()->where('id', $this->postId);

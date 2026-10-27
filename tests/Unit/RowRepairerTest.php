@@ -99,6 +99,7 @@ final class RowRepairerTest extends UnitTestCase
             $runtime = new CacheRuntime($config, $store, $keys, $failures);
             $repairer = new RowRepairer(
                 $config,
+                $runtime,
                 $store,
                 $keys,
                 new RawResultCodec(new CacheSerializer($config->serializer)),

@@ -8,15 +8,12 @@ use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Database\Query\Grammars\Grammar;
-use Illuminate\Database\Query\Processors\Processor;
 use NormCache\Cache\Engine;
 use NormCache\Enums\MutationType;
 use NormCache\Invalidator;
 use NormCache\Support\FailureReporter;
 use NormCache\Support\QueryIdentity;
 use NormCache\Support\QueryObserver;
-use NormCache\Values\DependencyDeclaration;
 use NormCache\Values\PrimaryKeyMetadata;
 
 final class QueryBuilder extends Builder
@@ -38,7 +35,7 @@ final class QueryBuilder extends Builder
 
     private ?string $cacheContext = null;
 
-    /** @var array<string, DependencyDeclaration> */
+    /** @var array<array-key, bool> */
     private array $dependencies = [];
 
     /** @var \WeakMap<Expression, array{builder: Builder, sql: string}>|null */
@@ -47,14 +44,6 @@ final class QueryBuilder extends Builder
     private int $writeDepth = 0;
 
     private int $nestedMutationSequence = 0;
-
-    public function __construct(
-        Connection $connection,
-        ?Grammar $grammar = null,
-        ?Processor $processor = null,
-    ) {
-        parent::__construct($connection, $grammar, $processor);
-    }
 
     public function selectSub($query, $as)
     {
@@ -262,14 +251,13 @@ final class QueryBuilder extends Builder
         }
 
         foreach ($dependencies as $dependency) {
-            $declaration = $this->dependencyDeclaration($dependency);
-            $this->dependencies[$declaration->key()] = $declaration;
+            $this->addDependency($dependency);
         }
 
         return $this;
     }
 
-    private function dependencyDeclaration(mixed $dependency): DependencyDeclaration
+    private function addDependency(mixed $dependency): void
     {
         if (!is_string($dependency)) {
             throw new \InvalidArgumentException(
@@ -278,7 +266,9 @@ final class QueryBuilder extends Builder
         }
 
         if (is_a($dependency, Model::class, true)) {
-            return DependencyDeclaration::model($dependency);
+            $this->dependencies[$dependency] = true;
+
+            return;
         }
 
         if ($this->isDefinedType($dependency)) {
@@ -301,7 +291,7 @@ final class QueryBuilder extends Builder
             );
         }
 
-        return DependencyDeclaration::table($table);
+        $this->dependencies[$table] = false;
     }
 
     private function isDefinedType(string $type): bool
@@ -315,47 +305,18 @@ final class QueryBuilder extends Builder
     /**
      * @internal
      *
-     * @return list<DependencyDeclaration>
+     * @return array<array-key, bool> Name => whether the dependency is a model.
      */
     public function dependencies(): array
     {
-        return array_values($this->dependencies);
+        return $this->dependencies;
     }
 
     protected function runSelect()
     {
         $this->applyBeforeQueryCallbacks();
-        $statement = new QueryStatement(fn(): array => [$this->toSql(), $this->getBindings()]);
 
-        [$bypass, $reason] = $this->bypassDecision();
-
-        if ($bypass) {
-            if ($reason !== null) {
-                app(QueryObserver::class)->bypass($this, $reason, $statement);
-            }
-
-            return $this->connection->select(
-                $statement->sql(),
-                $statement->bindings(),
-                !$this->useWritePdo,
-                $this->fetchUsing,
-            );
-        }
-
-        // Compiling SQL is deferred: a direct primary-key hit resolves its row
-        // from the plan alone and never reads the statement or its hash.
-        return app(Engine::class)->select(
-            $this,
-            $statement,
-            'select',
-            fn() => $this->connection->select(
-                $statement->sql(),
-                $statement->bindings(),
-                !$this->useWritePdo,
-                $this->fetchUsing,
-            ),
-            fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
-        );
+        return $this->read(new QueryStatement(fn(): array => [$this->toSql(), $this->getBindings()]), 'select');
     }
 
     public function exists()
@@ -365,16 +326,7 @@ final class QueryBuilder extends Builder
         $bindings = $this->getBindings();
         $statement = new QueryStatement(fn(): array => [$sql, $bindings]);
 
-        [$bypass, $reason] = $this->bypassDecision();
-        $results = $bypass
-            ? $this->runBypassedExists($statement, $reason)
-            : app(Engine::class)->select(
-                $this,
-                $statement,
-                'exists',
-                fn() => $this->connection->select($statement->sql(), $statement->bindings(), true),
-                fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
-            );
+        $results = $this->read($statement, 'exists');
 
         if (!isset($results[0])) {
             return false;
@@ -389,7 +341,6 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn(): bool => parent::insert($values),
             invalidate: static fn(bool $result): bool => $values !== [] && $result,
         );
@@ -399,9 +350,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn(): int => parent::insertOrIgnore($values),
-            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -409,7 +358,6 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn(): mixed => parent::insertOrIgnoreReturning($values, $returning, $uniqueBy),
             invalidate: static fn($result): bool => $result->isNotEmpty(),
         );
@@ -419,8 +367,8 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn() => parent::insertGetId($values, $sequence),
+            invalidate: true,
         );
     }
 
@@ -428,9 +376,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn(): int => parent::insertUsing($columns, $query),
-            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -438,9 +384,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::INSERT,
-            mayAffectExistingRows: false,
             operation: fn(): int => parent::insertOrIgnoreUsing($columns, $query),
-            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -448,9 +392,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::UPDATE,
-            mayAffectExistingRows: true,
             operation: fn(): int => parent::update($values),
-            invalidate: static fn(int $result): bool => $result > 0,
             assigned: $values,
         );
     }
@@ -459,9 +401,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::UPDATE,
-            mayAffectExistingRows: true,
             operation: fn(): int => parent::updateFrom($values),
-            invalidate: static fn(int $result): bool => $result > 0,
             assigned: $values,
         );
     }
@@ -472,7 +412,6 @@ final class QueryBuilder extends Builder
 
         return $this->writeWithInvalidation(
             mutation: MutationType::UPSERT,
-            mayAffectExistingRows: true,
             operation: fn(): bool => parent::updateOrInsert($attributes, $values),
             invalidate: fn(): bool => $this->nestedMutationSequence !== $mutationSequence,
             forceBroadInvalidation: true,
@@ -483,7 +422,6 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::UPSERT,
-            mayAffectExistingRows: true,
             operation: fn(): int => parent::upsert($values, $uniqueBy, $update),
             invalidate: $values !== [],
             forceBroadInvalidation: true,
@@ -494,9 +432,7 @@ final class QueryBuilder extends Builder
     {
         return $this->writeWithInvalidation(
             mutation: MutationType::DELETE,
-            mayAffectExistingRows: true,
             operation: fn() => parent::delete($id),
-            invalidate: static fn(int $result): bool => $result > 0,
         );
     }
 
@@ -504,8 +440,8 @@ final class QueryBuilder extends Builder
     {
         $this->writeWithInvalidation(
             mutation: MutationType::TRUNCATE,
-            mayAffectExistingRows: true,
             operation: fn() => parent::truncate(),
+            invalidate: true,
             forceBroadInvalidation: true,
         );
     }
@@ -534,18 +470,32 @@ final class QueryBuilder extends Builder
         return [$reason !== null, $reason];
     }
 
-    private function runBypassedExists(
-        QueryStatement $statement,
-        ?string $reason,
-    ): array {
-        if ($reason !== null) {
-            app(QueryObserver::class)->bypass($this, $reason, $statement);
-        }
-
-        return $this->connection->select(
+    private function read(QueryStatement $statement, string $operation): array
+    {
+        $fetchUsing = $operation === 'select' ? $this->fetchUsing : [];
+        $database = fn() => $this->connection->select(
             $statement->sql(),
             $statement->bindings(),
             !$this->useWritePdo,
+            $fetchUsing,
+        );
+
+        [$bypass, $reason] = $this->bypassDecision();
+        if ($bypass) {
+            if ($reason !== null) {
+                app(QueryObserver::class)->bypass($this, $reason, $statement);
+            }
+
+            return $database();
+        }
+
+        // Lazy compilation lets direct primary-key hits avoid building SQL.
+        return app(Engine::class)->select(
+            $this,
+            $statement,
+            $operation,
+            $database,
+            fn() => $this->connection->select($statement->sql(), $statement->bindings(), false, []),
         );
     }
 
@@ -553,13 +503,12 @@ final class QueryBuilder extends Builder
      * The operation's return value is always passed to $invalidate. Callables
      * that decide from builder state instead may declare no parameters.
      *
-     * @param  bool|callable(mixed): bool  $invalidate
+     * @param  bool|callable(mixed): bool|null  $invalidate
      */
     private function writeWithInvalidation(
         MutationType $mutation,
-        bool $mayAffectExistingRows,
         callable $operation,
-        bool|callable $invalidate = true,
+        bool|callable|null $invalidate = null,
         bool $forceBroadInvalidation = false,
         ?array $assigned = null,
     ): mixed {
@@ -583,7 +532,7 @@ final class QueryBuilder extends Builder
                     app(Invalidator::class)->afterWrite(
                         query: $this,
                         mutation: $mutation,
-                        mayAffectExistingRows: $mayAffectExistingRows,
+                        mayAffectExistingRows: $mutation !== MutationType::INSERT,
                         forceBroadInvalidation: true,
                         assigned: $assigned,
                     );
@@ -595,7 +544,9 @@ final class QueryBuilder extends Builder
             throw $failure;
         }
 
-        $shouldInvalidate = is_bool($invalidate) ? $invalidate : $invalidate($result);
+        $shouldInvalidate = $invalidate === null
+            ? $result > 0
+            : (is_bool($invalidate) ? $invalidate : $invalidate($result));
 
         if (!$owner) {
             if ($shouldInvalidate) {
@@ -609,7 +560,7 @@ final class QueryBuilder extends Builder
             app(Invalidator::class)->afterWrite(
                 query: $this,
                 mutation: $mutation,
-                mayAffectExistingRows: $mayAffectExistingRows,
+                mayAffectExistingRows: $mutation !== MutationType::INSERT,
                 forceBroadInvalidation: $forceBroadInvalidation,
                 assigned: $assigned,
             );

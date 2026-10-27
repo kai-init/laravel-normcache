@@ -46,37 +46,20 @@ final readonly class CacheSerializer
 
     public function decode(string $payload): mixed
     {
-        $marker = $payload[0] ?? '';
-
-        return match ($marker) {
-            self::PHP_MARKER => $this->decodePhp(substr($payload, 1)),
-            self::IGBINARY_MARKER => $this->igbinaryAvailable
-                ? $this->decodeIgbinary(substr($payload, 1))
-                : null,
-            default => null,
-        };
-    }
-
-    private function decodePhp(string $payload): mixed
-    {
         try {
-            $value = @unserialize($payload, ['allowed_classes' => false]);
+            $body = substr($payload, 1);
+            $marker = $payload[0] ?? '';
 
-            return $value === false && $payload !== 'b:0;' ? null : $value;
+            if ($marker === self::PHP_MARKER) {
+                $value = @unserialize($body, ['allowed_classes' => false]);
+
+                return $value === false && $body !== 'b:0;' ? null : $value;
+            }
+
+            return $marker === self::IGBINARY_MARKER && $this->igbinaryAvailable
+                ? @igbinary_unserialize($body)
+                : null;
         } catch (\Throwable) { // @phpstan-ignore catch.neverThrown (custom error handlers may throw)
-            return null;
-        }
-    }
-
-    private function decodeIgbinary(string $payload): mixed
-    {
-        if (!$this->igbinaryAvailable) {
-            return null;
-        }
-
-        try {
-            return @igbinary_unserialize($payload);
-        } catch (\Throwable) {
             return null;
         }
     }

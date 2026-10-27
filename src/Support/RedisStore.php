@@ -43,12 +43,9 @@ final class RedisStore
 
     public function readHashFieldWithValues(string $key, string $field, array $valueKeys): array
     {
-        $connection = $this->connection();
-
         if (
             $valueKeys === []
-            || $connection instanceof PredisClusterConnection
-            || $connection instanceof PhpRedisClusterConnection
+            || !$this->supportsAtomicMget()
         ) {
             return [$this->readHashField($key, $field), $this->mget($valueKeys)];
         }
@@ -206,9 +203,7 @@ final class RedisStore
         string $tablePrefix,
         string $primaryKeyToken,
     ): ?array {
-        $connection = $this->connection();
-
-        if ($connection instanceof PredisClusterConnection || $connection instanceof PhpRedisClusterConnection) {
+        if (!$this->supportsAtomicMget()) {
             return null;
         }
 
@@ -307,15 +302,13 @@ final class RedisStore
         array $tokens,
         string $rowPrefix,
     ): void {
-        $this->script(
-            RedisScripts::get('invalidate_tables'),
-            [$versionKey, $generationKey, $rowPrefix],
-            [
-                $mode,
-                (string) count($tokens),
-                ...$tokens,
-            ],
-        );
+        $this->invalidateTableStates([[
+            'versionKey' => $versionKey,
+            'generationKey' => $generationKey,
+            'mode' => $mode,
+            'tokens' => $tokens,
+            'rowPrefix' => $rowPrefix,
+        ]]);
     }
 
     /**
@@ -329,55 +322,45 @@ final class RedisStore
      */
     public function invalidateTableStates(array $states): void
     {
-        if (count($states) === 1) {
-            $this->invalidateTableState(...$states[0]);
-
+        if ($states === []) {
             return;
         }
 
         $this->withRetryingConnection(function (Connection $connection) use ($states): void {
-            if (
+            $cluster = count($states) > 1 && (
                 $connection instanceof PhpRedisClusterConnection
                 || $connection instanceof PredisClusterConnection
-            ) {
-                foreach ($states as $index => $state) {
-                    try {
-                        $this->evaluate(
-                            $connection,
-                            RedisScripts::get('invalidate_tables'),
-                            [$state['versionKey'], $state['generationKey'], $state['rowPrefix']],
-                            [
-                                $state['mode'],
-                                (string) count($state['tokens']),
-                                ...$state['tokens'],
-                            ],
-                        );
-                    } catch (\Exception $exception) {
-                        throw new TableInvalidationException($index, $exception);
-                    }
+            );
+            $batches = $cluster ? array_chunk($states, 1) : [$states];
+
+            foreach ($batches as $batchIndex => $batch) {
+                $keys = [];
+                $args = [];
+
+                foreach ($batch as $state) {
+                    $keys[] = $state['versionKey'];
+                    $keys[] = $state['generationKey'];
+                    $keys[] = $state['rowPrefix'];
+                    $args[] = $state['mode'];
+                    $args[] = (string) count($state['tokens']);
+                    array_push($args, ...$state['tokens']);
                 }
 
-                return;
+                try {
+                    $this->evaluate(
+                        $connection,
+                        RedisScripts::get('invalidate_tables'),
+                        $keys,
+                        $args,
+                    );
+                } catch (\Exception $exception) {
+                    if ($cluster) {
+                        throw new TableInvalidationException($batchIndex, $exception);
+                    }
+
+                    throw $exception;
+                }
             }
-
-            $keys = [];
-            $args = [];
-
-            foreach ($states as $state) {
-                $keys[] = $state['versionKey'];
-                $keys[] = $state['generationKey'];
-                $keys[] = $state['rowPrefix'];
-                $args[] = $state['mode'];
-                $args[] = (string) count($state['tokens']);
-                array_push($args, ...$state['tokens']);
-            }
-
-            $this->evaluate(
-                $connection,
-                RedisScripts::get('invalidate_tables'),
-                $keys,
-                $args,
-            );
         });
     }
 

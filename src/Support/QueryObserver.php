@@ -29,18 +29,9 @@ final class QueryObserver
         private readonly FailureReporter $failures,
     ) {}
 
-    private function guard(string $outcome, \Closure $observation): void
-    {
-        try {
-            $observation();
-        } catch (\Throwable $exception) {
-            $this->failures->observationFailed($exception, $outcome);
-        }
-    }
-
     public function begin(): void
     {
-        if ($this->enabled()) {
+        if ($this->observing()) {
             $this->startedAt = microtime(true);
         }
     }
@@ -60,72 +51,70 @@ final class QueryObserver
         QueryStatement $statement,
         ?string $reason = null,
     ): void {
-        if (!$this->enabled()) {
-            return;
-        }
-
-        $this->guard($outcome->value, function () use (
-            $outcome, $query, $plan, $hash, $statement, $reason,
-        ): void {
-            $this->record($outcome, $query, $plan, $hash, $statement, $reason);
-        });
+        $this->recordQuery($outcome->value, $query, $plan, $hash, $statement, $reason);
     }
 
-    private function record(
-        ReadOutcome $outcome,
+    private function recordQuery(
+        string $outcome,
         QueryBuilder $query,
-        QueryPlan $plan,
-        string $hash,
+        ?QueryPlan $plan,
+        ?string $hash,
         QueryStatement $statement,
         ?string $reason,
     ): void {
-        if (!$this->enabled()) {
+        if (!$this->observing()) {
             return;
         }
 
-        [$startedAt, $endedAt] = $this->elapsed();
+        try {
+            [$startedAt, $endedAt] = $this->elapsed();
 
-        if (
-            $outcome === ReadOutcome::MISS
-            && $reason === 'corrupt_payload'
-            && !$this->firstCorruption($hash)
-        ) {
-            return;
+            if (
+                $outcome === 'miss'
+                && $reason === 'corrupt_payload'
+                && !$this->firstCorruption((string) $hash)
+            ) {
+                return;
+            }
+
+            $route = $plan === null ? null : str_replace('-', '_', $plan->route);
+            $record = new ObservationRecord(
+                outcome: $outcome,
+                route: $route,
+                tableHash: $plan?->root->hash,
+                queryHash: $hash,
+                reason: $reason,
+                sql: $statement->sql(),
+                bindings: $statement->bindings(),
+                modelClass: $query->modelClass(),
+                startedAt: $startedAt,
+                endedAt: $endedAt,
+            );
+            $this->sink?->record($record);
+
+            if (!$this->config->dispatchEvents) {
+                return;
+            }
+
+            $eventClass = match ($outcome) {
+                'hit' => QueryCacheHit::class,
+                'miss' => QueryCacheMiss::class,
+                'repair' => QueryCacheRepaired::class,
+                'bypass' => QueryBypassed::class,
+            };
+
+            event(new $eventClass(
+                route: $record->route,
+                queryHash: $record->queryHash,
+                tableHash: $record->tableHash,
+                sql: $record->sql,
+                bindings: $record->bindings,
+                modelClass: $record->modelClass,
+                reason: $record->reason,
+            ));
+        } catch (\Throwable $exception) {
+            $this->failures->observationFailed($exception, $outcome);
         }
-
-        $record = new ObservationRecord(
-            outcome: $outcome->value,
-            route: $this->route($plan->route),
-            tableHash: $plan->root->hash,
-            queryHash: $hash,
-            reason: $reason,
-            sql: $statement->sql(),
-            bindings: $statement->bindings(),
-            modelClass: $query->modelClass(),
-            startedAt: $startedAt,
-            endedAt: $endedAt,
-        );
-        $this->sink?->record($record);
-
-        if (!$this->config->dispatchEvents) {
-            return;
-        }
-
-        $eventClass = match ($outcome) {
-            ReadOutcome::HIT => QueryCacheHit::class,
-            ReadOutcome::MISS => QueryCacheMiss::class,
-            ReadOutcome::REPAIRED => QueryCacheRepaired::class,
-        };
-
-        event(new $eventClass(
-            $record->route,
-            $record->queryHash,
-            $record->tableHash,
-            $record->sql,
-            $record->bindings,
-            $record->modelClass,
-            $record->reason,
-        ));
     }
 
     public function bypass(
@@ -134,103 +123,39 @@ final class QueryObserver
         QueryStatement $statement,
         ?QueryPlan $plan = null,
     ): void {
-        if (!$this->enabled()) {
-            return;
-        }
-
-        $this->guard('bypass', function () use ($query, $reason, $statement, $plan): void {
-            $this->recordBypass($query, $reason, $statement, $plan);
-        });
-    }
-
-    private function recordBypass(
-        QueryBuilder $query,
-        string $reason,
-        QueryStatement $statement,
-        ?QueryPlan $plan,
-    ): void {
-        if (!$this->enabled()) {
-            return;
-        }
-
-        [$startedAt, $endedAt] = $this->elapsed();
-
-        $record = new ObservationRecord(
-            outcome: 'bypass',
-            route: $plan === null ? null : $this->route($plan->route),
-            tableHash: $plan?->root->hash,
-            queryHash: null,
-            reason: $reason,
-            sql: $statement->sql(),
-            bindings: $statement->bindings(),
-            modelClass: $query->modelClass(),
-            startedAt: $startedAt,
-            endedAt: $endedAt,
-        );
-        $this->sink?->record($record);
-
-        if ($this->config->dispatchEvents) {
-            event(new QueryBypassed(
-                $record->reason,
-                $record->sql,
-                $record->bindings,
-                $record->modelClass,
-                $record->tableHash,
-                $record->queryHash,
-                $record->route,
-            ));
-        }
+        $this->recordQuery('bypass', $query, $plan, null, $statement, $reason);
     }
 
     /** @param list<string> $tokens */
     public function invalidated(TableIdentity $table, string $mode, array $tokens): void
     {
-        if (!$this->enabled()) {
+        if (!$this->observing()) {
             return;
         }
 
-        $this->guard('invalidation', function () use ($table, $mode, $tokens): void {
-            $this->recordInvalidation($table, $mode, $tokens);
-        });
-    }
+        try {
+            [$startedAt, $endedAt] = $this->elapsed();
+            $record = new ObservationRecord(
+                outcome: 'invalidation',
+                tableHash: $table->hash,
+                invalidationMode: $mode,
+                primaryKeyTokens: $tokens,
+                startedAt: $startedAt,
+                endedAt: $endedAt,
+            );
+            $this->sink?->record($record);
 
-    /** @param list<string> $tokens */
-    private function recordInvalidation(TableIdentity $table, string $mode, array $tokens): void
-    {
-        if (!$this->enabled()) {
-            return;
-        }
-
-        [$startedAt, $endedAt] = $this->elapsed();
-
-        $record = new ObservationRecord(
-            outcome: 'invalidation',
-            tableHash: $table->hash,
-            invalidationMode: $mode,
-            primaryKeyTokens: $tokens,
-            startedAt: $startedAt,
-            endedAt: $endedAt,
-        );
-        $this->sink?->record($record);
-
-        if ($this->config->dispatchEvents) {
-            event(new CacheInvalidated($table->hash, $mode, $tokens));
+            if ($this->config->dispatchEvents) {
+                event(new CacheInvalidated($table->hash, $mode, $tokens));
+            }
+        } catch (\Throwable $exception) {
+            $this->failures->observationFailed($exception, 'invalidation');
         }
     }
 
     public function observing(): bool
     {
-        return $this->enabled();
-    }
-
-    private function enabled(): bool
-    {
         return $this->config->dispatchEvents || $this->sink !== null;
-    }
-
-    private function route(string $route): string
-    {
-        return str_replace('-', '_', $route);
     }
 
     private function firstCorruption(string $keyHash): bool

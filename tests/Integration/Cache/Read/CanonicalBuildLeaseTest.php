@@ -7,7 +7,9 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\QueryEntryRepository;
+use NormCache\Cache\QueryHashResolver;
 use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\RedisScripts;
@@ -17,7 +19,6 @@ use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
 use NormCache\Values\PrimaryKeyMetadata;
 use NormCache\Values\QueryPlan;
-use NormCache\Values\TableQueryReply;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CanonicalBuildLeaseTest extends TestCase
@@ -166,7 +167,7 @@ final class CanonicalBuildLeaseTest extends TestCase
         $this->deleteCacheKeys($entry);
         $queryBuilder = RawPost::query()->toBase()->where('title', 'Waiter post');
         $plan = app(QueryPlanner::class)->plan($queryBuilder, $table, [$table]);
-        $cached = app(QueryEntryRepository::class)->read($queryBuilder, $plan, 'u', $hash, claim: true);
+        $cached = app(QueryEntryRepository::class)->read($queryBuilder, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: true);
         $this->assertNotNull($cached->lease);
         $this->assertFalse($cached->lease->owner);
         $this->assertSame($ownerToken, $cached->lease->token);
@@ -202,30 +203,32 @@ final class CanonicalBuildLeaseTest extends TestCase
         $table = app(TableIdentityResolver::class)->resolve(DB::connection(), 'posts');
         $this->assertNotNull($table);
         $keys = $this->cacheKeys();
-        $buildKey = $keys->queryBuild($table, '0', 'u', 'throwing-resolution');
-        $owner = str_repeat('d', 32);
-        $this->claimBuildForTest($buildKey, $owner, 30);
+        $version = $this->cacheStore()->getRaw($keys->version($table)) ?? '0';
+        $buildKey = $keys->queryBuild($table, $version, 'u', 'throwing-resolution');
         $dependency = app(TableIdentityResolver::class)->resolve(DB::connection(), 'authors');
         $this->assertNotNull($dependency);
         $plan = QueryPlan::canonical($table, [$table, $dependency], new PrimaryKeyMetadata('id', PrimaryKeyMetadata::INTEGER));
         $repository = $this->app->make(QueryEntryRepository::class);
+        $this->app->make(CacheRuntime::class)->epoch();
         $connection = Redis::connection('normcache-test');
         $connection->setEventDispatcher($this->app->make('events'));
         $thrown = false;
-        $connection->listen(function (CommandExecuted $event) use (&$thrown): void {
+        $owner = null;
+        $connection->listen(function (CommandExecuted $event) use (&$thrown, &$owner, $buildKey): void {
             if (!$thrown && in_array(strtolower($event->command), ['mget', 'pipeline'], true)) {
                 $thrown = true;
+                $owner = $this->cacheStore()->getRaw($buildKey);
                 throw new \Error('resolution failed');
             }
         });
 
         try {
-            $repository->readCanonical(
+            $repository->read(
                 RawPost::query()->toBase(),
                 $plan,
                 'u',
-                'throwing-resolution',
-                new TableQueryReply('miss', '0', '0', null, true, $owner),
+                new QueryHashResolver(static fn(): string => 'throwing-resolution'),
+                claim: true,
             );
             $this->fail('Expected state resolution to throw.');
         } catch (\Error $exception) {
@@ -235,6 +238,8 @@ final class CanonicalBuildLeaseTest extends TestCase
         }
 
         $this->assertTrue($thrown);
+        $this->assertIsString($owner);
+        $this->assertSame(32, strlen($owner));
         $this->assertNull($this->cacheStore()->getRaw($buildKey));
         $this->assertTrue($this->cacheStore()->brpop($keys->wake($table, 'q', 'throwing-resolution', $owner), 0.1));
     }
@@ -248,7 +253,7 @@ final class CanonicalBuildLeaseTest extends TestCase
         $this->assertTrue($plan->isCanonical());
         $hash = 'canonical-pre-lua';
         $repository = app(QueryEntryRepository::class);
-        $read = $repository->read($query, $plan, 'u', $hash, claim: true);
+        $read = $repository->read($query, $plan, 'u', new QueryHashResolver(static fn(): string => $hash), claim: true);
         $this->assertNotNull($read->lease);
         $this->assertTrue($read->lease->owner);
 
@@ -259,13 +264,12 @@ final class CanonicalBuildLeaseTest extends TestCase
 
         try {
             $row->resource = $stream;
-            $published = $repository->publishCanonical(
+            $published = $repository->publish(
                 $query,
                 $plan,
                 $read->state,
                 [$row],
                 $read->lease,
-                app(CacheConfig::class)->wakeTtl(),
             );
         } finally {
             fclose($stream);

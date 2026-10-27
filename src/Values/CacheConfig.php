@@ -39,40 +39,28 @@ final readonly class CacheConfig
             throw new \InvalidArgumentException('NormCache key_prefix must not contain Redis hash-tag braces.');
         }
 
-        $rowTtl = self::positive($values, 'row_ttl', 604_800);
-        $queryTtl = self::positive($values, 'query_ttl', 3_600);
-        $maxAutoOverlayRows = self::nonNegative(
-            $values,
-            'auto_overlay_max_rows',
-            1000,
-        );
-        $maxPreciseInvalidationKeys = self::bounded(
-            $values,
-            'max_precise_invalidation_keys',
-            self::MAX_PRECISE_INVALIDATION_KEYS,
-        );
-        $buildingLockTtl = self::positive($values, 'building_lock_ttl', 5);
-        $stampedeWaitMs = self::positive($values, 'stampede_wait_ms', 200);
-        $stampedeWakeTokens = self::bounded(
-            $values,
-            'stampede_wake_tokens',
-            self::MAX_STAMPEDE_WAKE_TOKENS,
-            64,
-        );
-        $epochRefreshSeconds = self::nonNegative($values, 'epoch_refresh_seconds', 5);
-
         return new self(
             connection: (string) ($values['connection'] ?? 'cache'),
             keyPrefix: $keyPrefix,
             serializer: self::serializer($values['serializer'] ?? 'auto'),
-            rowTtl: $rowTtl,
-            queryTtl: $queryTtl,
-            maxAutoOverlayRows: $maxAutoOverlayRows,
-            maxPreciseInvalidationKeys: $maxPreciseInvalidationKeys,
-            buildingLockTtl: $buildingLockTtl,
-            stampedeWaitMs: $stampedeWaitMs,
-            epochRefreshSeconds: $epochRefreshSeconds,
-            stampedeWakeTokens: $stampedeWakeTokens,
+            rowTtl: self::integer($values, 'row_ttl', 604_800),
+            queryTtl: self::integer($values, 'query_ttl', 3_600),
+            maxAutoOverlayRows: self::integer($values, 'auto_overlay_max_rows', 1000, 0),
+            maxPreciseInvalidationKeys: self::integer(
+                $values,
+                'max_precise_invalidation_keys',
+                self::MAX_PRECISE_INVALIDATION_KEYS,
+                maximum: self::MAX_PRECISE_INVALIDATION_KEYS,
+            ),
+            buildingLockTtl: self::integer($values, 'building_lock_ttl', 5),
+            stampedeWaitMs: self::integer($values, 'stampede_wait_ms', 200),
+            stampedeWakeTokens: self::integer(
+                $values,
+                'stampede_wake_tokens',
+                64,
+                maximum: self::MAX_STAMPEDE_WAKE_TOKENS,
+            ),
+            epochRefreshSeconds: self::integer($values, 'epoch_refresh_seconds', 5, 0),
             enabled: (bool) ($values['enabled'] ?? true),
             dispatchEvents: (bool) ($values['events'] ?? false),
             debugbar: (bool) ($values['debugbar'] ?? false),
@@ -91,35 +79,20 @@ final readonly class CacheConfig
     }
 
     /** @param array<string, mixed> $values */
-    private static function positive(array $values, string $key, int $default): int
-    {
+    private static function integer(
+        array $values,
+        string $key,
+        int $default,
+        int $minimum = 1,
+        ?int $maximum = null,
+    ): int {
         $value = (int) ($values[$key] ?? $default);
 
-        if ($value < 1) {
-            throw new \InvalidArgumentException("NormCache {$key} must be at least 1.");
+        if ($value < $minimum) {
+            throw new \InvalidArgumentException("NormCache {$key} must be at least {$minimum}.");
         }
 
-        return $value;
-    }
-
-    /** @param array<string, mixed> $values */
-    private static function nonNegative(array $values, string $key, int $default): int
-    {
-        $value = (int) ($values[$key] ?? $default);
-
-        if ($value < 0) {
-            throw new \InvalidArgumentException("NormCache {$key} must be at least 0.");
-        }
-
-        return $value;
-    }
-
-    /** @param array<string, mixed> $values */
-    private static function bounded(array $values, string $key, int $maximum, ?int $default = null): int
-    {
-        $value = self::positive($values, $key, $default ?? $maximum);
-
-        if ($value > $maximum) {
+        if ($maximum !== null && $value > $maximum) {
             throw new \InvalidArgumentException("NormCache {$key} must not exceed {$maximum}.");
         }
 

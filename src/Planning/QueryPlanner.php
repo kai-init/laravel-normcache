@@ -23,7 +23,7 @@ final class QueryPlanner
         $explicitDependencies = $query->dependencies();
         $rootOnlyDependencies = $explicitDependencies !== []
             && !$forceQueryGroup
-            && ($query->joins === null || $query->joins === [])
+            && empty($query->joins)
             && count($dependencies) === 1
             && $dependencies[0]->hash === $root->hash;
 
@@ -34,7 +34,7 @@ final class QueryPlanner
         if (
             $forceQueryGroup
             || $explicitDependencies !== []
-            || $query->joins !== null && $query->joins !== []
+            || !empty($query->joins)
             || !empty($query->unions) && count($dependencies) > 1
         ) {
             return QueryPlan::queryGroup($root, $dependencies);
@@ -50,26 +50,12 @@ final class QueryPlanner
                 ? $query->primaryKey()
                 : null;
 
-        $direct = $this->directPlan(
-            $query,
-            $root,
-            $dependencies,
-            $primaryKey,
-        );
-
-        if ($direct !== null) {
-            return $direct;
+        if ($primaryKey === null) {
+            return QueryPlan::result($root, $dependencies);
         }
 
-        if ($primaryKey !== null) {
-            return QueryPlan::canonical(
-                $root,
-                $dependencies,
-                $primaryKey,
-            );
-        }
-
-        return QueryPlan::result($root, $dependencies);
+        return $this->directPlan($query, $root, $dependencies, $primaryKey)
+            ?? QueryPlan::canonical($root, $dependencies, $primaryKey);
     }
 
     /** @return array{tokens: list<string>, softDeleteMode: ?string}|null */
@@ -100,28 +86,12 @@ final class QueryPlanner
             return null;
         }
 
-        $inWhere = null;
-        foreach ($query->wheres as $where) {
-            if ($this->isSoftDeleteWhere($query, $plan->root, $where)) {
-                continue;
-            }
-            if (
-                $inWhere !== null
-                || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
-                || !in_array($where['type'] ?? null, ['In', 'InRaw'], true)
-                || !is_string($where['column'] ?? null)
-                || !$this->resolvesToColumn($query, $plan->root, $where['column'], $plan->primaryKey->column)
-                || !is_array($where['values'] ?? null)
-            ) {
-                return null;
-            }
-            $inWhere = $where;
-        }
-        if ($inWhere === null) {
+        $predicate = $this->primaryKeyPredicate($query, $plan->root, $plan->primaryKey);
+        if ($predicate === null) {
             return null;
         }
-        [$safe, $mode] = $this->softDeleteMode($query, $plan->root);
-        if (!$safe) {
+        [$inWhere, $mode] = $predicate;
+        if (!in_array($inWhere['type'] ?? null, ['In', 'InRaw'], true) || !is_array($inWhere['values'] ?? null)) {
             return null;
         }
 
@@ -153,25 +123,32 @@ final class QueryPlanner
         QueryBuilder $query,
         TableIdentity $root,
         array $dependencies,
-        ?PrimaryKeyMetadata $primaryKey,
+        PrimaryKeyMetadata $primaryKey,
     ): ?QueryPlan {
         if (
-            $primaryKey === null
+            $query->configuredTag() !== null
+            || $query->configuredTtl() !== null
             || count($dependencies) !== 1
-            || !$this->allowsDirectControls($query)
+            || $query->offset !== null
+            || ($query->limit !== null && $query->limit !== 1)
+            || !empty($query->orders)
         ) {
             return null;
         }
 
-        $directToken = $this->directPrimaryKeyToken($query, $root, $primaryKey);
-
-        if ($directToken === null) {
+        $predicate = $this->primaryKeyPredicate($query, $root, $primaryKey);
+        if ($predicate === null) {
             return null;
         }
-
-        [$softDeleteSafe, $softDeleteMode] = $this->softDeleteMode($query, $root);
-
-        if (!$softDeleteSafe) {
+        [$where, $softDeleteMode] = $predicate;
+        if (
+            ($where['type'] ?? null) !== 'Basic'
+            || !in_array($where['operator'] ?? null, ['=', '=='], true)
+        ) {
+            return null;
+        }
+        $directToken = $primaryKey->token($where['value'] ?? null);
+        if ($directToken === null) {
             return null;
         }
 
@@ -187,24 +164,17 @@ final class QueryPlanner
         );
     }
 
-    private function allowsDirectControls(QueryBuilder $query): bool
-    {
-        return $query->configuredTag() === null && $query->configuredTtl() === null;
-    }
-
-    private function isSingleRowShape(QueryBuilder $query): bool
-    {
-        return !$query->distinct
-            && $query->aggregate === null
-            && $query->groupLimit === null
-            && empty($query->groups)
-            && empty($query->havings)
-            && empty($query->unions);
-    }
-
     private function canUseRowShape(QueryBuilder $query, string $operation): bool
     {
-        if ($operation !== 'select' || !$this->isSingleRowShape($query)) {
+        if (
+            $operation !== 'select'
+            || $query->distinct
+            || $query->aggregate !== null
+            || $query->groupLimit !== null
+            || !empty($query->groups)
+            || !empty($query->havings)
+            || !empty($query->unions)
+        ) {
             return false;
         }
 
@@ -249,30 +219,38 @@ final class QueryPlanner
         return null;
     }
 
-    private function directPrimaryKeyToken(
+    /** @return array{0: array<string, mixed>, 1: ?string}|null */
+    private function primaryKeyPredicate(
         QueryBuilder $query,
         TableIdentity $root,
         PrimaryKeyMetadata $primaryKey,
-    ): ?string {
-        if (
-            $query->offset !== null
-            || ($query->limit !== null && $query->limit !== 1)
-            || !empty($query->orders)
-        ) {
-            return null;
-        }
-
+    ): ?array {
         $primaryWhere = null;
+        $deletedAt = $query->deletedAtColumn();
+        $mode = $deletedAt === null ? null : 'with';
 
         foreach ($query->wheres as $where) {
-            if ($this->isSoftDeleteWhere($query, $root, $where)) {
+            if (
+                strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
+                || !is_string($where['column'] ?? null)
+            ) {
+                return null;
+            }
+            if ($deletedAt !== null && $this->resolvesToColumn($query, $root, $where['column'], $deletedAt)) {
+                if (!in_array($where['type'] ?? null, ['Null', 'NotNull'], true) || $mode !== 'with') {
+                    return null;
+                }
+                $mode = ($where['type'] ?? null) === 'NotNull' ? 'only' : 'default';
+
                 continue;
             }
 
-            if ($primaryWhere !== null) {
+            if (
+                $primaryWhere !== null
+                || !$this->resolvesToColumn($query, $root, $where['column'], $primaryKey->column)
+            ) {
                 return null;
             }
-
             $primaryWhere = $where;
         }
 
@@ -280,80 +258,7 @@ final class QueryPlanner
             return null;
         }
 
-        $where = $primaryWhere;
-
-        if (
-            ($where['type'] ?? null) !== 'Basic'
-            || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
-            || !in_array($where['operator'] ?? null, ['=', '=='], true)
-            || !is_string($where['column'] ?? null)
-            || $where['value'] instanceof Expression
-        ) {
-            return null;
-        }
-
-        if (!$this->resolvesToColumn($query, $root, (string) $where['column'], $primaryKey->column)) {
-            return null;
-        }
-
-        return $primaryKey->token($where['value'] ?? null);
-    }
-
-    /** @return array{0: bool, 1: ?string} */
-    private function softDeleteMode(QueryBuilder $query, TableIdentity $root): array
-    {
-        if ($query->deletedAtColumn() === null) {
-            return [true, null];
-        }
-
-        $modes = [];
-
-        foreach ($query->wheres as $where) {
-            if (!$this->isDeletedAtColumn($query, $root, $where['column'] ?? null)) {
-                continue;
-            }
-
-            $type = $where['type'] ?? null;
-
-            if (
-                !in_array($type, ['Null', 'NotNull'], true)
-                || strtolower((string) ($where['boolean'] ?? 'and')) !== 'and'
-            ) {
-                return [false, null];
-            }
-
-            $modes[] = $type === 'NotNull' ? 'only' : 'default';
-        }
-
-        if (count($modes) > 1) {
-            return [false, null];
-        }
-
-        return [true, $modes[0] ?? 'with'];
-    }
-
-    /** @param array<string, mixed> $where */
-    private function isSoftDeleteWhere(QueryBuilder $query, TableIdentity $root, array $where): bool
-    {
-        return in_array($where['type'] ?? null, ['Null', 'NotNull'], true)
-            && strtolower((string) ($where['boolean'] ?? 'and')) === 'and'
-            && $this->isDeletedAtColumn($query, $root, $where['column'] ?? null);
-    }
-
-    private function isValidQualifier(string $qualifier, string $table, ?string $alias): bool
-    {
-        return $alias !== null
-            ? $qualifier === $alias
-            : $qualifier === $table;
-    }
-
-    private function isDeletedAtColumn(QueryBuilder $query, TableIdentity $root, mixed $column): bool
-    {
-        $deletedAt = $query->deletedAtColumn();
-
-        return is_string($column)
-            && is_string($deletedAt)
-            && $this->resolvesToColumn($query, $root, $column, $deletedAt);
+        return [$primaryWhere, $mode];
     }
 
     private function resolvesToColumn(
@@ -375,10 +280,11 @@ final class QueryPlanner
 
         $qualifier = trim((string) array_pop($parts), '`"[]');
 
-        return $parts === [] && $this->isValidQualifier(
-            $qualifier,
-            $root->table,
-            $this->fromAlias($query),
-        );
+        if ($parts !== []) {
+            return false;
+        }
+        $alias = $this->fromAlias($query);
+
+        return $alias !== null ? $qualifier === $alias : $qualifier === $root->table;
     }
 }

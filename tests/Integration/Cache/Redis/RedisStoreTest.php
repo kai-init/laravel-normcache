@@ -6,11 +6,14 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
 use NormCache\Cache\QueryEntryRepository;
+use NormCache\Cache\QueryHashResolver;
+use NormCache\Payload\MembershipCodec;
+use NormCache\Planning\QueryPlanner;
 use NormCache\Planning\TableIdentityResolver;
 use NormCache\Support\CacheKeyBuilder;
 use NormCache\Support\RedisStore;
+use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\TestCase;
-use NormCache\Values\CacheState;
 use Predis\Client;
 use ReflectionProperty;
 
@@ -128,23 +131,27 @@ final class RedisStoreTest extends TestCase
 
     public function test_corrupt_result_read_does_not_delete_the_observed_payload(): void
     {
+        $query = Author::query()->toBase()->select('name');
+        $table = app(TableIdentityResolver::class)->resolve($query->getConnection(), 'authors');
+        $this->assertNotNull($table);
+        $plan = app(QueryPlanner::class)->plan($query, $table, [$table]);
+        $this->assertTrue($plan->isResult());
         $store = app(RedisStore::class);
-        $key = 'test:{nc:x:corrupt-read}:payload';
-        $store->setRawForever($key, 'corrupt');
-        $state = new CacheState(
-            key: $key,
-            epoch: '0',
-            version: '0',
-            generation: '0',
-            versions: [],
-            tag: null,
-            tagKey: null,
+        $version = $store->getRaw($this->cacheKeys()->version($table)) ?? '0';
+        $key = $this->cacheKeys()->queryEntry($table, $version, 'u', 'corrupt-read');
+        $this->writeCacheField($key, 'r', 'corrupt');
+
+        $result = app(QueryEntryRepository::class)->read(
+            $query,
+            $plan,
+            'u',
+            new QueryHashResolver(static fn(): string => 'corrupt-read'),
+            claim: false,
         );
 
-        $result = app(QueryEntryRepository::class)->readResult($state, 'corrupt');
-
+        $this->assertNotNull($result);
         $this->assertSame('corrupt_payload', $result->reason);
-        $this->assertSame('corrupt', $store->getRaw($key));
+        $this->assertSame('corrupt', $store->readHashField($key, 'r'));
     }
 
     public function test_phpredis_raw_operations_preserve_the_shared_serializer(): void
@@ -352,6 +359,7 @@ final class RedisStoreTest extends TestCase
         $token = str_repeat('a', 32);
         $wakeKey = $keys->wake($table, 'q', 'query', $token);
         $rowKey = $keys->row($table, '0', 'i:1');
+        $membership = app(MembershipCodec::class)->encode('0', '0', ['i:1']);
 
         $this->assertTrue($this->claimBuildForTest($buildKey, $token, 5));
         $this->assertTrue($store->publishCanonical(
@@ -362,7 +370,7 @@ final class RedisStoreTest extends TestCase
             rowPayloads: ['row-payload'],
             expectedVersion: '0',
             expectedGeneration: '0',
-            membershipPayload: '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}',
+            membershipPayload: $membership,
             membershipTtl: 60,
             rowTtl: 3600,
             buildingKey: $buildKey,
@@ -381,7 +389,8 @@ final class RedisStoreTest extends TestCase
         );
 
         $result = array_map(static fn(mixed $value): mixed => $value ?? false, $result);
-        $this->assertSame(['membership', '0', '0', '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}', 0, false], $result);
+        $this->assertSame(['membership', '0', '0', $membership, 0, false], $result);
+        $this->assertSame('row-payload', $store->getRaw($rowKey));
 
         // The script resolves the key from ver, so a bump points it at an unwritten key.
         $store->increment($versionKey);
@@ -542,7 +551,7 @@ final class RedisStoreTest extends TestCase
         $prefix = $keys->tablePrefix($table);
         $resultKey = $keys->queryEntry($table, '0', 'u', 'result-query');
         $membershipKey = $resultKey;
-        $membership = '{"f":4,"ep":"0","g":"0","ids":["i:1"],"vec":[]}';
+        $membership = app(MembershipCodec::class)->encode('0', '0', ['i:1']);
 
         $this->writeCacheField($membershipKey, 'm', $membership);
         $this->writeCacheField($resultKey, 'r', 'result-payload');

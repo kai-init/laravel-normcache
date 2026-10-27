@@ -56,10 +56,11 @@ final class DependencyAnalyzer
     ): ?TableIdentity {
         $declaredRoot = null;
 
-        foreach ($query instanceof QueryBuilder ? $query->dependencies() : [] as $declaration) {
-            $identity = $declaration->isTable()
-                ? $this->tables->resolve($connection, $declaration->value)
-                : $this->modelIdentity($connection, $declaration->value);
+        foreach ($query instanceof QueryBuilder ? $query->dependencies() : [] as $name => $isModel) {
+            $name = (string) $name;
+            $identity = $isModel
+                ? $this->modelIdentity($connection, $name)
+                : $this->tables->resolve($connection, $name);
 
             if ($identity === null) {
                 $dependencies->markUnresolvedDeclaration();
@@ -82,32 +83,12 @@ final class DependencyAnalyzer
 
         if ($resolvedSource !== null) {
             $dependencies->add($resolvedSource);
-        } elseif ($query->from instanceof Expression) {
-            $this->walkExpression(
-                $connection,
-                $query,
-                $query->from,
-                $dependencies,
-                $authoritative,
-                source: true,
-            );
         } else {
-            $this->resolveSource($connection, $query->from, $dependencies, $authoritative);
+            $this->resolveSource($connection, $query, $query->from, $dependencies, $authoritative);
         }
 
         foreach ($query->joins ?? [] as $join) {
-            if ($join->table instanceof Expression) {
-                $this->walkExpression(
-                    $connection,
-                    $query,
-                    $join->table,
-                    $dependencies,
-                    $authoritative,
-                    source: true,
-                );
-            } else {
-                $this->resolveSource($connection, $join->table, $dependencies, $authoritative);
-            }
+            $this->resolveSource($connection, $query, $join->table, $dependencies, $authoritative);
 
             $this->walkValues($connection, $query, $join->wheres, $dependencies, $authoritative);
         }
@@ -173,7 +154,7 @@ final class DependencyAnalyzer
                 }
             }
 
-            $this->walkValues($connection, $query, array_values($value), $dependencies, $authoritative);
+            $this->walkValues($connection, $query, $value, $dependencies, $authoritative);
         }
     }
 
@@ -220,10 +201,17 @@ final class DependencyAnalyzer
 
     private function resolveSource(
         Connection $connection,
+        Builder $query,
         mixed $source,
         DependencyCollection $dependencies,
         bool $authoritative,
     ): void {
+        if ($source instanceof Expression) {
+            $this->walkExpression($connection, $query, $source, $dependencies, $authoritative, source: true);
+
+            return;
+        }
+
         $identity = $this->tables->resolve($connection, $source);
 
         if ($identity === null) {

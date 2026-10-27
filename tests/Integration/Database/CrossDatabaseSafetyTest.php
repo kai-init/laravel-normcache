@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Schema;
 use NormCache\Cache\BuildLeaseCoordinator;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
-use NormCache\Cache\CanonicalRowRepository;
+use NormCache\Cache\QueryEntryRepository;
 use NormCache\Events\QueryCacheMiss;
 use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\DependencyAnalyzer;
@@ -92,8 +92,8 @@ final class CrossDatabaseSafetyTest extends TestCase
         $state = app(CacheStateResolver::class)->resolve($plan, 'u', 'unused');
         $lease = app(BuildLeaseCoordinator::class)->claim($plan, $state, 'u', 'unused');
         $row = DB::table('authors')->where('id', $author->id)->first();
-        Event::listen(QueryCacheMiss::class, function () use ($plan, $state, $row, $lease): void {
-            app(CanonicalRowRepository::class)->publish($plan, $state, [$row], $lease);
+        Event::listen(QueryCacheMiss::class, function () use ($query, $plan, $state, $row, $lease): void {
+            app(QueryEntryRepository::class)->publish($query, $plan, $state, [$row], $lease);
         });
 
         DB::flushQueryLog();

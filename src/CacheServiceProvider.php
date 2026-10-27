@@ -18,7 +18,6 @@ use Illuminate\Support\ServiceProvider;
 use NormCache\Cache\BuildLeaseCoordinator;
 use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\CacheStateResolver;
-use NormCache\Cache\CanonicalRowRepository;
 use NormCache\Cache\Engine;
 use NormCache\Cache\PendingInvalidations;
 use NormCache\Cache\QueryEntryRepository;
@@ -92,7 +91,6 @@ final class CacheServiceProvider extends ServiceProvider
         $this->app->scoped(CacheRuntime::class);
         $this->app->scoped(CacheStateResolver::class);
         $this->app->scoped(BuildLeaseCoordinator::class);
-        $this->app->scoped(CanonicalRowRepository::class);
         $this->app->scoped(QueryEntryRepository::class);
         $this->app->scoped(RowRepairer::class);
         $this->app->singleton(PendingInvalidations::class);

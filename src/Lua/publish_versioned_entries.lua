@@ -25,22 +25,15 @@ local wake_count = tonumber(ARGV[n + 2 * m + 5] or '1') or 1
 local wake_ttl = tonumber(ARGV[n + 2 * m + 6] or '10') or 10
 local has_lease = #KEYS > n + m
 local has_wake = #KEYS > n + m + 1
-local wake_tokens = {}
-
-for i = 1, wake_count do
-    wake_tokens[i] = '1'
-end
-
-local function wake()
-    redis.call('LPUSH', KEYS[n + m + 2], unpack(wake_tokens))
-end
-
 local function release_building()
     if not has_lease then return end
-    if token == '' or redis.call('GET', KEYS[n + m + 1]) ~= token then return end
     redis.call('DEL', KEYS[n + m + 1])
     if has_wake then
-        wake()
+        local wake_tokens = {}
+        for i = 1, wake_count do
+            wake_tokens[i] = '1'
+        end
+        redis.call('LPUSH', KEYS[n + m + 2], unpack(wake_tokens))
         redis.call('EXPIRE', KEYS[n + m + 2], wake_ttl)
     end
 end

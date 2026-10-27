@@ -83,7 +83,7 @@ final readonly class BuildLeaseCoordinator
     /** @param callable(string): string $wakeKey */
     private function acquire(string $buildingKey, callable $wakeKey): BuildLease
     {
-        $token = bin2hex(random_bytes(16));
+        $token = hash('xxh128', random_bytes(16));
         [$owner, $ownerToken] = $this->store->claimBuild(
             $buildingKey,
             $token,
