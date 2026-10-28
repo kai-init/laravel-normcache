@@ -9,7 +9,6 @@ use NormCache\Cache\CacheRuntime;
 use NormCache\Cache\PendingInvalidations;
 use NormCache\Database\QueryBuilder;
 use NormCache\Enums\MutationType;
-use NormCache\Exceptions\TableInvalidationException;
 use NormCache\Planning\DeleteDependencyResolver;
 use NormCache\Planning\MutationKeyExtractor;
 use NormCache\Planning\TableIdentityResolver;
@@ -48,111 +47,116 @@ final class Invalidator
             return;
         }
 
-        $connection = $query->getConnection();
-        $connectionName = (string) $connection->getName();
-        $inPhysicalTx = $this->inPhysicalTransaction($connection);
+        try {
+            $connection = $query->getConnection();
+            $connectionName = (string) $connection->getName();
+            $inPhysicalTx = $this->inPhysicalTransaction($connection);
 
-        if (!$inPhysicalTx && $this->hasPending($connectionName)) {
-            $this->reconcileOrphaned($connection);
-        }
-
-        $from = $query->from;
-
-        if ($from instanceof Expression) {
-            $from = $from->getValue($query->getGrammar());
-        }
-
-        $table = $this->tables->resolve($connection, $from);
-
-        if ($table === null) {
-            $this->applyOrQueueGlobal($connection, 'opaque_write');
-            $this->failures->opaqueWriteGlobalInvalidation($connectionName);
-
-            return;
-        }
-
-        $truncating = $mutation === MutationType::TRUNCATE;
-        $affectedByDelete = [];
-
-        if ($truncating || $mutation === MutationType::DELETE) {
-            try {
-                $epoch = $this->runtime->epoch();
-                $resolved = $truncating
-                    ? $this->deleteDependencies->affectedByTruncate($connection, $table, $epoch)
-                    : $this->deleteDependencies->affectedByDelete($connection, $table, $epoch);
-            } catch (\Throwable) {
-                $resolved = null;
+            if (!$inPhysicalTx && $this->hasPending($connectionName)) {
+                $this->reconcileOrphaned($connection);
             }
 
-            if ($resolved === null) {
-                $reason = $mutation->value . '_dependencies_unavailable';
-                $this->applyOrQueueGlobal($connection, $reason);
-                $this->failures->deleteDependencyGlobalInvalidation($table, $mutation);
+            $from = $query->from;
+
+            if ($from instanceof Expression) {
+                $from = $from->getValue($query->getGrammar());
+            }
+
+            $table = $this->tables->resolve($connection, $from);
+
+            if ($table === null) {
+                $this->applyOrQueueGlobal($connection, 'opaque_write');
+                $this->failures->opaqueWriteGlobalInvalidation($connectionName);
 
                 return;
             }
 
-            $affectedByDelete = $resolved;
-        }
+            $truncating = $mutation === MutationType::TRUNCATE;
+            $affectedByDelete = [];
 
-        $broad = $forceBroadInvalidation;
-        $tokens = [];
+            if ($truncating || $mutation === MutationType::DELETE) {
+                try {
+                    $epoch = $this->runtime->epoch();
+                    $resolved = $truncating
+                        ? $this->deleteDependencies->affectedByTruncate($connection, $table, $epoch)
+                        : $this->deleteDependencies->affectedByDelete($connection, $table, $epoch);
+                } catch (\Throwable) {
+                    $resolved = null;
+                }
 
-        if ($mayAffectExistingRows && !$forceBroadInvalidation) {
-            $primaryKey = $query->primaryKey();
-            $extracted = $primaryKey !== null
-                && $primaryKey->family === PrimaryKeyMetadata::INTEGER
-                ? $this->mutationKeys->extractMutation($query, $primaryKey, $assigned)
-                : null;
+                if ($resolved === null) {
+                    $reason = $mutation->value . '_dependencies_unavailable';
+                    $this->applyOrQueueGlobal($connection, $reason);
+                    $this->failures->deleteDependencyGlobalInvalidation($table, $mutation);
 
-            if (
-                $extracted === null
-                || count($extracted) > $this->config->maxPreciseInvalidationKeys
-            ) {
-                $broad = true;
-            } else {
-                $tokens = $extracted;
-            }
-        }
+                    return;
+                }
 
-        $invalidations = [[
-            'table' => $table,
-            'broad' => $broad,
-            'tokens' => $tokens,
-        ]];
-
-        foreach ($affectedByDelete as $affected) {
-            if ($affected->hash === $table->hash) {
-                $invalidations[0]['broad'] = true;
-
-                continue;
+                $affectedByDelete = $resolved;
             }
 
-            $invalidations[] = [
-                'table' => $affected,
-                'broad' => true,
-                'tokens' => [],
-            ];
-        }
+            $broad = $forceBroadInvalidation;
+            $tokens = [];
 
-        if ($inPhysicalTx) {
-            if ($truncating) {
-                $this->applyMany($invalidations);
+            if ($mayAffectExistingRows && !$forceBroadInvalidation) {
+                $primaryKey = $query->primaryKey();
+                $extracted = $primaryKey !== null
+                    && $primaryKey->family === PrimaryKeyMetadata::INTEGER
+                    ? $this->mutationKeys->extractMutation($query, $primaryKey, $assigned)
+                    : null;
+
+                if (
+                    $extracted === null
+                    || count($extracted) > $this->config->maxPreciseInvalidationKeys
+                ) {
+                    $broad = true;
+                } else {
+                    $tokens = $extracted;
+                }
             }
 
-            foreach ($invalidations as $invalidation) {
-                $this->queueInvalidation(
-                    $invalidation['table'],
-                    $invalidation['broad'],
-                    $invalidation['tokens'],
-                    $connection,
-                );
+            $invalidations = [[
+                'table' => $table,
+                'broad' => $broad,
+                'tokens' => $tokens,
+            ]];
+
+            foreach ($affectedByDelete as $affected) {
+                if ($affected->hash === $table->hash) {
+                    $invalidations[0]['broad'] = true;
+
+                    continue;
+                }
+
+                $invalidations[] = [
+                    'table' => $affected,
+                    'broad' => true,
+                    'tokens' => [],
+                ];
             }
 
-            return;
-        }
+            if ($inPhysicalTx) {
+                if ($truncating) {
+                    $this->applyMany($invalidations);
+                }
 
-        $this->applyMany($invalidations);
+                foreach ($invalidations as $invalidation) {
+                    $this->queueInvalidation(
+                        $invalidation['table'],
+                        $invalidation['broad'],
+                        $invalidation['tokens'],
+                        $connection,
+                    );
+                }
+
+                return;
+            }
+
+            $this->applyMany($invalidations);
+        } catch (\Throwable $exception) {
+            $this->disableAfterInvalidationFailure();
+            $this->failures->cacheUnavailable($exception);
+        }
     }
 
     public function commit(string $connection): void
@@ -346,19 +350,20 @@ final class Invalidator
             return true;
         }
 
-        $states = [];
+        $states = $affected = [];
 
         foreach ($invalidations as $invalidation) {
             $table = $invalidation['table'];
-            $broad = $invalidation['broad'];
             $tokens = $invalidation['tokens'];
+            $mode = $invalidation['broad'] ? 'generation' : ($tokens === [] ? 'version' : 'precise');
             $states[] = [
                 'versionKey' => $this->keys->version($table),
                 'generationKey' => $this->keys->generation($table),
-                'mode' => $broad ? 'generation' : ($tokens === [] ? 'version' : 'precise'),
+                'mode' => $mode,
                 'tokens' => $tokens,
                 'rowPrefix' => $this->keys->tablePrefix($table) . ':r:g',
             ];
+            $affected[] = ['table' => $table, 'mode' => $mode, 'token_count' => count($tokens)];
         }
 
         $this->observer->begin();
@@ -376,19 +381,8 @@ final class Invalidator
 
             return true;
         } catch (\Throwable $exception) {
-            $failedIndex = $exception instanceof TableInvalidationException
-                ? $exception->stateIndex
-                : 0;
-            $failed = $invalidations[$failedIndex] ?? $invalidations[0];
-            $failure = $exception->getPrevious() ?? $exception;
-
             $this->disableAfterInvalidationFailure();
-            $this->failures->invalidationFailed(
-                $failure,
-                $failed['table'],
-                $states[$failedIndex]['mode'] ?? $states[0]['mode'],
-                $failed['tokens'],
-            );
+            $this->failures->invalidationFailed($exception, $affected);
 
             return false;
         }

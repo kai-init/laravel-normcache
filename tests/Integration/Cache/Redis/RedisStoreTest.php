@@ -272,6 +272,7 @@ final class RedisStoreTest extends TestCase
                 'serializer-query',
                 'prefer-result',
             );
+            $reply = array_map(static fn(mixed $value): mixed => $value ?? false, $reply);
             $this->assertSame(['result', '0', false, 'result-payload', 0, false], $reply);
             $this->assertSame('membership-payload', $store->readHashField($entryKey, 'm'));
             $this->assertSame('result-payload', $store->readHashField($entryKey, 'r'));

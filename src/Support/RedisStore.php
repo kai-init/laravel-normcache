@@ -7,7 +7,6 @@ use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
 use Illuminate\Support\Facades\Redis;
-use NormCache\Exceptions\TableInvalidationException;
 use Predis\NotSupportedException;
 use Predis\Response\ServerException;
 
@@ -333,7 +332,7 @@ final class RedisStore
             );
             $batches = $cluster ? array_chunk($states, 1) : [$states];
 
-            foreach ($batches as $batchIndex => $batch) {
+            foreach ($batches as $batch) {
                 $keys = [];
                 $args = [];
 
@@ -346,20 +345,7 @@ final class RedisStore
                     array_push($args, ...$state['tokens']);
                 }
 
-                try {
-                    $this->evaluate(
-                        $connection,
-                        RedisScripts::get('invalidate_tables'),
-                        $keys,
-                        $args,
-                    );
-                } catch (\Exception $exception) {
-                    if ($cluster) {
-                        throw new TableInvalidationException($batchIndex, $exception);
-                    }
-
-                    throw $exception;
-                }
+                $this->evaluate($connection, RedisScripts::get('invalidate_tables'), $keys, $args);
             }
         });
     }

@@ -9,6 +9,16 @@ use Psr\Log\LogLevel;
 
 final class FailureReporter
 {
+    private const EVENTS = [
+        'invalidation_failed' => [LogLevel::CRITICAL, 'Invalidation failed; cached reads may be stale.'],
+        'opaque_write_global_invalidation' => [LogLevel::WARNING, 'Globally invalidated after an intercepted write target could not be resolved.'],
+        'delete_dependency_global_invalidation' => [LogLevel::WARNING, 'Globally invalidated because delete dependencies could not be resolved.'],
+        'global_invalidation_failed' => [LogLevel::CRITICAL, 'Global invalidation failed; cached reads may be stale.'],
+        'invalidation_disable_failed' => [LogLevel::CRITICAL, 'Could not disable cached reads across processes after an invalidation failure.'],
+        'observation_failed' => [LogLevel::WARNING, 'Diagnostics failed; the query itself was unaffected.'],
+        'repair_unreachable' => [LogLevel::WARNING, 'Could not reload rows from the database to repair a membership.'],
+    ];
+
     /** @var array<string, true> */
     private array $recorded = [];
 
@@ -26,134 +36,70 @@ final class FailureReporter
         }
     }
 
-    /** @param  list<string>  $tokens */
-    public function invalidationFailed(
-        \Throwable $exception,
-        TableIdentity $table,
-        string $mode,
-        array $tokens,
-    ): void {
-        $this->log(
-            LogLevel::CRITICAL,
-            'invalidation_failed',
-            'Invalidation failed; cached reads may be stale.',
-            $exception,
-            [
-                ...$this->tableContext($table),
-                'mode' => $mode,
-                'token_count' => count($tokens),
-            ],
-            [$table->hash, $mode],
-        );
+    /** @param list<array{table: TableIdentity, mode: string, token_count: int}> $affected */
+    public function invalidationFailed(\Throwable $exception, array $affected): void
+    {
+        $tables = array_map(fn(array $entry): array => [
+            ...$this->tableContext($entry['table']),
+            'mode' => $entry['mode'],
+            'token_count' => $entry['token_count'],
+        ], $affected);
+
+        $this->log('invalidation_failed', count($tables) === 1 ? $tables[0] : ['tables' => $tables], $exception);
     }
 
     public function opaqueWriteGlobalInvalidation(string $connection): void
     {
-        $this->log(
-            LogLevel::WARNING,
-            'opaque_write_global_invalidation',
-            'Globally invalidated after an intercepted write target could not be resolved.',
-            null,
-            ['connection' => $connection],
-            [$connection],
-        );
+        $this->log('opaque_write_global_invalidation', ['connection' => $connection]);
     }
 
-    public function deleteDependencyGlobalInvalidation(
-        TableIdentity $table,
-        MutationType $mutation,
-    ): void {
-        $this->log(
-            LogLevel::WARNING,
-            'delete_dependency_global_invalidation',
-            'Globally invalidated because delete dependencies could not be resolved.',
-            null,
-            [
-                ...$this->tableContext($table),
-                'mutation' => strtolower($mutation->name),
-            ],
-            [$table->hash, $mutation->name],
-        );
+    public function deleteDependencyGlobalInvalidation(TableIdentity $table, MutationType $mutation): void
+    {
+        $this->log('delete_dependency_global_invalidation', [
+            ...$this->tableContext($table),
+            'mutation' => strtolower($mutation->name),
+        ]);
     }
 
     public function globalInvalidationFailed(\Throwable $exception, string $reason): void
     {
-        $this->log(
-            LogLevel::CRITICAL,
-            'global_invalidation_failed',
-            'Global invalidation failed; cached reads may be stale.',
-            $exception,
-            ['reason' => $reason],
-            [$reason],
-        );
+        $this->log('global_invalidation_failed', ['reason' => $reason], $exception);
     }
 
     public function invalidationDisableFailed(\Throwable $exception): void
     {
-        $this->log(
-            LogLevel::CRITICAL,
-            'invalidation_disable_failed',
-            'Could not disable cached reads across processes after an invalidation failure.',
-            $exception,
-            [],
-        );
+        $this->log('invalidation_disable_failed', [], $exception);
     }
 
     public function observationFailed(\Throwable $exception, string $outcome): void
     {
-        $this->log(
-            LogLevel::WARNING,
-            'observation_failed',
-            'Diagnostics failed; the query itself was unaffected.',
-            $exception,
-            ['outcome' => $outcome],
-            [$outcome],
-        );
+        $this->log('observation_failed', ['outcome' => $outcome], $exception);
     }
 
-    public function repairUnreachable(
-        \Throwable $exception,
-        TableIdentity $table,
-        int $tokenCount,
-    ): void {
-        $this->log(
-            LogLevel::WARNING,
-            'repair_unreachable',
-            'Could not reload rows from the database to repair a membership.',
-            $exception,
-            [
-                ...$this->tableContext($table),
-                'token_count' => $tokenCount,
-            ],
-            [$table->hash],
-        );
+    public function repairUnreachable(\Throwable $exception, TableIdentity $table, int $tokenCount): void
+    {
+        $this->log('repair_unreachable', [
+            ...$this->tableContext($table),
+            'token_count' => $tokenCount,
+        ], $exception);
     }
 
-    /**
-     * @param  array<string, mixed>  $context
-     * @param  list<string>  $fingerprint
-     */
-    private function log(
-        string $level,
-        string $category,
-        string $message,
-        ?\Throwable $exception,
-        array $context,
-        array $fingerprint = [],
-    ): void {
-        if (!$this->claim($category, $exception, ...$fingerprint)) {
+    /** @param array<string, mixed> $context */
+    private function log(string $event, array $context, ?\Throwable $exception = null): void
+    {
+        if (!$this->claim($event, $exception, $context)) {
             return;
         }
 
-        $context = [
-            'component' => 'normcache',
-            'event' => $category,
-            ...$context,
-            ...($exception === null ? [] : ['exception' => $exception]),
-        ];
+        [$level, $message] = self::EVENTS[$event];
 
         try {
-            $this->logger->log($level, $message, $context);
+            $this->logger->log($level, $message, [
+                'component' => 'normcache',
+                'event' => $event,
+                ...$context,
+                ...($exception === null ? [] : ['exception' => $exception]),
+            ]);
         } catch (\Throwable) {
         }
     }
@@ -167,12 +113,13 @@ final class FailureReporter
         ];
     }
 
-    private function claim(string $category, ?\Throwable $exception, string ...$context): bool
+    /** @param array<string, mixed> $context */
+    private function claim(string $event, ?\Throwable $exception, array $context = []): bool
     {
-        $fingerprint = implode('|', [
-            $category,
-            ...($exception === null ? [] : [$exception::class, $exception->getMessage()]),
-            ...$context,
+        $fingerprint = serialize([
+            $event,
+            $exception === null ? null : [$exception::class, $exception->getMessage()],
+            $context,
         ]);
 
         if (isset($this->recorded[$fingerprint])) {

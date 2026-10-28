@@ -276,6 +276,10 @@ final class KnownPrimaryKeyColdFillTest extends TestCase
 
     public function test_overflow_integer_keys_fall_back_without_integer_truncation(): void
     {
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            $this->markTestSkipped('PostgreSQL bigint columns reject values above signed 64-bit integer limit.');
+        }
+
         [, $queries] = $this->observe(fn() => RawPost::query()->toBase()
             ->whereIn('id', ['9223372036854775808'])->orderBy('id')->get());
 

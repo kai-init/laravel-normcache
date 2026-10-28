@@ -2,6 +2,8 @@
 
 namespace NormCache\Tests\Integration\Cache\Invalidation;
 
+use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Grammar;
 use Illuminate\Redis\Connections\PhpRedisClusterConnection;
 use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connections\PredisClusterConnection;
@@ -186,6 +188,49 @@ final class RedisScriptFailureTest extends TestCase
         $this->assertSame('After', Author::where('name', 'After')->first()->name);
         $this->assertFalse(app(CacheRuntime::class)->available());
         Event::assertNotDispatched(CacheInvalidated::class);
+    }
+
+    public function test_multi_table_failure_logs_the_uncertain_batch_and_disables_reads(): void
+    {
+        $resolver = app(TableIdentityResolver::class);
+        $posts = $resolver->resolve(DB::connection(), 'posts');
+        $authors = $resolver->resolve(DB::connection(), 'authors');
+        $this->assertNotNull($posts);
+        $this->assertNotNull($authors);
+        $this->cacheStore()->setRawForever($this->cacheKeys()->version($authors), 'invalid-counter');
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('log')->with(
+            LogLevel::CRITICAL,
+            $this->anything(),
+            $this->callback(static fn(array $context): bool => ($context['event'] ?? null) === 'invalidation_failed'
+                && array_column($context['tables'] ?? [], 'table_hash') === [$posts->hash, $authors->hash]
+                && array_column($context['tables'] ?? [], 'mode') === ['generation', 'generation']
+            ),
+        );
+        $this->app->instance(LoggerInterface::class, $logger);
+        $this->app->forgetScopedInstances();
+
+        $this->assertFalse(NormCache::invalidate(['posts', 'authors']));
+        $this->assertFalse(app(CacheRuntime::class)->available());
+        $this->assertSame('1', $this->cacheStore()->getRaw($this->cacheKeys()->disabled()));
+    }
+
+    public function test_unexpected_invalidation_error_disables_cache_without_escaping(): void
+    {
+        $query = Author::query()->toBase();
+        $query->from = new class implements Expression
+        {
+            public function getValue(Grammar $grammar): string
+            {
+                throw new \RuntimeException('Could not resolve the written table.');
+            }
+        };
+
+        app(Invalidator::class)->afterWrite($query, MutationType::UPDATE, true);
+
+        $this->assertFalse(app(CacheRuntime::class)->available());
+        $this->assertSame('1', $this->cacheStore()->getRaw($this->cacheKeys()->disabled()));
     }
 
     public static function scriptStates(): array
