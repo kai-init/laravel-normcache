@@ -26,7 +26,7 @@ final readonly class BuildLeaseCoordinator
         string $queryHash,
     ): BuildLease {
         $buildingKey = match (true) {
-            !$plan->isDirectPrimaryKey() && !$plan->isQueryGroup() => $this->keys->queryBuild(
+            $plan->isCanonical() => $this->keys->queryBuild(
                 $plan->root,
                 $state->version,
                 $namespace,
@@ -37,7 +37,7 @@ final readonly class BuildLeaseCoordinator
                 $state->generation,
                 (string) $plan->primaryKeyToken,
             ),
-            default => $this->keys->queryGroupBuild($queryHash),
+            default => $this->keys->resultBuild($queryHash),
         };
 
         return $this->acquire(
@@ -101,7 +101,7 @@ final readonly class BuildLeaseCoordinator
     private function wakeKey(QueryPlan $plan, string $queryHash, string $token): string
     {
         return match (true) {
-            !$plan->isDirectPrimaryKey() && !$plan->isQueryGroup() => $this->keys->wake(
+            $plan->isCanonical() => $this->keys->wake(
                 $plan->root,
                 'q',
                 $queryHash,
@@ -113,7 +113,7 @@ final readonly class BuildLeaseCoordinator
                 (string) $plan->primaryKeyToken,
                 $token,
             ),
-            default => $this->keys->queryGroupWake($queryHash, $token),
+            default => $this->keys->resultWake($queryHash, $token),
         };
     }
 }

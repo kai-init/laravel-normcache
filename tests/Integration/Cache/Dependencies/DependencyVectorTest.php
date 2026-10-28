@@ -179,7 +179,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertCount(1, DB::getQueryLog());
     }
 
-    public function test_root_only_explicit_table_dependency_uses_table_local_result_entry(): void
+    public function test_root_only_explicit_table_dependency_uses_full_result_entry(): void
     {
         $read = fn() => Post::query()
             ->from('posts')
@@ -196,8 +196,8 @@ final class DependencyVectorTest extends TestCase
 
         $resultKeys = $this->cacheQueryKeysWithField('r');
         $this->assertNotSame([], $resultKeys);
-        $this->assertStringContainsString(':q:v', $resultKeys[0]);
-        $this->assertSame([], $this->cacheKeysMatching('{nc:x:'));
+        $this->assertStringContainsString('{nc:x:', $resultKeys[0]);
+        $this->assertCount(1, $resultKeys);
         $this->assertSame('After', $read()->first()?->title);
     }
 
@@ -411,7 +411,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame('unresolvable_declared_dependency', $analysis->bypassReason);
     }
 
-    public function test_explicit_dependencies_authorize_a_hashable_derived_result_as_query_group(): void
+    public function test_explicit_dependencies_authorize_a_hashable_derived_full_result(): void
     {
         $build = fn() => RawPost::query()->toBase()
             ->from(DB::raw('(select id, title from posts) as derived'))
@@ -427,7 +427,7 @@ final class DependencyVectorTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    public function test_query_group_invalidation_between_payload_and_state_reads_cannot_serve_stale_data(): void
+    public function test_full_result_invalidation_between_payload_and_state_reads_cannot_serve_stale_data(): void
     {
         $read = fn() => RawPost::query()->toBase()
             ->from(DB::raw('(select id, title from posts) as derived'))

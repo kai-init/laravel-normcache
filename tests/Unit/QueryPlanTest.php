@@ -9,13 +9,13 @@ use NormCache\Values\TableIdentity;
 
 final class QueryPlanTest extends UnitTestCase
 {
-    public function test_query_group_is_a_query_scoped_result_strategy(): void
+    public function test_full_result_has_no_row_generation(): void
     {
         $table = $this->table();
-        $plan = QueryPlan::queryGroup($table, [$table]);
+        $plan = QueryPlan::result($table, [$table]);
 
-        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
-        $this->assertTrue($plan->isQueryGroup());
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
+        $this->assertTrue($plan->isResult());
         $this->assertNull($plan->primaryKey);
         $this->assertFalse($plan->usesGeneration());
     }

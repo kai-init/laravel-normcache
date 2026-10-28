@@ -87,10 +87,7 @@ final class CacheStateResolverTest extends TestCase
 
     public static function generationlessPlans(): array
     {
-        return [
-            'result' => ['resultPlan'],
-            'query group' => ['queryGroupPlan'],
-        ];
+        return ['result' => ['resultPlan']];
     }
 
     public function test_canonical_routes_still_fail_after_a_generation_bump(): void
@@ -152,7 +149,6 @@ final class CacheStateResolverTest extends TestCase
     public static function warmReadPlans(): array
     {
         return [
-            'result explicit generation disabled' => ['resultPlan', null, false],
             'result default generation setting' => ['resultPlan', null, null],
             'canonical overlay' => ['canonicalPlan', null, false],
             'canonical membership generation' => ['canonicalPlan', '7', null],
@@ -183,7 +179,9 @@ final class CacheStateResolverTest extends TestCase
         );
 
         $this->assertNotNull($tagged->tagKey);
-        $this->assertSame([$dependency->hash => '0'], $dependent->versions);
+        $expected = [$root->hash => '0', $dependency->hash => '0'];
+        ksort($expected, SORT_STRING);
+        $this->assertSame($expected, $dependent->versions);
         $this->assertContains($this->cacheKeys()->version($dependency), $resolver->pendingStateKeys($multiTable, 'n'));
     }
 
@@ -195,13 +193,6 @@ final class CacheStateResolverTest extends TestCase
             $root,
             [$root],
         );
-    }
-
-    private function queryGroupPlan(): QueryPlan
-    {
-        $root = $this->table('posts');
-
-        return QueryPlan::queryGroup($root, [$root, $this->table('authors')]);
     }
 
     private function canonicalPlan(): QueryPlan

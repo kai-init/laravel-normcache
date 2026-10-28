@@ -42,9 +42,9 @@ final readonly class QueryEntryRepository
         }
 
         $queryHash = $hash->value();
-        if ($plan->isQueryGroup()) {
+        if ($plan->isResult()) {
             [$raw, $values] = $this->store->readHashFieldWithValues(
-                $this->keys->queryGroupEntry($queryHash, $namespace),
+                $this->keys->resultEntry($queryHash, $namespace),
                 'r',
                 $this->states->pendingStateKeys($plan, $namespace),
             );
@@ -281,12 +281,8 @@ final readonly class QueryEntryRepository
             );
         }
 
-        $versionKeys = $plan->isQueryGroup() ? [] : [$this->keys->version($plan->root)];
-        $versions = $plan->isQueryGroup() ? [] : [$state->version];
-        if ($direct) {
-            $versionKeys[] = $this->keys->generation($plan->root);
-            $versions[] = $state->generation;
-        }
+        $versionKeys = $direct ? [$this->keys->version($plan->root), $this->keys->generation($plan->root)] : [];
+        $versions = $direct ? [$state->version, $state->generation] : [];
 
         return $this->store->publishVersionedEntries(
             entryKeys: $direct ? $encoded['rowKeys'] : [$state->key],

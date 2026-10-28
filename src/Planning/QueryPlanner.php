@@ -17,30 +17,16 @@ final class QueryPlanner
         QueryBuilder $query,
         TableIdentity $root,
         array $dependencies,
-        bool $forceQueryGroup = false,
+        bool $queryScoped = false,
         string $operation = 'select',
     ): QueryPlan {
-        $explicitDependencies = $query->dependencies();
-        $rootOnlyDependencies = $explicitDependencies !== []
-            && !$forceQueryGroup
-            && empty($query->joins)
-            && count($dependencies) === 1
-            && $dependencies[0]->hash === $root->hash;
-
-        if ($rootOnlyDependencies) {
-            return QueryPlan::result($root, $dependencies);
-        }
-
         if (
-            $forceQueryGroup
-            || $explicitDependencies !== []
+            $queryScoped
+            || $query->dependencies() !== []
             || !empty($query->joins)
-            || !empty($query->unions) && count($dependencies) > 1
+            || (!empty($query->unions) && count($dependencies) > 1)
+            || $query->configuredCacheContext() !== null
         ) {
-            return QueryPlan::queryGroup($root, $dependencies);
-        }
-
-        if ($query->configuredCacheContext() !== null) {
             return QueryPlan::result($root, $dependencies);
         }
 

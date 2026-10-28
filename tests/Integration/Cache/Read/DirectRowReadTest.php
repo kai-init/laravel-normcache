@@ -79,6 +79,23 @@ final class DirectRowReadTest extends TestCase
         $this->assertSame('corrupt_payload', $cached->reason);
     }
 
+    public function test_warm_direct_row_does_not_compute_the_query_hash(): void
+    {
+        $plan = $this->plan('i:7');
+        $this->seedRow($plan, ['id' => 7]);
+
+        $cached = $this->app->make(QueryEntryRepository::class)->read(
+            RawPost::query()->toBase(),
+            $plan,
+            'u',
+            new QueryHashResolver(static fn(): string => throw new \LogicException('query hash was evaluated')),
+        );
+
+        $this->assertNotNull($cached);
+        $this->assertTrue($cached->served());
+        $this->assertSame(7, $cached->rows[0]->id);
+    }
+
     public function test_row_state_is_scoped_to_the_generation_and_token(): void
     {
         $plan = $this->plan('i:7');

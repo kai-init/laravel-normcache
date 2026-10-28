@@ -21,7 +21,7 @@ final class CacheKeyBuilderTest extends UnitTestCase
         $this->assertStringContainsString($expectedTag, $keys->row($table, '4', 'i:42'));
     }
 
-    public function test_global_tag_and_query_group_keys_have_independent_groups(): void
+    public function test_global_tag_and_full_result_keys_have_independent_groups(): void
     {
         $keys = new CacheKeyBuilder('app:');
 
@@ -29,7 +29,7 @@ final class CacheKeyBuilderTest extends UnitTestCase
         $this->assertSame('app:{nc:g:taghash}:ver', $keys->tagVersion('taghash'));
         $this->assertSame(
             'app:{nc:x:queryhash}:q:gabc',
-            $keys->queryGroupEntry('queryhash', 'gabc'),
+            $keys->resultEntry('queryhash', 'gabc'),
         );
     }
 

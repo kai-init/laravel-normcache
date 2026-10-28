@@ -8,8 +8,6 @@ final readonly class QueryPlan
 
     public const RESULT = 'result';
 
-    public const QUERY_GROUP = 'query-group';
-
     public const DIRECT_PK = 'direct-pk';
 
     /**
@@ -24,12 +22,6 @@ final readonly class QueryPlan
         public ?string $softDeleteMode = null,
         public ?string $deletedAtColumn = null,
     ) {}
-
-    /** @param list<TableIdentity> $dependencies */
-    public static function queryGroup(TableIdentity $root, array $dependencies): self
-    {
-        return new self(self::QUERY_GROUP, $root, $dependencies);
-    }
 
     /** @param list<TableIdentity> $dependencies */
     public static function directPrimaryKey(
@@ -81,11 +73,6 @@ final readonly class QueryPlan
     public function isResult(): bool
     {
         return $this->route === self::RESULT;
-    }
-
-    public function isQueryGroup(): bool
-    {
-        return $this->route === self::QUERY_GROUP;
     }
 
     public function isDirectPrimaryKey(): bool

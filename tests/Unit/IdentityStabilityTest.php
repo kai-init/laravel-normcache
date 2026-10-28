@@ -34,7 +34,6 @@ final class IdentityStabilityTest extends UnitTestCase
 
         $this->assertSame('548acc7208c045aac641546e36bdbffc', $hash(QueryPlan::CANONICAL));
         $this->assertSame('f982b6a4ee8b0a2c9854ce4dffe05908', $hash(QueryPlan::RESULT));
-        $this->assertSame('09bf37953b8677842e6d58ac178f35eb', $hash(QueryPlan::QUERY_GROUP));
         $this->assertSame('1427a690b77f0404a4ecbc02f48a3dbc', $hash(QueryPlan::DIRECT_PK));
     }
 

@@ -11,6 +11,7 @@ use NormCache\Tests\Fixtures\Models\Author;
 use NormCache\Tests\Fixtures\Models\RawPost;
 use NormCache\Tests\TestCase;
 use NormCache\Values\CacheConfig;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class UnifiedQueryEntryTest extends TestCase
 {
@@ -77,21 +78,6 @@ final class UnifiedQueryEntryTest extends TestCase
             $this->app->instance(CacheConfig::class, $originalConfig);
             $this->app->forgetScopedInstances();
         }
-    }
-
-    public function test_a_single_table_cold_fill_does_not_reread_state_before_guarded_publish(): void
-    {
-        $this->skipWhenCommandStatsAreSharded();
-
-        $calls = $this->commandCallsDuring(
-            fn() => RawPost::query()->toBase()->select('title')->orderBy('id')->get(),
-        );
-
-        $this->assertSame(
-            0,
-            $calls['mget'] ?? 0,
-            'the slot-local publish script already validates the table state',
-        );
     }
 
     public function test_canonical_fill_with_seeded_rows_uses_one_mget(): void
@@ -174,22 +160,25 @@ final class UnifiedQueryEntryTest extends TestCase
         $this->assertSame(0, $repairs);
     }
 
-    public function test_a_query_group_read_costs_a_single_pipelined_round_trip(): void
+    #[DataProvider('fullResultShapes')]
+    public function test_full_result_read_costs_a_single_pipelined_round_trip(bool $joined): void
     {
         $this->skipWhenCommandStatsAreSharded();
 
-        $query = fn() => RawPost::query()->toBase()
-            ->join('authors', 'authors.id', '=', 'posts.author_id')
-            ->select('posts.id')
-            ->orderBy('posts.id')
-            ->get();
+        $query = $joined
+            ? fn() => RawPost::query()->toBase()
+                ->join('authors', 'authors.id', '=', 'posts.author_id')
+                ->select('posts.id')
+                ->orderBy('posts.id')
+                ->get()
+            : fn() => RawPost::query()->toBase()->select('title')->orderBy('id')->get();
 
         $query();
 
         $this->assertSame(
             [],
             $this->cacheQueryKeysWithField('m'),
-            'a joined query must take the query-group route',
+            'a projection or join must use full-result storage',
         );
 
         DB::flushQueryLog();
@@ -200,6 +189,11 @@ final class UnifiedQueryEntryTest extends TestCase
         $this->assertSame([], DB::getQueryLog(), 'the read must still be served from cache');
         $this->assertSame(0, $calls['hget'] ?? 0, 'the entry must not cost a standalone HGET');
         $this->assertSame(0, $calls['mget'] ?? 0, 'the cache state must not cost a second round trip');
+    }
+
+    public static function fullResultShapes(): array
+    {
+        return ['projection' => [false], 'join' => [true]];
     }
 
     public function test_a_canonical_overlay_read_needs_nothing_beyond_its_script(): void

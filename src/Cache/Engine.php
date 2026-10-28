@@ -87,7 +87,7 @@ final readonly class Engine
         ));
 
         try {
-            $cached = $this->entries->read($query, $plan, $namespace, $hash, claim: true);
+            $cached = $this->entries->read($query, $plan, $namespace, $hash, claim: $plan->isCanonical());
             if ($cached?->served()) {
                 if ($this->observer->observing()) {
                     $this->observer->read($cached->outcome, $query, $plan, $hash->value(), $statement, $cached->reason);

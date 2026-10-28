@@ -41,7 +41,7 @@ final class UnionDependencyTest extends TestCase
         $this->assertSame(['First', 'Changed'], $read());
     }
 
-    public function test_cross_table_union_uses_query_group_and_tracks_both_tables(): void
+    public function test_cross_table_union_uses_full_result_and_tracks_both_tables(): void
     {
         Author::create(['name' => 'Author']);
         Tag::create(['name' => 'Tag']);
@@ -57,7 +57,7 @@ final class UnionDependencyTest extends TestCase
         $this->assertSame(['Author', 'Tag'], $read());
         Event::assertDispatched(
             QueryCacheHit::class,
-            fn(QueryCacheHit $event): bool => $event->route === 'query_group',
+            fn(QueryCacheHit $event): bool => $event->route === 'result',
         );
 
         Tag::create(['name' => 'Second Tag']);

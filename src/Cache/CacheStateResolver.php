@@ -40,8 +40,7 @@ final readonly class CacheStateResolver
         if (
             $knownVersion !== null
             && (!$usesGeneration || $knownGeneration !== null)
-            && !$plan->isQueryGroup()
-            && !$plan->isDirectPrimaryKey()
+            && $plan->isCanonical()
             && count($plan->dependencies) === 1
             && $plan->dependencies[0]->hash === $plan->root->hash
             && $tagKey === null
@@ -74,19 +73,17 @@ final readonly class CacheStateResolver
 
         $version = $knownVersion ?? $values[$keys[$plan->root->hash]] ?? '0';
         $generation = $knownGeneration ?? (isset($keys['generation']) ? ($values[$keys['generation']] ?? '0') : '0');
-        $versions = [];
+        $versions = $plan->isResult() ? [$plan->root->hash => $version] : [];
         foreach ($plan->dependencies as $dependency) {
-            if ($dependency->hash !== $plan->root->hash || $plan->isQueryGroup()) {
-                $versions[$dependency->hash] = $dependency->hash === $plan->root->hash
-                    ? $version
-                    : ($values[$keys[$dependency->hash]] ?? '0');
+            if ($dependency->hash !== $plan->root->hash) {
+                $versions[$dependency->hash] = $values[$keys[$dependency->hash]] ?? '0';
             }
         }
         ksort($versions, SORT_STRING);
 
         $key = match (true) {
             $plan->isDirectPrimaryKey() => $this->keys->row($plan->root, $generation, (string) $plan->primaryKeyToken),
-            $plan->isQueryGroup() => $this->keys->queryGroupEntry($queryHash, $namespace),
+            $plan->isResult() => $this->keys->resultEntry($queryHash, $namespace),
             default => $this->keys->queryEntry($plan->root, $version, $namespace, $queryHash),
         };
 

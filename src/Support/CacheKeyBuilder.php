@@ -76,17 +76,17 @@ final class CacheKeyBuilder
         return $this->tablePrefix($table) . ":wake:{$family}:{$identity}:{$token}";
     }
 
-    public function queryGroupEntry(string $queryHash, string $namespace): string
+    public function resultEntry(string $queryHash, string $namespace): string
     {
         return $this->keyPrefix . "{nc:x:{$queryHash}}:q:{$namespace}";
     }
 
-    public function queryGroupBuild(string $queryHash): string
+    public function resultBuild(string $queryHash): string
     {
         return $this->keyPrefix . "{nc:x:{$queryHash}}:build";
     }
 
-    public function queryGroupWake(string $queryHash, string $token): string
+    public function resultWake(string $queryHash, string $token): string
     {
         return $this->keyPrefix . "{nc:x:{$queryHash}}:wake:{$token}";
     }

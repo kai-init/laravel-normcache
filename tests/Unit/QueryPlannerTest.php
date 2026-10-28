@@ -96,7 +96,7 @@ final class QueryPlannerTest extends UnitTestCase
             [$view, $this->posts],
         );
 
-        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
     public function test_explicit_root_only_dependency_uses_result_storage(): void
@@ -540,7 +540,7 @@ final class QueryPlannerTest extends UnitTestCase
         $this->assertSame('default', $plan->softDeleteMode);
     }
 
-    public function test_cross_table_union_uses_query_group_from_dependency_count(): void
+    public function test_cross_table_union_uses_full_result_from_dependency_count(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
         $query = RawPost::query()->toBase()
@@ -553,10 +553,10 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts, $comments],
         );
 
-        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_join_query_group_does_not_collapse(): void
+    public function test_join_uses_full_result(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
         $query = RawPost::query()->toBase()
@@ -569,10 +569,10 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts, $comments],
         );
 
-        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 
-    public function test_any_sql_join_uses_query_group(): void
+    public function test_any_sql_join_uses_full_result(): void
     {
         $comments = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'comments');
         $query = RawPost::query()->toBase()
@@ -586,6 +586,6 @@ final class QueryPlannerTest extends UnitTestCase
             [$this->posts, $comments],
         );
 
-        $this->assertSame(QueryPlan::QUERY_GROUP, $plan->route);
+        $this->assertSame(QueryPlan::RESULT, $plan->route);
     }
 }

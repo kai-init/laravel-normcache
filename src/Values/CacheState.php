@@ -4,7 +4,7 @@ namespace NormCache\Values;
 
 final readonly class CacheState
 {
-    /** @param array<string, string> $versions table hash => version, excluding the root outside QUERY_GROUP */
+    /** @param array<string, string> $versions table hash => version; full results include the root */
     public function __construct(
         public string $key,
         public string $epoch,

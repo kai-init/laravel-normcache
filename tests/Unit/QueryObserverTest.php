@@ -31,7 +31,7 @@ final class QueryObserverTest extends UnitTestCase
             new FailureReporter(new NullLogger),
         );
         $table = TableIdentity::fromParts('sqlite', 'testing', '/tmp/test.sqlite', '', '', 'posts');
-        $plan = QueryPlan::queryGroup($table, [$table]);
+        $plan = QueryPlan::result($table, [$table]);
         $query = Post::query()->toBase();
         $sql = 'select * from posts where id = ?';
         $bindings = [42];
@@ -42,7 +42,7 @@ final class QueryObserverTest extends UnitTestCase
 
         Event::assertDispatched(
             QueryCacheHit::class,
-            fn(QueryCacheHit $event): bool => $event->route === 'query_group'
+            fn(QueryCacheHit $event): bool => $event->route === 'result'
                 && $event->queryHash === 'hit-hash'
                 && $event->tableHash === $table->hash
                 && $event->sql === $sql
@@ -51,7 +51,7 @@ final class QueryObserverTest extends UnitTestCase
         );
         Event::assertDispatched(
             QueryCacheMiss::class,
-            fn(QueryCacheMiss $event): bool => $event->route === 'query_group'
+            fn(QueryCacheMiss $event): bool => $event->route === 'result'
                 && $event->queryHash === 'miss-hash'
                 && $event->tableHash === $table->hash
                 && $event->sql === $sql

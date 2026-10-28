@@ -137,8 +137,7 @@ final class RedisStoreTest extends TestCase
         $plan = app(QueryPlanner::class)->plan($query, $table, [$table]);
         $this->assertTrue($plan->isResult());
         $store = app(RedisStore::class);
-        $version = $store->getRaw($this->cacheKeys()->version($table)) ?? '0';
-        $key = $this->cacheKeys()->queryEntry($table, $version, 'u', 'corrupt-read');
+        $key = $this->cacheKeys()->resultEntry('corrupt-read', 'u');
         $this->writeCacheField($key, 'r', 'corrupt');
 
         $result = app(QueryEntryRepository::class)->read(
